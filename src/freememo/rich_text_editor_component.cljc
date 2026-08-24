@@ -67,6 +67,6 @@
         ;; had hidden this by usually arriving after the build.
         (when (some? initial-html)
           (let [dirty (e/watch editor/!dirty-html)
-                ready? (some? (:editor (e/watch editor/!editor-state)))]
+                ready? (e/watch editor/!editor-ready?)]
             (when (and ready? (not (and dirty (= (:topic-id dirty) doc-id))))
               (editor/set-content! initial-html))))))))

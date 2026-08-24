@@ -29,35 +29,46 @@
           t-focus dctx/t-focus focus-save dctx/focus-save
           t-last-page dctx/t-last-page last-page-save dctx/last-page-save
           is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?]
-    ;; Persist layout on toggle
-    (when t-layout
+    ;; Persist layout on toggle.
+    ;;
+    ;; `e/drain` holds this sibling at size 0. A bare `(when t …)` is a 0-to-1
+    ;; size change, and an incseq diff falls back on POSITION — so a token
+    ;; appearing here shifted every following sibling, including
+    ;; DocumentColumns, which unmounted and rebuilt the whole top region.
+    ;; `e/drain` runs the body for its effect and always returns the empty amb.
+    (e/drain
+     (when t-layout
       (if (and is-pdf? pdf-root-id)
         (let [r (e/server (e/Offload #(settings/save-pdf-layout user-id pdf-root-id layout-save)))]
           (when (some? r)
             (if (:success r) (case r (t-layout)) (t-layout (:error r)))))
-        (t-layout)))
+        (t-layout))))
 
     ;; Persist the focus-reader flag on toggle. Same shape as the layout
     ;; persist above: a non-PDF has no per-root key, so the token is spent
     ;; without a server call.
-    (when t-focus
+    ;; Size-0 sibling, as above.
+    (e/drain
+     (when t-focus
       (if (and is-pdf? pdf-root-id)
         (let [r (e/server (e/Offload #(settings/save-pdf-focus user-id pdf-root-id focus-save)))]
           (when (some? r)
             (if (:success r) (case r (t-focus)) (t-focus (:error r)))))
-        (t-focus)))
+        (t-focus))))
 
     ;; Persist the last page the reader turned to. This lived in PdfPane until
     ;; focus reader, which unmounts the pane — and a writer that unmounts stops
     ;; recording pages. DocumentViewState owns the request atom and
     ;; `on-page-change!` is its only setter, so this fires once per real page
     ;; change and never at mount.
-    (when t-last-page
+    ;; Size-0 sibling, as above.
+    (e/drain
+     (when t-last-page
       (if (and is-pdf? pdf-root-id last-page-save)
         (let [r (e/server (e/Offload #(settings/save-last-page user-id pdf-root-id last-page-save)))]
           (when (some? r)
             (if (:success r) (case r (t-last-page)) (t-last-page (:error r)))))
-        (t-last-page)))
+        (t-last-page))))
 
     ;; Blob-less Live Document: the upload wizard IS the whole body — no
     ;; toolbars, hierarchy/pins, or card table. Normal layout returns once the

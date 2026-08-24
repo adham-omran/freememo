@@ -394,9 +394,13 @@
                         (:page nav-target))
           ;; Live page-info — re-derives as user navigates pages. Score topics
           ;; have no page children: skip the fetch, keep the topic's own id.
+          ;; Gate inside the thunk, matching merged-doc and text-result below.
+          ;; A `when` outside it makes the binding go from NO VALUE to pending
+          ;; the first time the gate opens, and a pending value in this map
+          ;; annihilates the whole map — see effective-content.
           page-info (e/server
-                      (when (and is-pdf? (not is-score?))
-                        (e/Offload #(get-page-info* refresh meta-refresh pdf-root-id current-page))))
+                      (e/Offload #(when (and is-pdf? (not is-score?))
+                                    (get-page-info* refresh meta-refresh pdf-root-id current-page))))
           page-topic-id (if (and is-pdf? (not is-score?))
                           (or (:topic-id page-info) topic-id)
                           topic-id)
@@ -439,11 +443,24 @@
           text-result (e/server
                         (e/Offload #(when (and is-pdf? (not is-score?) (not merged?))
                                       (get-page-text* refresh pdf-root-id current-page))))
-          effective-content (cond
-                              merged? merged-html
-                              (and is-pdf? (not is-score?))
-                              (when (:success text-result) (:text text-result))
-                              :else static-content)
+          ;; `e/Reconcile` is what keeps a mode change from tearing down the
+          ;; document view. Its docstring: "collapse :grow/:shrink diffs into
+          ;; :change diffs based on position … Use case: inhibit undesired
+          ;; duplicate effects."
+          ;;
+          ;; Without it, this `cond` swapping branches emits a shrink of the old
+          ;; branch and a grow of the new one in one diff, and that ripples UP
+          ;; the DAG — every parent sees a shrink and a grow. `e/on-unmount`
+          ;; fires on a shrink/grow but not on a change, so the ripple reached
+          ;; RichTextEditorComponent and called `destroy-editor!`. Measured: a
+          ;; focus toggle rebuilt DocumentColumns, ContentColumn and EditorPane
+          ;; and destroyed the Quill instance.
+          effective-content (e/Reconcile
+                              (cond
+                                merged? merged-html
+                                (and is-pdf? (not is-score?))
+                                (when (:success text-result) (:text text-result))
+                                :else static-content))
           ;; Topic the shown editor body belongs to. Non-PDF/score read the
           ;; static body → carry its fetched-for id, which lags the live topic-id
           ;; through a switch (stale-detectable). Real PDFs read per-page text
@@ -456,7 +473,10 @@
           ;; The identity of the body in the editor — see doc-context. Merged
           ;; mode holds the whole document, so it is the root; every other mode
           ;; holds one topic's body, so it is that topic.
-          editor-doc-id (if merged? pdf-root-id page-topic-id)
+          ;; Reconciled for the same reason as effective-content above: an
+          ;; unreconciled `if` emits shrink+grow on every toggle, and that
+          ;; ripples up the DAG until an `e/on-unmount` fires.
+          editor-doc-id (e/Reconcile (if merged? pdf-root-id page-topic-id))
           ;; Score editor state — owned here (the stable client ancestor) so the
           ;; waveform strip, the PDF-toolbar rect button, the rect modal, and
           ;; the score card bar all share one pending-card selection.

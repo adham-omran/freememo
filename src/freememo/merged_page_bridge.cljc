@@ -40,10 +40,13 @@
           current dctx/current-page
           on-page-change! dctx/on-page-change!]
 
-      ;; OUT. A `reset!` is idempotent, so a reactive re-evaluation costs
-      ;; nothing — the same shape as EditorPane's !document-base-url reset.
-      (reset! editor-actions/!page-break-context
-        (when merged? {:pages (vec merged-page-numbers)}))
+      ;; OUT. `e/drain` runs this for its effect and returns the empty amb, so
+      ;; the write is not a let-body value Electric may skip — CLAUDE.md's
+      ;; "Every Expression in a `let` Body Must Be Used". A `reset!` is
+      ;; idempotent, so a reactive re-evaluation costs nothing.
+      (e/drain
+       (reset! editor-actions/!page-break-context
+         (when merged? {:pages (vec merged-page-numbers)})))
 
       ;; IN. The equality guard is what makes this converge: calling the funnel
       ;; moves `current` to `scrolled`, after which the condition is false.

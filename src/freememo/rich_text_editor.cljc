@@ -94,6 +94,17 @@
 ;; inside an e/defn body would not increment reliably.
 (defonce ^:private !init-gen (atom 0))
 
+;; Whether a Quill instance is built and usable.
+;;
+;; Its own atom, deliberately NOT a read of `!editor-state`. Two components need
+;; this flag, and `update-topic-id!` swaps `!editor-state` on every evaluation of
+;; one of them — so watching that map means watching an atom the same component
+;; writes. Work-skipping damps the loop only while every value in the map stays
+;; `=` across the swap, which is a property no future field is obliged to keep.
+;;
+;; A boolean changes twice per editor lifetime, so a watch on it fires twice.
+(defonce !editor-ready? (atom false))
+
 (defn current-editor
   "The live document-editor Quill instance, or nil.
 
@@ -117,6 +128,7 @@
   #?(:clj nil
      :cljs
      (do
+       (reset! !editor-ready? false)
        (swap! !init-gen inc)
        (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
@@ -369,6 +381,7 @@
                               :page-marker-teardown
                               (editor-actions/install-page-marker-tracking! editor
                                 #(reset! editor-actions/!scrolled-page %))})
+       (reset! !editor-ready? true)
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the

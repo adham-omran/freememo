@@ -528,7 +528,14 @@
           ;; Reactive per-PDF extraction style (drives Copy text / Copy all).
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           extract-style (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id pdf-root-id)))]
-      (cond
-        phone? (PdfPhoneToolbar extract-style)
-        focus? (PdfFocusToolbar extract-style)
-        :else  (PdfDesktopToolbar extract-style)))))
+      ;; `e/Reconcile` collapses the arm swap into a change. Unreconciled, the
+      ;; swap emits shrink+grow, and an incseq diff falls back on POSITION — so
+      ;; this bar's swap shifted the following sibling, DocumentColumns, which
+      ;; unmounted and rebuilt the whole document view including the Quill
+      ;; instance. The three arms each render one root div, so there is no real
+      ;; size change to preserve.
+      (e/Reconcile
+        (cond
+          phone? (PdfPhoneToolbar extract-style)
+          focus? (PdfFocusToolbar extract-style)
+          :else  (PdfDesktopToolbar extract-style))))))

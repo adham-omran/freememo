@@ -754,18 +754,74 @@
            true)))
      :clj nil))
 
+(defonce ^:private !marker-offsets
+  ;; The page markers' scroll offsets, or nil when the table needs rebuilding.
+  ;;
+  ;; `[[page offset] …]` ascending by offset, where `offset` is the marker's
+  ;; distance from the top of the scroller's content — scroll-invariant, so one
+  ;; build serves every scroll position.
+  ;;
+  ;; WHY A TABLE AT ALL. The scroll handler used to call `getBoundingClientRect`
+  ;; on EVERY marker, per scroll event. Each call forces layout, so the largest
+  ;; real PDF here — 883 pages — cost 883 forced layouts per event, on the same
+  ;; main thread the reader is scrolling with. `{passive: true}` does not help:
+  ;; it keeps the gesture unblocked, not the layout out of the handler.
+  ;;
+  ;; This is memoization of a pure DOM read, not hysteresis. It is rebuilt FROM
+  ;; the DOM and holds no previous answer, so the rule `page-at-scroll-top`
+  ;; documents still holds: a remount drops it and the next call rebuilds.
+  (atom nil))
+
+(defn invalidate-marker-offsets!
+  "Mark the offset table stale. Cheap — one atom write.
+
+   Post: the next `page-at-scroll-top` rebuilds the table.
+
+   Called on `text-change` and on a resize of the scroller, which are the two
+   things that move a marker. Deliberately NOT a rebuild: an edit would then pay
+   for every marker on every keystroke, which is worse than what the table
+   replaced. The rebuild is deferred to the next scroll that needs an answer."
+  []
+  #?(:cljs (reset! !marker-offsets nil) :clj nil))
+
+#?(:cljs
+   (defn- build-marker-offsets!
+     "Measure every marker once and cache the result.
+
+      Pre : `root` is the scroller (`.ql-editor`).
+      Post: `!marker-offsets` holds `[[page offset] …]` ascending by offset, and
+            the same vector is returned. One layout pass for all markers."
+     [^js root]
+     (let [top (.-top (.getBoundingClientRect root))
+           scrolled (.-scrollTop root)
+           table (->> (array-seq (.querySelectorAll root
+                                   (str "[id^=\"" page-merge/marker-id-prefix "\"]")))
+                      (keep (fn [^js el]
+                              (when-let [page (page-merge/parse-marker-id (.-id el))]
+                                ;; Distance from the content top, so the value
+                                ;; does not depend on where we are scrolled now.
+                                [page (+ (- (.-top (.getBoundingClientRect el)) top)
+                                        scrolled)])))
+                      (sort-by second)
+                      vec)]
+       (reset! !marker-offsets table)
+       table)))
+
 (defn page-at-scroll-top
   "The page whose marker is the last one at or above the scroll container's top
-   edge, or nil when no marker is at or above it.
+   edge, or nil when the document holds no marker.
 
    Pre : `ed` is a Quill instance.
    Post: a page number present in the document, or nil.
 
-   PURE PER-CALL. It reads only the live DOM — no remembered previous answer and
-   no hysteresis. Electric frames remount on a WebSocket reconnect and on a hot
-   reload, which wipes any state kept across frames, so a derivation that
-   depended on one could not hold. Same rule the vendored `Scroll-window`
-   follows for its offset."
+   READS ONLY `scrollTop` on the hot path. The marker offsets come from a table
+   built once per document shape (see `!marker-offsets`), so a scroll event
+   forces no layout however many pages the document holds.
+
+   NO REMEMBERED ANSWER. The table is derived from the DOM and the answer is
+   recomputed from `scrollTop` every call, so a remount — which wipes the table —
+   changes nothing but the cost of the next call. That is the rule the vendored
+   `Scroll-window` follows for its offset."
   [ed]
   #?(:cljs
      (let [^js ed ed
@@ -777,19 +833,14 @@
            ;; only the scroll extent can. Listening on the container gave NO
            ;; scroll events at all and the page field never moved.
            ^js root (.-root ed)
-           edge (.-top (.getBoundingClientRect root))
-           els (.querySelectorAll root (str "[id^=\"" page-merge/marker-id-prefix "\"]"))
-           markers (array-seq els)]
-       (or (->> markers
-                (keep (fn [^js el]
-                        (when-let [page (page-merge/parse-marker-id (.-id el))]
-                          ;; A small tolerance, so a marker flush with the top
-                          ;; edge counts as reached rather than as one line away.
-                          (when (<= (.-top (.getBoundingClientRect el)) (+ edge 4))
-                            page))))
-                last)
-           ;; Scrolled above every marker: the document's own first page.
-           (some-> markers first .-id page-merge/parse-marker-id)))
+           table (or @!marker-offsets (build-marker-offsets! root))]
+       (when (seq table)
+         ;; A small tolerance, so a marker flush with the top edge counts as
+         ;; reached rather than as one line away.
+         (let [limit (+ (.-scrollTop root) 4)]
+           (or (->> table (take-while (fn [[_ offset]] (<= offset limit))) last first)
+               ;; Scrolled above every marker: the document's own first page.
+               (first (first table))))))
      :clj nil))
 
 (defn install-page-marker-tracking!
@@ -798,15 +849,18 @@
    Pre : `ed` is a Quill instance. `on-page` takes a page number.
    Post: `on-page` fires with a page number whenever the topmost marker
          changes, and never with the same page twice in a row. The teardown
-         removes the listener.
+         removes every listener and observer it installed.
 
    `on-page` is the app's one page-change funnel, so a scroll records the page
    as current AND requests the last-page write — the same path the toolbar
    arrows and the PDF viewer use.
 
+   THREE LISTENERS, and each earns its place. `scroll` answers the question.
+   `text-change` and a `ResizeObserver` only INVALIDATE the offset table — they
+   are the two things that move a marker, and invalidating is one atom write.
+
    The last-reported page is remembered ONLY to suppress a repeat call. It is
-   not read to compute the answer: `page-at-scroll-top` is pure, so a remount
-   that loses this simply re-reports once."
+   not read to compute the answer."
   [ed on-page]
   #?(:cljs
      (let [^js ed ed
@@ -817,10 +871,18 @@
                      (when-let [page (page-at-scroll-top ed)]
                        (when (not= page @!last)
                          (reset! !last page)
-                         (on-page page))))]
+                         (on-page page))))
+           invalidate (fn [& _] (invalidate-marker-offsets!))
+           resize-obs (js/ResizeObserver. invalidate)]
        (.addEventListener scroller "scroll" handler #js {:passive true})
+       (.on ed "text-change" invalidate)
+       (.observe resize-obs scroller)
+       (invalidate-marker-offsets!)
        (reset! !marker-tracking {:scroller scroller :handler handler})
        (fn []
          (.removeEventListener scroller "scroll" handler)
+         (.off ed "text-change" invalidate)
+         (.disconnect resize-obs)
+         (invalidate-marker-offsets!)
          (reset! !marker-tracking nil)))
      :clj (fn [] nil)))

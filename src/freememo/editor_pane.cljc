@@ -179,7 +179,8 @@
           merged-page-numbers dctx/merged-page-numbers
           ;; Whether a Quill instance is already up. The spinner gate below
           ;; reads it so a transiently nil body cannot destroy the editor.
-          editor-live? (some? (:editor (e/watch editor/!editor-state)))]
+          ;; A dedicated flag, not a read of !editor-state — see that var.
+          editor-live? (e/watch editor/!editor-ready?)]
     (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
@@ -400,7 +401,12 @@
           ;; -----------------------------------------------------------------------
           (dom/div
             (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-            (if (or (and (nil? static-content) (not editor-live?))
+            ;; `e/Reconcile` collapses this branch swap into a change. Without
+            ;; it the swap emits shrink+grow, which ripples up the DAG and fires
+            ;; `e/on-unmount` — and the unmount this branch reaches is
+            ;; RichTextEditorComponent's, which calls `destroy-editor!`.
+            (e/Reconcile
+             (if (or (and (nil? static-content) (not editor-live?))
                   ;; Stale body from the previous topic: on a switch the content
                   ;; re-fetch is pending and its value latches (never nil), so the
                   ;; old text would otherwise sit under the new topic-id until the
@@ -462,7 +468,7 @@
                         (install-image-contextmenu! host get-topic-id get-pin-count
                           on-pin-fn on-occlude-fn on-error-fn)))
                     0)
-                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f)))))))
+                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f))))))))
 
             ;; Image-occlusion authoring modal (context-menu entry point).
             (OcclusionModal !occlusion-request user-id))))))))
