@@ -5337,17 +5337,22 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .focus-reader-column .ql-editor [id^="fm-page-"] {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     margin: 2.5em 0 1.2em;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--color-text-secondary);
     user-select: none;
 }
-/* The rule itself. A border on the heading would sit under the text; a flex
-   pseudo-element sits beside it and takes the remaining width. */
+/* The rules, one on each side, which is what centers the label: each takes an
+   equal share of the leftover width. A border on the heading would sit under
+   the text instead of beside it.
+
+   `text-align` cannot do this. The heading is a flex container, so its own
+   text alignment does not move the label — the two flexible siblings do. */
+.focus-reader-column .ql-editor [id^="fm-page-"]::before,
 .focus-reader-column .ql-editor [id^="fm-page-"]::after {
     content: "";
     flex: 1;
