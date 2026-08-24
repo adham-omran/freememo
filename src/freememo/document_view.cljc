@@ -103,16 +103,30 @@
    then takes the whole content column. Page nav survives the teardown:
    viewer/go-to-page! is a silent no-op with no viewer, the editor text keys on
    the page NUMBER, and !total is seeded from the server page count so the
-   arrow buttons do not disable (see topic-state/DocumentViewState)."
+   arrow buttons do not disable (see topic-state/DocumentViewState).
+
+   ONE ALWAYS-PRESENT WRAPPER, whose contents are conditional. That keeps the
+   content row's child COUNT constant, and the count is what the editor's
+   survival depends on: with the pane emitted as two bare siblings, entering the
+   mode took the row from three children to one, and Electric tore down the
+   editor's slot along with the pane's. Measured — a focus toggle destroyed and
+   rebuilt the Quill instance every time, while the layout toggle, which keeps
+   the count at two, destroyed nothing.
+
+   `display: contents` is what makes the wrapper free: it has no box of its own,
+   so the pane and the handle stay direct flex items of the row and every width
+   percentage keeps its meaning."
   []
   (e/client
-    (when (and dctx/is-pdf? (not dctx/focus?))
-      (PdfPaneFrame)
-      (if dctx/top-bottom?
-        (PaneDragHandle :y dctx/!top-split-pct dctx/top-split-pct
-          "Resize PDF and editor panes")
-        (PaneDragHandle :x dctx/!left-pct dctx/left-pct
-          "Resize PDF and editor panes")))))
+    (dom/div
+      (dom/props {:class "pdf-split-slot"})
+      (when (and dctx/is-pdf? (not dctx/focus?))
+        (PdfPaneFrame)
+        (if dctx/top-bottom?
+          (PaneDragHandle :y dctx/!top-split-pct dctx/top-split-pct
+            "Resize PDF and editor panes")
+          (PaneDragHandle :x dctx/!left-pct dctx/left-pct
+            "Resize PDF and editor panes"))))))
 
 (e/defn VideoSplitPane
   "The video half of a video document: player, waveform strip, a vertical

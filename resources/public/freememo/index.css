@@ -5363,3 +5363,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .focus-reader-column .ql-editor > [id^="fm-page-"]:first-child {
     margin-top: 0;
 }
+
+/* The PDF pane's slot in the content row (document-view/PdfSplitPane).
+   `display: contents` gives it no box, so the pane and its drag handle stay
+   direct flex items of the row and every width percentage keeps its meaning.
+   The wrapper exists only to hold the row's child count constant across a
+   focus-reader toggle — see PdfSplitPane's docstring for what a changing count
+   cost. */
+.pdf-split-slot {
+    display: contents;
+}

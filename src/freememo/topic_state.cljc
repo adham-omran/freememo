@@ -410,14 +410,35 @@
           ;; 155 KB for a search-results frame, and this result is megabytes.
           ;; The two fields are read separately for the same reason: the map is
           ;; never materialized whole.
+          ;; The gate lives INSIDE the thunk, and that placement is the whole
+          ;; point. `(when merged? (e/Offload …))` transitions this binding from
+          ;; NO VALUE to pending the first time the mode turns on, and a pending
+          ;; value here makes TopicPage's whole merged prop map pending — so
+          ;; DocumentRoot's entire subtree unmounts and rebuilds.
+          ;;
+          ;; Measured: a focus toggle rebuilt DocumentColumns, ContentColumn and
+          ;; EditorPane twice each, destroyed the Quill instance and re-created
+          ;; the PDF viewer. A page flip re-runs the sibling `text-result`
+          ;; Offload and costs none of that, because e/Offload's latest-wins
+          ;; HOLDS the previous value while recomputing — it only goes pending
+          ;; when it has no previous value to hold.
+          ;;
+          ;; Bound unconditionally, the Offload always has a value: nil for
+          ;; every PDF outside the mode, which costs no database work because
+          ;; the gate is the thunk's first act.
           merged-doc (e/server
-                       (when merged?
-                         (e/Offload #(get-merged-document* refresh pdf-root-id))))
+                       (e/Offload #(when merged?
+                                     (get-merged-document* refresh pdf-root-id))))
           merged-html (e/server (:html merged-doc))
           merged-page-numbers (e/server (:page-numbers merged-doc))
+          ;; Gate inside the thunk, for the reason merged-doc above records: a
+          ;; `when` outside it makes this binding go from NO VALUE to pending
+          ;; when the mode turns OFF, which unmounts DocumentRoot's subtree.
+          ;; Leaving the mode cost one rebuild more than entering it until this
+          ;; matched.
           text-result (e/server
-                        (when (and is-pdf? (not is-score?) (not merged?))
-                          (e/Offload #(get-page-text* refresh pdf-root-id current-page))))
+                        (e/Offload #(when (and is-pdf? (not is-score?) (not merged?))
+                                      (get-page-text* refresh pdf-root-id current-page))))
           effective-content (cond
                               merged? merged-html
                               (and is-pdf? (not is-score?))

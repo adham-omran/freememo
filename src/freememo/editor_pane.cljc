@@ -176,7 +176,10 @@
           effective-content-topic-id dctx/effective-content-topic-id
           on-imported-navigate! dctx/on-imported-navigate!
           merged? dctx/merged? pdf-root-id dctx/pdf-root-id
-          merged-page-numbers dctx/merged-page-numbers]
+          merged-page-numbers dctx/merged-page-numbers
+          ;; Whether a Quill instance is already up. The spinner gate below
+          ;; reads it so a transiently nil body cannot destroy the editor.
+          editor-live? (some? (:editor (e/watch editor/!editor-state)))]
     (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
@@ -397,7 +400,7 @@
           ;; -----------------------------------------------------------------------
           (dom/div
             (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-            (if (or (nil? static-content)
+            (if (or (and (nil? static-content) (not editor-live?))
                   ;; Stale body from the previous topic: on a switch the content
                   ;; re-fetch is pending and its value latches (never nil), so the
                   ;; old text would otherwise sit under the new topic-id until the
@@ -405,7 +408,23 @@
                   ;; here → show the spinner instead of the stale text. No-op for
                   ;; real PDFs (id pinned to page-topic-id in DocumentViewState).
                   (not= effective-content-topic-id topic-id))
-              ;; Loading — first fetch in flight, or a topic switch mid-load.
+              ;; Loading — the FIRST fetch, or a topic switch mid-load.
+              ;;
+              ;; `editor-live?` is what keeps a nil content from tearing the
+              ;; editor down. This branch unmounts RichTextEditorComponent, whose
+              ;; e/on-unmount calls destroy-editor! — so a body that goes
+              ;; transiently nil rebuilt the whole Quill DOM.
+              ;;
+              ;; A focus-reader toggle does exactly that: the mode's new body is
+              ;; a different query, so `static-content` is nil for one tick while
+              ;; it resolves. Measured before this guard: `.ql-editor` absent for
+              ;; 75ms per toggle, a new Quill instance each time, and about 1400
+              ;; nodes rebuilt under the editor host.
+              ;;
+              ;; A nil content with an editor already up means "the body for THIS
+              ;; document is in flight". Holding the current body for that tick is
+              ;; both cheaper and less jarring than a spinner. `set-content!`
+              ;; swaps it in when it arrives.
               (loading/Spinner)
               ;; Render editor for any string (including "") — PDF pages without
               ;; scanned text yet are editable
