@@ -23,14 +23,32 @@
 
 (e/defn PdfPaneFrame
   "The PDF pane itself (PdfPane + its sized wrapper). Own e/defn for the 64KB
-   method cap."
+   method cap.
+
+   Pre : dctx/current-page holds the page the reader is on.
+   Post: the viewer opens at that page, and dctx/!current-page keeps its value
+         across a mount of this frame."
   []
   (e/client
-    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id initial-page dctx/initial-page
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id
           target-page dctx/target-page is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?
           pdf-page-count dctx/pdf-page-count top-bottom? dctx/top-bottom?
           top-split-pct dctx/top-split-pct left-pct dctx/left-pct
           !current-page dctx/!current-page !total dctx/!total
+          ;; The page the viewer opens at. `dctx/initial-page` is resolved ONCE
+          ;; per topic (URL anchor, else the persisted last page), and both
+          ;; PdfPane and PdfViewerComponent seed their page cursor from it. That
+          ;; was the live page while this frame mounted exactly once per topic.
+          ;; Focus reader unmounts and remounts it, so on the second mount that
+          ;; value is stale — and PdfPane's return then overwrites
+          ;; dctx/!current-page with it, throwing away the page the reader had
+          ;; navigated to while the pane was gone.
+          ;;
+          ;; e/snapshot reads the live page at THIS mount and freezes it: a
+          ;; later flip must not re-navigate the viewer, which owns the cursor
+          ;; from then on. On a first mount the two agree, because
+          ;; DocumentViewState seeds !current-page from initial-page.
+          resume-page (e/snapshot (or dctx/current-page dctx/initial-page 1))
           pdf-style (if top-bottom?
                       {:height (str top-split-pct "%")
                        :min-height "0" :overflow "hidden"}
@@ -39,9 +57,14 @@
       (dom/div
         (dom/props {:style pdf-style})
         (reset! !current-page
+          ;; on-page-change! is NOT bound here. DocumentRoot binds the one
+          ;; funnel that DocumentViewState owns, so the viewer's page changes
+          ;; and the toolbar's reach the same fn — and both request the
+          ;; last-page write. Two identical local copies of it recorded
+          ;; neither.
           (binding [dctx/has-file? pdf-has-file?
+                    dctx/initial-page resume-page
                     dctx/reload-nonce pdf-page-count
-                    dctx/on-page-change! (fn [p] (reset! !current-page p))
                     dctx/on-total! (fn [n] (reset! !total n))]
             (PdfPane)))))))
 
@@ -223,7 +246,7 @@
           reading-mode? dctx/reading-mode? card-refresh dctx/card-refresh !show-bib dctx/!show-bib
           show-bib? dctx/show-bib? total dctx/total layout dctx/layout is-live? dctx/is-live?
           scan-dpi dctx/scan-dpi scanning-pages dctx/scanning-pages ocr-errors dctx/ocr-errors
-          phone? dctx/phone? !current-page dctx/!current-page toggle-layout! dctx/toggle-layout!
+          phone? dctx/phone? toggle-layout! dctx/toggle-layout!
           bib-topic-id dctx/bib-topic-id]
         ;; URL anchor write-back: reflect the live page as /viewer/topic/<root>/<page>
         ;; (real PDF root only — score/page kinds don't honour a URL page on
@@ -263,8 +286,8 @@
         ;; page-nav, zoom, layout-toggle, done-checkbox, and the AI/extract
         ;; action buttons. Shown only when a PDF item is in view.
         (when is-pdf?
+          ;; on-page-change! comes from DocumentRoot — see PdfPaneFrame.
           (binding [dctx/page-number current-page
-                    dctx/on-page-change! (fn [p] (reset! !current-page p))
                     dctx/on-layout-toggle! toggle-layout!]
             (PdfToolbar)))
 

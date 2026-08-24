@@ -113,6 +113,10 @@
 (e/declare layout-save)
 (e/declare t-focus)
 (e/declare focus-save)
+;; Last-page persistence. DocumentViewState owns the request atom, DocumentBody
+;; writes the setting — the pane cannot, because focus reader unmounts it.
+(e/declare t-last-page)
+(e/declare last-page-save)
 
 ;; ── Client atoms (the atom refs themselves, for child mutation) ────────────
 (e/declare !show-bib)

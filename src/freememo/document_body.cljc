@@ -27,6 +27,7 @@
           !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
           t-layout dctx/t-layout layout-save dctx/layout-save
           t-focus dctx/t-focus focus-save dctx/focus-save
+          t-last-page dctx/t-last-page last-page-save dctx/last-page-save
           is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?]
     ;; Persist layout on toggle
     (when t-layout
@@ -45,6 +46,18 @@
           (when (some? r)
             (if (:success r) (case r (t-focus)) (t-focus (:error r)))))
         (t-focus)))
+
+    ;; Persist the last page the reader turned to. This lived in PdfPane until
+    ;; focus reader, which unmounts the pane — and a writer that unmounts stops
+    ;; recording pages. DocumentViewState owns the request atom and
+    ;; `on-page-change!` is its only setter, so this fires once per real page
+    ;; change and never at mount.
+    (when t-last-page
+      (if (and is-pdf? pdf-root-id last-page-save)
+        (let [r (e/server (e/Offload #(settings/save-last-page user-id pdf-root-id last-page-save)))]
+          (when (some? r)
+            (if (:success r) (case r (t-last-page)) (t-last-page (:error r)))))
+        (t-last-page)))
 
     ;; Blob-less Live Document: the upload wizard IS the whole body — no
     ;; toolbars, hierarchy/pins, or card table. Normal layout returns once the
@@ -116,6 +129,8 @@
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
               dctx/focus? (:focus? m) dctx/set-focus! (:set-focus! m)
               dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)
+              dctx/t-last-page (:t-last-page m) dctx/last-page-save (:last-page-save m)
+              dctx/on-page-change! (:on-page-change! m)
               dctx/reset-split! (:reset-split! m)
               dctx/is-score? (:is-score? m) dctx/!score-region (:!score-region m)
               dctx/!score-pages (:!score-pages m) dctx/!score-modal-open? (:!score-modal-open? m)

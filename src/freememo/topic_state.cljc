@@ -331,6 +331,24 @@
           ;; overwrites this with its own count as soon as it mounts.
           !total (atom (or pdf-page-count 0))
           total (e/watch !total)
+          ;; Last-page persistence. The writer is DocumentBody, not PdfPane:
+          ;; focus reader unmounts the pane, and a writer that unmounts stops
+          ;; recording the pages the reader turns. This atom and its token live
+          ;; in the state that outlives the pane.
+          ;;
+          ;; It starts nil so a mount writes nothing — only a real page change
+          ;; requests a save, which is why `on-page-change!` is the single
+          ;; funnel below rather than a watch on current-page.
+          !last-page-save (atom nil)
+          last-page-save (e/watch !last-page-save)
+          [t-last-page _] (e/Token last-page-save)
+          ;; The one page-change funnel. PdfPaneFrame binds it for the viewer's
+          ;; own scroll and jump events; DocumentToolbars binds it for the
+          ;; toolbar's arrows and page field. Both were `(reset! !current-page
+          ;; p)` written twice, and neither recorded the page for persistence.
+          on-page-change! (fn [p]
+                            (reset! !current-page p)
+                            (reset! !last-page-save p))
           ;; Same-doc page-jump channel from HierarchySidePanel. Hierarchy resets
           ;; {:topic-id pdf-root-id :page n} on sibling-page click; we derive
           ;; target-page for PdfPane and clear nav-target one tick later so the
@@ -387,6 +405,8 @@
           phone? (e/watch viewport/!phone?)
           reading-mode? (and phone? (= (:origin queue-ctx) :learn))]
       {:!current-page !current-page :current-page current-page
+       :on-page-change! on-page-change!
+       :last-page-save last-page-save :t-last-page t-last-page
        :!total !total :total total :!nav-target !nav-target :target-page target-page
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
        :effective-content-topic-id effective-content-topic-id
