@@ -216,6 +216,21 @@
                       :when #{:viewer :library} :views #{}}
      :export         {:label "Export cards…" :class :query :exec :ui-button
                       :when #{:viewer} :views #{}}
+     ;; Focus reader (plans/focus-reader.md). The flag is a per-root settings
+     ;; row, so :table names #{:settings}; :views is empty because nothing
+     ;; re-queries it — it is read once at resolve time and held on the client
+     ;; after that, like :initial-layout.
+     :toggle-focus-reader {:label "Focus reader" :class :mutation :exec :ui-button
+                           :when #{:viewer} :table #{:settings} :views #{}}
+     ;; Page flip. :query, not :mutation — the flip writes a client atom and
+     ;; two reads follow it. The `last_page_` write is PdfPane's, not this
+     ;; command's. The chord is substituted off macOS by effective-bind:
+     ;; the default meta→ctrl rule would produce ctrl+pg-down, which is
+     ;; Chrome's Select-Next-Tab accelerator.
+     :prev-page      {:label "Previous page" :class :query :exec :ui-button
+                      :bind "meta+pg-up" :when #{:viewer} :views #{}}
+     :next-page      {:label "Next page" :class :query :exec :ui-button
+                      :bind "meta+pg-down" :when #{:viewer} :views #{}}
      ;; :card_versions is reached by cascade, not by a direct write — deleting
      ;; the topics rows drops the version log that FKs them.
      :delete-document {:label "Delete document…" :class :mutation :exec :ui-button
@@ -391,6 +406,11 @@
   []
   (for [[id {:keys [bind]}] registry :when bind] [id bind]))
 
+(def ^:private page-flip-ids
+  "The two commands whose `meta` substitutes to `alt` rather than `ctrl`.
+   See effective-bind."
+  #{:prev-page :next-page})
+
 (defn effective-bind
   "The chord actually registered and displayed for command `id` on this
    platform+browser, given its registry `bind`.
@@ -401,12 +421,20 @@
    the address bar, so it gets a non-reserved chord instead — `ctrl+shift+p`,
    or `ctrl+/` on Firefox (which reserves `ctrl+shift+p` for private windows).
 
+   The page-flip pair is special the same way. `meta`→`ctrl` would give
+   `ctrl+pg-up` / `ctrl+pg-down`, which Chrome reserves for previous-tab and
+   next-tab (`IsReservedCommandOrKey`), so the page never receives them. They
+   take `alt` instead. If `alt+pg-up` / `alt+pg-down` turn out to be taken on
+   a target platform, the recorded fallback is `ctrl+alt+pg-up` /
+   `ctrl+alt+pg-down` (plans/focus-reader.md §5.2).
+
    Pre : `bind` is a goog KeyboardShortcutHandler spec string.
    Post: goog-parseable spec string; on macOS returns `bind` unchanged."
   [id bind]
   (cond
     (util/mac-platform?)   bind
     (= id :toggle-palette) (if (util/firefox-browser?) "ctrl+/" "ctrl+shift+p")
+    (page-flip-ids id)     (str/replace bind "meta" "alt")
     :else                  (str/replace bind "meta" "ctrl")))
 
 (defn display-chord
@@ -434,6 +462,11 @@
                           "ctrl"  (if mac? "⌃" "Ctrl")
                           "shift" (if mac? "⇧" "Shift")
                           "alt"   (if mac? "⌥" "Alt")
+                          ;; goog names these keys `pg-up` / `pg-down`
+                          ;; (goog/events/keynames.js). The upper-case fallback
+                          ;; below would render them "PG-UP" / "PG-DOWN".
+                          "pg-up"   (if mac? "⇞" "PgUp")
+                          "pg-down" (if mac? "⇟" "PgDn")
                           (str/upper-case p)))]
        (str/join (if mac? "" "+") (map part (str/split eff #"\+")))))))
 

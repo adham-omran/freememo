@@ -82,6 +82,9 @@
 
 ;; ── Layout / display ─────────────────────────────────────────────────────
 (e/declare layout)
+;; Focus reader — the PDF pane is unmounted and the editor column is centered.
+;; Independent of `layout`: the stored split orientation survives the mode.
+(e/declare focus?)
 (e/declare top-pct)
 (e/declare top-split-pct)
 (e/declare left-pct)
@@ -98,6 +101,7 @@
 ;; ── Callbacks / tokens ─────────────────────────────────────────────────────
 (e/declare navigate!)
 (e/declare toggle-layout!)
+(e/declare set-focus!)
 (e/declare reset-split!)
 (e/declare on-page-change!)
 (e/declare on-layout-toggle!)
@@ -107,6 +111,8 @@
 (e/declare on-done!)
 (e/declare t-layout)
 (e/declare layout-save)
+(e/declare t-focus)
+(e/declare focus-save)
 
 ;; ── Client atoms (the atom refs themselves, for child mutation) ────────────
 (e/declare !show-bib)

@@ -73,10 +73,17 @@
 (e/defn PdfSplitPane
   "The PDF half of a document split: PdfPaneFrame + PaneDragHandle. Renders
    nothing for non-PDF topics. Thin shell — work lives in its two children so no
-   single e/defn exceeds Electric's 64KB-per-method cap."
+   single e/defn exceeds Electric's 64KB-per-method cap.
+
+   dctx/focus? (focus reader) removes the pane and its handle together, which
+   destroys the PDF.js viewer (PdfViewerComponent's e/on-unmount). The editor
+   then takes the whole content column. Page nav survives the teardown:
+   viewer/go-to-page! is a silent no-op with no viewer, the editor text keys on
+   the page NUMBER, and !total is seeded from the server page count so the
+   arrow buttons do not disable (see topic-state/DocumentViewState)."
   []
   (e/client
-    (when dctx/is-pdf?
+    (when (and dctx/is-pdf? (not dctx/focus?))
       (PdfPaneFrame)
       (if dctx/top-bottom?
         (PaneDragHandle :y dctx/!top-split-pct dctx/top-split-pct
@@ -134,7 +141,11 @@
         (when dctx/is-score?
           (ScoreWaveformStrip))
         (dom/div
-          (dom/props {:style {:flex "1" :display "flex"
+          ;; The focus-reader class is the ONLY scope for the centered-column
+          ;; CSS. `.ql-editor` also styles card fields and every other Quill
+          ;; surface, so an unscoped padding rule would reach a card modal.
+          (dom/props {:class (if (and is-pdf? dctx/focus?) "focus-reader-column" "")
+                      :style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)
                                                 "column"
                                                 "row")

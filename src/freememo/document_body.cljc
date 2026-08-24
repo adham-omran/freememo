@@ -26,6 +26,7 @@
           !top-pct dctx/!top-pct top-pct dctx/top-pct
           !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
           t-layout dctx/t-layout layout-save dctx/layout-save
+          t-focus dctx/t-focus focus-save dctx/focus-save
           is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?]
     ;; Persist layout on toggle
     (when t-layout
@@ -34,6 +35,16 @@
           (when (some? r)
             (if (:success r) (case r (t-layout)) (t-layout (:error r)))))
         (t-layout)))
+
+    ;; Persist the focus-reader flag on toggle. Same shape as the layout
+    ;; persist above: a non-PDF has no per-root key, so the token is spent
+    ;; without a server call.
+    (when t-focus
+      (if (and is-pdf? pdf-root-id)
+        (let [r (e/server (e/Offload #(settings/save-pdf-focus user-id pdf-root-id focus-save)))]
+          (when (some? r)
+            (if (:success r) (case r (t-focus)) (t-focus (:error r)))))
+        (t-focus)))
 
     ;; Blob-less Live Document: the upload wizard IS the whole body — no
     ;; toolbars, hierarchy/pins, or card table. Normal layout returns once the
@@ -103,6 +114,8 @@
               dctx/!total (:!total m) dctx/!nav-target (:!nav-target m) dctx/!top-split-pct (:!top-split-pct m)
               dctx/!left-pct (:!left-pct m) dctx/card-font-size (:card-font-size m) dctx/t-layout (:t-layout m)
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
+              dctx/focus? (:focus? m) dctx/set-focus! (:set-focus! m)
+              dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)
               dctx/reset-split! (:reset-split! m)
               dctx/is-score? (:is-score? m) dctx/!score-region (:!score-region m)
               dctx/!score-pages (:!score-pages m) dctx/!score-modal-open? (:!score-modal-open? m)

@@ -9,14 +9,21 @@
    the main toolbar's transparent-at-rest / hover-fill rule applies — the whole
    row matches the main ContentToolbar (S2).
 
-   Two layouts:
+   Three layouts. PdfToolbar is a shell that picks one; each is its own e/defn
+   for the JVM 64KB-per-method cap. The order is phone, then focus, then
+   desktop — a 390px bar has its own layout problem, which focus mode does not
+   solve.
      desktop/tablet — all groups inline; action buttons collapse to icon-only
        under the content-aware overflow mechanism (install-overflow-detector!;
        tier-1 hides .icon-label). Page-nav and zoom glyphs carry no .icon-label.
+     focus reader — the PDF pane is gone (plans/focus-reader.md), so page-nav,
+       the focus toggle and mark-done stay inline and scan/copy drop into a ⋮
+       panel. The zoom group is absent: all four of its controls act on a viewer
+       this mode has destroyed.
      phone (C3) — two primary controls + a ⋮ overflow dropdown holding the rest.
        Live docs get the add-photos buttons as primaries; other PDFs get
-       page-nav. Everything else (page-nav for live, zoom, mark-done, scan/copy)
-       drops into .pdf-overflow-panel, one tap away."
+       page-nav. Everything else (page-nav for live, zoom, mark-done, scan/copy,
+       the focus toggle) drops into .pdf-overflow-panel, one tap away."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -70,6 +77,10 @@
           ;; change, scroll included, so scroll-driven navigation is that total
           ;; minus these entries. Recording both here would double-count, since
           ;; go-to-page! makes the viewer emit its own page-change too.
+          ;; go-to-page! is a silent no-op once the PDF.js viewer is gone
+          ;; (pdf_viewer/go-to-page! guards on @!viewer-state), which is what
+          ;; makes a flip work in focus reader: the editor text keys on the page
+          ;; NUMBER, not on a topic id, so on-page-change! alone drives it.
           nav! (fn [p via]
                  (trail/record! :pdf-page {:via via :page p})
                  (viewer/go-to-page! p)
@@ -84,6 +95,13 @@
             (dom/props {:class "btn btn-sm btn-secondary"
                         :title "Previous Page" :disabled prev-disabled?})
             (dom/text "◀")
+            ;; The chord dispatches through this button rather than calling nav!
+            ;; itself: !current-page is frame-local to DocumentViewState, so the
+            ;; keyboard layer needs a handle, and a click on a disabled button
+            ;; is inert — the bounds check is not duplicated.
+            (let [node dom/node]
+              (bus/publish-invoker! :prev-page node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :prev-page node))))
             (dom/On "click"
               (fn [_] (when (and (> page-number 1) (> total 0))
                         (nav! (dec page-number) :prev))) nil)))
@@ -113,9 +131,77 @@
             (dom/props {:class "btn btn-sm btn-secondary"
                         :title "Next Page" :disabled next-disabled?})
             (dom/text "▶")
+            (let [node dom/node]
+              (bus/publish-invoker! :next-page node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :next-page node))))
             (dom/On "click"
               (fn [_] (when (and (< page-number total) (> total 0))
                         (nav! (inc page-number) :next))) nil)))))))
+
+(e/defn PdfFocusToggle
+  "Focus reader on/off. Hides the PDF pane and centers the editor column
+   (plans/focus-reader.md). Mounts inline on desktop and inside the phone
+   overflow panel, so it owns nothing but the click.
+
+   Pre : dctx/focus? and dctx/set-focus! are bound (topic-state's
+         DocumentLayoutState owns both). The write is persisted by
+         DocumentBody's t-focus, not here.
+   Post: one click flips the mode with no server round trip."
+  []
+  (e/client
+    (let [focus? dctx/focus? set-focus! dctx/set-focus!
+          label (if focus? "Exit focus reader" "Focus reader")]
+      (dom/div
+        (dom/props {:class "toolbar-group"
+                    :style {:padding-left "12px"
+                            :border-left "1px solid var(--color-border)"}})
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :aria-label label
+                      :aria-pressed (str (boolean focus?))
+                      :style {:outline (when focus? "1px solid currentColor")}})
+          (tooltip/Tooltip! (if focus?
+                              "Show the PDF pane again"
+                              "Hide the PDF and read the text in a centered column"))
+          (icons/Icon :book-open :size 16)
+          (dom/span (dom/props {:class "icon-label"}) (dom/text label))
+          (let [node dom/node]
+            (bus/publish-invoker! :toggle-focus-reader node (fn [] (.click node)))
+            (e/on-unmount (fn [] (bus/retract-invoker! :toggle-focus-reader node))))
+          (dom/On "click" (fn [_] (set-focus! (not focus?))) nil))))))
+
+(e/defn PdfOverflowTrigger
+  "The ⋮ button that opens a PDF-bar overflow panel. Shared by the phone arm
+   and the focus arm so the two cannot drift apart.
+
+   Pre : `!open` is a client atom holding a boolean.
+   Post: a click flips it. The panel and the backdrop are the caller's."
+  [!open]
+  (e/client
+    (dom/div
+      (dom/props {:class "toolbar-overflow-trigger"
+                  :style {:display "flex" :margin-left "auto"}})
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary"
+                    :aria-label "More PDF controls"
+                    :aria-expanded (str (boolean (e/watch !open)))
+                    :style {:font-weight "bold" :font-size "16px" :line-height "1"}})
+        (tooltip/Tooltip! "More")
+        (icons/Icon :more-vertical :size 16)
+        (dom/On "click" (fn [_] (swap! !open not)) nil)))))
+
+(e/defn PdfOverflowBackdrop
+  "Click-outside layer that closes a PDF-bar overflow panel. Shared by the
+   phone arm and the focus arm. Renders nothing while the panel is closed.
+
+   Pre : `!open` is a client atom holding a boolean.
+   Post: a click on the backdrop sets it false."
+  [!open]
+  (e/client
+    (when (e/watch !open)
+      (dom/div
+        (dom/props {:class "pdf-overflow-backdrop"})
+        (dom/On "click" (fn [_] (reset! !open false)) nil)))))
 
 (e/defn PdfZoomControls
   "−  [zoom%]  +  │  fit-toggle  │  rotate  │  layout-toggle.
@@ -293,92 +379,146 @@
           (e/client
             (js/setTimeout (fn [] (reset! !show false)) 3000))))))))
 
+(e/defn PdfPhoneToolbar
+  "Phone (C3): two primary controls + a ⋮ overflow dropdown holding the rest.
+   Own e/defn for the 64KB method cap.
+
+   Focus reader appears here only as its toggle, inside the overflow panel: a
+   390px bar affords two primaries, and burying page-nav to surface the toggle
+   would cost more than it buys. So on a phone the mode hides the pane and
+   changes nothing else about this bar."
+  [extract-style]
+  (e/client
+    (let [pdf-root-id dctx/pdf-root-id is-live? dctx/is-live?
+          !overflow-open (atom false)
+          overflow-open  (e/watch !overflow-open)]
+      (dom/div
+        (dom/props {:class "toolbar-container pdf-toolbar-container"})
+        (dom/div
+          (dom/props {:class "toolbar pdf-toolbar-bar"})
+          ;; Primary controls — live doc: add-photos; otherwise page-nav.
+          (if is-live?
+            (dom/div
+              (dom/props {:class "toolbar-group"})
+              (binding [dctx/document-id pdf-root-id dctx/compact? true]
+                (LiveDocAddPhotos)))
+            (PdfPageNav))
+          ;; ⋮ trigger (pushed right).
+          (PdfOverflowTrigger !overflow-open)
+          ;; Overflow panel — secondary controls, one tap away.
+          (when overflow-open
+            (dom/div
+              (dom/props {:class "pdf-overflow-panel"})
+              (when is-live? (PdfPageNav))
+              (PdfZoomControls)
+              ;; Score topics have no page children — done/scan/copy all
+              ;; target page topics. They get the notation rect tool.
+              (if dctx/is-score?
+                (e/amb (PdfFocusToggle) (ScoreRectButton))
+                (e/amb
+                  (PdfFocusToggle)
+                  (PdfMarkDone)
+                  (binding [dctx/extract-style extract-style dctx/is-live? false]
+                    (PdfScanCopy))))))
+          (PdfOcrError))
+        (PdfOverflowBackdrop !overflow-open)))))
+
+(e/defn PdfFocusToolbar
+  "Focus reader: the reading controls inline, everything else one click away.
+   Own e/defn for the 64KB method cap (plans/focus-reader.md §3.8).
+
+   Inline are page-nav, the focus toggle, Mark Done and the OCR error, plus the
+   ⋮ trigger. The zoom group is absent, not collapsed: all four of its controls
+   — zoom, fit, rotate and the layout toggle — act on a viewer this mode has
+   destroyed. Arm selection is the only gate, so turning the mode off restores
+   them unchanged.
+
+   The collapse detector is installed for the same reason the desktop arm
+   installs it, and it has the same single effect here: no group in this bar
+   carries a `.toolbar-collapse-*` class, so tier 1 and above hide `.icon-label`
+   and nothing ever leaves the DOM."
+  [extract-style]
+  (e/client
+    (let [score? dctx/is-score?
+          !tier (atom 0)
+          _tier (e/watch !tier)
+          !overflow-open (atom false)
+          overflow-open  (e/watch !overflow-open)]
+      (dom/div
+        (dom/props {:class "toolbar-container pdf-toolbar-container"})
+        (let [container-node dom/node]
+          (dom/div
+            (dom/props {:class "toolbar pdf-toolbar-bar"})
+            (let [toolbar-node dom/node
+                  cleanup (install-overflow-detector!
+                            container-node toolbar-node !tier !overflow-open)]
+              (e/on-unmount cleanup)
+              (PdfPageNav)
+              (PdfFocusToggle)
+              ;; Score topics have no page children — Mark Done targets a page
+              ;; topic. They get the notation rect tool instead, and their
+              ;; overflow panel would be empty, so they get no ⋮ either.
+              (if score?
+                (ScoreRectButton)
+                (PdfMarkDone))
+              (when-not score?
+                (PdfOverflowTrigger !overflow-open))
+              (when (and overflow-open (not score?))
+                (dom/div
+                  (dom/props {:class "pdf-overflow-panel"})
+                  (binding [dctx/extract-style extract-style]
+                    (PdfScanCopy))))
+              (PdfOcrError))))
+        (when-not score?
+          (PdfOverflowBackdrop !overflow-open))))))
+
+(e/defn PdfDesktopToolbar
+  "Desktop / tablet: all groups inline + content-aware collapse. Own e/defn for
+   the 64KB method cap."
+  [extract-style]
+  (e/client
+    (let [!tier (atom 0)
+          _tier (e/watch !tier)
+          !overflow-open (atom false)]
+      (dom/div
+        ;; pdf-toolbar-container: ranks this bar's stacking context below the
+        ;; main ContentToolbar and above EditorToolbar, so dropped tooltips
+        ;; and the modal backdrop layer correctly across the stacked bars.
+        (dom/props {:class "toolbar-container pdf-toolbar-container"})
+        (let [container-node dom/node]
+          (dom/div
+            (dom/props {:class "toolbar pdf-toolbar-bar"})
+            (let [toolbar-node dom/node
+                  cleanup (install-overflow-detector!
+                            container-node toolbar-node !tier !overflow-open)]
+              (e/on-unmount cleanup)
+              (PdfViewerToolbar)
+              (PdfFocusToggle)
+              ;; Score topics have no page children — done/scan/copy all
+              ;; target page topics. They get the notation rect tool.
+              (if dctx/is-score?
+                (ScoreRectButton)
+                (e/amb
+                  (PdfMarkDone)
+                  (binding [dctx/extract-style extract-style]
+                    (PdfScanCopy))))
+              (PdfOcrError))))))))
+
 (e/defn PdfToolbar
-  "props: {:user-id :enc-key :pdf-root-id :page-number :total :layout :is-live?
-           :scan-dpi :llm-enabled? :scanning-pages :ocr-errors :phone?
-           :on-page-change! :on-layout-toggle!}
-   `pdf-root-id` is the document root — it serves as document-id (LiveDoc),
-   done/scan target, and copy-extract scope (all the same value upstream).
-   `phone?` selects the compact C3 layout (two primaries + ⋮ overflow)."
+  "Second command bar for a PDF item. Reads ambient doc-context and picks one of
+   three arms. Thin shell — each arm is its own e/defn for the 64KB method cap.
+
+   Arm order is phone, then focus, then desktop. The phone arm wins over focus
+   because a 390px bar has its own layout problem, which focus mode does not
+   solve — see PdfPhoneToolbar."
   []
   (e/client
-    (let [user-id dctx/user-id enc-key dctx/enc-key pdf-root-id dctx/pdf-root-id
-          page-number dctx/page-number total dctx/total layout dctx/layout is-live? dctx/is-live?
-          scan-dpi dctx/scan-dpi llm-enabled? dctx/llm-enabled? scanning-pages dctx/scanning-pages
-          ocr-errors dctx/ocr-errors phone? dctx/phone?
-          on-page-change! dctx/on-page-change! on-layout-toggle! dctx/on-layout-toggle!
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id
+          phone? dctx/phone? focus? dctx/focus?
           ;; Reactive per-PDF extraction style (drives Copy text / Copy all).
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           extract-style (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id pdf-root-id)))]
-      (if phone?
-        ;; ── Phone (C3): two primaries + ⋮ overflow dropdown ──────────────
-        (let [!overflow-open (atom false)
-              overflow-open  (e/watch !overflow-open)]
-          (dom/div
-            (dom/props {:class "toolbar-container pdf-toolbar-container"})
-            (dom/div
-              (dom/props {:class "toolbar pdf-toolbar-bar"})
-              ;; Primary controls — live doc: add-photos; otherwise page-nav.
-              (if is-live?
-                (dom/div
-                  (dom/props {:class "toolbar-group"})
-                  (binding [dctx/document-id pdf-root-id dctx/compact? true]
-                    (LiveDocAddPhotos)))
-                (PdfPageNav))
-              ;; ⋮ trigger (pushed right).
-              (dom/div
-                (dom/props {:class "toolbar-overflow-trigger"
-                            :style {:display "flex" :margin-left "auto"}})
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary"
-                              :aria-label "More PDF controls"
-                              :style {:font-weight "bold" :font-size "16px" :line-height "1"}})
-                  (tooltip/Tooltip! "More")
-                  (icons/Icon :more-vertical :size 16)
-                  (dom/On "click" (fn [_] (swap! !overflow-open not)) nil)))
-              ;; Overflow panel — secondary controls, one tap away.
-              (when overflow-open
-                (dom/div
-                  (dom/props {:class "pdf-overflow-panel"})
-                  (when is-live? (PdfPageNav))
-                  (PdfZoomControls)
-                  ;; Score topics have no page children — done/scan/copy all
-                  ;; target page topics. They get the notation rect tool.
-                  (if dctx/is-score?
-                    (ScoreRectButton)
-                    (e/amb
-                      (PdfMarkDone)
-                      (binding [dctx/extract-style extract-style dctx/is-live? false]
-                        (PdfScanCopy))))))
-              (PdfOcrError))
-            (when overflow-open
-              (dom/div
-                (dom/props {:class "pdf-overflow-backdrop"})
-                (dom/On "click" (fn [_] (reset! !overflow-open false)) nil)))))
-
-        ;; ── Desktop / tablet: all groups inline + content-aware collapse ──
-        (let [!tier (atom 0)
-              _tier (e/watch !tier)
-              !overflow-open (atom false)]
-          (dom/div
-            ;; pdf-toolbar-container: ranks this bar's stacking context below the
-            ;; main ContentToolbar and above EditorToolbar, so dropped tooltips
-            ;; and the modal backdrop layer correctly across the stacked bars.
-            (dom/props {:class "toolbar-container pdf-toolbar-container"})
-            (let [container-node dom/node]
-              (dom/div
-                (dom/props {:class "toolbar pdf-toolbar-bar"})
-                (let [toolbar-node dom/node
-                      cleanup (install-overflow-detector!
-                                container-node toolbar-node !tier !overflow-open)]
-                  (e/on-unmount cleanup)
-                  (PdfViewerToolbar)
-                  ;; Score topics have no page children — done/scan/copy all
-                  ;; target page topics. They get the notation rect tool.
-                  (if dctx/is-score?
-                    (ScoreRectButton)
-                    (e/amb
-                      (PdfMarkDone)
-                      (binding [dctx/extract-style extract-style]
-                        (PdfScanCopy))))
-                  (PdfOcrError))))))))))
+      (cond
+        phone? (PdfPhoneToolbar extract-style)
+        focus? (PdfFocusToolbar extract-style)
+        :else  (PdfDesktopToolbar extract-style)))))

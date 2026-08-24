@@ -5296,3 +5296,27 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 @media (prefers-reduced-motion: reduce) {
     .ql-editor .anchor-target-flash { animation: none; outline: 2px solid var(--color-primary); }
 }
+
+/* ── Focus reader (plans/focus-reader.md §6) ───────────────────────────────
+   The mode unmounts the PDF pane, so the editor takes the whole content
+   column. A text column that fills a wide pane has no comfortable line
+   length, so the column is capped and centered — Notion's shape.
+
+   The padding goes on `.ql-editor` and NOT on `.ql-container`, because
+   `.ql-container` is the element that scrolls (see the Quill overrides
+   above). Padding the inner box keeps the scrollbar at the pane edge, where
+   Notion keeps it, rather than at the edge of the text column.
+
+   `.focus-reader-column` is set by document-view/ContentColumn and is the
+   only scope. `.ql-editor` also styles card fields, the assistant panel and
+   every other Quill surface in the app, so an unscoped rule would reach a
+   card modal.
+
+   The 15px floor is Quill's own `.ql-editor` inline padding: below that the
+   text would sit against the wrapper border on a narrow pane. */
+.focus-reader-column {
+    --focus-column-width: 720px;
+}
+.focus-reader-column .ql-editor {
+    padding-inline: max(15px, calc((100% - var(--focus-column-width)) / 2));
+}

@@ -40,3 +40,32 @@
     (testing (.getPath f)
       (is (nil? (re-find bump-pattern (slurp f)))
         "hand-written channel bump — declare :views in freememo.commands and call bump!/bump-channels! instead"))))
+
+;; ── Page-flip chords ────────────────────────────────────────────────────────
+;; `effective-bind` and `display-chord` are pure, so the substitution and the
+;; two key-name glyphs are testable without a browser. `util/mac-platform?`
+;; returns false on the JVM, so these assert the NON-macOS branch — the one
+;; that carries the substitution and is therefore the one that can be wrong.
+
+(deftest page-flip-chords-avoid-the-reserved-tab-accelerator
+  (testing "off macOS the two page-flip chords take alt, not ctrl"
+    ;; ctrl+pg-up / ctrl+pg-down are Chrome's previous-tab and next-tab
+    ;; (IsReservedCommandOrKey), so the page never receives them.
+    (is (= "alt+pg-up" (commands/effective-bind :prev-page "meta+pg-up")))
+    (is (= "alt+pg-down" (commands/effective-bind :next-page "meta+pg-down"))))
+  (testing "every other bound command keeps the meta→ctrl substitution"
+    (doseq [[id bind] (commands/bindings)
+            :when (not (contains? #{:prev-page :next-page :toggle-palette} id))]
+      (testing (str id)
+        (is (not (str/includes? (commands/effective-bind id bind) "alt+pg"))
+          "an unrelated command picked up the page-flip substitution")))))
+
+(deftest display-chord-names-the-page-keys
+  (testing "goog's pg-up / pg-down do not reach a label as PG-UP / PG-DOWN"
+    (is (= "Alt+PgUp" (commands/display-chord :prev-page)))
+    (is (= "Alt+PgDn" (commands/display-chord :next-page))))
+  (testing "no bound command renders a raw goog key name"
+    (doseq [[id _] (commands/bindings)]
+      (testing (str id)
+        (is (not (str/includes? (commands/display-chord id) "PG-"))
+          "display-chord fell through to its upper-case fallback")))))

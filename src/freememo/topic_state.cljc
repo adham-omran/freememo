@@ -192,6 +192,10 @@
           initial-layout (e/server
                            (when is-pdf?
                              (e/Offload #(or (settings/get-pdf-layout user-id pdf-root-id) "left-right"))))
+          ;; Focus reader — per PDF root, separate from the split orientation.
+          initial-focus? (e/server
+                           (boolean (when is-pdf?
+                                      (e/Offload #(settings/get-pdf-focus user-id pdf-root-id)))))
           initial-top-pct (e/server (e/Offload #(settings/get-card-split user-id)))
 
           ;; Bibliography target: PDF pages own no bibliography (resolve to the
@@ -221,7 +225,8 @@
        :pdf-page-count (:pdf-page-count overview) :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content
        :static-content-topic-id static-content-topic-id
-       :initial-page initial-page :initial-layout initial-layout :initial-top-pct initial-top-pct
+       :initial-page initial-page :initial-layout initial-layout :initial-focus? initial-focus?
+       :initial-top-pct initial-top-pct
        :bib-topic-id bib-topic-id :pdf-root? pdf-root? :citation citation :pdf-status pdf-status
        ;; settings + server-watched PDF state
        :card-font-size card-font-size :scan-dpi scan-dpi
@@ -237,7 +242,7 @@
    Post: returns the layout/split prop slice for DocumentBody."
   [resolved]
   (e/client
-    (let [{:keys [user-id initial-layout initial-top-pct]} resolved
+    (let [{:keys [user-id initial-layout initial-focus? initial-top-pct]} resolved
           ;; Content↕card-table split (global per-user, persisted). Seeded from
           ;; settings; nil → client default. Manual drag + double-click persist
           ;; via !top-pct-save; layout toggle resets live but does not persist.
@@ -267,6 +272,18 @@
                              (reset! !layout new-l)
                              (reset! !layout-save new-l)
                              (reset! !top-pct new-top-pct)))
+          ;; Focus reader (persisted per-doc, same shape as !layout). The PDF
+          ;; pane unmounts and the editor column centers. Kept apart from
+          ;; !layout so the stored orientation survives the mode untouched.
+          !focus? (atom (boolean initial-focus?))
+          focus? (e/watch !focus?)
+          !focus-save (atom nil)
+          focus-save (e/watch !focus-save)
+          [t-focus _] (e/Token focus-save)
+          set-focus! (fn [v]
+                       (let [v (boolean v)]
+                         (reset! !focus? v)
+                         (reset! !focus-save v)))
           !left-pct (atom 50)
           left-pct (e/watch !left-pct)
           !top-split-pct (atom 50)
@@ -285,6 +302,7 @@
       {:top-pct top-pct :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!
        :layout layout :layout-save layout-save :t-layout t-layout :toggle-layout! toggle-layout!
        :top-bottom? (= layout "top-bottom")
+       :focus? focus? :focus-save focus-save :t-focus t-focus :set-focus! set-focus!
        :left-pct left-pct :!left-pct !left-pct :top-split-pct top-split-pct :!top-split-pct !top-split-pct
        :transcript-pct transcript-pct :!transcript-pct !transcript-pct})))
 
@@ -299,13 +317,19 @@
   [resolved topic-id]
   (e/client
     (let [{:keys [refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
-                  static-content static-content-topic-id queue-ctx]} resolved
+                  pdf-page-count static-content static-content-topic-id queue-ctx]} resolved
           ;; Current PDF page (mutated by PdfPane via callback)
           !current-page (atom initial-page)
           current-page (e/watch !current-page)
           ;; PDF page count — surfaced by PdfViewerComponent via on-total!,
           ;; consumed by PdfToolbar's "of N" + nav-button disabled states.
-          !total (atom 0)
+          ;;
+          ;; Seeded from the server count (db/count-pages) rather than 0,
+          ;; because focus mode unmounts the viewer and on-total! is then the
+          ;; only writer that never runs. Both nav buttons disable on
+          ;; `(= total 0)`, so an unseeded atom strands them. The viewer
+          ;; overwrites this with its own count as soon as it mounts.
+          !total (atom (or pdf-page-count 0))
           total (e/watch !total)
           ;; Same-doc page-jump channel from HierarchySidePanel. Hierarchy resets
           ;; {:topic-id pdf-root-id :page n} on sibling-page click; we derive
