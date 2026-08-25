@@ -14,6 +14,7 @@
    [hyperfiddle.electric3 :as e]
    [freememo.viewport :as viewport]
    [freememo.bibliography-form :as bibform]
+   [freememo.page-merge :as page-merge]
    [clojure.string :as str]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
@@ -194,6 +195,10 @@
           pdf-root-id (:pdf-root-id overview)
           is-pdf? (some? pdf-root-id)
           is-score? (boolean (:is-score? overview))
+          ;; The document's page count, bound once. It bounds `initial-page`
+          ;; below and seeds DocumentViewState's `!total`, which bounds every
+          ;; later page change — one quantity, named once.
+          pdf-page-count (:pdf-page-count overview)
           root-topic-id (:root-topic-id overview)
           ;; Content body fetched separately and gated: PDF panes get their
           ;; text from get-page-text*, so fetching the topic's stored content
@@ -212,12 +217,21 @@
           ;; initial-page precedence: URL page anchor > persisted last-page > 1
           ;; for a PDF root; a page-topic carries its page number intrinsically.
           ;; The last-page fetch is skipped when the URL already supplies a page.
+          ;;
+          ;; CLAMPED, because both sources can name a page the document does not
+          ;; have. A hand-typed URL is one. The other is a value the shipped
+          ;; scroll-report leak already WROTE to `last_page_<doc>`, which is why
+          ;; clamping happens on read and no migration over `settings` exists —
+          ;; a stored 40 on a 5-page document heals itself here, on the next
+          ;; open. A page topic needs no clamp: it carries its own number.
           initial-page (when is-pdf?
                          (cond
                            (= kind "page") (:page-number overview)
-                           (= kind "pdf") (or url-page
-                                              (e/server (e/Offload #(settings/get-last-page user-id pdf-root-id)))
-                                              1)
+                           (= kind "pdf") (page-merge/clamp-page
+                                            (or url-page
+                                                (e/server (e/Offload #(settings/get-last-page user-id pdf-root-id)))
+                                                1)
+                                            pdf-page-count)
                            :else 1))
           initial-layout (e/server
                            (when is-pdf?
@@ -252,7 +266,7 @@
        :video-last-pos-ms (:video-last-pos-ms overview)
        :video-has-audio? (boolean (:video-has-audio? overview))
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
-       :pdf-page-count (:pdf-page-count overview) :root-topic-id root-topic-id
+       :pdf-page-count pdf-page-count :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content
        :static-content-topic-id static-content-topic-id
        :initial-page initial-page :initial-layout initial-layout :initial-focus? initial-focus?
@@ -380,9 +394,26 @@
           ;; own scroll and jump events; DocumentToolbars binds it for the
           ;; toolbar's arrows and page field. Both were `(reset! !current-page
           ;; p)` written twice, and neither recorded the page for persistence.
+          ;;
+          ;; CLAMPED HERE, and here only, because this is the single funnel:
+          ;; the toolbar arrows, the page field, the PDF viewer's own scroll and
+          ;; the merged editor's scroll report all pass through it. One call
+          ;; covers every current caller and every future one, which a check at
+          ;; each site would not.
+          ;;
+          ;; It DEREFS `!total` rather than closing over the `total` signal.
+          ;; This fn travels in the prop map that TopicPage merges and passes as
+          ;; one argument, so a reactive value captured here would rebuild the
+          ;; closure and change that map every time the page count moved — which
+          ;; it does at least twice per document, as the server count gives way
+          ;; to the viewer's. Reading the atom keeps the fn built once and still
+          ;; answers with the current count. `!total` is seeded from the same
+          ;; `pdf-page-count` that bounds `initial-page`, so both clamps use one
+          ;; quantity.
           on-page-change! (fn [p]
-                            (reset! !current-page p)
-                            (reset! !last-page-save p))
+                            (let [p (page-merge/clamp-page p (deref !total))]
+                              (reset! !current-page p)
+                              (reset! !last-page-save p)))
           ;; Same-doc page-jump channel from HierarchySidePanel. Hierarchy resets
           ;; {:topic-id pdf-root-id :page n} on sibling-page click; we derive
           ;; target-page for PdfPane and clear nav-target one tick later so the

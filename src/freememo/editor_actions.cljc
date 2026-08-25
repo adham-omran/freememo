@@ -3,6 +3,14 @@
    insertion, formula insert/edit, and the pasted/dropped/picked image re-host
    path that keeps base64 out of both editors (`install-image-rehost!`).
 
+   It also owns focus reader's page boundaries inside the editor: where they
+   are (`page-at-scroll-top`, `!marker-offsets`), moving to one
+   (`scroll-to-page!`, `restore-page-on-install!`), reporting the one the reader
+   reached (`!scrolled-page`, `install-page-marker-tracking!`), and putting a
+   deleted one back (`insert-page-break!`, `restorable-page`). The vocabulary
+   itself — ids, merging, splitting — is `freememo.page-merge`, which this
+   requires and which knows nothing about a DOM.
+
    Extracted from quill_field so both the QuillField lifecycle and the custom
    format-menu drive the same behavior without a namespace cycle (format-menu
    requires this ns; this ns requires neither). CLJS side effects; the CLJ
@@ -722,22 +730,63 @@
 ;; behind: `install!` returns a fn that clears it.
 (defonce ^:private !marker-tracking (atom nil))
 
-;; The page the reader has scrolled to in a merged document, or nil.
+;; The page the reader has scrolled to, as `{:doc-id … :page …}`, or nil.
 ;;
 ;; The editor writes; Electric watches. Same direction as
 ;; `rich-text-editor/!dirty-html`, and for the same reason: the scroll listener
 ;; lives with the Quill instance, and the page-change funnel lives in the
 ;; reactive graph.
+;;
+;; TAGGED WITH THE DOCUMENT, like `!dirty-html`, and for the same reason. This
+;; is a `defonce`, so it outlives every editor, and no teardown clears it — the
+;; tracking teardown clears `!marker-offsets` and `!marker-tracking` and leaves
+;; this one. An untagged page number therefore leaked across documents: reading
+;; a 200-page document to page 40 and then opening a 5-page one in-app set the
+;; second to page 40, wrote `/viewer/topic/<id>/40` into the address bar, and
+;; stored 40 as its last page. Reopening the SAME document hides this, because
+;; the stored last page equals the stale value and the consumer's inequality
+;; guard never fires.
+;;
+;; Tagging beats clearing on teardown: a tag makes a stale value unusable by
+;; construction, where clearing is a discipline every future teardown has to
+;; remember. `merged-page-bridge` checks `:doc-id` against `editor-doc-id`.
 (defonce !scrolled-page (atom nil))
+
+(defonce ^:private !scroll-target
+  ;; Where the last programmatic scroll asked to go, as `{:page n :scroll-top px}`.
+  ;;
+  ;; `scroll-to-page!` writes it; `page-at-scroll-top` reads it and answers
+  ;; `:page` while the scroller is still at `:scroll-top`. One pixel of reader
+  ;; scrolling makes it stop matching, and the top-edge rule takes over.
+  ;;
+  ;; WHY IT IS NEEDED. A document's last pages are shorter than the viewport, so
+  ;; their markers cannot reach the top edge — the scroller runs out first.
+  ;; Measured on a 200-page document: markers ~392px apart, `max-scroll` 77500,
+  ;; marker 199 at offset ~78008. So `scroll-to-page!` succeeds for 199 and 200
+  ;; alike and both land at the same scrollTop, where the top-edge rule answers
+  ;; 198 for both. Every page inside the final viewport was unreportable.
+  ;;
+  ;; POSITION, NOT A TIME WINDOW. The record is compared against the live
+  ;; scrollTop, so there is no suppression period to get wrong and no ordering
+  ;; against the scroll event it causes. It also needs no special case for the
+  ;; bottom: a reader who scrolls to the end THEMSELVES matches no record and
+  ;; gets 198, which is the page they are reading.
+  ;;
+  ;; Cleared by `invalidate-marker-offsets!`, because the two go stale together:
+  ;; an edit or a resize can leave scrollTop equal while the page under it
+  ;; changed.
+  (atom nil))
 
 (defn scroll-to-page!
   "Scroll the editor so page `page`'s boundary marker sits at the top of its
    scroll container. Returns true when a marker for that page was found.
 
    Pre : `ed` is a Quill instance.
-   Post: on true, the marker is the topmost visible line. On false, nothing
-         moved — a page whose marker the reader deleted has nowhere to scroll
-         to, and guessing would land the reader on the wrong text.
+   Post: on true, the marker is as close to the top as the scroller allows, and
+         `page-at-scroll-top` answers `page` until the reader scrolls. On false,
+         nothing moved and nothing was recorded — a page whose marker the reader
+         deleted has nowhere to scroll to, and guessing would land the reader on
+         the wrong text.
 
    This is what page navigation means in merged mode: the editor already holds
    every page, so a flip is a scroll rather than a fetch."
@@ -751,6 +800,11 @@
            ;; offsetTop: the scroll container is Quill's own, and its identity
            ;; differs between the two editors in this app.
            (.scrollIntoView el #js {:block "start" :behavior "auto"})
+           ;; `behavior "auto"` is instant, so scrollTop is already final here.
+           ;; Recording it is what lets page-at-scroll-top answer a page whose
+           ;; marker the scroller could not bring all the way up — see
+           ;; !scroll-target.
+           (reset! !scroll-target {:page page :scroll-top (.-scrollTop (.-root ed))})
            true)))
      :clj nil))
 
@@ -773,16 +827,23 @@
   (atom nil))
 
 (defn invalidate-marker-offsets!
-  "Mark the offset table stale. Cheap — one atom write.
+  "Mark the offset table stale, and drop the programmatic-scroll record with it.
 
-   Post: the next `page-at-scroll-top` rebuilds the table.
+   Post: the next `page-at-scroll-top` rebuilds the table, and answers from the
+         top edge until the next `scroll-to-page!`.
 
    Called on `text-change` and on a resize of the scroller, which are the two
    things that move a marker. Deliberately NOT a rebuild: an edit would then pay
    for every marker on every keystroke, which is worse than what the table
-   replaced. The rebuild is deferred to the next scroll that needs an answer."
+   replaced. The rebuild is deferred to the next scroll that needs an answer.
+
+   `!scroll-target` goes at the same moment because it goes stale for the same
+   reason: an edit above the caret leaves scrollTop equal while a different page
+   sits under it, and the record would then name the wrong one."
   []
-  #?(:cljs (reset! !marker-offsets nil) :clj nil))
+  #?(:cljs (do (reset! !marker-offsets nil)
+               (reset! !scroll-target nil))
+     :clj nil))
 
 #?(:cljs
    (defn- build-marker-offsets!
@@ -821,7 +882,15 @@
    NO REMEMBERED ANSWER. The table is derived from the DOM and the answer is
    recomputed from `scrollTop` every call, so a remount — which wipes the table —
    changes nothing but the cost of the next call. That is the rule the vendored
-   `Scroll-window` follows for its offset."
+   `Scroll-window` follows for its offset.
+
+   A PROGRAMMATIC SCROLL'S OWN ANSWER WINS, while the scroller is still where it
+   put us. A document's last pages are shorter than the viewport, so their
+   markers cannot reach the top edge and `scroll-to-page!` leaves several of them
+   at the SAME scrollTop — the top-edge rule alone answers the same page for all
+   of them, so none was reachable. `!scroll-target` records which one was asked
+   for, and that record is compared by position, so a reader who scrolls one
+   pixel gets the top-edge answer back."
   [ed]
   #?(:cljs
      (let [^js ed ed
@@ -835,12 +904,83 @@
            ^js root (.-root ed)
            table (or @!marker-offsets (build-marker-offsets! root))]
        (when (seq table)
-         ;; A small tolerance, so a marker flush with the top edge counts as
-         ;; reached rather than as one line away.
-         (let [limit (+ (.-scrollTop root) 4)]
-           (or (->> table (take-while (fn [[_ offset]] (<= offset limit))) last first)
-               ;; Scrolled above every marker: the document's own first page.
-               (first (first table))))))
+         (let [scrolled (.-scrollTop root)
+               target @!scroll-target]
+           (if (and target (= (:scroll-top target) scrolled))
+             ;; Still exactly where a programmatic scroll left us — see
+             ;; !scroll-target.
+             (:page target)
+             ;; A small tolerance, so a marker flush with the top edge counts as
+             ;; reached rather than as one line away.
+             (let [limit (+ scrolled 4)]
+               (or (->> table (take-while (fn [[_ offset]] (<= offset limit))) last first)
+                   ;; Scrolled above every marker: the document's own first page.
+                   (first (first table))))))))
+     :clj nil))
+
+(defonce ^:private !restored-generation
+  ;; The content generation this editor was last returned to a page for.
+  ;;
+  ;; A plain atom read by a plain fn, NOT a guard inside an e/defn body:
+  ;; Electric re-evaluates reactive bodies unpredictably, and CLAUDE.md's
+  ;; `init-viewer!` rule is that a generation guard belongs in normally
+  ;; compiled code. Same shape as `!init-gen`.
+  ;;
+  ;; UNTAGGED, unlike `!scrolled-page` two screens up, and the difference is
+  ;; real rather than an oversight. A generation is a global monotonic counter,
+  ;; so a value left behind by one document can never equal one the next
+  ;; document produces — staleness is self-defeating. A page NUMBER is drawn
+  ;; from a small range every document shares, so a stale one is indistinguishable
+  ;; from a fresh one and needs the document to tell them apart.
+  (atom nil))
+
+(defn restore-page-on-install!
+  "Return the editor to `page` after a body install, once per generation.
+
+   Pre : `generation` is `rich-text-editor/!content-generation`'s current value.
+         `get-editor` is a no-argument fn answering the live Quill instance, or
+         nil while one is being built — it is required, not optional. `page` is
+         the page the reader is on.
+   Post: nil when this generation was already handled, or when the editor or
+         `page` is nil — nothing moved and nothing was recorded, so the next
+         call for the same generation still gets its chance.
+   Post: otherwise the returned page is the one the editor is NOW showing, and
+         the generation is recorded. That is `page` when its marker was found,
+         and the document's real topmost page when it was not.
+   Inv : at most one restore per install. A page change with no new install
+         returns nil, so a reader who scrolls is never pulled back.
+
+   THE FALLBACK IS THE POINT, not an error path. A reader can delete a page's
+   boundary, and `scroll-to-page!` then refuses rather than guessing at text.
+   Answering with the page actually on screen keeps ONE source of truth: the
+   caller feeds it to the page-change funnel, so the toolbar and the URL agree
+   with what the reader can see. Holding the requested page instead would leave
+   the field naming a page nothing on screen belongs to, until the reader
+   happened to scroll.
+
+   TAKES A FN, NOT THE EDITOR, and that is not a style choice. A zero-argument
+   call inside an Electric body has no inputs, so work-skipping evaluates it
+   once and holds the result forever — `(editor/current-editor)` written at the
+   call site stayed nil from before the editor was built, and no install ever
+   restored anything. Measured: the sibling `e/watch` fired for generation 0 and
+   1 while this saw nil both times. A var read is a stable input, so the call
+   re-runs when the generation changes and this reads the editor that exists
+   now. It is also why the fn is passed rather than `!editor-state`: the map's
+   shape belongs to the editor namespace, which this one cannot require."
+  [generation get-editor page]
+  #?(:cljs
+     (let [ed (get-editor)]
+       (when (and ed page (not= generation @!restored-generation))
+         ;; Record only ON an answer, so the postcondition above holds: a nil
+         ;; return means this generation is still unhandled and the next
+         ;; evaluation gets its turn.
+         (let [landed (if (scroll-to-page! ed page) page (page-at-scroll-top ed))]
+           (when landed
+             (reset! !restored-generation generation)
+             (when js/goog.DEBUG
+               (js/console.log "[merged] restored generation" generation
+                 "to page" landed (when (not= landed page) (str "(asked " page ")")))))
+           landed)))
      :clj nil))
 
 (defn install-page-marker-tracking!

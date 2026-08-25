@@ -105,6 +105,25 @@
 ;; A boolean changes twice per editor lifetime, so a watch on it fires twice.
 (defonce !editor-ready? (atom false))
 
+;; How many times a document body has been installed into the editor.
+;;
+;; Bumped by the two sites that install one: `build-editor!` on a cold build,
+;; and `set-content!` on a real replacement. NEVER on `set-content!`'s
+;; length-equality skip — that skip exists to preserve scroll, so a bump there
+;; would report an install that did not happen.
+;;
+;; NOT `!init-gen`, which counts editor BUILDS so a build waiting on KaTeX can
+;; tell it has been superseded. This counts installs so a reader can tell the
+;; body under it was replaced. One build can install twice: the component builds
+;; empty when the body has not arrived, then installs it through `set-content!`.
+;;
+;; WHY ANYONE NEEDS IT. Every install puts the editor back at scrollTop 0, and
+;; in merged reading that is page 1 whatever page the reader asked for. Four
+;; entrances reach it — a deep link, turning the mode on, reopening the document
+;; in-app, and an OCR scan finishing mid-read — so a mount hook would fix one of
+;; the four. `merged-page-bridge` watches this and restores the page.
+(defonce !content-generation (atom 0))
+
 (defn current-editor
   "The live document-editor Quill instance, or nil.
 
@@ -378,10 +397,19 @@
                               ;; finds no marker outside merged mode and reports
                               ;; nothing, which costs one querySelectorAll per
                               ;; scroll event and needs no mode flag here.
+                              ;; The document is read LIVE from !editor-state,
+                              ;; never closed over: `update-topic-id!` changes it
+                              ;; without rebuilding, which is exactly what leaving
+                              ;; merged mode does.
                               :page-marker-teardown
                               (editor-actions/install-page-marker-tracking! editor
-                                #(reset! editor-actions/!scrolled-page %))})
+                                (fn [page]
+                                  (reset! editor-actions/!scrolled-page
+                                    {:doc-id (:topic-id @!editor-state) :page page})))})
        (reset! !editor-ready? true)
+       ;; Content is in the DOM (setContents above) and !editor-state is set, so
+       ;; a reader woken by this bump can find the editor and its markers.
+       (swap! !content-generation inc)
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
@@ -457,7 +485,12 @@
                  delta (.convert clipboard #js {:html for-editor})]
              (.setText ed "" "api")
              (.setContents ed delta "api")
-             (.clear (.-history ed))))
+             (.clear (.-history ed))
+             ;; A real replacement, so the reader's scroll position is gone.
+             ;; Inside the `when`, never beside it: the skip above is what keeps
+             ;; scroll, and a bump there would report an install that never
+             ;; happened. See !content-generation.
+             (swap! !content-generation inc)))
          true))))
 
 (defn update-topic-id!

@@ -181,3 +181,38 @@
   (testing "the answer is bounded by `all`, so it cannot mint a page number"
     (is (nil? (pm/next-missing-page #{1 2} 2 [1 2])))
     (is (= 2 (pm/next-missing-page #{1 3} 1 [1 2 3])))))
+
+;; ── The page-number bound ───────────────────────────────────────────────────
+
+(deftest clamp-bounds-a-page-to-the-pages-a-document-has
+  (testing "inside the range is unchanged"
+    (is (= 1 (pm/clamp-page 1 5)))
+    (is (= 3 (pm/clamp-page 3 5)))
+    (is (= 5 (pm/clamp-page 5 5))))
+  (testing "above the last page settles on the last page"
+    (is (= 5 (pm/clamp-page 40 5)))
+    (is (= 883 (pm/clamp-page 100000 883))))
+  (testing "below the first page settles on page 1"
+    (is (= 1 (pm/clamp-page 0 5)))
+    (is (= 1 (pm/clamp-page -3 5))))
+  (testing "a one-page document"
+    (is (= 1 (pm/clamp-page 40 1)))))
+
+(deftest clamp-passes-through-when-the-count-is-not-known
+  (testing "0 is the seeded count before the viewer reports its own"
+    (is (= 40 (pm/clamp-page 40 0))))
+  (testing "nil is a topic with no page children — a score topic"
+    (is (= 40 (pm/clamp-page 40 nil))))
+  (testing "a negative count is nonsense, and is not a reason to move the page"
+    (is (= 40 (pm/clamp-page 40 -1))))
+  (testing "a non-number count cannot be compared against"
+    (is (= 40 (pm/clamp-page 40 "5"))))
+  (testing "no page means nothing to bound — a non-PDF topic"
+    (is (nil? (pm/clamp-page nil 5)))
+    (is (nil? (pm/clamp-page nil nil)))))
+
+(deftest clamp-is-idempotent
+  (testing "clamping a clamped page changes nothing, so two call sites are safe"
+    (doseq [p [-1 0 1 3 5 40] total [0 1 5 nil]]
+      (is (= (pm/clamp-page p total)
+            (pm/clamp-page (pm/clamp-page p total) total))))))

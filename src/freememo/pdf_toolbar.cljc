@@ -36,6 +36,7 @@
    [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown KgCommandSources]]
    [freememo.pdf-viewer :as viewer]
    [freememo.editor-actions :as editor-actions]
+   [freememo.page-merge :as page-merge]
    [freememo.rich-text-editor :as editor]
    [freememo.live-doc-wizard :refer [LiveDocAddPhotos]]
    [freememo.score-toolbar :refer [ScoreRectButton]]
@@ -88,13 +89,20 @@
           ;; scroll to that page's boundary marker rather than a fetch
           ;; (plans/merged-page-reading.md §5.3). go-to-page! stays in the call
           ;; either way and is a silent no-op with no viewer.
-          nav! (fn [p via]
-                 (trail/record! :pdf-page {:via via :page p})
-                 (viewer/go-to-page! p)
-                 (when merged?
-                   (when-let [ed (editor/current-editor)]
-                     (editor-actions/scroll-to-page! ed p)))
-                 (when on-page-change! (on-page-change! p)))]
+          ;; `nav!` bounds its own argument, so every caller can hand it a raw
+          ;; number. Its three effects — the trail entry, the viewer jump and
+          ;; the merged-mode scroll — all run BEFORE the page-change funnel does
+          ;; its own clamp, so they need the bounded value here rather than
+          ;; trusting each call site to have checked. The funnel clamps again;
+          ;; `clamp-page` is idempotent, which page_merge_test asserts.
+          nav! (fn [raw via]
+                 (let [p (page-merge/clamp-page raw total)]
+                   (trail/record! :pdf-page {:via via :page p})
+                   (viewer/go-to-page! p)
+                   (when merged?
+                     (when-let [ed (editor/current-editor)]
+                       (editor-actions/scroll-to-page! ed p)))
+                   (when on-page-change! (on-page-change! p))))]
       (when (and (not inp-focused) (not= input-val (str page-number)))
         (reset! !input-val (str page-number)))
       (dom/div
@@ -125,9 +133,11 @@
             (fn [e]
               (let [raw (-> e .-target .-value)]
                 (reset! !inp-focused false)
+                ;; Only "is this a number at all" is checked here. The bound is
+                ;; `nav!`'s, so typing 99 into a 5-page document goes to page 5
+                ;; rather than silently snapping the field back.
                 (let [n (js/parseInt raw)]
-                  (when (and (not (js/isNaN n)) (>= n 1) (<= n total))
-                    (nav! (max 1 (min total n)) :input)))))
+                  (when-not (js/isNaN n) (nav! n :input)))))
             nil)
           (dom/On "keydown"
             (fn [e] (when (= "Enter" (.-key e)) (.blur (.-target e)))) nil)

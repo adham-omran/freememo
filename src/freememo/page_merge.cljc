@@ -202,6 +202,42 @@
              (.remove el)))
          (.html (.body doc))))))
 
+;; ── The page-number bound ──────────────────────────────────────────────────
+
+(defn clamp-page
+  "`page` bounded to the pages a document actually has.
+
+   Pre : `total` is the document's page count. 0 or nil means the count is not
+         known — a score topic has no page children, and `!total` is seeded 0
+         before the viewer reports its own count.
+   Post: 1 <= result <= total when `total` is a positive number. `page`
+         unchanged when it is nil or when `total` is not positive.
+   Inv : no caller can put a page number on screen, in the URL, or in
+         `last_page_<doc>` that the document does not have.
+
+   WHY THIS EXISTS. A scroll report leaked from another document set a 5-page
+   document to page 40. The number reached the page field, the address bar and
+   the stored last page, and it survived a reload — after which the document
+   showed `40` beside `of 5`, a dead Next button, and a control reading
+   \"Mark page 40 as done\" that targeted the ROOT topic, because
+   `get-page-info*` answers nil for a page that is not there and
+   `page-topic-id` falls back to the topic id.
+
+   `freememo.topic-state` calls it in two places, and both are needed for
+   different reasons. `on-page-change!` is the single funnel every live page
+   change passes through, so one call there covers the toolbar, the viewer and
+   the scroll report. `initial-page` covers a value ALREADY STORED by the
+   shipped defect — clamping on read is what makes those rows self-healing,
+   which is why no migration over `settings` exists.
+
+   Tagging the scroll report (`editor-actions/!scrolled-page`) removes the one
+   source known to have produced a bad number. This removes the consequence for
+   every source, including sources not yet written."
+  [page total]
+  (if (and page (number? total) (pos? total))
+    (max 1 (min total page))
+    page))
+
 ;; ── The restore rule ───────────────────────────────────────────────────────
 
 (defn next-missing-page
