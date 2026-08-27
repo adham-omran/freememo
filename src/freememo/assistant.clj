@@ -339,16 +339,16 @@
                   model-id (settings/effective-assistant-model user-id root-topic-id)
                   entry (or (card-models/resolve-model model-id)
                           (card-models/resolve-model settings/assistant-default-model-id))
-                  slug (:openrouter-model entry)]
+                  model-fields (openrouter/model-fields entry)]
               (try
                 (let [body (openrouter/chat-completion! api-key
-                             {:model slug
-                              :messages (assemble-messages chat-id (:id mode)
-                                          (not-empty
-                                            (str (mission-suffix user-id root-topic-id)
-                                              (grounding-system-suffix user-id ctx mode)))
-                                          context-msgs)
-                              :reasoning_effort (settings/get-reasoning user-id)}
+                             (assoc model-fields
+                               :messages (assemble-messages chat-id (:id mode)
+                                           (not-empty
+                                             (str (mission-suffix user-id root-topic-id)
+                                               (grounding-system-suffix user-id ctx mode)))
+                                           context-msgs)
+                               :reasoning_effort (settings/get-reasoning user-id))
                              {:feature :assistant :user-id user-id})
                       reply (-> body :choices first :message :content)
                       cost (double (or (-> body :usage :cost) 0))]

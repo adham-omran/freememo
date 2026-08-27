@@ -77,7 +77,7 @@
          {:success false :error msg :error-type kw?}."
   [user-id question-id user-answer]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :grade)
+    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
           {:keys [facts keywords question reference-answer]}
           (or (db/get-kg-question-for-session user-id question-id)
               (throw (ex-info "Question not found" {})))
@@ -99,7 +99,7 @@
           prompt (cards/load-prompt-template "kg-grade.md")
           gctx {:feature :kg-grade :user-id user-id}
           ;; unusable output is retried inside llm/chat!; :cost covers both attempts
-          {:keys [parsed cost]} (llm/chat! api-key model-slug prompt payload gctx)
+          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt payload gctx)
           verdict (or (normalize-verdict (:verdict parsed))
                       (throw (ex-info "Model returned no usable verdict" {})))
           linked-ids (into #{} (map :id) facts)
@@ -135,7 +135,7 @@
          keeps its HTML so the caller can render formatting and math."
   [user-id card-id ord user-answer]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :grade)
+    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
           {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
                                     (throw (ex-info "Card item not found" {})))
           payload (pr-str {:prompt (text/strip-html prompt)
@@ -143,7 +143,7 @@
                            :answer user-answer})
           tmpl (or (cards/load-prompt-template "card-grade.md")
                  (throw (ex-info "Failed to load card-grade prompt" {})))
-          {:keys [parsed cost]} (llm/chat! api-key model-slug tmpl payload
+          {:keys [parsed cost]} (llm/chat! api-key model-fields tmpl payload
                                   {:feature :card-grade :user-id user-id})
           verdict (or (normalize-verdict (:verdict parsed))
                     (throw (ex-info "Model returned no usable verdict" {})))]

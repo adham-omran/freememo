@@ -30,7 +30,9 @@
    resolved from the user's per-step KG model setting (settings/get-kg-model) —
    each KG lane carries its own knob.
    Pre:  step ∈ the KG step registry (settings/kg-model-steps).
-   Post: {:api-key :entry :model-slug}; throws on any failure —
+   Post: {:api-key :entry :model-fields}; :model-fields is
+   openrouter/model-fields of :entry, which is what chat! takes — so a pinned
+   model keeps its pin through every KG lane. Throws on any failure —
    ::insufficient-credits typed for the gate."
   [user-id step]
   (let [api-key (settings/get-openrouter-api-key user-id)]
@@ -41,7 +43,7 @@
     (let [model-id (settings/get-kg-model user-id step)
           entry (or (card-models/resolve-model model-id)
                     (throw (ex-info (str "Unknown model: " model-id) {})))]
-      {:api-key api-key :entry entry :model-slug (:openrouter-model entry)})))
+      {:api-key api-key :entry entry :model-fields (openrouter/model-fields entry)})))
 
 (def ^:private max-attempts
   "Completions per chat! call: one retry when a response yields no usable
@@ -60,7 +62,8 @@
    was meant to catch.
    Optional `ctx` {:feature kw :user-id id} tags the transport and no-content
    observability signals (see freememo.openrouter/post!).
-   Pre:  api-key configured; slug a registry :openrouter-model.
+   Pre:  api-key configured; model-fields is the :model-fields of
+         resolve-model+gate! (openrouter/model-fields of a registry entry).
    Post: {:parsed collection :cost usd} where :cost is summed across attempts —
          callers bill that sum. Throws the final attempt's exception on failure
          (ex-data carries :type); a failed call bills nothing, and the spend it
@@ -68,15 +71,15 @@
          cost — the exception carries no accumulator, and kg-questions' skipped
          batch truthfully reports :cost 0.0 for what it BILLED — so the platform
          only sees absorbed spend if this frame records it."
-  ([api-key slug system-prompt user-content]
-   (chat! api-key slug system-prompt user-content nil))
-  ([api-key slug system-prompt user-content ctx]
+  ([api-key model-fields system-prompt user-content]
+   (chat! api-key model-fields system-prompt user-content nil))
+  ([api-key model-fields system-prompt user-content ctx]
    (loop [attempt 1
           cost-acc 0.0]
      (let [body (openrouter/chat-completion! api-key
-                  {:model slug
-                   :messages [{:role "system" :content system-prompt}
-                              {:role "user" :content user-content}]}
+                  (assoc model-fields
+                    :messages [{:role "system" :content system-prompt}
+                               {:role "user" :content user-content}])
                   ctx)
            cost-acc' (+ cost-acc (double (or (-> body :usage :cost) 0)))
            result (try {:parsed (llm-edn/parse-response

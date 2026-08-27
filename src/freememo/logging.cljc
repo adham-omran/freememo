@@ -51,12 +51,13 @@
   "Log an outbound external call's outcome and latency.
    Pre:  m has :id, :feature (keyword), :outcome ∈ #{:ok :error}, :duration-ms (long).
    Post: one signal — :info when :ok, :warn when :error; :data carries
-         {:feature :outcome :duration-ms :user-id :status :error}. Returns nil."
+         {:feature :outcome :duration-ms :user-id :status :error :provider}.
+         Returns nil."
   [{:keys [id outcome duration-ms feature] :as m}]
   (tel/log! {:level (if (= :error outcome) :warn :info)
              :id (or id ::external)
              :data (select-keys m [:feature :outcome :duration-ms :user-id
-                                   :status :error])}
+                                   :status :error :provider])}
     (str (some-> feature name) " " (some-> outcome name)
       (when duration-ms (str " " duration-ms "ms"))))
   nil)

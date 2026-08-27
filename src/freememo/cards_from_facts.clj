@@ -58,10 +58,10 @@
          ids are dropped — the model cannot invent a fact)."
   [user-id root-topic-id passage candidate-facts]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :fact-select)
+    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :fact-select)
           prompt (cards/load-prompt-template "select-facts.md")
           _ (when-not prompt (throw (ex-info "Failed to load select-facts prompt" {})))
-          {:keys [parsed cost]} (llm/chat! api-key model-slug prompt
+          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt
                                   (pr-str {:passage passage
                                            :facts (mapv fact->select-row candidate-facts)})
                                   {:feature :fact-select :user-id user-id})

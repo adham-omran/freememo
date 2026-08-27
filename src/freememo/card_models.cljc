@@ -11,7 +11,10 @@
 
 (def registry
   "Ordered for display. :id is the durable settings value — never rename it,
-   stored rows reference it. :openrouter-model is the slug sent to OpenRouter."
+   stored rows reference it. :openrouter-model is the slug sent to OpenRouter.
+   :provider, when present, is OpenRouter's provider-routing request object,
+   sent verbatim by openrouter/model-fields — the only way a lane names a
+   provider. Absent means OpenRouter picks the provider."
   [{:id "gpt-5.1"
     :label "OpenAI · GPT-5.1"
     :openrouter-model "openai/gpt-5.1"}
@@ -50,7 +53,14 @@
    ;; when DeepSeek withdraws the snapshot.
    {:id "deepseek-v4-flash"
     :label "DeepSeek · V4 Flash"
-    :openrouter-model "deepseek/deepseek-v4-flash-0731"}])
+    :openrouter-model "deepseek/deepseek-v4-flash-0731"}
+   ;; Pinned to Z.ai: every other provider of this slug listed 2× the price on
+   ;; 2026-08-27, and the pin fails the call on a Z.ai outage rather than pay
+   ;; it. See plans/add-glm-5.3-flash-z-ai-pin.md.
+   {:id "glm-5.3-flash"
+    :label "Z.ai · GLM 5.3 Flash"
+    :openrouter-model "z-ai/glm-5.3-flash"
+    :provider {:only ["z-ai"]}}])
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod

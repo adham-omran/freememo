@@ -111,8 +111,8 @@
   "Pass 1 for one page. Post: {:triples [...] :cost usd}; triples are
    shape-valid and tagged :page. Unusable model output is retried inside
    llm/chat!, whose :cost covers both attempts."
-  [api-key model-slug prompt page-number page-text]
-  (let [{:keys [parsed cost]} (llm/chat! api-key model-slug prompt page-text
+  [api-key model-fields prompt page-number page-text]
+  (let [{:keys [parsed cost]} (llm/chat! api-key model-fields prompt page-text
                                 {:feature :kg-extract})
         triples (if (sequential? parsed) parsed [])
         valid (filterv valid-triple? triples)]
@@ -181,10 +181,10 @@
          the provider charged whether or not the write succeeded — a lost write
          does not un-bill the call. Exactly one extraction row is written either
          way, so the page is never left unaccounted."
-  [api-key model-slug prompt ctx page-state]
+  [api-key model-fields prompt ctx page-state]
   (let [outcome (try
                   {:kind :extracted
-                   :result (extract-page-triples! api-key model-slug prompt
+                   :result (extract-page-triples! api-key model-fields prompt
                              (:page_number page-state) (:content_text page-state))}
                   (catch InterruptedException e (throw e))
                   (catch Exception e {:kind :failed :error e}))]
@@ -231,14 +231,14 @@
    Pre : every member of `page-states` needs extraction. Deciding that is
          `classify-page`'s job, not this function's.
    Post: a seq of extract-and-stage-page! results, order matching `page-states`."
-  [api-key model-slug prompt ctx page-states]
+  [api-key model-fields prompt ctx page-states]
   (llm/interrupt-checkpoint!)
   (let [limiter (Semaphore. extract-page-concurrency)
         futs (mapv (fn [state]
                      (future
                        (.acquire limiter)
                        (try
-                         (extract-and-stage-page! api-key model-slug prompt ctx state)
+                         (extract-and-stage-page! api-key model-fields prompt ctx state)
                          (finally (.release limiter)))))
                page-states)]
     (mapv (fn [f] (llm/interrupt-checkpoint!) (deref f)) futs)))
@@ -248,7 +248,7 @@
    Labels without trigram candidates skip the LLM. A failed/invalid LLM
    decision degrades to :new (a duplicate entity is reviewable later; a wrong
    merge is not). Post: every input label has an id; :cost is the LLM spend."
-  [api-key model-slug user-id labels]
+  [api-key model-fields user-id labels]
   (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
         by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
         ;; One batched trigram query for every label instead of a round trip
@@ -263,7 +263,7 @@
         (if (empty? candidates)
           {:decisions {} :cost 0.0}
           (try
-            (let [{:keys [parsed cost]} (llm/chat! api-key model-slug
+            (let [{:keys [parsed cost]} (llm/chat! api-key model-fields
                                           (cards/load-prompt-template "kg-link.md")
                                           (pr-str candidates)
                                           {:feature :kg-link})]
@@ -368,11 +368,11 @@
   [user-id root-topic-id]
   (try
     ;; Extraction and entity-linking are independently configurable steps
-    ;; (:extract / :link). model-slug drives extraction; link-slug drives
+    ;; (:extract / :link). model-fields drives extraction; link-model-fields drives
     ;; linking. entry (the extraction model) is what facts record as
     ;; :source_model and what the summed distill cost bills under.
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :extract)
-          link-slug (:model-slug (llm/resolve-model+gate! user-id :link))
+    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :extract)
+          link-model-fields (:model-fields (llm/resolve-model+gate! user-id :link))
           all-states (or (seq (document-page-states root-topic-id))
                          (throw (ex-info "No page text. Extract text first." {})))
           by-outcome (group-by #(classify-page attempt-cap digest/digest-version %)
@@ -387,7 +387,7 @@
                :digest-version digest/digest-version
                :prompt-version (prompt-template-version template)
                :extract-model-id (:id entry)}
-          extractions (extract-and-stage-pages! api-key model-slug prompt ctx to-extract)
+          extractions (extract-and-stage-pages! api-key model-fields prompt ctx to-extract)
           _ (llm/interrupt-checkpoint!)
           ;; Everything unlinked for this document, including whatever an earlier
           ;; cancelled invocation left staged. This is the set one linking call
@@ -402,7 +402,7 @@
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)
           {:keys [by-label] link-cost :cost}
           (if (seq entity-labels)
-            (link-entities! api-key link-slug user-id entity-labels)
+            (link-entities! api-key link-model-fields user-id entity-labels)
             {:by-label {} :cost 0.0})
           entity-id #(get by-label (str/lower-case (str/trim %)))
           predicate-id (memoize

@@ -162,11 +162,11 @@
   (let [resp (case (:shape entry)
                :chat
                (openrouter-post! api-key
-                 {:model (:openrouter-model entry)
-                  :messages [{:role "user"
-                              :content [{:type "text" :text prompt}
-                                        {:type "image_url"
-                                         :image_url {:url (:image-url prepared)}}]}]})
+                 (assoc (openrouter/model-fields entry)
+                   :messages [{:role "user"
+                               :content [{:type "text" :text prompt}
+                                         {:type "image_url"
+                                          :image_url {:url (:image-url prepared)}}]}]))
                :plugin
                (openrouter-post! api-key
                  {:model plugin-downstream-model

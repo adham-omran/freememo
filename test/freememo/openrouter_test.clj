@@ -1,13 +1,16 @@
 (ns freememo.openrouter-test
   "Covers freememo.openrouter/message-content and retryable-cause? — the gate
-   between a 200 response and the EDN parser.
+   between a 200 response and the EDN parser — and model-fields, the one place a
+   registry entry becomes request fields.
 
    Anchor: a production card generation received a 200 whose
    choices[0].message.content was null, and the parser reported it as
    unreadable EDN. Each cause below must classify distinctly, and the terminal
    one (refusal) must not be retried."
   (:require [clojure.test :refer [deftest is testing]]
+            [freememo.card-models :as card-models]
             [freememo.llm-edn :as llm-edn]
+            [freememo.ocr-models :as ocr-models]
             [freememo.openrouter :as openrouter]))
 
 (defn- body
@@ -120,3 +123,26 @@
     (let [e (try (llm-edn/parse-response "prose with no payload")
                (catch clojure.lang.ExceptionInfo ex ex))]
       (is (true? (openrouter/retryable-cause? e))))))
+
+(deftest model-fields-carries-the-pin-only-when-the-entry-has-one
+  (testing "an entry without :provider yields the slug alone"
+    (is (= {:model "google/gemini-3-flash-preview"}
+          (openrouter/model-fields {:id "gemini-3-flash"
+                                    :openrouter-model "google/gemini-3-flash-preview"}))))
+  (testing "a pinned entry passes its provider object verbatim"
+    (is (= {:model "z-ai/glm-5.3-flash" :provider {:only ["z-ai"]}}
+          (openrouter/model-fields {:id "glm-5.3-flash"
+                                    :openrouter-model "z-ai/glm-5.3-flash"
+                                    :provider {:only ["z-ai"]}})))))
+
+(deftest every-chat-registry-entry-yields-a-slug
+  (testing "both registries, every entry that names an OpenRouter model"
+    (doseq [entry (concat card-models/registry ocr-models/registry)
+            :when (:openrouter-model entry)]
+      (is (string? (:model (openrouter/model-fields entry))) (:id entry)))))
+
+(deftest glm-5-3-flash-is-pinned-to-z-ai-in-both-registries
+  (testing "the pin is the reason the entry exists at its price"
+    (doseq [resolve [card-models/resolve-model ocr-models/resolve-model]]
+      (is (= {:model "z-ai/glm-5.3-flash" :provider {:only ["z-ai"]}}
+            (openrouter/model-fields (resolve "glm-5.3-flash")))))))

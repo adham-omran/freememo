@@ -14,7 +14,10 @@
 (def registry
   "Ordered for display. :id is the durable settings value — never rename it,
    stored rows reference it. :shape is :chat (vision chat-completion, the
-   current code path) or :plugin (OpenRouter file-parser, engine mistral-ocr)."
+   current code path) or :plugin (OpenRouter file-parser, engine mistral-ocr).
+   :provider, when present, is OpenRouter's provider-routing request object,
+   sent verbatim by openrouter/model-fields — the only way a lane names a
+   provider. Absent means OpenRouter picks the provider."
   [{:id "openai-gpt-5.1"
     :label "OpenAI · GPT-5.1"
     :shape :chat
@@ -47,6 +50,12 @@
     :label "Google · Gemini 3.5 Flash-Lite"
     :shape :chat
     :openrouter-model "google/gemini-3.5-flash-lite"}
+   ;; Pinned to Z.ai — same reasoning as the card-models entry.
+   {:id "glm-5.3-flash"
+    :label "Z.ai · GLM 5.3 Flash"
+    :shape :chat
+    :openrouter-model "z-ai/glm-5.3-flash"
+    :provider {:only ["z-ai"]}}
    {:id "mistral-ocr-4"
     :label "Mistral · OCR 4"
     :shape :plugin

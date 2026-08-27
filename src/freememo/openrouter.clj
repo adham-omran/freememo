@@ -79,8 +79,9 @@
    Optional `ctx` {:feature kw :user-id id} enriches the observability signal.
    Pre:  api-key non-blank; path begins with '/'.
    Post: {:status int :body any}. Side effect: one `log/external!` signal per call
-         (::call), carrying feature + latency + outcome, plus the provider's error
-         text on a failing status — the operator reads that line first, and a
+         (::call), carrying feature + latency + outcome + the provider that served
+         the call (a pinned model's line names the pin's target), plus the
+         provider's error text on a failing status — the operator reads that line first, and a
          caller that maps the response itself must not be the only way to see the
          cause; a network throw is logged :error then re-thrown (contract for HTTP
          status unchanged)."
@@ -94,11 +95,13 @@
                     {:headers {"Authorization" (str "Bearer " api-key)}
                      :content-type :json :as :json :throw-exceptions false
                      :body (json/generate-string body)})
-             failed? (>= (int (:status resp)) 400)]
+             failed? (>= (int (:status resp)) 400)
+             served-by (when (map? (:body resp)) (:provider (:body resp)))]
          (log/external! (cond-> {:id ::call :feature feature :user-id (:user-id ctx)
                                  :status (:status resp)
                                  :outcome (if failed? :error :ok)
                                  :duration-ms (ms)}
+                          served-by (assoc :provider served-by)
                           failed? (assoc :error (provider-message (:body resp)))))
          resp)
        (catch Throwable e
@@ -113,6 +116,20 @@
   (if (= 200 (:status resp))
     (:body resp)
     (throw (api-error resp))))
+
+(defn model-fields
+  "The chat-completion body fields that select the model for a registry `entry`
+   (freememo.card-models or freememo.ocr-models): `:model` is the OpenRouter
+   slug, and `:provider` is the entry's provider-routing object when it pins
+   one. The one place an entry becomes request fields, so no lane can send the
+   slug and drop the pin.
+   Pre:  entry is a resolved registry map with a non-blank :openrouter-model.
+         :provider, when present, is OpenRouter's `provider` request object as a
+         map (e.g. {:only [\"z-ai\"]}) and is sent verbatim.
+   Post: {:model slug} or {:model slug :provider m}; no other keys."
+  [entry]
+  (cond-> {:model (:openrouter-model entry)}
+    (:provider entry) (assoc :provider (:provider entry))))
 
 (defn chat-completion!
   "POST /chat/completions with request map `body` (:model, :messages, …).

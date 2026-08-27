@@ -245,6 +245,7 @@
         entry (or (card-models/resolve-model model-id)
                   (throw (ex-info (str "Unknown card model: " model-id) {})))
         slug (:openrouter-model entry)
+        model-fields (openrouter/model-fields entry)
         _ (let [gate (credits/check-cost-billed-balance! user-id)]
             (when-not (:ok gate)
               (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
@@ -269,11 +270,11 @@
            cost-acc 0.0]
       (let [t-start (System/nanoTime)
             body (openrouter/chat-completion! api-key
-                   {:model slug
-                    :messages [{:role "system" :content prompt}
-                               {:role "user" :content content-text}]
-                    :reasoning_effort reasoning
-                    :verbosity verbosity}
+                   (assoc model-fields
+                     :messages [{:role "system" :content prompt}
+                                {:role "user" :content content-text}]
+                     :reasoning_effort reasoning
+                     :verbosity verbosity)
                    ctx)
             duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
             usage (:usage body)

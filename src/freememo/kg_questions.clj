@@ -121,7 +121,7 @@
           on the next run. A failed batch is skipped, never aborts the run."
   [user-id graph-topic-id]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :atomic)
+    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :atomic)
           clusters (db/fact-clusters-without-question user-id graph-topic-id)
           _ (when (empty? clusters)
               (throw (ex-info "Every fact already has a question." {})))
@@ -140,7 +140,7 @@
                                                      discriminators-per-member)
                                     payload (mapv #(cluster->prompt-row discriminators %) batch)
                                     {:keys [parsed cost]}
-                                    (llm/chat! api-key model-slug prompt (pr-str payload)
+                                    (llm/chat! api-key model-fields prompt (pr-str payload)
                                       {:feature :kg-atomic :user-id user-id})
                                     {:keys [persisted covered]}
                                     (persist-questions! user-id "atomic" (:id entry)
@@ -206,8 +206,8 @@
               {:level :error
                :message "Needs at least two facts touching this entity."})
           {:success true :questions 0})
-        (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :synthesis)
-              {:keys [parsed cost]} (llm/chat! api-key model-slug
+        (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
+              {:keys [parsed cost]} (llm/chat! api-key model-fields
                                       (cards/load-prompt-template "kg-question-synthesis.md")
                                       (pr-str {:entity entity-label
                                                :facts (mapv fact->prompt-row facts)})
