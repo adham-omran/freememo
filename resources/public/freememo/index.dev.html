@@ -55,6 +55,10 @@
         <script src="/freememo/vendor/highlight.js@11.9.0/highlight.min.js"></script>
         <!-- Clojure language pack (not in the common bundle). MUST follow highlight.min.js -->
         <script src="/freememo/vendor/highlight.js@11.9.0/languages/clojure.min.js"></script>
+        <!-- Zig language pack — third-party; Zig is in no highlight.js release.
+             MUST follow highlight.min.js: the file is a bare
+             hljs.registerLanguage("zig", …) call on the global. -->
+        <script src="/freememo/vendor/highlightjs-zig@1.0.2/zig.min.js"></script>
 
         <!-- Quill. Eager because quill_field's namespace-load `defonce` patches
              Quill's icon registry before any load guard could run. -->

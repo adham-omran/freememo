@@ -36,7 +36,8 @@
 (def ^:private versions
   {:pdf.js "3.11.174", :highlight.js "11.9.0", :quill "2.0.3",
    :quill-resize-module "2.1.3", :konva "9.3.16", :graphology "0.26.0",
-   :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11"})
+   :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11",
+   :highlightjs-zig "1.0.2"})
 
 (defn- v [lib] (get versions lib))
 (def ^:private cdnjs "https://cdnjs.cloudflare.com/ajax/libs")
@@ -51,7 +52,7 @@
    production. Nothing to vendor; the behaviour is unchanged."
   (let [pdf (v :pdf.js), hl (v :highlight.js), q (v :quill), rs (v :quill-resize-module)
         kv (v :konva), gr (v :graphology), sg (v :sigma), ws (v :wavesurfer.js)
-        lm (v :lamejs), kx (v :katex)]
+        lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig)]
     [[(str "pdf.js@" pdf "/pdf.min.js")                (str cdnjs "/pdf.js/" pdf "/pdf.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.js")         (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.css")        (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.css")]
@@ -60,6 +61,14 @@
      [(str "pdf.js@" pdf "/images/loading-icon.gif")   (str jsd "/pdfjs-dist@" pdf "/web/images/loading-icon.gif")]
      [(str "highlight.js@" hl "/highlight.min.js")     (str cdnjs "/highlight.js/" hl "/highlight.min.js")]
      [(str "highlight.js@" hl "/languages/clojure.min.js") (str cdnjs "/highlight.js/" hl "/languages/clojure.min.js")]
+     ;; Zig is in NO highlight.js release — the core project lists it as a
+     ;; third-party grammar. This package's dist is the only build that
+     ;; self-registers on window.hljs the way the clojure pack does; the repo
+     ;; highlight.js's SUPPORTED_LANGUAGES.md links to (fwx5618177) ships a
+     ;; CommonJS bundle that throws `module is not defined` in a script tag.
+     ;; Its own directory, not highlight.js@…/languages/, because it is a
+     ;; different package with its own version.
+     [(str "highlightjs-zig@" hz "/zig.min.js")        (str jsd "/highlightjs-zig@" hz "/dist/zig.min.js")]
      [(str "quill@" q "/quill.js")                     (str jsd "/quill@" q "/dist/quill.js")]
      [(str "quill@" q "/quill.snow.css")               (str jsd "/quill@" q "/dist/quill.snow.css")]
      [(str "quill@" q "/quill.bubble.css")             (str jsd "/quill@" q "/dist/quill.bubble.css")]

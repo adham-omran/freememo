@@ -192,7 +192,7 @@
                 ;; invisible. Formulas are created by typing `\(…\)` and edited
                 ;; through freememo.formula-ui's popover.
                 ;;
-                ;; Syntax module — requires window.hljs + clojure pack (loaded in
+                ;; Syntax module — requires window.hljs + the clojure and zig packs (loaded in
                 ;; index*.html). Same `:languages` list as the main editor for
                 ;; consistent picker UX across modals and the page editor.
                 :syntax {:languages [{:key "plain" :label "Plain"}
@@ -210,7 +210,8 @@
                                      {:key "python" :label "Python"}
                                      {:key "ruby" :label "Ruby"}
                                      {:key "rust" :label "Rust"}
-                                     {:key "sql" :label "SQL"}]}
+                                     {:key "sql" :label "SQL"}
+                                     {:key "zig" :label "Zig"}]}
                 :table true
                 ;; Drag-to-resize images. quill-resize-module 2.0.3+ is loaded
                 ;; from /freememo/vendor/ in index*.html and self-registers `modules/resize`
