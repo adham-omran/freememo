@@ -47,3 +47,7 @@ logs/
 # hash-verified against vendor-lock.sha256. Never committed (3.4 MB of binaries).
 /resources/public/freememo/vendor/
 /reports/*.pdf
+
+# Python test and script caches.
+__pycache__/
+*.py[cod]
