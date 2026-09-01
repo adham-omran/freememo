@@ -1,7 +1,8 @@
 (ns freememo.logging
   (:require [taoensso.telemere :as tel]
             [clojure.string :as str]
-            #?@(:clj [[clojure.java.io :as io]
+            #?@(:clj [[cheshire.core :as json]
+                      [clojure.java.io :as io]
                       [freememo.config :as config]
                       [taoensso.telemere.postal :as tel-postal]])))
 
@@ -131,6 +132,82 @@
    (def ^:private format-alert-signal (tel/format-signal-fn {})))
 
 #?(:clj
+   (def ^:private clean-log-signal (tel/clean-signal-fn)))
+
+#?(:clj
+   (defn- json-compatible-value
+     "Convert a log value to values that Cheshire can encode.
+      Pre:  value is finite Clojure data or an application object.
+      Post: the result contains only JSON values or Cheshire-supported scalars."
+     [value]
+     (cond
+       (instance? java.time.Instant value) (str value)
+       (map? value) (persistent!
+                      (reduce-kv
+                        (fn [result key item]
+                          (assoc! result key (json-compatible-value item)))
+                        (transient {}) value))
+       (coll? value) (mapv json-compatible-value value)
+       (or (nil? value)
+           (string? value)
+           (number? value)
+           (boolean? value)
+           (char? value)
+           (keyword? value)
+           (symbol? value)
+           (uuid? value)
+           (instance? java.util.Date value)) value
+       :else (str value))))
+
+#?(:clj
+   (defn- throwable-stacktrace
+     "Return the complete JVM stack trace for an error."
+     [^Throwable error]
+     (let [writer (java.io.StringWriter.)]
+       (.printStackTrace error (java.io.PrintWriter. writer))
+       (str writer))))
+
+#?(:clj
+   (defn- loki-signal-map
+     "Prepare one Telemere signal for Loki.
+      Pre:  signal is a Telemere signal map.
+      Post: the result preserves public signal content with stable JSON names."
+     [signal]
+     (let [cleaned (clean-log-signal signal)
+           error (:error signal)
+           coords (:coords cleaned)]
+       (json-compatible-value
+         (cond-> (dissoc cleaned :inst :ns :msg_ :coords)
+           (:inst cleaned) (assoc :timestamp (str (:inst cleaned)))
+           (:ns cleaned) (assoc :logger (:ns cleaned))
+           (:msg_ cleaned) (assoc :message (:msg_ cleaned))
+           coords (assoc :line (first coords) :column (second coords))
+           error (assoc :error
+                   {:chain (:error cleaned)
+                    :stacktrace (throwable-stacktrace error)}))))))
+
+#?(:clj
+   (defn- loki-json-output
+     "Serialize one Telemere signal as one newline-terminated JSON record."
+     [signal]
+     (str (json/generate-string (loki-signal-map signal)) \newline)))
+
+#?(:clj
+   (defn- install-loki-log-handlers!
+     "Install one-line JSON handlers for container and rotated file logs.
+      Post: repeated calls replace both handlers instead of duplicating them."
+     []
+     (tel/add-handler! :default/console
+       (tel/handler:console {:output-fn loki-json-output})
+       {:async nil})
+     (let [log-dir (io/file "logs")]
+       (.mkdirs log-dir)
+       (tel/add-handler! :log-file
+         (tel/handler:file
+           {:path "logs/app.log"
+            :output-fn loki-json-output})))))
+
+#?(:clj
    (defn- alert-subject-fn
      "Subject line for one alert class: \"[freememo] <tag>: <signal-id> user=N\"
       (user suffix only when the signal carries :user-id)."
@@ -246,14 +323,10 @@
      (tel/set-min-level! nil "io.undertow.*" :warn)
      (tel/set-min-level! nil "org.apache.http.*" :warn)
 
-     ;; File logging — writes to ./logs/app.log. handler:file rotates by
-     ;; default: 4MB × 8 gzipped parts, :monthly interval × 6 retained.
-     (let [log-dir (io/file "logs")]
-       (.mkdirs log-dir)
-       (tel/add-handler! :log-file
-         (tel/handler:file
-           {:path "logs/app.log"
-            :output-fn (tel/format-signal-fn {})})))
+     ;; Loki consumes container output. The file uses the same JSON contract.
+     ;; handler:file keeps its default rotation: 4MB × 8 compressed parts,
+     ;; plus a monthly interval with six retained parts.
+     (install-loki-log-handlers!)
 
      ;; Alert emails — only when SMTP is configured (config.edn :secrets or
      ;; env). One postal handler per alert class (see alert-routes above).
