@@ -29,6 +29,13 @@
 (def source-forms
   (read-source-forms "src/freememo/curriculum_page.cljc"))
 
+(defn- definition [name]
+  (some #(when (and (seq? %)
+                 (= 'e/defn (first %))
+                 (= name (second %)))
+           %)
+    source-forms))
+
 (deftest every-curriculum-collection-loop-has-a-differential-source
   (let [loops (forms-matching
                 #(and (seq? %) (= 'e/for (first %)))
@@ -73,3 +80,22 @@
     (is (empty? detached-streams)
       (str "Create Forms5 inside its visual container, not before it: "
         (pr-str (map first detached-streams))))))
+
+(deftest exam-generation-control-shows-its-lifecycle
+  (let [trigger (definition 'GenerateExamTrigger)
+        control (definition 'GenerateExamButton)
+        trigger-nodes (tree-seq coll? seq trigger)
+        control-nodes (tree-seq coll? seq control)]
+    (testing "a model request cannot look like an ignored click"
+      (is (some #(and (map? %)
+                   (contains? % :disabled)
+                   (contains? % :aria-busy))
+            trigger-nodes)
+        "the control must expose its pending state")
+      (is (some #{"Generating exam…"} trigger-nodes)
+        "the control must replace its idle label while the request runs"))
+    (testing "a failed request is announced outside the trigger"
+      (is (some #(and (map? %) (= "alert" (:role %))) control-nodes)
+        "the control must render a visible error alert")
+      (is (not-any? #(and (map? %) (= "alert" (:role %))) trigger-nodes)
+        "the error must not become part of the button's accessible name"))))

@@ -598,19 +598,30 @@
           (if (e/server (:ok response)) (token)
             (token (e/server (:error response)))))))))
 
-(e/defn GenerateExamButton [user-id subject form-kind threshold label class-name]
+(e/defn GenerateExamTrigger [label class-name]
   (e/client
     (dom/button
-      (dom/props {:type "button" :class class-name})
-      (dom/text label)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
+        (dom/props {:type "button"
+                    :class class-name
+                    :disabled (some? token)
+                    :aria-busy (some? token)
+                    :aria-invalid (some? error)})
+        (dom/text (if token "Generating exam…" label))
+        [token error]))))
+
+(e/defn GenerateExamButton [user-id subject form-kind threshold label class-name]
+  (e/client
+    (dom/div
+      (dom/props {:class "curriculum-generate-control"})
+      (let [[token error] (GenerateExamTrigger label class-name)]
         (when token
           (let [response (e/server (e/Offload
                                     #(generate-form* user-id subject form-kind threshold)))]
             (if (e/server (:success response)) (token)
               (token (e/server (:error response))))))
         (when error
-          (dom/span (dom/props {:class "curriculum-inline-error"})
+          (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
             (dom/text error)))))))
 
 (e/defn ApproveExamButton [user-id form]

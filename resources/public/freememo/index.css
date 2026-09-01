@@ -5465,6 +5465,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .curriculum-help,
 .curriculum-credit-note { color: var(--color-text-hint); font-size: 12px; }
 .curriculum-credit-note { margin: 8px 0 0; }
+.curriculum-generate-control { display: flex; flex-direction: column; align-items: flex-end; }
 .curriculum-inline-error { display: block; margin-top: 5px; color: var(--color-danger, #b91c1c); font-size: 11px; }
 .curriculum-exam-panel { margin: 14px 0; padding: 14px; background: color-mix(in srgb, var(--color-bg-subtle) 72%, transparent); border: 1px solid var(--color-border); border-radius: 10px; }
 .curriculum-exam-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
