@@ -13,6 +13,7 @@
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.schedule-page :refer [SchedulePage]]
+            [freememo.curriculum-page :refer [CurriculumPage]]
             [freememo.learn-session :refer [LearnSession]]
             [freememo.topic-page :refer [TopicPage]]
             [freememo.knowledge-page :refer [KnowledgePage]]
@@ -126,6 +127,7 @@
        ;; /schedule/<id>. One extra segment, read back by `r/pop` in
        ;; SchedulePage, so a forecast survives a reload and is linkable.
        :schedule-detail (list 'schedule (:id nav-map))
+       :curriculum-detail (list 'curriculum (:id nav-map))
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
        ;; Entities/Questions carry an OPTIONAL doc-id: arriving from a document
@@ -412,6 +414,7 @@
                         (NavTab active-tab navigate! :library "Library" "nav-collapse-6" "Your documents & cards")
                         (NavTab active-tab navigate! :learn "Learn" "nav-collapse-5" "Spaced-repetition queue")
                         (NavTab active-tab navigate! :schedule "Schedule" "nav-collapse-8" "Deadline plan for a document")
+                        (NavTab active-tab navigate! :curriculum "Curriculum" "nav-collapse-4" "Ordered study blocks and long-form exams")
                         (NavTab active-tab navigate! :quiz "Quiz" "nav-collapse-4" "LLM-graded quiz on your facts")
 
                         ;; Content · Discovery divider (hides once Discovery empties).
@@ -450,6 +453,7 @@
                       (NavProxy navigate! !nav-overflow-open :knowledge :link "Facts" "nav-overflow-2")
                       (NavProxy navigate! !nav-overflow-open :search :search "Search" "nav-overflow-3")
                       (NavProxy navigate! !nav-overflow-open :quiz :clipboard "Quiz" "nav-overflow-4")
+                      (NavProxy navigate! !nav-overflow-open :curriculum :route "Curriculum" "nav-overflow-4")
                       (NavProxy navigate! !nav-overflow-open :schedule :clock "Schedule" "nav-overflow-8")
                       (NavProxy navigate! !nav-overflow-open :learn :graduation-cap "Learn" "nav-overflow-5")
                       (NavProxy navigate! !nav-overflow-open :library :library "Library" "nav-overflow-6")
@@ -499,7 +503,7 @@
                 ;; Tab content
                 (dom/main
                   (dom/props {:id "main-content"
-                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule} active-tab) "hidden" "auto")}})
+                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
                     (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
@@ -521,6 +525,9 @@
                   (when (= active-tab :schedule)
                     (r/pop ; consume 'schedule; SchedulePage reads the id segment
                       (SchedulePage user-id navigate!)))
+                  (when (= active-tab :curriculum)
+                    (r/pop
+                      (CurriculumPage user-id navigate!)))
                   (when (= active-tab :viewer)
                     (ViewerContent user-id enc-key navigate! llm-enabled?)))
 

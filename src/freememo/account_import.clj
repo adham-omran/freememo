@@ -40,6 +40,7 @@
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [freememo.account-transfer-format :as fmt]
             [freememo.largeobj :as lo]
             [freememo.quota :as quota]
@@ -56,7 +57,8 @@
 (def ^:private user-scoped-tables
   "Tables carrying a `user_id` that must point at the importing user.
    An archive's own user id is provenance only and is never trusted."
-  #{:sources :media :topics :topic_repetitions :study_schedules :assistant_chats
+  #{:sources :media :topics :topic_repetitions :study_schedules :curricula
+    :curriculum_exam_forms :curriculum_exam_sittings :assistant_chats
     :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings})
 
 (def ^:private fk-columns
@@ -82,6 +84,15 @@
    ;; rewrites scalars — so the column type is what keeps the schedule honest
    ;; on the target rather than an entry here.
    :study_schedules {:root_topic_id :topics}
+   :curriculum_blocks {:curriculum_id :curricula}
+   :curriculum_materials {:block_id :curriculum_blocks :topic_id :topics}
+   :curriculum_exam_forms {:block_id :curriculum_blocks
+                           :material_id :curriculum_materials}
+   :curriculum_exam_sittings {:form_id :curriculum_exam_forms}
+   :curriculum_grade_revisions {:sitting_id :curriculum_exam_sittings}
+   :curriculum_unlock_overrides {:curriculum_id :curricula
+                                 :from_block_id :curriculum_blocks
+                                 :to_block_id :curriculum_blocks}
    :assistant_chats {:root_topic_id :topics}
    :assistant_messages {:chat_id :assistant_chats}
    :video_transcripts {:topic_id :topics}
@@ -103,6 +114,11 @@
    :card_versions #{:root_topic_id}
    :topic_repetitions #{:topic_id}
    :study_schedules #{:root_topic_id}
+   :curriculum_blocks #{:curriculum_id}
+   :curriculum_materials #{:block_id :topic_id}
+   :curriculum_exam_sittings #{:form_id}
+   :curriculum_grade_revisions #{:sitting_id}
+   :curriculum_unlock_overrides #{:curriculum_id :from_block_id :to_block_id}
    :assistant_chats #{:root_topic_id}
    :assistant_messages #{:chat_id}
    :video_transcripts #{:topic_id}
@@ -655,6 +671,24 @@
       :card_versions (remap-card-versions-scope with-jsonb-html maps)
       :score_groups {:row (update with-jsonb-html :geometry
                             #(remap-score-geometry % media-map))}
+      :curriculum_exam_forms
+      {:row
+       (reduce
+         (fn [form-row column]
+           (if-let [value (get form-row column)]
+             (assoc form-row column
+               (walk/postwalk
+                 (fn [node]
+                   (if (map? node)
+                     (cond-> node
+                       (contains? node :material_id)
+                       (update :material_id #(get-in maps [:curriculum_materials %]))
+                       (contains? node :topic_id)
+                       (update :topic_id #(get-in maps [:topics %])))
+                     node))
+                 value))
+             form-row))
+         with-jsonb-html [:blueprint :questions])}
       :settings (remap-settings-row with-jsonb-html (get maps :topics))
       {:row with-jsonb-html})))
 

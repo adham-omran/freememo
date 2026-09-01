@@ -100,12 +100,12 @@
             ["Upload it" "Import → Upload, pick the .zip, and confirm \"Import as Code Repository\". Drag-and-drop works too."]
             ["What you get" "A root topic named after the repo, one child topic per source file (source shown as a syntax-highlighted code block), and code facts distilled in the background — a toast reports when they're ready."]
             ["Browse & quiz" "Facts (defined-in, calls, requires, arglists, docstrings) land under Knowledge → Facts for the repo. Generate questions and quiz against them like any other graph."]]}
-   {:title "Testing yourself — Quiz & Exam"
+   {:title "Testing yourself — Quiz & Timed Quiz"
     :intro "Test recall against the fact graph, graded by the model."
-    :steps [["Set it up" "Quiz tab → toggle Quiz or Exam, check the source documents, set Questions (and Minutes for an exam), then Start."]
+    :steps [["Set it up" "Quiz tab → toggle Quiz or Timed Quiz, check the source documents, set Questions (and Minutes for a timed quiz), then Start."]
             ["Quiz" "Untimed. Submit an answer for an instant verdict — ✓ Correct, ◐ Partial, or ✗ Incorrect — with an explanation and the facts you missed."]
-            ["Exam" "Timed and forward-only. Answers are saved as you go and graded only when you Submit exam, or when the timer runs out."]
-            ["Review past sessions" "History lists your previous quizzes and exams with scores."]]}
+            ["Timed Quiz" "Timed and forward-only. Answers are saved as you go and graded only when you submit, or when the timer runs out."]
+            ["Review past sessions" "History lists your previous quizzes and timed quizzes with scores."]]}
    {:title "Finding & organizing"
     :intro "Search, browse, reshape, and review your growing library."
     :steps [["Search" "The Search tab finds topics by their text, Fuzzy or Exact. Card text is filtered separately in Library → Cards."]

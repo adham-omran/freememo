@@ -25,6 +25,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [clojure.string :as str]
+   #?(:clj [freememo.curriculum :as curriculum])
    #?(:clj [freememo.user-state :as us])))
 
 (defn parse-int-or-nil
@@ -39,6 +40,16 @@
         #?(:clj (Long/parseLong t)
            :cljs (let [n (js/parseInt t 10)] (when-not (js/isNaN n) n)))
         (catch #?(:clj Exception :cljs :default) _ nil)))))
+
+(defn curriculum-schedule-summaries* [refresh user-id]
+  #?(:clj
+     (mapv (fn [row]
+             (let [plan (curriculum/build-schedule refresh user-id (:id row))]
+               (merge (select-keys row [:id :title :target_date])
+                 (select-keys plan [:total-minutes :daily-minutes :feasible?
+                                    :earliest-date]))))
+       (curriculum/list-curricula refresh user-id))
+     :cljs nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Acquisition (§2, §9.4.1)
@@ -684,15 +695,40 @@
           ;; list would put a round trip inside the loop; this is a single
           ;; query plus one h=0 projection per schedule, about 5 ms each.
           summaries (e/server (e/Offload #(sched/schedule-summaries refresh user-id)))
+          curriculum-summaries (e/server
+                                 (e/Offload
+                                   #(curriculum-schedule-summaries* refresh user-id)))
           n (e/server (count summaries))]
       (dom/div
         (dom/props {:style {:padding "4px"}})
+        (when (seq curriculum-summaries)
+          (dom/section
+            (dom/props {:class "schedule-curriculum-section"})
+            (dom/h2 (dom/text "Curriculum schedules"))
+            (e/for [plan curriculum-summaries]
+              (dom/button
+                (dom/props {:type "button" :class "schedule-curriculum-card"})
+                (dom/On "click" (fn [_]
+                                  (navigate! :curriculum
+                                    {:type :curriculum-detail :id (:id plan)})) nil)
+                (dom/div
+                  (dom/strong (dom/text (:title plan)))
+                  (dom/span
+                    (dom/text (if (:feasible? plan) "Feasible" "Needs adjustment"))))
+                (dom/p
+                  (dom/text (str (:total-minutes plan) " minutes remaining · "
+                              (:daily-minutes plan) " minutes per study day")))
+                (when (:earliest-date plan)
+                  (dom/time (dom/text (str "Estimated finish " (:earliest-date plan)))))))))
+        (when (seq curriculum-summaries)
+          (dom/h2 (dom/props {:class "schedule-document-heading"})
+            (dom/text "Document schedules")))
         (if (zero? n)
           (dom/div
             (dom/props {:style {:padding "32px" :text-align "center"
                                 :color "var(--color-text-secondary)"
                                 :font-size "14px"}})
-            (dom/text "No schedules yet. Pick a document and a date."))
+            (dom/text "No document schedules yet. Pick a document and a date."))
           (e/for [i (e/diff-by identity (range n))]
             (DashboardCard (e/server (nth summaries i)) navigate!)))))))
 

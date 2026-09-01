@@ -210,7 +210,7 @@
             (dom/text "← Back")
             (dom/On "click" (fn [_] (reset! !result-sid nil)) nil))
           (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text (str (if (= kind "exam") "Exam" "Quiz") " · " started)))
+            (dom/text (str (if (= kind "exam") "Timed Quiz" "Quiz") " · " started)))
           (dom/span (dom/props {:style {:font-size "16px" :font-weight "700" :margin-left "auto"}})
             (dom/text (str (or score "—") "%"))))
         (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})

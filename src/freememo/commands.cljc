@@ -52,7 +52,7 @@
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
     :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations
-    :schedule-mutations :activity-mutations})
+    :schedule-mutations :curriculum-mutations :activity-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -82,7 +82,13 @@
    (bump-channels! inside the effect — undo, staged delete)."
   (merge
     ;; — Optimistic-queue mutations (run-command! methods; the pump bumps) —
-    {:add-card         {:label "Add card" :class :mutation :when #{:viewer}
+    {:curriculum-change {:label "Update curriculum" :class :mutation
+                         :palette-hidden true
+                         :table #{:curricula :curriculum_blocks :curriculum_materials
+                                  :curriculum_exam_forms :curriculum_exam_sittings
+                                  :curriculum_grade_revisions :curriculum_unlock_overrides}
+                         :views #{:curriculum-mutations :schedule-mutations}}
+     :add-card         {:label "Add card" :class :mutation :when #{:viewer}
                         :palette-hidden true ; submitted by AddCardModal; :add-new opens it
                         :data {:topic-id :payload :root-topic-id :payload
                                :kind :payload :card-data :payload}
@@ -171,7 +177,7 @@
      ;; Global quiz navigation — invokers published by GlobalQuizInvokers
      ;; (mounted once in Main), so they're reachable from every tab.
      :start-quiz     {:label "Start quiz…" :class :nav :exec :ui-button :views #{}}
-     :start-exam     {:label "Start exam…" :class :nav :exec :ui-button :views #{}}
+     :start-exam     {:label "Start timed quiz…" :class :nav :exec :ui-button :views #{}}
      :quiz-history   {:label "Quiz history" :class :nav :exec :ui-button :views #{}}
      :compare-ocr    {:label "Compare OCR models" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}

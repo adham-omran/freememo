@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 27 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 34 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -107,6 +107,13 @@
    :card_versions
    :topic_repetitions
    :study_schedules
+   :curricula
+   :curriculum_blocks
+   :curriculum_materials
+   :curriculum_exam_forms
+   :curriculum_exam_sittings
+   :curriculum_grade_revisions
+   :curriculum_unlock_overrides
    :assistant_chats
    :assistant_messages
    :kg_entities
@@ -199,6 +206,16 @@
   (str "SELECT id FROM kg_facts WHERE user_id = ? AND graph_topic_id IN ("
     owned-topics ")"))
 
+(def ^:private owned-curriculum-exam-forms
+  "Subquery for forms whose subject survives the same export."
+  (str "SELECT f.id FROM curriculum_exam_forms f WHERE f.user_id = ? AND ("
+    "f.block_id IN (SELECT b.id FROM curriculum_blocks b JOIN curricula c"
+    " ON c.id = b.curriculum_id WHERE c.user_id = ?) OR "
+    "f.material_id IN (SELECT m.id FROM curriculum_materials m"
+    " JOIN curriculum_blocks b ON b.id = m.block_id"
+    " JOIN curricula c ON c.id = b.curriculum_id WHERE c.user_id = ?"
+    " AND m.topic_id IN (" owned-topics ")))"))
+
 (def entity-scopes
   "Per-table scope, used to build both the `count(*)` and the row query.
 
@@ -289,6 +306,34 @@
    ;; translation and appears in no `fk-columns` entry.
    :study_schedules {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
                      :params 2 :order "t.id"}
+
+   :curricula {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :curriculum_blocks
+   {:where "t.curriculum_id IN (SELECT id FROM curricula WHERE user_id = ?)"
+    :params 1 :order "t.id"}
+
+   :curriculum_materials
+   {:where (str "t.block_id IN (SELECT b.id FROM curriculum_blocks b"
+             " JOIN curricula c ON c.id = b.curriculum_id WHERE c.user_id = ?)"
+             " AND t.topic_id IN (" owned-topics ")")
+    :params 2 :order "t.id"}
+
+   :curriculum_exam_forms {:where (str "t.id IN (" owned-curriculum-exam-forms ")")
+                           :params 4 :order "t.id"}
+
+   :curriculum_exam_sittings
+   {:where (str "t.user_id = ? AND t.form_id IN (" owned-curriculum-exam-forms ")")
+    :params 5 :order "t.id"}
+
+   :curriculum_grade_revisions
+   {:where (str "t.sitting_id IN (SELECT s.id FROM curriculum_exam_sittings s"
+             " WHERE s.user_id = ? AND s.form_id IN (" owned-curriculum-exam-forms "))")
+    :params 5 :order "t.id"}
+
+   :curriculum_unlock_overrides
+   {:where "t.curriculum_id IN (SELECT id FROM curricula WHERE user_id = ?)"
+    :params 1 :order "t.id"}
 
    :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
                      :params 2 :order "t.id"}

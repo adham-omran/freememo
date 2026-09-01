@@ -1764,6 +1764,125 @@
       PRIMARY KEY (user_id, deck)
     )"]))
 
+(defn- setup-schema-curriculum!
+  "Personal curricula and evidence-bound long-form exams.
+
+   The order of these tables is also their account-import order. A form belongs
+   to one material or one block. Five questions are frozen at approval. Grade
+   revisions are append-only, and block completion is a monotonic timestamp."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curricula (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+      target_date DATE,
+      daily_minutes INTEGER CHECK (daily_minutes > 0),
+      study_weekdays SMALLINT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (target_date IS NOT NULL OR daily_minutes IS NOT NULL
+             OR cardinality(study_weekdays) > 0),
+      CHECK (study_weekdays <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[])
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_curricula_user
+                      ON curricula(user_id, updated_at DESC)"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_blocks (
+      id SERIAL PRIMARY KEY,
+      curriculum_id INTEGER NOT NULL REFERENCES curricula(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+      unlocked_at TIMESTAMPTZ,
+      focused_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (curriculum_id, position)
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_blocks_focus
+                      ON curriculum_blocks(curriculum_id) WHERE focused_at IS NOT NULL"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_materials (
+      id SERIAL PRIMARY KEY,
+      block_id INTEGER NOT NULL REFERENCES curriculum_blocks(id) ON DELETE CASCADE,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      estimated_minutes INTEGER CHECK (estimated_minutes > 0),
+      studied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (block_id, position),
+      UNIQUE (block_id, topic_id)
+    )"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_exam_forms (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      block_id INTEGER REFERENCES curriculum_blocks(id) ON DELETE CASCADE,
+      material_id INTEGER REFERENCES curriculum_materials(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL CHECK (version > 0),
+      form_kind TEXT NOT NULL DEFAULT 'standard'
+        CHECK (form_kind IN ('standard','targeted-retry')),
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','approved')),
+      threshold INTEGER NOT NULL DEFAULT 70 CHECK (threshold BETWEEN 0 AND 100),
+      blueprint JSONB NOT NULL,
+      questions JSONB NOT NULL CHECK (jsonb_typeof(questions) = 'array'
+                                     AND jsonb_array_length(questions) = 5),
+      source_versions JSONB NOT NULL,
+      accepted_source_versions JSONB,
+      generation_cost_credits NUMERIC(12,4),
+      approved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((block_id IS NULL) <> (material_id IS NULL)),
+      CHECK ((status = 'approved') = (approved_at IS NOT NULL))
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_material_form_version
+                      ON curriculum_exam_forms(material_id, version)
+                      WHERE material_id IS NOT NULL"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_block_form_version
+                      ON curriculum_exam_forms(block_id, version)
+                      WHERE block_id IS NOT NULL"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_exam_sittings (
+      id SERIAL PRIMARY KEY,
+      form_id INTEGER NOT NULL REFERENCES curriculum_exam_forms(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      submitted_at TIMESTAMPTZ,
+      answers JSONB,
+      self_correction_score INTEGER CHECK (self_correction_score BETWEEN 0 AND 100),
+      self_correction_reason TEXT
+    )"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_grade_revisions (
+      id SERIAL PRIMARY KEY,
+      sitting_id INTEGER NOT NULL REFERENCES curriculum_exam_sittings(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      raw_score INTEGER NOT NULL CHECK (raw_score BETWEEN 0 AND 100),
+      passed BOOLEAN NOT NULL,
+      criteria JSONB NOT NULL,
+      explanation TEXT NOT NULL,
+      grading_cost_credits NUMERIC(12,4),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (sitting_id, revision)
+    )"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS curriculum_unlock_overrides (
+      id SERIAL PRIMARY KEY,
+      curriculum_id INTEGER NOT NULL REFERENCES curricula(id) ON DELETE CASCADE,
+      from_block_id INTEGER NOT NULL REFERENCES curriculum_blocks(id) ON DELETE CASCADE,
+      to_block_id INTEGER NOT NULL REFERENCES curriculum_blocks(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (from_block_id, to_block_id),
+      CHECK (from_block_id <> to_block_id)
+    )"]))
+
 (defn- setup-schema-activity-monitor!
   "One row per long-running operation a user started — the Activity monitor's
    durable record (plans/activity-monitor.md). Must run after
@@ -1862,6 +1981,7 @@
   (setup-schema-neoreader!)
   (setup-schema-account-transfer!)
   (setup-schema-study-scheduler!)
+  (setup-schema-curriculum!)
   (setup-schema-activity-monitor!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
@@ -11176,4 +11296,3 @@
       (sql/format {:select [[[:max :updated_at] :cached_at]]
                    :from [:anki_card_states]
                    :where [:= :user_id user-id]}))))
-

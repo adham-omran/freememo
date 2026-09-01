@@ -195,6 +195,18 @@
    :chevron-down
    [[:path {:d "m6 9 6 6 6-6"}]]
 
+   :chevron-up
+   [[:path {:d "m18 15-6-6-6 6"}]]
+
+   :arrow-left
+   [[:path {:d "m12 19-7-7 7-7"}]
+    [:path {:d "M19 12H5"}]]
+
+   :route
+   [[:circle {:cx "6" :cy "19" :r "2"}]
+    [:circle {:cx "18" :cy "5" :r "2"}]
+    [:path {:d "M6 17c0-7 12-5 12-10"}]]
+
    :history
    [[:path {:d "M3 12a9 9 0 1 0 3-6.7L3 8"}]
     [:path {:d "M3 3v5h5"}]

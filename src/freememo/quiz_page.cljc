@@ -157,11 +157,11 @@
               (dom/text "← Dashboard")
               (dom/On "click" (fn [_] (reset! !view :dashboard)) nil))
             (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-              (dom/text (if (= mode "exam") "Start an exam" "Custom quiz")))))
+              (dom/text (if (= mode "exam") "Start a Timed Quiz" "Custom quiz")))))
         ;; Mode toggle — quiz: untimed, instant feedback; exam: timed, graded at end.
         (dom/div
           (dom/props {:style {:display "flex" :gap "4px" :margin "10px 0"}})
-          (e/for [[k label dflt] (e/diff-by first [["quiz" "Quiz" "10"] ["exam" "Exam" "20"]])]
+          (e/for [[k label dflt] (e/diff-by first [["quiz" "Quiz" "10"] ["exam" "Timed Quiz" "20"]])]
             (dom/button
               (dom/props {:class (str "btn btn-sm" (when (= mode k) " btn-secondary"))
                           :style {:font-weight (if (= mode k) "600" "400")}
@@ -233,7 +233,7 @@
                   (t)))
               (dom/button
                 (dom/props {:class "btn btn-primary" :disabled (empty? scope)})
-                (dom/text (if (= mode "exam") "Start exam" "Start quiz"))
+                (dom/text (if (= mode "exam") "Start Timed Quiz" "Start quiz"))
                 (let [click (dom/On "click"
                               (fn [_]
                                 (let [kind @!mode
@@ -463,7 +463,7 @@
                                   {:level :error
                                    :message "Grading failed — try submitting again."})
                                 {:success false}))))]
-            (dom/h3 (dom/props {:style {:font-size "16px"}}) (dom/text "Grading your exam…"))
+            (dom/h3 (dom/props {:style {:font-size "16px"}}) (dom/text "Grading your Timed Quiz…"))
             (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text (if gtotal (str done " / " gtotal " answers graded") "Preparing…")))
             (case result ; wait on the value — do would race the transition
@@ -493,8 +493,8 @@
                                              "var(--color-text-primary)")}})
                 (dom/text (fmt-mmss remaining)))
               (dom/button
-                (dom/props {:class "btn btn-sm" :aria-label "Submit exam now"})
-                (dom/text "Submit exam")
+                (dom/props {:class "btn btn-sm" :aria-label "Submit Timed Quiz now"})
+                (dom/text "Submit Timed Quiz")
                 (dom/On "click" (fn [_] (when (nil? @!submit-req)
                                           (reset! !submit-req {:draft @!draft})))
                   nil)))
@@ -509,13 +509,13 @@
             (e/for [[t edit] (e/amb
                                (forms/Input! :exam/answer draft :as :textarea
                                  :class "input" :rows 4 :dir "auto"
-                                 :placeholder "Answer in your own words — graded when you submit the exam"
+                                 :placeholder "Answer in your own words — graded when you submit the Timed Quiz"
                                  :aria-label "Your answer"
                                  :autofocus true
                                  :style {:width "100%" :resize "vertical"})
                                (forms/Button! [::save]
                                  :class "btn btn-primary" :style {:margin-top "8px"}
-                                 :label (if (< (inc idx) total) "Save & next" "Save & submit exam")
+                                 :label (if (< (inc idx) total) "Save & next" "Save & submit Timed Quiz")
                                  :disabled (str/blank? (str draft))))]
               (if (map? edit)
                 (do (reset! !draft (:exam/answer edit)) (t))

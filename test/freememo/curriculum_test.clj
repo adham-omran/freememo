@@ -1,0 +1,159 @@
+(ns freememo.curriculum-test
+  (:require
+   [clojure.test :refer [deftest is testing]]
+   [freememo.curriculum :as curriculum]
+   [freememo.curriculum-exam :as exam]
+   [freememo.db :as db]
+   [next.jdbc :as jdbc]
+   [next.jdbc.result-set :as rs])
+  (:import [java.time LocalDate]))
+
+(def rubric
+  {:factual_accuracy "Facts match the evidence."
+   :reasoning "The claim follows from the evidence."
+   :source_evidence "The answer uses the supplied evidence."
+   :integration "The answer connects relevant points."
+   :completeness "The answer covers the full prompt."})
+
+(defn question [index]
+  {:role (nth ["explain" "compare" "apply" "evaluate" "synthesize"] index)
+   :prompt (str "Question " index)
+   :outcomes [(str "outcome-" index)]
+   :grading_guide "Use the cited evidence."
+   :evidence [{:material_id 1 :topic_id 2 :quote "frozen evidence"}]
+   :rubric rubric})
+
+(deftest generated-form-requires-five-complete-essay-questions
+  (let [form {:blueprint {:assessed_outcomes ["a"] :unassessed_outcomes ["b"]}
+              :questions (mapv question (range 5))}
+        validated (exam/validate-generated-form! form)]
+    (is (= 5 (count (:questions validated))))
+    (is (every? :id (:questions validated))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly five"
+        (exam/validate-generated-form!
+          {:blueprint {:assessed_outcomes [] :unassessed_outcomes []}
+           :questions (mapv question (range 4))})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Add material"
+        (exam/validate-generated-form! {:insufficient true :reason "Too little evidence."}))))
+
+(def full-score
+  {:factual_accuracy 4 :reasoning 4 :source_evidence 4
+   :integration 4 :completeness 4})
+
+(def blueprint
+  {:evidence_packets [{:sections [{:text "This is frozen evidence for grading."}]}]})
+
+(deftest grade-is-the-sum-of-25-zero-to-four-criteria
+  (let [grade {:question_grades
+               (vec (repeat 5 {:criteria full-score :deductions []
+                               :weaknesses [] :explanation "Complete."}))
+               :explanation "All answers meet the frozen rubric."}]
+    (is (= 100 (:raw-score (exam/validate-grade! grade blueprint))))))
+
+(deftest every-lost-point-needs-a-frozen-evidence-citation
+  (let [scores (assoc full-score :reasoning 3)
+        base {:question_grades
+              (vec (repeat 5 {:criteria full-score :deductions []
+                              :weaknesses [] :explanation "Complete."}))
+              :explanation "One answer needs work."}]
+    (testing "a missing deduction is invalid"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"lost point"
+            (exam/validate-grade!
+              (assoc-in base [:question_grades 0 :criteria] scores) blueprint))))
+    (testing "a citation outside the frozen evidence is invalid"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"frozen evidence"
+            (exam/validate-grade!
+              (-> base
+                (assoc-in [:question_grades 0 :criteria] scores)
+                (assoc-in [:question_grades 0 :deductions]
+                  [{:criterion "reasoning" :reason "Missing link."
+                    :citation "invented text"}]))
+              blueprint))))
+    (testing "an exact frozen citation is accepted"
+      (is (= 99
+            (:raw-score
+              (exam/validate-grade!
+                (-> base
+                  (assoc-in [:question_grades 0 :criteria] scores)
+                  (assoc-in [:question_grades 0 :deductions]
+                    [{:criterion "reasoning" :reason "Missing link."
+                      :citation "frozen evidence"}]))
+                blueprint)))))))
+
+(deftest work-allocation-preserves-order-days-and-capacity
+  (let [tasks [{:title "A" :minutes 90} {:title "B" :minutes 30}]
+        monday (LocalDate/parse "2026-08-31")
+        result (curriculum/allocate-work tasks monday #{1 3} 60)]
+    (is (= ["2026-08-31" "2026-09-02" "2026-09-02"] (mapv :date result)))
+    (is (= [60 30 30] (mapv :minutes result)))
+    (is (= ["A" "A" "B"] (mapv :title result)))))
+
+(defn- db-up? []
+  (try (jdbc/execute-one! db/ds ["SELECT 1"]) true (catch Exception _ false)))
+
+(deftest passing-block-exams-and-overrides-have-distinct-effects
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "curriculum-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")]
+                         {:builder-fn rs/as-unqualified-maps}))
+          topic-id (:id (jdbc/execute-one! db/ds
+                          ["INSERT INTO topics (user_id, title, kind, content_text)
+                            VALUES (?, 'Evidence', 'markdown', 'frozen evidence') RETURNING id"
+                           user-id]
+                          {:builder-fn rs/as-unqualified-maps}))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum!
+                              user-id {:title "Contract test" :daily-minutes 60
+                                       :study-weekdays []})
+              first-block (curriculum/add-block! user-id curriculum-id "First")
+              second-block (curriculum/add-block! user-id curriculum-id "Second")
+              third-block (curriculum/add-block! user-id curriculum-id "Third")
+              _material (curriculum/add-material! user-id first-block topic-id 30)
+              evidence (curriculum/subject-evidence db/ds user-id {:block-id first-block})
+              questions (mapv question (range 5))
+              form-id (curriculum/save-draft-form! user-id {:block-id first-block}
+                        {:threshold 70
+                         :blueprint {:assessed_outcomes ["a"] :unassessed_outcomes []
+                                     :evidence_packets []}
+                         :questions questions
+                         :source-versions (:source-versions evidence)})
+              _approved (curriculum/approve-form! user-id form-id)
+              sitting-id (curriculum/start-sitting! user-id form-id)
+              _submitted (curriculum/submit-sitting! user-id sitting-id
+                           (vec (repeat 5 {:answer "Answer" :do-not-know false})))
+              _resubmitted (curriculum/submit-sitting! user-id sitting-id
+                             (vec (repeat 5 {:answer "Changed" :do-not-know false})))
+              passing-criteria (vec (repeat 5 {:criteria
+                                                {:factual_accuracy 3 :reasoning 3
+                                                 :source_evidence 3 :integration 3
+                                                 :completeness 2}}))
+              zero-criteria (vec (repeat 5 {:criteria
+                                             {:factual_accuracy 0 :reasoning 0
+                                              :source_evidence 0 :integration 0
+                                              :completeness 0}}))
+              _pass (curriculum/record-grade-revision! user-id sitting-id
+                      {:raw-score 70 :criteria passing-criteria :explanation "Pass."})]
+          (is (= "Answer" (-> (curriculum/sitting-for-grade user-id sitting-id)
+                             :answers first :answer))
+            "the first submitted answer set is frozen")
+          (let [detail (curriculum/curriculum-detail 0 user-id curriculum-id)
+                blocks (:blocks detail)]
+            (is (some? (:completed_at (first blocks))))
+            (is (some? (:unlocked_at (second blocks)))))
+          (curriculum/record-grade-revision! user-id sitting-id
+            {:raw-score 0 :criteria zero-criteria :explanation "Lower regrade."})
+          (is (some? (:completed_at
+                       (first (:blocks (curriculum/curriculum-detail
+                                        0 user-id curriculum-id)))))
+            "a later lower revision cannot reverse completion")
+          (curriculum/unlock-next-block! user-id second-block)
+          (let [blocks (:blocks (curriculum/curriculum-detail 0 user-id curriculum-id))]
+            (is (nil? (:completed_at (second blocks))))
+            (is (some? (:unlocked_at (nth blocks 2)))
+              "an override unlocks the next block without completing this one")))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))

@@ -72,7 +72,7 @@
     ["Distill a document into a graph of facts, curated by exception rather than one by one."
      "Every fact becomes an atomic question, generated for you."
      "Answer in prose. The model grades it ✓ Correct, ◐ Partial, or ✗ Incorrect and names the facts you missed."
-     "Or sit a timed exam: forward-only, graded at the end."]]
+     "Or sit a Timed Quiz: forward-only, graded at the end."]]
    ["3" "Sync"
     "Anki's scheduler, once the cards land"
     ["Generate basic, cloze, or overlapping-cloze cards from the page you just read."
