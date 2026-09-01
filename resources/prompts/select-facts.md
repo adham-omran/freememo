@@ -10,9 +10,9 @@ Exclude facts that the passage does not discuss.
 Return one JSON object. Use double quotes for all keys and strings.
 Return no Markdown, code fences, or explanation.
 
-{"fact-ids":[3,7,12]}
+{"fact_ids":[3,7,12]}
 
 Rules:
 - Use only IDs from the input `facts` array.
-- Return `{"fact-ids":[]}` when the passage supports no facts.
+- Return `{"fact_ids":[]}` when the passage supports no facts.
 - Judge by meaning, not word overlap: a fact is supported when the passage entails it.

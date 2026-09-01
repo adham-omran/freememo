@@ -285,6 +285,16 @@
                (m/amb item (recur)))))))
 
 #?(:clj
+   (defn- card-generation-task
+     "Run one queued card-generation item.
+      Pre:  `item` satisfies `generate-and-save!`.
+      Post: a Missionary task returns the exact generation result.
+      Inv:  the generation runs on the blocking executor, and no outer deadline
+            can replace a result after `generate-and-save!` saves cards."
+     [item]
+     (m/via m/blk (generate-and-save! item))))
+
+#?(:clj
    (defonce card-gen-processor-cancel
      ((m/reduce
         (fn [_ _] nil) nil
@@ -302,13 +312,11 @@
                 (forget-card-gen-item! uid tid))
               (do
                 (swap! !status update tid assoc :active-id (:id item) :error nil)
-                ;; 120s: the fact path (KG→cards bridge) runs a fact-selection call
-                ;; before the card-gen call + its retries — two LLM round-trips must
-                ;; fit the budget. Raw-text gen uses only the first half.
-                (let [result (m/? (m/timeout
-                                    (m/via m/blk (generate-and-save! item))
-                                    120000
-                                    {:success false :error "Card generation timed out"}))]
+                ;; Apache HttpClient ignores Missionary's worker interruption.
+                ;; An outer timeout can therefore expire, wait while this call
+                ;; saves cards, and then replace its success with a timeout. The
+                ;; worker result is the only truthful completion signal.
+                (let [result (m/? (card-generation-task item))]
                   (forget-card-gen-item! uid tid)
                   (cond
                     (:success result)

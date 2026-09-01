@@ -74,7 +74,7 @@
                                   (llm-json/write-prompt-input
                                     {:passage passage
                                      :facts (mapv fact->select-row candidate-facts)})
-                                  :fact-ids :vector
+                                  :fact_ids :vector
                                   {:feature :fact-select :user-id user-id})
           by-id (into {} (map (juxt :id identity)) candidate-facts)
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))

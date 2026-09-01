@@ -9,6 +9,7 @@
    [freememo.cards :as cards]
    [freememo.cards-from-facts :as cards-from-facts]
    [freememo.credits :as credits]
+   [freememo.db :as db]
    [freememo.kg-extract :as kg-extract]
    [freememo.kg-grade :as kg-grade]
    [freememo.kg-llm :as kg-llm]
@@ -129,7 +130,7 @@
     :wrong-domain-value {:verdict "correct"}}
    {:lane :fact-select
     :prompt "select-facts.md"
-    :root-key :fact-ids
+    :root-key :fact_ids
     :root-type :vector
     :valid-value [3 7 12]
     :valid-domain? every-fact-id-valid?
@@ -343,6 +344,30 @@
           data))
     (is (not (contains? data :prompt)))
     (is (not (contains? data :response)))))
+
+(deftest fact-select-accepts-its-snake-case-json-root
+  (let [attempts (atom 0)
+        candidates [{:id 7
+                     :subject_label "heart"
+                     :predicate_label "pumps"
+                     :object_label "blood"}]]
+    (with-redefs [kg-llm/resolve-model+gate!
+                  (constantly {:api-key "key"
+                               :entry {:id "glm-5.3-flash"}
+                               :model-fields {:model "z-ai/glm-5.3-flash"}})
+                  openrouter/chat-completion!
+                  (fn [_ _ _]
+                    (swap! attempts inc)
+                    {:choices [{:message {:content "{\"fact_ids\": []}"}
+                                :finish_reason "stop"}]
+                     :usage {:cost 0.001}})
+                  credits/record-cost-charge! (constantly 1.0)
+                  db/get-fact-mastery (constantly {})]
+      (is (= {:success true :facts [] :cost 0.001}
+            (cards-from-facts/select-relevant-facts
+              8 11910 "unrelated passage" candidates)))
+      (is (= 1 @attempts))
+      (is (invalid-response? "{\"fact-ids\": []}" :fact_ids :vector)))))
 
 (deftest all-card-kinds-parse-their-json-envelope
   (doseq [[lane generate response expected]
