@@ -27,16 +27,29 @@
 ;; the same client. Duplicating the credential lookup there would let the two
 ;; flows drift onto different clients, which Google would reject at the token
 ;; exchange with nothing in the app to explain it.
+(defn- blank->nil
+  "Read a blank credential as an absent credential.
+
+   Compose writes `GOOGLE_CLIENT_ID: \"${GOOGLE_CLIENT_ID:-}\"`, so an unset
+   variable reaches the JVM as \"\" and not as no variable at all. \"\" satisfied
+   every `or` below and every `boolean` above it, so the deployment reported
+   itself configured, put an empty client_id into the authorization URL, and
+   Google answered each sign-in with `Error 400: invalid_request`."
+  [s]
+  (when-not (clojure.string/blank? s) s))
+
 (defn client-id []
-  (or (:client_id @credentials) (System/getenv "GOOGLE_CLIENT_ID")))
+  (or (blank->nil (:client_id @credentials))
+      (blank->nil (System/getenv "GOOGLE_CLIENT_ID"))))
 
 (defn client-secret []
-  (or (:client_secret @credentials) (System/getenv "GOOGLE_CLIENT_SECRET")))
+  (or (blank->nil (:client_secret @credentials))
+      (blank->nil (System/getenv "GOOGLE_CLIENT_SECRET"))))
 
 (defn redirect-uri []
   ;; Env var takes precedence; otherwise pick the localhost callback from the file,
   ;; falling back to the first entry (production), then a hardcoded default.
-  (or (System/getenv "GOOGLE_REDIRECT_URI")
+  (or (blank->nil (System/getenv "GOOGLE_REDIRECT_URI"))
       (some #(when (clojure.string/includes? % "localhost") %) (:redirect_uris @credentials))
       (first (:redirect_uris @credentials))
       "http://localhost:8080/auth/google/callback"))
@@ -44,16 +57,59 @@
 (defn- url-encode [s]
   (java.net.URLEncoder/encode s "UTF-8"))
 
-(defn configured?
-  "Returns true if Google OAuth credentials are available."
+(defn missing-credentials
+  "Which Google credentials this deployment lacks, named as their env vars.
+   Post: a vector, empty exactly when both are present and non-blank. Named
+   rather than boolean, so the operator alert can say which value is blank.
+
+   Blank is re-tested here rather than trusted from the readers above. This
+   predicate answers `can anyone sign in`, and an answer that holds only while
+   an invariant one layer down holds is the shape that produced the outage it
+   exists to catch."
   []
-  (boolean (client-id)))
+  (cond-> []
+    (clojure.string/blank? (client-id))     (conj "GOOGLE_CLIENT_ID")
+    (clojure.string/blank? (client-secret)) (conj "GOOGLE_CLIENT_SECRET")))
+
+(defn configured?
+  "Whether this deployment can complete a Google sign-in.
+   Post: true only when BOTH credentials are present and non-blank. The id alone
+   is not enough — `auth-url` needs the id and `exchange-code` needs the secret,
+   so an id-only deployment sends the user to Google and then fails the callback."
+  []
+  (empty? (missing-credentials)))
+
+(defn report-unusable-sign-in!
+  "Signal that this deployment offers Google sign-in and cannot perform it.
+
+   Pre : the caller has established that AUTH_MODE includes google.
+   Post: one :error signal, id ::sign-in-unconfigured, when a credential is
+         blank, and no signal at all when none is. Returns `missing-credentials`
+         either way.
+
+   `freememo.logging/alert-routes` mails ::sign-in-unconfigured, because a blank
+   credential locks every user out of the deployment and raises nothing else. No
+   request fails, no exception is thrown, and the landing page still offers the
+   button. The only other symptom is Google's own error page, which the operator
+   never sees."
+  []
+  (let [missing (missing-credentials)]
+    (when (seq missing)
+      (tel/log! {:level :error :id ::sign-in-unconfigured
+                 :data {:missing missing}}
+        (str "Google sign-in is unusable: " (clojure.string/join " and " missing)
+          " blank. No user can sign in.")))
+    missing))
 
 (defn auth-url
-  "Build the Google OAuth authorization URL with a CSRF state parameter."
+  "Build the Google OAuth authorization URL with a CSRF state parameter.
+   Pre : `configured?` is true. A caller that skips that check gets an assertion
+         naming the fault, rather than a URL that Google rejects with a 400 the
+         caller cannot read."
   [state]
+  {:pre [(configured?)]}
   (str "https://accounts.google.com/o/oauth2/v2/auth"
-       "?client_id=" (url-encode (or (client-id) ""))
+       "?client_id=" (url-encode (client-id))
        "&redirect_uri=" (url-encode (redirect-uri))
        "&response_type=code"
        "&scope=openid%20email%20profile"

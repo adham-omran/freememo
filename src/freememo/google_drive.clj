@@ -115,8 +115,12 @@
          `prompt=consent` so a refresh token is issued. Without both, Google
          returns an access token only and every later sync would need the user
          present. `include_granted_scopes` keeps the sign-in scopes the user
-         already granted."
+         already granted.
+   Pre : `oauth/configured?` is true. Drive authorizes the SAME client as
+         sign-in, so a blank credential breaks both and must fail here by
+         assertion rather than by an empty client_id Google cannot act on."
   [state]
+  {:pre [(oauth/configured?)]}
   (str "https://accounts.google.com/o/oauth2/v2/auth"
     "?client_id=" (url-encode (oauth/client-id))
     "&redirect_uri=" (url-encode (oauth/redirect-uri))

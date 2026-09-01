@@ -173,6 +173,13 @@
               :freememo.google-oauth/user-signup
               :freememo.db/signup-grant
               :freememo.db/grandfather-grant}}
+      ;; A deployment that cannot sign anyone in. Its own pool, because the
+      ;; alert must not be rate-capped away by a billing or pipeline storm, and
+      ;; because it fires at most once per boot.
+      {:handler-id :alert/sign-in-broken
+       :subject-tag "SIGN-IN"
+       :min-level :error
+       :ids #{:freememo.google-oauth/sign-in-unconfigured}}
       {:handler-id :alert/pipeline-failures
        :subject-tag "pipeline"
        :min-level :error

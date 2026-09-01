@@ -62,13 +62,21 @@
          (log/info "Admin seed for" u "→" (name (auth/ensure-admin-user! u p)))))))
 
 #?(:clj
-   (defn warn-auth-mode-coherence!
-     "Warn when AUTH_MODE expects Google but OAuth is unconfigured (4.4)."
+   (defn check-auth-mode-coherence!
+     "At boot, report an AUTH_MODE that offers a sign-in this deployment cannot
+      perform (4.4).
+
+      Pre : `logging/init!` has run, so the alert route exists.
+      Post: `google-oauth/report-unusable-sign-in!` has emitted its :error signal
+            when a credential is blank. Returns the missing names, empty when
+            Google sign-in is unreachable by configuration rather than broken.
+
+      This used to call `log/warn`, which reaches logs/app.log and nothing else.
+      No operator reads that file at boot, so the one deployment that shipped a
+      blank GOOGLE_CLIENT_ID ran for six days with sign-in dead."
      []
-     (when (and (contains? #{:google :both} (config/auth-mode))
-                (not (google-oauth/configured?)))
-       (log/warn "AUTH_MODE includes google but Google OAuth is not configured —"
-         "Google sign-in will not work. Set GOOGLE_CLIENT_ID/SECRET or use AUTH_MODE=password."))))
+     (when (contains? #{:google :both} (config/auth-mode))
+       (google-oauth/report-unusable-sign-in!))))
 
 #?(:clj
    (defn wrap-api-routes [handler]
@@ -156,7 +164,7 @@
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.
        (seed-admin-user!)
-       (warn-auth-mode-coherence!)
+       (check-auth-mode-coherence!)
 
        (ring/run-jetty
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
