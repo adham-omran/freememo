@@ -1,4 +1,6 @@
-- You'll be provided the content as a Clojure map,
-  - the key `:context` representing surrounding text context.
-  - the key `:content` represents the text to make questions for.
-- Utilize the context to create cards for the content, do not make cards about the context, only content.
+- You receive one JSON object.
+  - `context` contains surrounding text.
+  - `content` contains the text for the cards.
+  - `card-count` contains the required number of cards.
+- Use `context` to understand `content`.
+- Make cards only from `content`.

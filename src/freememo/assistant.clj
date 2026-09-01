@@ -339,7 +339,8 @@
                   model-id (settings/effective-assistant-model user-id root-topic-id)
                   entry (or (card-models/resolve-model model-id)
                           (card-models/resolve-model settings/assistant-default-model-id))
-                  model-fields (openrouter/model-fields entry)]
+                  model-fields (openrouter/chat-completion-fields entry
+                                 {:reasoning_effort (settings/get-reasoning user-id)})]
               (try
                 (let [body (openrouter/chat-completion! api-key
                              (assoc model-fields
@@ -347,8 +348,7 @@
                                            (not-empty
                                              (str (mission-suffix user-id root-topic-id)
                                                (grounding-system-suffix user-id ctx mode)))
-                                           context-msgs)
-                               :reasoning_effort (settings/get-reasoning user-id))
+                                           context-msgs))
                              {:feature :assistant :user-id user-id})
                       reply (-> body :choices first :message :content)
                       cost (double (or (-> body :usage :cost) 0))]

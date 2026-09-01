@@ -9,6 +9,7 @@
    Contract with the model output (all gated here, never trusted):
    - verdict must normalize to correct|partial|incorrect, else the grade
      fails visibly (no silent clamping);
+   - explanation must be a non-blank string;
    - missed-fact-ids are filtered to the question's linked facts;
    - matched-keywords are filtered case-insensitively to the linked entities'
      labels/aliases — a hallucinated keyword can never render as a highlight.
@@ -23,6 +24,7 @@
    [freememo.db :as db]
    [freememo.credits :as credits]
    [freememo.kg-llm :as llm]
+   [freememo.llm-json :as llm-json]
    [freememo.cards :as cards]
    [freememo.settings :as settings]
    [freememo.text :as text]
@@ -32,8 +34,25 @@
    [clojure.string :as str]))
 
 (defn- normalize-verdict [v]
-  (let [s (str/lower-case (name (or v "")))]
-    (#{"correct" "partial" "incorrect"} s)))
+  (when (or (string? v) (keyword? v))
+    (#{"correct" "partial" "incorrect"}
+      (str/lower-case (name v)))))
+
+(defn- validate-grade!
+  "Validate and normalize one parsed grade.
+   Pre:  parsed is the :grade JSON object.
+   Post: returns parsed with a normalized :verdict and non-blank :explanation.
+         Invalid domain fields throw ::invalid-grade."
+  [parsed]
+  (let [verdict (normalize-verdict (:verdict parsed))
+        explanation (:explanation parsed)]
+    (when-not verdict
+      (throw (ex-info "Model returned no usable verdict"
+               {:type ::invalid-grade :field :verdict})))
+    (when-not (and (string? explanation) (not (str/blank? explanation)))
+      (throw (ex-info "Model returned no usable explanation"
+               {:type ::invalid-grade :field :explanation})))
+    (assoc parsed :verdict verdict)))
 
 (defn verdict->rating
   "Map an LLM verdict to an FSRS rating (binary, per product decision):
@@ -89,29 +108,31 @@
           ;; an answer the graph confirms must never be marked wrong just
           ;; because the question was generated from a different fact.
           also-true (db/kg-fact-alternates user-id (mapv :id facts))
-          payload (pr-str (cond-> {:question question
-                                   :reference-answer reference-answer
-                                   :facts (mapv fact->row facts)
-                                   :keywords keywords
-                                   :answer user-answer}
-                            (seq also-true)
-                            (assoc :also-true (mapv fact->row also-true))))
+          payload (llm-json/write-prompt-input
+                    (cond-> {:question question
+                             :reference-answer reference-answer
+                             :facts (mapv fact->row facts)
+                             :keywords keywords
+                             :answer user-answer}
+                      (seq also-true)
+                      (assoc :also-true (mapv fact->row also-true))))
           prompt (cards/load-prompt-template "kg-grade.md")
           gctx {:feature :kg-grade :user-id user-id}
           ;; unusable output is retried inside llm/chat!; :cost covers both attempts
-          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt payload gctx)
-          verdict (or (normalize-verdict (:verdict parsed))
-                      (throw (ex-info "Model returned no usable verdict" {})))
+          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt payload
+                                  :grade :map gctx)
+          grade (validate-grade! parsed)
+          verdict (:verdict grade)
           linked-ids (into #{} (map :id) facts)
-          missed (filterv linked-ids (:missed-fact-ids parsed))
+          missed (filterv linked-ids (:missed-fact-ids grade))
           lexicon (into {} (map (juxt str/lower-case identity)) keywords)
           matched (into []
                     (comp (map str) (keep #(lexicon (str/lower-case %))) (distinct))
-                    (:matched-keywords parsed))]
+                    (:matched-keywords grade))]
       (credits/record-cost-charge! user-id :kg.grade (:id entry) cost)
       {:success true
        :verdict verdict
-       :explanation (str (:explanation parsed))
+       :explanation (:explanation grade)
        :missed-fact-ids missed
        :missed-facts (filterv #(contains? (set missed) (:id %)) facts)
        :matched-keywords matched
@@ -138,19 +159,21 @@
     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
           {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
                                     (throw (ex-info "Card item not found" {})))
-          payload (pr-str {:prompt (text/strip-html prompt)
-                           :reference-answer (text/strip-html answer)
-                           :answer user-answer})
+          payload (llm-json/write-prompt-input
+                    {:prompt (text/strip-html prompt)
+                     :reference-answer (text/strip-html answer)
+                     :answer user-answer})
           tmpl (or (cards/load-prompt-template "card-grade.md")
                  (throw (ex-info "Failed to load card-grade prompt" {})))
           {:keys [parsed cost]} (llm/chat! api-key model-fields tmpl payload
+                                  :grade :map
                                   {:feature :card-grade :user-id user-id})
-          verdict (or (normalize-verdict (:verdict parsed))
-                    (throw (ex-info "Model returned no usable verdict" {})))]
+          grade (validate-grade! parsed)
+          verdict (:verdict grade)]
       (credits/record-cost-charge! user-id :cards.grade (:id entry) cost)
       {:success true
        :verdict verdict
-       :explanation (str (:explanation parsed))
+       :explanation (:explanation grade)
        :reference-answer answer
        :missed-fact-ids [] :missed-facts [] :matched-keywords []})
     (catch Exception e (grade-failure! user-id ::grade-card e))))

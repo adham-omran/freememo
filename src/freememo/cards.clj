@@ -9,7 +9,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [freememo.pre-prompt-mode :as ppm]
-   [freememo.llm-edn :as llm-edn]
+   [freememo.llm-json :as llm-json]
    [freememo.math :as math]
    [freememo.overlapping :as overlap]
    [freememo.image-rehost :as image-rehost]
@@ -127,7 +127,7 @@
         (when context (str "\n\n" context))
         "\n\n# Instructions\n\n"
         "Generate EXACTLY " card-count " " item-noun " from the provided text. "
-        "Return EXACTLY " card-count " " collection-noun " in the EDN vector — no more, no fewer. "
+        "Return EXACTLY " card-count " " collection-noun " in the JSON cards array — no more, no fewer. "
         "Do not exceed this count even if the content seems to warrant more cards."))))
 
 (defn build-basic-prompt
@@ -177,11 +177,56 @@
 
 ;; Model response parsing
 (defn parse-card-response
-  "Parse the model's card response into a collection of maps — delegates to
-   freememo.llm-edn/parse-response (EDN preferred, JSON fallback, fences
-   stripped; throws ex-info on unparseable input)."
+  "Parse the model's JSON object and return its :cards vector.
+   Pre:  raw-text is the non-blank message content.
+   Post: a realized vector. Invalid JSON, wrappers, a missing :cards field, or
+         a non-vector :cards value throws :freememo.llm-json/unparseable."
   [raw-text]
-  (llm-edn/parse-response raw-text))
+  (llm-json/parse-response-field raw-text :cards :vector))
+
+(defn- card-type-for-endpoint
+  "Return the card type owned by one generation ledger endpoint.
+   Pre:  endpoint-tag is a card-generation endpoint.
+   Post: one of \"basic\", \"cloze\", or \"overlapping\".
+         An unknown endpoint is a caller bug."
+  [endpoint-tag]
+  (case endpoint-tag
+    :cards.basic "basic"
+    :cards.cloze "cloze"
+    :cards.overlapping "overlapping"
+    (throw (ex-info "Unknown card generation endpoint"
+             {:endpoint endpoint-tag}))))
+
+(defn- generated-card-valid?
+  "Check one generated card against its card-type wire contract.
+   Pre:  card-type is a value from card-type-for-endpoint.
+   Post: true only when required fields are non-blank strings.
+         Overlapping cards also require at least two non-blank items."
+  [card-type card]
+  (let [nonblank-string? #(and (string? %) (not (str/blank? %)))]
+    (and (map? card)
+      (case card-type
+        "basic" (and (nonblank-string? (:q card))
+                  (nonblank-string? (:a card)))
+        "cloze" (nonblank-string? (:c card))
+        "overlapping" (and (nonblank-string? (:question card))
+                        (vector? (:items card))
+                        (<= 2 (count (:items card)) 20)
+                        (every? nonblank-string? (:items card)))
+        false))))
+
+(defn- card-generation-options
+  "Build the domain options sent inside the card prompt input.
+   Pre:  card-type is valid. Other values are the active generation controls.
+   Post: always includes :card-type. Includes each non-blank optional control."
+  [card-type pre-prompt pre-prompt-mode goal]
+  (cond-> {:card-type card-type}
+    (not (str/blank? pre-prompt))
+    (assoc :pre-prompt pre-prompt
+      :pre-prompt-mode (ppm/normalize pre-prompt-mode))
+
+    (not (str/blank? goal))
+    (assoc :learning-goal goal)))
 
 (defn- unusable-response-result!
   "Terminal result for an attempt whose response yielded no usable cards, plus
@@ -224,7 +269,7 @@
   "Shared implementation for card generation with up to `max-retries` attempts.
    Validates that the returned card count matches the requested count; on success
    bills the summed OpenRouter usage.cost of all attempts (no charge on final
-   failure). endpoint-tag is :cards.basic or :cards.cloze for the ledger.
+   failure). endpoint-tag identifies the card-generation ledger lane.
 
    One attempt fails three ways, and all three consume the same attempt budget:
    the response carries no usable content (openrouter/message-content), the
@@ -245,13 +290,16 @@
         entry (or (card-models/resolve-model model-id)
                   (throw (ex-info (str "Unknown card model: " model-id) {})))
         slug (:openrouter-model entry)
-        model-fields (openrouter/model-fields entry)
         _ (let [gate (credits/check-cost-billed-balance! user-id)]
             (when-not (:ok gate)
               (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
         max-retries (settings/get-card-gen-max-retries user-id)
         reasoning (settings/get-reasoning user-id)
         verbosity (settings/get-verbosity user-id)
+        card-type (card-type-for-endpoint endpoint-tag)
+        model-fields (openrouter/structured-chat-completion-fields entry
+                       {:reasoning_effort reasoning
+                        :verbosity verbosity})
         has-context? (not (empty? context))
         prompt (prompt-builder-fn card-count has-context? pre-prompt pre-prompt-mode user-id topic-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
@@ -262,7 +310,13 @@
                  (str "\n\n# Learning goal\n\n"
                    "The learner is studying this material to: " goal "\n"
                    "Favor cards that serve this goal."))
-        content-text (if has-context? (pr-str {:content content :context context}) content)
+        prompt-input-json (llm-json/write-prompt-input
+                            (cond-> {:content content
+                                     :card-count card-count
+                                     :options (card-generation-options
+                                                card-type pre-prompt
+                                                pre-prompt-mode goal)}
+                              has-context? (assoc :context context)))
         ;; Attempt-invariant: tags the transport signal and the no-content signal
         ;; with the lane + user, which the card lane alone was omitting.
         ctx {:feature :cards :user-id user-id}]
@@ -272,9 +326,7 @@
             body (openrouter/chat-completion! api-key
                    (assoc model-fields
                      :messages [{:role "system" :content prompt}
-                                {:role "user" :content content-text}]
-                     :reasoning_effort reasoning
-                     :verbosity verbosity)
+                                {:role "user" :content prompt-input-json}])
                    ctx)
             duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
             usage (:usage body)
@@ -300,7 +352,8 @@
                              (catch clojure.lang.ExceptionInfo e {:failure e}))
             failure (:failure attempt-result)
             cards (:cards attempt-result)
-            actual-count (count cards)]
+            actual-count (count cards)
+            invalid-card-count (count (remove #(generated-card-valid? card-type %) cards))]
         (cond
           (and failure (openrouter/retryable-cause? failure) (< attempt max-retries))
           (do (tel/log! {:level :warn :id ::no-content-retry
@@ -312,7 +365,7 @@
           failure
           (unusable-response-result! failure user-id endpoint-tag attempt cost-acc')
 
-          (= actual-count card-count)
+          (and (= actual-count card-count) (zero? invalid-card-count))
           ;; Success — bill the summed cost of all attempts (§5.4.5).
           ;; record-cost-charge! is total: a billing failure logs
           ;; ::credit-charge-failed and returns nil, never discarding cards.
@@ -325,18 +378,24 @@
           (>= attempt max-retries)
           ;; Also absorbed spend — same discard as unusable-response-result!,
           ;; reported the same way so the two terminal branches agree.
-          (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
+          (do (tel/log! {:level :error :id ::generate-cards-contract-mismatch
                          :data {:expected card-count :got actual-count :attempts attempt
+                                :invalid-card-count invalid-card-count
                                 :user-id user-id :unbilled-cost-usd cost-acc'}}
-                "Count mismatch after max retries")
+                "Card contract mismatch after max retries")
             {:success false
-             :error (str "LLM returned " actual-count " cards instead of "
-                      card-count " after " attempt " attempts")})
+             :error (if (pos? invalid-card-count)
+                      (str "The model returned invalid card data after "
+                        attempt " attempt" (when (not= 1 attempt) "s") ".")
+                      (str "The model returned " actual-count
+                        " cards instead of " card-count " after " attempt
+                        " attempt" (when (not= 1 attempt) "s") "."))})
 
           :else
           (do (tel/log! {:level :warn :id ::generate-cards-retry
-                         :data {:attempt attempt :expected card-count :got actual-count}}
-                "Card count mismatch, retrying")
+                         :data {:attempt attempt :expected card-count :got actual-count
+                                :invalid-card-count invalid-card-count}}
+                "Card contract mismatch, retrying")
             (recur (inc attempt) cost-acc')))))))
 
 (defn- generate-cards-wrapped

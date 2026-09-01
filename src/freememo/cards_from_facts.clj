@@ -10,6 +10,7 @@
    [freememo.cards :as cards]
    [freememo.db :as db]
    [freememo.kg-llm :as llm]
+   [freememo.llm-json :as llm-json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]))
 
@@ -35,6 +36,14 @@
    render-facts and the logs so the logged text matches the generated-from text."
   [{:keys [subject_label predicate_label object_label object_literal]}]
   (str subject_label " " predicate_label " " (or object_label object_literal)))
+
+(defn- candidate-fact-for-id
+  "Return the candidate fact named by one model value.
+   Pre:  candidates-by-id maps the IDs sent to the model.
+   Post: the matching fact for an integer ID, else nil."
+  [candidates-by-id model-value]
+  (when (integer? model-value)
+    (get candidates-by-id model-value)))
 
 (defn render-facts
   "Selected fact rows → a plain-text statement list — the facts-only content
@@ -62,13 +71,16 @@
           prompt (cards/load-prompt-template "select-facts.md")
           _ (when-not prompt (throw (ex-info "Failed to load select-facts prompt" {})))
           {:keys [parsed cost]} (llm/chat! api-key model-fields prompt
-                                  (pr-str {:passage passage
-                                           :facts (mapv fact->select-row candidate-facts)})
+                                  (llm-json/write-prompt-input
+                                    {:passage passage
+                                     :facts (mapv fact->select-row candidate-facts)})
+                                  :fact-ids :vector
                                   {:feature :fact-select :user-id user-id})
           by-id (into {} (map (juxt :id identity)) candidate-facts)
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))
           dropped-ids (into [] (remove by-id) model-ids)
-          relevant (into [] (comp (distinct) (keep by-id))
+          relevant (into [] (comp (distinct)
+                             (keep #(candidate-fact-for-id by-id %)))
                      (when (sequential? parsed) parsed))
           ;; Reorder weak-first (untested/due/lapsed lead) so card generation
           ;; spends the card-count budget on the facts that most need practice.

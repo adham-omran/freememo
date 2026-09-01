@@ -42,6 +42,7 @@
    [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [freememo.kg-llm :as llm]
+   [freememo.llm-json :as llm-json]
    [freememo.kg-dedup :as kg-dedup]
    [freememo.kg-page-digest :as digest]
    [freememo.user-state :as us]
@@ -112,7 +113,9 @@
    shape-valid and tagged :page. Unusable model output is retried inside
    llm/chat!, whose :cost covers both attempts."
   [api-key model-fields prompt page-number page-text]
-  (let [{:keys [parsed cost]} (llm/chat! api-key model-fields prompt page-text
+  (let [{:keys [parsed cost]} (llm/chat! api-key model-fields prompt
+                                (llm-json/write-prompt-input {:page-text page-text})
+                                :triples :vector
                                 {:feature :kg-extract})
         triples (if (sequential? parsed) parsed [])
         valid (filterv valid-triple? triples)]
@@ -243,10 +246,18 @@
                page-states)]
     (mapv (fn [f] (llm/interrupt-checkpoint!) (deref f)) futs)))
 
+(defn- link-decision-valid?
+  "Check one entity-link decision against the offered candidate IDs.
+   Pre:  valid-ids contains only IDs sent to the model.
+   Post: true for \"new\" or an offered integer ID."
+  [valid-ids decision]
+  (or (= "new" decision)
+    (and (integer? decision) (contains? valid-ids decision))))
+
 (defn- link-entities!
-  "Pass 2. Distinct labels → {lower-label entity-id}, creating rows for :new.
+  "Pass 2. Distinct labels → {lower-label entity-id}, creating rows for new.
    Labels without trigram candidates skip the LLM. A failed/invalid LLM
-   decision degrades to :new (a duplicate entity is reviewable later; a wrong
+   decision degrades to new (a duplicate entity is reviewable later; a wrong
    merge is not). Post: every input label has an id; :cost is the LLM spend."
   [api-key model-fields user-id labels]
   (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
@@ -265,9 +276,18 @@
           (try
             (let [{:keys [parsed cost]} (llm/chat! api-key model-fields
                                           (cards/load-prompt-template "kg-link.md")
-                                          (pr-str candidates)
+                                          (llm-json/write-prompt-input
+                                            {:candidates candidates})
+                                          :decisions :map
                                           {:feature :kg-link})]
-              {:decisions (if (map? parsed) parsed {}) :cost cost})
+              {:decisions (into {}
+                            (map (fn [[label decision]]
+                                   [(if (keyword? label)
+                                      (subs (str label) 1)
+                                      (str label))
+                                    decision]))
+                            parsed)
+               :cost cost})
             (catch Exception e
               (tel/log! {:level :warn :id ::link-degraded
                          :data {:labels (count candidates) :error (ex-message e)}}
@@ -276,7 +296,9 @@
         valid-ids (into #{} (comp (mapcat val) (map :id)) candidates)
         id-of (fn [label]
                 (let [d (get decisions label)]
-                  (when (and (integer? d) (valid-ids d)) d)))
+                  (when (and (link-decision-valid? valid-ids d)
+                          (integer? d))
+                    d)))
         ;; Labels with no merge decision are new — batch-insert them all in
         ;; one round trip instead of one insert-kg-entity! per label.
         new-labels (into [] (comp (map val) (remove id-of)) by-lower)

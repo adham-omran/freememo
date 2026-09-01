@@ -2,15 +2,17 @@
 
 You pick which knowledge-graph facts a reading passage supports.
 
-You receive an EDN map: `{:passage "…" :facts [{:id int :s subject :p predicate :o object-or-value}]}`.
+You receive one JSON object with `passage` and `facts`.
 
-Return the `:id`s of the facts that the passage directly states or clearly supports — the facts a reader could learn from this passage. Exclude facts the passage does not touch, even if true.
+Select fact IDs that the passage directly states or clearly supports.
+Exclude facts that the passage does not discuss.
 
-Return EDN only — a vector of the selected integer ids, no prose, no code fences:
+Return one JSON object. Use double quotes for all keys and strings.
+Return no Markdown, code fences, or explanation.
 
-[3 7 12]
+{"fact-ids":[3,7,12]}
 
 Rules:
-- Only ids present in the input `:facts` may appear. Invent nothing.
-- Return `[]` when the passage supports none of the facts.
+- Use only IDs from the input `facts` array.
+- Return `{"fact-ids":[]}` when the passage supports no facts.
 - Judge by meaning, not word overlap: a fact is supported when the passage entails it.

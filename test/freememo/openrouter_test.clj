@@ -1,15 +1,15 @@
 (ns freememo.openrouter-test
   "Covers freememo.openrouter/message-content and retryable-cause? — the gate
-   between a 200 response and the EDN parser — and model-fields, the one place a
-   registry entry becomes request fields.
+   between a 200 response and the JSON parser. It also covers the request-field
+   seam where registry capabilities become OpenRouter parameters.
 
    Anchor: a production card generation received a 200 whose
    choices[0].message.content was null, and the parser reported it as
-   unreadable EDN. Each cause below must classify distinctly, and the terminal
+   unreadable structured output. Each cause below must classify distinctly, and the terminal
    one (refusal) must not be retried."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.card-models :as card-models]
-            [freememo.llm-edn :as llm-edn]
+            [freememo.llm-json :as llm-json]
             [freememo.ocr-models :as ocr-models]
             [freememo.openrouter :as openrouter]))
 
@@ -99,7 +99,7 @@
   (doseq [cause [:freememo.openrouter/empty-content
                  :freememo.openrouter/truncated
                  :freememo.openrouter/no-choices
-                 :freememo.llm-edn/unparseable]]
+                 :freememo.llm-json/unparseable]]
     (is (true? (openrouter/retryable-cause? (ex-info "x" {:type cause})))
       (str cause " must be retryable"))))
 
@@ -119,10 +119,61 @@
         (str "must not retry: " (some-> e ex-message))))))
 
 (deftest parser-cause-is-the-one-the-predicate-names
-  (testing "llm-edn's typed throw and openrouter's retryable set agree"
-    (let [e (try (llm-edn/parse-response "prose with no payload")
+  (testing "llm-json's typed throw and openrouter's retryable set agree"
+    (let [e (try (llm-json/parse-response-field "prose with no payload"
+                   :cards :vector)
                (catch clojure.lang.ExceptionInfo ex ex))]
       (is (true? (openrouter/retryable-cause? e))))))
+
+(deftest chat-completion-fields-projects-model-capabilities
+  (testing "a supported optional parameter remains"
+    (let [entry (card-models/resolve-model "claude-sonnet-5")]
+      (is (= {:model "anthropic/claude-sonnet-5"
+              :reasoning_effort "low"
+              :verbosity "high"}
+            (openrouter/chat-completion-fields entry
+              {:reasoning_effort "low" :verbosity "high" :temperature 0.2})))))
+  (testing "unsupported optional parameters are omitted"
+    (let [entry (card-models/resolve-model "claude-haiku-4.5")]
+      (is (= {:model "anthropic/claude-haiku-4.5"}
+            (openrouter/chat-completion-fields entry
+              {:reasoning_effort "low" :verbosity "high"})))))
+  (testing "a text-only request gets no structured fields"
+    (let [fields (openrouter/chat-completion-fields
+                   (card-models/resolve-model "gpt-5.1")
+                   {:reasoning_effort "low"})]
+      (is (not (contains? fields :response_format)))
+      (is (not (get-in fields [:provider :require_parameters]))))))
+
+(deftest structured-chat-fields-require-json-compatible-routes
+  (testing "an unpinned model gets JSON mode and parameter-compatible routing"
+    (is (= {:model "google/gemini-3-flash-preview"
+            :reasoning_effort "low"
+            :response_format {:type "json_object"}
+            :provider {:require_parameters true}}
+          (openrouter/structured-chat-completion-fields
+            (card-models/resolve-model "gemini-3-flash")
+            {:reasoning_effort "low" :verbosity "high"}))))
+  (testing "the GLM provider pin is merged, not replaced"
+    (is (= {:model "z-ai/glm-5.3-flash"
+            :reasoning_effort "low"
+            :response_format {:type "json_object"}
+            :provider {:only ["z-ai"] :require_parameters true}}
+          (openrouter/structured-chat-completion-fields
+            (card-models/resolve-model "glm-5.3-flash")
+            {:reasoning_effort "low" :verbosity "high"}))))
+  (testing "an incompatible registry entry fails before transport"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+          #"does not support structured JSON"
+          (openrouter/structured-chat-completion-fields
+            {:id "bad" :openrouter-model "example/bad"
+             :supported-parameters #{:reasoning_effort}}
+            {})))))
+
+(deftest every-card-model-supports-json-object-output
+  (doseq [entry card-models/registry]
+    (is (contains? (:supported-parameters entry) :response_format)
+      (:id entry))))
 
 (deftest model-fields-carries-the-pin-only-when-the-entry-has-one
   (testing "an entry without :provider yields the slug alone"

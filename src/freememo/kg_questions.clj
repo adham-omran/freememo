@@ -14,6 +14,7 @@
    [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [freememo.kg-llm :as llm]
+   [freememo.llm-json :as llm-json]
    [freememo.user-state :as us]
    [freememo.cards :as cards]
    [taoensso.telemere :as tel]
@@ -28,6 +29,18 @@
   {:id id :s subject_label :p predicate_label
    :o (or object_label object_literal)})
 
+(defn- validated-question
+  "Return one normalized generated question, or nil for invalid domain fields.
+   Pre:  valid-ids is the set this call can persist. min-facts is positive.
+   Post: a map with non-blank :q and :a and at least min-facts valid IDs.
+         Hallucinated IDs are removed."
+  [valid-ids min-facts {:keys [q a fact-ids] :as question}]
+  (let [ids (if (vector? fact-ids) (filterv valid-ids fact-ids) [])]
+    (when (and (string? q) (not (str/blank? q))
+            (string? a) (not (str/blank? a))
+            (>= (count ids) min-facts))
+      (assoc question :fact-ids ids))))
+
 (defn- persist-questions!
   "Persist the model's [{:q :a :fact-ids}] for one call. An entry is dropped unless
    :q and :a are non-blank strings and :fact-ids yields ≥ min-facts ids drawn from
@@ -38,14 +51,12 @@
          question linked, so callers can tell which targets went unanswered."
   [user-id kind model-id valid-ids min-facts parsed]
   (reduce
-    (fn [acc {:keys [q a fact-ids]}]
-      (let [ids (filterv valid-ids fact-ids)]
-        (if (and (string? q) (not (str/blank? q))
-              (string? a) (not (str/blank? a))
-              (>= (count ids) min-facts))
-          (do (db/create-kg-question! user-id kind q a ids model-id)
-            (-> acc (update :persisted inc) (update :covered into ids)))
-          acc)))
+    (fn [acc question]
+      (if-let [{:keys [q a fact-ids]} (validated-question
+                                       valid-ids min-facts question)]
+        (do (db/create-kg-question! user-id kind q a fact-ids model-id)
+          (-> acc (update :persisted inc) (update :covered into fact-ids)))
+        acc))
     {:persisted 0 :covered #{}}
     (when (sequential? parsed) parsed)))
 
@@ -80,7 +91,7 @@
        (cond-> done (seq current) (conj current))))))
 
 (defn- cluster->prompt-row
-  "One cluster as the EDN the atomic prompt consumes.
+  "One cluster for the JSON object that the atomic prompt consumes.
 
    :members carries every sibling so the model can avoid naming one inside
    another's question; :targets names the ids that still need a question;
@@ -140,7 +151,9 @@
                                                      discriminators-per-member)
                                     payload (mapv #(cluster->prompt-row discriminators %) batch)
                                     {:keys [parsed cost]}
-                                    (llm/chat! api-key model-fields prompt (pr-str payload)
+                                    (llm/chat! api-key model-fields prompt
+                                      (llm-json/write-prompt-input {:clusters payload})
+                                      :questions :vector
                                       {:feature :kg-atomic :user-id user-id})
                                     {:keys [persisted covered]}
                                     (persist-questions! user-id "atomic" (:id entry)
@@ -209,8 +222,10 @@
         (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
               {:keys [parsed cost]} (llm/chat! api-key model-fields
                                       (cards/load-prompt-template "kg-question-synthesis.md")
-                                      (pr-str {:entity entity-label
-                                               :facts (mapv fact->prompt-row facts)})
+                                      (llm-json/write-prompt-input
+                                        {:entity entity-label
+                                         :facts (mapv fact->prompt-row facts)})
+                                      :questions :vector
                                       {:feature :kg-synthesis :user-id user-id})
               valid-ids (into #{} (map :id) facts)
               ;; Same validator as atomic; only the fact-count floor differs — a

@@ -131,6 +131,31 @@
   (cond-> {:model (:openrouter-model entry)}
     (:provider entry) (assoc :provider (:provider entry))))
 
+(defn chat-completion-fields
+  "Build model and supported optional fields for one chat completion.
+   Pre:  entry is a resolved model registry entry. `requested-parameters` is a
+         map of optional OpenRouter fields.
+   Post: model-fields plus only keys declared in entry :supported-parameters.
+         This function never adds structured-output routing fields."
+  [entry requested-parameters]
+  (merge (model-fields entry)
+    (select-keys requested-parameters (:supported-parameters entry))))
+
+(defn structured-chat-completion-fields
+  "Build model fields for a strict JSON-object chat completion.
+   Pre:  entry declares :response_format in :supported-parameters.
+   Post: chat-completion-fields plus JSON mode and provider.require_parameters.
+         Existing provider routing fields, including :only pins, are preserved.
+   A missing response_format capability is a caller or registry bug."
+  [entry requested-parameters]
+  (when-not (contains? (:supported-parameters entry) :response_format)
+    (throw (ex-info "Model does not support structured JSON output"
+             {:model-id (:id entry)
+              :openrouter-model (:openrouter-model entry)})))
+  (-> (chat-completion-fields entry requested-parameters)
+    (assoc :response_format {:type "json_object"})
+    (update :provider #(assoc (or % {}) :require_parameters true))))
+
 (defn chat-completion!
   "POST /chat/completions with request map `body` (:model, :messages, …).
    Optional `ctx` {:feature kw :user-id id} tags the observability signal.
@@ -235,7 +260,7 @@
    parser). Every untyped failure (::api-error, missing key, empty input) is
    absent and therefore terminal: retrying a 401 three times spends three calls
    to learn nothing."
-  (into #{:freememo.llm-edn/unparseable}
+  (into #{:freememo.llm-json/unparseable}
     (keep (fn [[cause {:keys [retryable?]}]] (when retryable? cause)))
     no-content-causes))
 
