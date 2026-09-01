@@ -118,6 +118,9 @@
      :generate       {:label "Generate cards" :class :mutation :exec :ui-button
                       :bind "meta+g" :when #{:viewer}
                       :table #{:flashcards} :views #{:card-mutations}}
+     :parse-questions {:label "Parse questions" :class :mutation :exec :ui-button
+                       :palette-hidden true :when #{:viewer}
+                       :table #{:flashcards} :views #{:card-mutations}}
      :gen-prompt     {:label "Generate with prompt…" :class :mutation :exec :ui-button
                       :when #{:viewer} :views #{}} ; opens dialog; the run bumps :generate
      :compare-card-gen {:label "Compare card models" :class :mutation :exec :ui-button

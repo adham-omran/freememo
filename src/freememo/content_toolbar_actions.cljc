@@ -11,7 +11,8 @@
    [hyperfiddle.electric3 :as e]
    [freememo.doc-context :as dctx]
    [freememo.extract-topic-button :refer [ExtractTopicButton]]
-   [freememo.add-card-button :refer [AddCardButton]]))
+   [freememo.add-card-button :refer [AddCardButton]]
+   [freememo.parse-questions-invoker :refer [ParseQuestionsInvoker]]))
 
 (e/defn ToolbarActions []
   (e/client
@@ -22,4 +23,5 @@
       ;; lets each stay small (JVM 64KB bytecode limit) and makes the toolbar
       ;; orchestration explicit in `content_toolbar.cljc`.
       (ExtractTopicButton user-id topic-id context-mode)
-      (AddCardButton user-id topic-id root-topic-id card-type))))
+      (AddCardButton user-id topic-id root-topic-id card-type)
+      (ParseQuestionsInvoker user-id topic-id root-topic-id))))

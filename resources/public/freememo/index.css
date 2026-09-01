@@ -2388,6 +2388,18 @@ textarea:hover {
     color: var(--color-primary-text, #2383e2);
 }
 .format-menu .fmt-cardgen-btn svg { flex-shrink: 0; }
+.format-menu .fmt-parse-questions-row { padding-top: 0; }
+.format-menu .fmt-parse-questions-btn {
+    justify-content: flex-start;
+    width: 100%;
+    gap: 7px;
+    padding: 0 10px;
+    font-size: 13px;
+}
+.format-menu .fmt-parse-questions-btn [aria-hidden="true"] {
+    color: var(--color-primary-text, #2383e2);
+    font-weight: 700;
+}
 
 /* Colour presets: the "A" trigger opens a popup of Text + Background swatches. */
 .format-menu .fmt-colour-trigger { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
@@ -5363,4 +5375,3 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .focus-reader-column .ql-editor > [id^="fm-page-"]:first-child {
     margin-top: 0;
 }
-

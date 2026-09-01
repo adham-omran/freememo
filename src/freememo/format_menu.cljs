@@ -32,8 +32,8 @@
 
    `opts` (2-arity install!) turns on optional controls: `:image?` adds an
    image-insert button, `:cloze?` adds a cloze-deletion row (both drive
-   freememo.editor-actions), `:card-gen?` adds the document editor's card-count
-   stepper + Generate-here row (drives freememo.card-count + the command bus).
+   freememo.editor-actions), `:card-gen?` adds the document editor's card-count,
+   Generate-here, and Parse-questions actions.
    The document editor passes `:card-gen?`; card fields pass `:image?/:cloze?`.
 
    Math has no control here: formulas are created by typing `\\(…\\)` and edited
@@ -347,6 +347,30 @@
     (.appendChild row gen-btn)
     {:row row :sync sync!}))
 
+(defn- parse-questions-row
+  "Build the document editor's selected-line card action.
+
+   Pre : `get-rng` returns the cached non-empty selection.
+   Post: a click restores that selection, dispatches :parse-questions once,
+         and hides the format menu.
+   Inv : parsing and persistence stay in the mounted Electric invoker."
+  [^js q get-rng ^js card]
+  (let [row (el "div" "fmt-row fmt-parse-questions-row")
+        parse-btn (el "button" "fmt-btn fmt-parse-questions-btn")]
+    (set! (.-type parse-btn) "button")
+    (set! (.-innerHTML parse-btn) "<span aria-hidden=\"true\">Q?</span><span>Parse questions</span>")
+    (.setAttribute parse-btn "title" "Create basic cards from selected question-and-answer lines")
+    (.setAttribute parse-btn "aria-label" "Parse selected questions into basic cards")
+    (keep-selection! parse-btn)
+    (.addEventListener parse-btn "click"
+      (fn [^js e]
+        (.stopPropagation e)
+        (reselect! q (get-rng))
+        (bus/dispatch! :parse-questions)
+        (set! (.. card -style -display) "none")))
+    (.appendChild row parse-btn)
+    row))
+
 (defn- build-card
   "Build the menu card and its controls. Returns
    {:card <el> :refresh (fn []) :!sync <atom>}.
@@ -355,8 +379,8 @@
    ALONE, deliberately not re-placing: a format that changes the text metrics
    would otherwise jitter the card under the cursor. `get-rng` returns the cached
    {:index :length}. `opts` = {:image? :cloze? :card-gen?}: :image?/:cloze?
-   toggle card-editor controls; :card-gen? adds the document-editor card-count
-   row (§ ns docstring). Returns :card-count-sync (nil unless :card-gen?)."
+   toggle card-editor controls; :card-gen? adds the document-editor card actions
+   (§ ns docstring). Returns :card-count-sync (nil unless :card-gen?)."
   [^js q get-rng opts]
   (let [card    (el "div" "format-menu")
         section (fn [] (el "div" "fmt-row"))
@@ -390,6 +414,8 @@
         row-inline (section)
         row-blockfmt (section)
         cardgen (when (:card-gen? opts) (card-gen-row q get-rng card))
+        parse-questions (when (:card-gen? opts)
+                          (parse-questions-row q get-rng card))
         page-break-btn (glyph-button page-break-glyph "Restore page boundary"
                          (after #(editor-actions/insert-page-break! q (:index (get-rng)))))]
     ;; Row 1 — block type + size dropdowns
@@ -456,11 +482,12 @@
             (str eq-label (chord :cloze-eq :eq))))
         (.appendChild card (el "div" "fmt-divider"))
         (.appendChild card cloze-row)))
-    ;; Card-gen row (document editor only, via :card-gen? opt) — count stepper
-    ;; + Generate-here, at the bottom under its own divider.
+    ;; Document card actions, via :card-gen?: count, Generate-here, then the
+    ;; selected-line parser. They share one bottom section and one divider.
     (when cardgen
       (.appendChild card (el "div" "fmt-divider"))
-      (.appendChild card (:row cardgen)))
+      (.appendChild card (:row cardgen))
+      (.appendChild card parse-questions))
     {:card card
      :!sync !sync
      :card-count-sync (:sync cardgen)      ; nil when no card-gen row
