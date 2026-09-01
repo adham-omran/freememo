@@ -20,6 +20,14 @@
   (is (= "No cards created. Skipped 4 duplicates."
         (invoker/card-creation-message 0 4))))
 
+(deftest only-created-card-batches-highlight-the-selection
+  (is (true? (invoker/created-cards-highlight-selection?
+               {:success true :created 4})))
+  (is (false? (invoker/created-cards-highlight-selection?
+                {:success true :created 0})))
+  (is (false? (invoker/created-cards-highlight-selection?
+                {:success false :created 4}))))
+
 (deftest valid-selection-saves-one-basic-card-batch
   (let [save-calls (atom [])
         bump-calls (atom [])

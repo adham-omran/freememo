@@ -47,6 +47,12 @@
     (str "Created " (counted-noun created-count "card") ". Skipped "
       (counted-noun duplicate-count "duplicate") ".")))
 
+(defn created-cards-highlight-selection?
+  "True when a parse result created at least one card from the selection."
+  [creation-result]
+  (and (true? (:success creation-result))
+       (pos? (or (:created creation-result) 0))))
+
 (defn create-selected-question-cards!*
   "Parse and save one selected text block as an all-or-nothing basic-card batch.
 
@@ -99,8 +105,8 @@
   "Host the hidden Electric flow for the selection popover command.
 
    Pre : a document toolbar supplies the card owner ids.
-   Post: each accepted invocation captures the current plain-text selection,
-         waits for the server result, and then spends its token.
+   Post: each accepted invocation captures the current text and range. A batch
+         that creates cards marks its source range with the card-source gold.
    Inv : the published command handle exists only while this component mounts."
   [user-id topic-id root-topic-id]
   (e/client
@@ -112,8 +118,9 @@
         (e/on-unmount (fn [] (bus/retract-invoker! :parse-questions))))
       (let [parse-request (dom/On "click"
                             (fn [_]
-                              {:request-id (str (random-uuid))
-                               :selected-text (editor/get-selected-text!)})
+                              (let [selection (editor/get-selection!)]
+                                {:request-id (str (random-uuid))
+                                 :selection selection}))
                             nil)
             [t ?error] (e/Token parse-request)]
         (dom/props {:disabled (some? t)})
@@ -122,7 +129,14 @@
                                   (e/Offload
                                     #(create-selected-question-cards!*
                                        user-id topic-id root-topic-id
-                                       (:selected-text parse-request))))]
+                                       (get-in parse-request [:selection :text]))))]
             (if (:success creation-result)
-              (t)
+              (if (created-cards-highlight-selection? creation-result)
+                (case (e/client
+                        (editor/highlight-range!
+                          (get-in parse-request [:selection :index])
+                          (get-in parse-request [:selection :length])
+                          :color "var(--color-highlight-gold)"))
+                  (t))
+                (t))
               (t (:error creation-result)))))))))
