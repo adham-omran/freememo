@@ -133,22 +133,26 @@
   (e/client
     (dom/div
       (dom/props {:class "curriculum-weekdays"})
-      (e/for [weekday weekdays]
+      (e/for [weekday (e/diff-by :key weekdays)]
         (dom/label
           (dom/props {:class "curriculum-weekday"})
-          (forms/Input! (:key weekday) (boolean (get fields (:key weekday)))
-            :type "checkbox")
-          (dom/span (dom/text (:label weekday))))))))
+          (e/amb
+            (forms/Input! (:key weekday) (boolean (get fields (:key weekday)))
+              :type "checkbox")
+            (dom/span (dom/text (:label weekday)))))))))
 
 (e/defn NewCurriculumForm [user-id navigate! !open?]
   (e/client
     (let [commits
-          (forms/Form!
-            {:title "" :target-date "" :daily-minutes ""
-             :mon false :tue false :wed false :thu false
-             :fri false :sat false :sun false}
-            (e/fn Fields [fields]
-              (e/amb
+          (dom/div
+            (dom/props {:class "curriculum-form-card"})
+            (dom/h2 (dom/text "New curriculum"))
+            (forms/Form!
+              {:title "" :target-date "" :daily-minutes ""
+               :mon false :tue false :wed false :thu false
+               :fri false :sat false :sun false}
+              (e/fn Fields [fields]
+                (e/amb
                 (dom/label (dom/props {:class "curriculum-field-label"})
                   (dom/text "Curriculum name"))
                 (forms/Input! :title (:title fields) :class "input input-full"
@@ -175,25 +179,22 @@
                     (dom/On "click" (fn [_] (reset! !open? false)) nil))
                     (forms/SubmitButton! :label "Create curriculum"
                       :class "btn btn-primary")))))
-            :Parse
-            (e/fn [fields _]
-              (let [title (str/trim (:title fields))
-                    minutes (parse-positive-int (:daily-minutes fields))
-                    selected-days (mapv :value
-                                    (filter #(true? (get fields (:key %))) weekdays))
-                    target (not-empty (:target-date fields))]
-                (cond
-                  (str/blank? title) (ex-info "Enter a curriculum name." {})
-                  (not (or target minutes (seq selected-days)))
-                  (ex-info "Set a target date, daily study time, or study days." {})
-                  :else [`CreateCurriculum
-                         {:title title :target-date target
-                          :daily-minutes minutes :study-weekdays selected-days}])))
-            :type :command
-            :show-buttons false)]
-      (dom/div (dom/props {:class "curriculum-form-card"})
-        (dom/h2 (dom/text "New curriculum"))
-        commits)
+              :Parse
+              (e/fn [fields _]
+                (let [title (str/trim (:title fields))
+                      minutes (parse-positive-int (:daily-minutes fields))
+                      selected-days (mapv :value
+                                      (filter #(true? (get fields (:key %))) weekdays))
+                      target (not-empty (:target-date fields))]
+                  (cond
+                    (str/blank? title) (ex-info "Enter a curriculum name." {})
+                    (not (or target minutes (seq selected-days)))
+                    (ex-info "Set a target date, daily study time, or study days." {})
+                    :else [`CreateCurriculum
+                           {:title title :target-date target
+                            :daily-minutes minutes :study-weekdays selected-days}])))
+              :type :command
+              :show-buttons false))]
       (e/for [[token command] commits]
         (let [response (e/server (e/Offload
                                   #(create-curriculum* user-id (second command))))]
@@ -216,7 +217,7 @@
           (dom/p (dom/text "Order your sources into blocks, schedule the work, and pass a long-form exam to progress.")))
         (dom/div
           (dom/props {:class "curriculum-grid"})
-          (e/for [curriculum curricula]
+          (e/for [curriculum (e/diff-by :id curricula)]
             (dom/button
               (dom/props {:class "curriculum-card"})
               (dom/On "click" (fn [_]
@@ -235,17 +236,18 @@
 (e/defn AddBlockForm [user-id curriculum-id !open?]
   (e/client
     (let [commits
-          (forms/Form! {:title ""}
-            (e/fn Fields [{:keys [title]}]
-              (e/amb
-                (forms/Input! :title title :class "input" :placeholder "Block name")
-                (forms/SubmitButton! :label "Add block" :class "btn btn-primary")))
-            :Parse (e/fn [fields _]
-                     (if (str/blank? (:title fields))
-                       (ex-info "Enter a block name." {})
-                       [`AddBlock {:title (str/trim (:title fields))}]))
-            :type :command :show-buttons false)]
-      (dom/div (dom/props {:class "curriculum-inline-form"}) commits)
+          (dom/div
+            (dom/props {:class "curriculum-inline-form"})
+            (forms/Form! {:title ""}
+              (e/fn Fields [{:keys [title]}]
+                (e/amb
+                  (forms/Input! :title title :class "input" :placeholder "Block name")
+                  (forms/SubmitButton! :label "Add block" :class "btn btn-primary")))
+              :Parse (e/fn [fields _]
+                       (if (str/blank? (:title fields))
+                         (ex-info "Enter a block name." {})
+                         [`AddBlock {:title (str/trim (:title fields))}]))
+              :type :command :show-buttons false))]
       (e/for [[token command] commits]
         (let [response (e/server (e/Offload
                                   #(add-block* user-id curriculum-id
@@ -270,12 +272,17 @@
           !topic-id (atom nil)
           filtered (if kind (filterv #(= kind (:kind %)) docs) docs)
           commits
-          (forms/Form! {:minutes ""}
-            (e/fn Fields [{:keys [minutes]}]
-              (e/amb
+          (dom/div
+            (dom/props {:class "curriculum-form-card curriculum-material-wizard"})
+            (dom/h3 (dom/text "Add material"))
+            (forms/Form! {:minutes ""}
+              (e/fn Fields [{:keys [minutes]}]
+                (e/amb
                 (dom/div (dom/props {:class "curriculum-kind-row"})
-                  (e/for [[value label] [["pdf" "PDF"] ["markdown" "Markdown"]
-                                         ["web" "Web article"] ["wikipedia" "Wikipedia"]]]
+                  (e/for [[value label]
+                          (e/diff-by first
+                            [["pdf" "PDF"] ["markdown" "Markdown"]
+                             ["web" "Web article"] ["wikipedia" "Wikipedia"]])]
                     (dom/button
                       (dom/props {:type "button"
                                   :class (str "curriculum-kind-button"
@@ -303,16 +310,13 @@
                       (dom/text "Cancel")
                       (dom/On "click" (fn [_] (reset! !open? false)) nil))
                     (forms/SubmitButton! :label "Add material" :class "btn btn-primary")))))
-            :Parse (e/fn [fields _]
-                     (let [topic-id (e/watch !topic-id)]
-                       (if-not topic-id
-                         (ex-info "Choose imported material." {})
-                         [`AddMaterial {:topic-id topic-id
-                                        :minutes (parse-positive-int (:minutes fields))}])))
-            :type :command :show-buttons false)]
-      (dom/div (dom/props {:class "curriculum-form-card curriculum-material-wizard"})
-        (dom/h3 (dom/text "Add material"))
-        commits)
+              :Parse (e/fn [fields _]
+                       (let [topic-id (e/watch !topic-id)]
+                         (if-not topic-id
+                           (ex-info "Choose imported material." {})
+                           [`AddMaterial {:topic-id topic-id
+                                          :minutes (parse-positive-int (:minutes fields))}])))
+              :type :command :show-buttons false))]
       (e/for [[token command] commits]
         (let [{:keys [topic-id minutes]} (second command)
               response (e/server (e/Offload
@@ -349,9 +353,11 @@
           seed (merge (into {} (map (fn [key] [key ""]) question-field-keys))
                  (into {} (map (fn [key] [key false]) unknown-field-keys)))
           commits
-          (forms/Form! seed
-            (e/fn Fields [fields]
-              (e/amb
+          (dom/div
+            (dom/props {:class "curriculum-sitting"})
+            (forms/Form! seed
+              (e/fn Fields [fields]
+                (e/amb
                 (dom/div (dom/props {:class "curriculum-honor-note"})
                   (icons/Icon :book-open :size 16)
                   (dom/span
@@ -360,36 +366,38 @@
                     (dom/text (str "Elapsed " (format-elapsed elapsed)
                                 " · suggested 45 min · no enforced limit"))))
                 (e/for [[index question key unknown-key]
-                        (map vector (range 1 6) questions question-field-keys
-                          unknown-field-keys)]
+                        (e/diff-by first
+                          (map vector (range 1 6) questions question-field-keys
+                            unknown-field-keys))]
                   (dom/section
                     (dom/props {:class "curriculum-exam-question"})
-                    (dom/div (dom/props {:class "curriculum-question-meta"})
-                      (dom/span (dom/text (str "Question " index)))
-                      (dom/span (dom/text (str/capitalize (:role question)))))
-                    (dom/h3 (dom/text (:prompt question)))
-                    (forms/Input! key (get fields key) :as :textarea
-                      :class "input curriculum-answer" :rows 8
-                      :placeholder "Write your answer")
-                    (dom/label (dom/props {:class "curriculum-unknown-answer"})
-                      (forms/Input! unknown-key (boolean (get fields unknown-key))
-                        :type "checkbox")
-                      (dom/span (dom/text "I do not know")))))
+                    (e/amb
+                      (dom/div (dom/props {:class "curriculum-question-meta"})
+                        (dom/span (dom/text (str "Question " index)))
+                        (dom/span (dom/text (str/capitalize (:role question)))))
+                      (dom/h3 (dom/text (:prompt question)))
+                      (forms/Input! key (get fields key) :as :textarea
+                        :class "input curriculum-answer" :rows 8
+                        :placeholder "Write your answer")
+                      (dom/label (dom/props {:class "curriculum-unknown-answer"})
+                        (e/amb
+                          (forms/Input! unknown-key (boolean (get fields unknown-key))
+                            :type "checkbox")
+                          (dom/span (dom/text "I do not know")))))))
                 (forms/SubmitButton! :label "Submit all five answers"
                   :class "btn btn-primary")))
-            :Parse (e/fn [fields _]
-                     (let [answers (mapv (fn [key unknown-key]
-                                          (let [answer (str/trim (get fields key))
-                                                unknown? (true? (get fields unknown-key))]
-                                            {:answer answer
-                                             :do-not-know unknown?}))
-                                     question-field-keys unknown-field-keys)]
-                       (if (every? #(or (seq (:answer %)) (:do-not-know %)) answers)
-                         [`SubmitSitting {:answers answers}]
-                         (ex-info "Answer every question or write “I do not know.”" {}))))
-            :type :command :show-buttons false)]
+              :Parse (e/fn [fields _]
+                       (let [answers (mapv (fn [key unknown-key]
+                                            (let [answer (str/trim (get fields key))
+                                                  unknown? (true? (get fields unknown-key))]
+                                              {:answer answer
+                                               :do-not-know unknown?}))
+                                       question-field-keys unknown-field-keys)]
+                         (if (every? #(or (seq (:answer %)) (:do-not-know %)) answers)
+                           [`SubmitSitting {:answers answers}]
+                           (ex-info "Answer every question or write “I do not know.”" {}))))
+              :type :command :show-buttons false))]
       (e/on-unmount #?(:cljs #(js/clearInterval timer) :clj (fn [] nil)))
-      (dom/div (dom/props {:class "curriculum-sitting"}) commits)
       (e/for [[token command] commits]
         (let [sitting-id (e/watch !sitting-id)
               saved (e/server (e/Offload
@@ -402,28 +410,39 @@
                 (token (e/server (:error graded)))))
             (token (e/server (:error saved)))))))))
 
+(e/defn SelfCorrectionForm [user-id sitting-id]
+  (e/client
+    (let [commits
+          (dom/div
+            (dom/props {:class "curriculum-self-correction"})
+            (forms/Form! {:score "" :reason ""}
+              (e/fn Fields [{:keys [score reason]}]
+                (e/amb
+                  (dom/label (dom/props {:class "curriculum-field-label"})
+                    (dom/text "Self-correction score"))
+                  (forms/Input! :score score :type "number" :class "input curriculum-threshold")
+                  (dom/label (dom/props {:class "curriculum-field-label"})
+                    (dom/text "What changed in your assessment?"))
+                  (forms/Input! :reason reason :as :textarea :class "input" :rows 3)
+                  (forms/SubmitButton! :label "Save reflection" :class "btn")))
+              :Parse (e/fn [fields _]
+                       (let [score (parse-positive-int (:score fields))]
+                         (if (and score (<= score 100) (not (str/blank? (:reason fields))))
+                           [`SelfCorrection {:score score :reason (:reason fields)}]
+                           (ex-info "Enter a score from 1 to 100 and a reason." {}))))
+              :type :command :show-buttons false))]
+      (e/for [[token command] commits]
+        (let [{:keys [score reason]} (second command)
+              response (e/server (e/Offload
+                                  #(record-self-correction* user-id sitting-id score reason)))]
+          (if (e/server (:ok response)) (token)
+            (token (e/server (:error response)))))))))
+
 (e/defn GradeResult [user-id sitting-id subject threshold]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
           grade (e/server (latest-grade* refresh user-id sitting-id))
-          history (e/server (grade-history* refresh user-id sitting-id))
-          commits
-          (forms/Form! {:score "" :reason ""}
-            (e/fn Fields [{:keys [score reason]}]
-              (e/amb
-                (dom/label (dom/props {:class "curriculum-field-label"})
-                  (dom/text "Self-correction score"))
-                (forms/Input! :score score :type "number" :class "input curriculum-threshold")
-                (dom/label (dom/props {:class "curriculum-field-label"})
-                  (dom/text "What changed in your assessment?"))
-                (forms/Input! :reason reason :as :textarea :class "input" :rows 3)
-                (forms/SubmitButton! :label "Save reflection" :class "btn")))
-            :Parse (e/fn [fields _]
-                     (let [score (parse-positive-int (:score fields))]
-                       (if (and score (<= score 100) (not (str/blank? (:reason fields))))
-                         [`SelfCorrection {:score score :reason (:reason fields)}]
-                         (ex-info "Enter a score from 1 to 100 and a reason." {}))))
-            :type :command :show-buttons false)]
+          history (e/server (grade-history* refresh user-id sitting-id))]
       (when grade
         (dom/div
           (dom/props {:class (str "curriculum-grade "
@@ -434,13 +453,17 @@
           (dom/p (dom/text (:explanation grade)))
           (dom/details
             (dom/summary (dom/text "Question scores and evidence deductions"))
-            (e/for [[index question-grade] (map-indexed vector (:criteria grade))]
+            (e/for [[index question-grade]
+                    (e/diff-by first (map-indexed vector (:criteria grade)))]
               (dom/section (dom/props {:class "curriculum-grade-question"})
                 (dom/strong (dom/text (str "Question " (inc index))))
                 (dom/div (dom/props {:class "curriculum-criterion-scores"})
-                  (e/for [[criterion score] (:criteria question-grade)]
+                  (e/for [[criterion score]
+                          (e/diff-by first (:criteria question-grade))]
                     (dom/span (dom/text (str (name criterion) " " score "/4")))))
-                (e/for [deduction (:deductions question-grade)]
+                (e/for [[_ deduction]
+                        (e/diff-by first
+                          (map-indexed vector (:deductions question-grade)))]
                   (dom/blockquote
                     (dom/text (str (:criterion deduction) ": " (:reason deduction)
                                 " — “" (:citation deduction) "”")))))))
@@ -475,19 +498,12 @@
           (dom/details
             (dom/summary (dom/text (str (count history) " AI grade revision"
                                      (when (not= 1 (count history)) "s"))))
-            (e/for [revision history]
+            (e/for [revision (e/diff-by :revision history)]
               (dom/p
                 (dom/text (str "Revision " (:revision revision) " · "
                             (:raw_score revision) "% · "
                             (if (:passed revision) "passed" "not passed"))))))
-          (dom/div (dom/props {:class "curriculum-self-correction"}) commits)
-          (e/for [[token command] commits]
-            (let [{:keys [score reason]} (second command)
-                  response (e/server (e/Offload
-                                      #(record-self-correction* user-id sitting-id
-                                         score reason)))]
-              (if (e/server (:ok response)) (token)
-                (token (e/server (:error response)))))))))))
+          (SelfCorrectionForm user-id sitting-id))))))
 
 (defn moved-items [items index direction]
   (let [target (+ index direction)
@@ -532,26 +548,31 @@
                 (forms/Input! :threshold (:threshold fields)
                   :type "number" :class "input curriculum-threshold")
                 (e/for [[index key question]
-                        (map vector (range 1 6) question-field-keys questions)]
+                        (e/diff-by first
+                          (map vector (range 1 6) question-field-keys questions))]
                   (dom/div (dom/props {:class "curriculum-draft-question"})
-                    (dom/div (dom/props {:class "curriculum-question-meta"})
-                      (dom/span (dom/text (str index ". " (str/capitalize (:role question)))))
-                      (dom/span (dom/props {:class "curriculum-draft-order"})
-                        (DraftQuestionMove user-id form (dec index) -1)
-                        (DraftQuestionMove user-id form (dec index) 1)))
-                    (forms/Input! key (get fields key) :as :textarea
-                      :class "input" :rows 3)
-                    (dom/details
-                      (dom/summary (dom/text "Review rubric and evidence"))
-                      (dom/ul
-                        (e/for [criterion [:factual_accuracy :reasoning :source_evidence
-                                           :integration :completeness]]
-                          (dom/li
-                            (dom/strong (dom/text (str (name criterion) ": ")))
-                            (dom/span (dom/text (get-in question [:rubric criterion]))))))
-                      (e/for [evidence (:evidence question)]
-                        (dom/blockquote (dom/text (:quote evidence))))))
-                    )
+                    (e/amb
+                      (dom/div (dom/props {:class "curriculum-question-meta"})
+                        (dom/span (dom/text (str index ". " (str/capitalize (:role question)))))
+                        (dom/span (dom/props {:class "curriculum-draft-order"})
+                          (DraftQuestionMove user-id form (dec index) -1)
+                          (DraftQuestionMove user-id form (dec index) 1)))
+                      (forms/Input! key (get fields key) :as :textarea
+                        :class "input" :rows 3)
+                      (dom/details
+                        (dom/summary (dom/text "Review rubric and evidence"))
+                        (dom/ul
+                          (e/for [criterion
+                                  (e/diff-by identity
+                                    [:factual_accuracy :reasoning :source_evidence
+                                     :integration :completeness])]
+                            (dom/li
+                              (dom/strong (dom/text (str (name criterion) ": ")))
+                              (dom/span (dom/text (get-in question [:rubric criterion]))))))
+                        (e/for [[_ evidence]
+                                (e/diff-by first
+                                  (map-indexed vector (:evidence question)))]
+                          (dom/blockquote (dom/text (:quote evidence))))))))
                 (forms/SubmitButton! :label "Save draft" :class "btn")))
             :Parse (e/fn [fields _]
                      (let [threshold (parse-positive-int (:threshold fields))
@@ -654,7 +675,7 @@
           (when (> (count forms-list) 1)
             (dom/details
               (dom/summary (dom/text (str (count forms-list) " form versions")))
-              (e/for [historical forms-list]
+              (e/for [historical (e/diff-by :id forms-list)]
                 (dom/p
                   (dom/text (str "Version " (:version historical) " · "
                               (str/capitalize (:status historical)) " · "
@@ -684,18 +705,19 @@
           (dom/text (str (:estimated_minutes material) " min estimate · edit"))
           (dom/On "click" (fn [_] (reset! !editing? true)) nil))
         (let [commits
-              (forms/Form! {:minutes (str (:estimated_minutes material))}
-                (e/fn Fields [{:keys [minutes]}]
-                  (e/amb
-                    (forms/Input! :minutes minutes :type "number"
-                      :class "input curriculum-threshold")
-                    (forms/SubmitButton! :label "Save" :class "btn btn-sm")))
-                :Parse (e/fn [fields _]
-                         (if-let [minutes (parse-positive-int (:minutes fields))]
-                           [`Estimate {:minutes minutes}]
-                           (ex-info "Enter positive minutes." {})))
-                :type :command :show-buttons false)]
-          (dom/div (dom/props {:class "curriculum-estimate-form"}) commits)
+              (dom/div
+                (dom/props {:class "curriculum-estimate-form"})
+                (forms/Form! {:minutes (str (:estimated_minutes material))}
+                  (e/fn Fields [{:keys [minutes]}]
+                    (e/amb
+                      (forms/Input! :minutes minutes :type "number"
+                        :class "input curriculum-threshold")
+                      (forms/SubmitButton! :label "Save" :class "btn btn-sm")))
+                  :Parse (e/fn [fields _]
+                           (if-let [minutes (parse-positive-int (:minutes fields))]
+                             [`Estimate {:minutes minutes}]
+                             (ex-info "Enter positive minutes." {})))
+                  :type :command :show-buttons false))]
           (e/for [[token command] commits]
             (let [response (e/server (e/Offload
                                       #(update-material-estimate* user-id (:id material)
@@ -779,7 +801,8 @@
               (if (empty? materials)
                 (dom/p (dom/props {:class "curriculum-help"})
                   (dom/text "Add imported material to this block."))
-                (e/for [[material-index material] (map-indexed vector materials)]
+                (e/for [[material-index material]
+                        (e/diff-by first (map-indexed vector materials))]
                   (MaterialRow user-id block materials material-index material navigate!)))
               (if add-material?
                 (AddMaterialWizard user-id (:id block) navigate! !add-material?)
@@ -816,7 +839,9 @@
                         " minutes per study day or move the target to "
                         (get-in plan [:adjustment :earliest-date]) "."))))
         (dom/div (dom/props {:class "curriculum-next-tasks"})
-          (e/for [task (take 3 (:tasks plan))]
+          (e/for [[_ task]
+                  (e/diff-by first
+                    (map-indexed vector (take 3 (:tasks plan))))]
             (dom/div
               (dom/time (dom/text (:date task)))
               (dom/span (dom/text (:title task)))
@@ -831,9 +856,11 @@
                  (into {} (map (fn [{:keys [value key]}]
                                  [key (contains? selected value)]) weekdays)))
           commits
-          (forms/Form! seed
-            (e/fn Fields [fields]
-              (e/amb
+          (dom/div
+            (dom/props {:class "curriculum-form-card"})
+            (forms/Form! seed
+              (e/fn Fields [fields]
+                (e/amb
                 (dom/label (dom/props {:class "curriculum-field-label"})
                   (dom/text "Curriculum name"))
                 (forms/Input! :title (:title fields) :class "input input-full")
@@ -857,21 +884,20 @@
                       (dom/On "click" (fn [_] (reset! !open? false)) nil))
                     (forms/SubmitButton! :label "Save schedule controls"
                       :class "btn btn-primary")))))
-            :Parse (e/fn [fields _]
-                     (let [title (str/trim (:title fields))
-                           target (not-empty (:target-date fields))
-                           minutes (parse-positive-int (:daily-minutes fields))
-                           days (mapv :value
-                                  (filter #(true? (get fields (:key %))) weekdays))]
-                       (cond
-                         (str/blank? title) (ex-info "Enter a curriculum name." {})
-                         (not (or target minutes (seq days)))
-                         (ex-info "Set a target date, daily study time, or study days." {})
-                         :else [`EditCurriculum
-                                {:title title :target-date target
-                                 :daily-minutes minutes :study-weekdays days}])))
-            :type :command :show-buttons false)]
-      (dom/div (dom/props {:class "curriculum-form-card"}) commits)
+              :Parse (e/fn [fields _]
+                       (let [title (str/trim (:title fields))
+                             target (not-empty (:target-date fields))
+                             minutes (parse-positive-int (:daily-minutes fields))
+                             days (mapv :value
+                                    (filter #(true? (get fields (:key %))) weekdays))]
+                         (cond
+                           (str/blank? title) (ex-info "Enter a curriculum name." {})
+                           (not (or target minutes (seq days)))
+                           (ex-info "Set a target date, daily study time, or study days." {})
+                           :else [`EditCurriculum
+                                  {:title title :target-date target
+                                   :daily-minutes minutes :study-weekdays days}])))
+              :type :command :show-buttons false))]
       (e/for [[token command] commits]
         (let [response (e/server (e/Offload
                                   #(update-curriculum* user-id (:id detail)
@@ -912,7 +938,8 @@
             (ScheduleSummary user-id curriculum-id))
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
-            (e/for [[index block] (map-indexed vector blocks)]
+            (e/for [[index block]
+                    (e/diff-by first (map-indexed vector blocks))]
               (BlockCard user-id curriculum-id blocks index block navigate!))
             (if add-block?
               (AddBlockForm user-id curriculum-id !add-block?)

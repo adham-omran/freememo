@@ -162,23 +162,25 @@
   (let [title (str/trim (str title))]
     (when (str/blank? title)
       (throw (ex-info "Enter a block name." {:type ::invalid-block})))
-    (jdbc/with-transaction [tx db/ds]
-      (let [{:keys [position]} (jdbc/execute-one! tx
-                                 ["SELECT count(*)::int AS position
-                                     FROM curriculum_blocks WHERE curriculum_id = ?"
-                                  curriculum-id] opts)
-            first? (zero? position)
-            row (jdbc/execute-one! tx
-                  ["INSERT INTO curriculum_blocks
-                      (curriculum_id, position, title, unlocked_at, focused_at)
-                    VALUES (?, ?, ?, CASE WHEN ? THEN now() END,
-                                    CASE WHEN ? THEN now() END)
-                    RETURNING id"
-                   curriculum-id position title first? first?] opts)]
-        (jdbc/execute-one! tx ["UPDATE curricula SET updated_at = now() WHERE id = ?"
-                               curriculum-id])
-        (bump! user-id)
-        (:id row)))))
+    (let [block-id
+          (jdbc/with-transaction [tx db/ds]
+            (let [{:keys [position]} (jdbc/execute-one! tx
+                                       ["SELECT count(*)::int AS position
+                                           FROM curriculum_blocks WHERE curriculum_id = ?"
+                                        curriculum-id] opts)
+                  first? (zero? position)
+                  row (jdbc/execute-one! tx
+                        ["INSERT INTO curriculum_blocks
+                            (curriculum_id, position, title, unlocked_at, focused_at)
+                          VALUES (?, ?, ?, CASE WHEN ? THEN now() END,
+                                          CASE WHEN ? THEN now() END)
+                          RETURNING id"
+                         curriculum-id position title first? first?] opts)]
+              (jdbc/execute-one! tx ["UPDATE curricula SET updated_at = now() WHERE id = ?"
+                                     curriculum-id])
+              (:id row)))]
+      (bump! user-id)
+      block-id)))
 
 (defn reorder-blocks!
   "Replace the complete block order.
@@ -224,29 +226,31 @@
 (defn add-material!
   "Append a supported Library material to a block."
   [user-id block-id topic-id estimated-minutes]
-  (jdbc/with-transaction [tx db/ds]
-    (let [block (require-owned! (own-block tx user-id block-id) :block block-id)
-          topic (jdbc/execute-one! tx
-                  ["SELECT id, kind FROM topics
-                    WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
-                   topic-id user-id] opts)]
-      (when-not (contains? #{"pdf" "markdown" "web" "wikipedia"} (:kind topic))
-        (throw (ex-info "Pick a PDF, Markdown document, or web article."
-                 {:type ::unsupported-material})))
-      (let [{:keys [position]} (jdbc/execute-one! tx
-                               ["SELECT count(*)::int AS position
-                                  FROM curriculum_materials WHERE block_id = ?" block-id]
-                               opts)
-            minutes (or estimated-minutes (estimate-material-minutes tx topic-id))
-            row (jdbc/execute-one! tx
-                  ["INSERT INTO curriculum_materials
-                      (block_id, topic_id, position, estimated_minutes)
-                    VALUES (?, ?, ?, ?) RETURNING id"
-                   block-id topic-id position minutes] opts)]
-        (jdbc/execute-one! tx ["UPDATE curricula SET updated_at = now() WHERE id = ?"
-                               (:curriculum_id block)])
-        (bump! user-id)
-        (:id row)))))
+  (let [material-id
+        (jdbc/with-transaction [tx db/ds]
+          (let [block (require-owned! (own-block tx user-id block-id) :block block-id)
+                topic (jdbc/execute-one! tx
+                        ["SELECT id, kind FROM topics
+                          WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
+                         topic-id user-id] opts)]
+            (when-not (contains? #{"pdf" "markdown" "web" "wikipedia"} (:kind topic))
+              (throw (ex-info "Pick a PDF, Markdown document, or web article."
+                       {:type ::unsupported-material})))
+            (let [{:keys [position]} (jdbc/execute-one! tx
+                                     ["SELECT count(*)::int AS position
+                                        FROM curriculum_materials WHERE block_id = ?" block-id]
+                                     opts)
+                  minutes (or estimated-minutes (estimate-material-minutes tx topic-id))
+                  row (jdbc/execute-one! tx
+                        ["INSERT INTO curriculum_materials
+                            (block_id, topic_id, position, estimated_minutes)
+                          VALUES (?, ?, ?, ?) RETURNING id"
+                         block-id topic-id position minutes] opts)]
+              (jdbc/execute-one! tx ["UPDATE curricula SET updated_at = now() WHERE id = ?"
+                                     (:curriculum_id block)])
+              (:id row))))]
+    (bump! user-id)
+    material-id))
 
 (defn reorder-materials!
   "Replace the complete material order inside one block."
@@ -535,8 +539,9 @@
                 (= raw-score (reduce + criterion-scores)))
       (throw (ex-info "The raw score must equal all 25 criterion scores."
                {:type ::invalid-grade-revision}))))
-  (jdbc/with-transaction [tx db/ds]
-    (let [sitting (some-> (jdbc/execute-one! tx
+  (let [revision-id
+        (jdbc/with-transaction [tx db/ds]
+          (let [sitting (some-> (jdbc/execute-one! tx
                             ["SELECT s.*, f.threshold, f.block_id, f.material_id
                                 FROM curriculum_exam_sittings s
                                 JOIN curriculum_exam_forms f ON f.id = s.form_id
@@ -554,8 +559,8 @@
                      explanation, grading_cost_credits)
                   VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
                  sitting-id revision raw-score passed (pg-json criteria) explanation cost] opts)]
-      (when (and passed (:block_id sitting))
-        (let [block (jdbc/execute-one! tx
+            (when (and passed (:block_id sitting))
+              (let [block (jdbc/execute-one! tx
                       ["UPDATE curriculum_blocks
                           SET completed_at = COALESCE(completed_at, now()), focused_at = NULL
                         WHERE id = ? RETURNING curriculum_id, position"
@@ -565,8 +570,8 @@
                              WHERE curriculum_id = ? AND position > ?
                              ORDER BY position LIMIT 1"
                             (:curriculum_id block) (:position block)] opts)]
-          (when next-block
-            (jdbc/execute-one! tx
+                (when next-block
+                  (jdbc/execute-one! tx
               ["UPDATE curriculum_blocks
                   SET unlocked_at = COALESCE(unlocked_at, now()),
                       focused_at = CASE
@@ -576,8 +581,9 @@
                              AND focused.focused_at IS NOT NULL)
                         THEN now() ELSE focused_at END
                 WHERE id = ?" (:curriculum_id block) (:id next-block)]))))
-      (bump! user-id)
-      (:id row))))
+            (:id row)))]
+    (bump! user-id)
+    revision-id))
 
 (defn record-grade-charge!
   "Attach the actual completed-call charge to a persisted grade revision."
