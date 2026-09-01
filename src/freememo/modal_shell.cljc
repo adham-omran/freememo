@@ -46,7 +46,8 @@
 #?(:clj (defn trap-tab! [_container _e] nil))
 
 ;; Focus restore (WCAG dialog pattern): remember the element that had focus
-;; when the modal opened; put focus back there when the modal unmounts.
+;; when the modal opened; put focus back there when the modal unmounts. Focus
+;; return must not reveal an old caret and move a reader away from its page.
 ;; Platform-split so the e/defn body stays frame-safe.
 
 ;; Capture-then-focus in ONE synchronous call so the ordering cannot race:
@@ -67,9 +68,11 @@
 #?(:clj (defn opener-element [] nil))
 
 #?(:cljs
-   (defn restore-focus! [opener]
+   (defn restore-focus!
+     "Refocus a connected modal opener without changing any scroll position."
+     [opener]
      (when (and opener (.contains js/document.documentElement opener))
-       (.focus opener))))
+       (.focus opener #js {:preventScroll true}))))
 #?(:clj (defn restore-focus! [_opener] nil))
 
 (e/defn FocusReturn
@@ -81,7 +84,7 @@
           mount, so a synchronous .focus elsewhere in the same frame body
           could win the race and be captured as the opener.
    Post : on frame unmount, focus returns to the captured element if it is
-          still in the document."
+          still in the document, without changing a scroll position."
   []
   (e/client
     (let [opener (e/snapshot (opener-element))]
@@ -95,14 +98,15 @@
    `aria-modal`, `aria-label` (from `label`) and `tabindex=-1` on the
    enclosing node, focuses it on mount (via rAF — `:autofocus` does not fire
    on dynamically inserted elements), traps Tab inside it, closes on Escape,
-   and restores focus to the element that was focused when the modal opened.
-   Listeners attach to the enclosing dom/node — the established Electric
-   composition idiom.
+   and restores focus without scrolling to the element that was focused when
+   the modal opened. Listeners attach to the enclosing dom/node — the
+   established Electric composition idiom.
 
    Pre  : `close!` is a 0-arg thunk; `label` names the dialog for AT.
    Post : the modal is focused on mount and announced as a dialog; Escape with
           focus anywhere inside it runs close!; Tab cycles within the modal;
-          on unmount focus returns to the opener (if still in the document).
+          on unmount focus returns to the opener without scrolling (if still
+          in the document).
    Invariant: the opener is captured in the same synchronous call that
           schedules the (deferred) focus — capture-before-focus by
           construction, not by luck of concurrent body ordering."
