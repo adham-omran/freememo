@@ -91,6 +91,32 @@
 (defn- db-up? []
   (try (jdbc/execute-one! db/ds ["SELECT 1"]) true (catch Exception _ false)))
 
+(defn- sql-smallint-array [values]
+  (reify java.sql.Array
+    (getBaseTypeName [_] "int2")
+    (getBaseType [_] java.sql.Types/SMALLINT)
+    (getArray [_] (into-array Short (map short values)))
+    (getArray [_ _] (into-array Short (map short values)))
+    (getArray [_ _ _] (into-array Short (map short values)))
+    (getArray [_ _ _ _] (into-array Short (map short values)))
+    (getResultSet [_] nil)
+    (getResultSet [_ _] nil)
+    (getResultSet [_ _ _] nil)
+    (getResultSet [_ _ _ _] nil)
+    (free [_])))
+
+(deftest curriculum-list-returns-plain-schedule-controls
+  (let [weekdays (sql-smallint-array [1 3])]
+    (with-redefs [jdbc/execute! (fn [& _]
+                                  [{:id 7
+                                    :study_weekdays weekdays
+                                    :target_date (LocalDate/parse "2026-09-30")}])]
+      (let [listed (first (curriculum/list-curricula 0 11))]
+        (is (= [1 3] (:study_weekdays listed)))
+        (is (vector? (:study_weekdays listed))
+          "curriculum rows must contain Electric-wire-safe weekdays")
+        (is (= "2026-09-30" (:target_date listed)))))))
+
 (deftest passing-block-exams-and-overrides-have-distinct-effects
   (if-not (db-up?)
     (is true "PostgreSQL is unavailable; integration assertion skipped")

@@ -38,10 +38,24 @@
     (json/parse-string (.getValue ^org.postgresql.util.PGobject value) true)
     :else value))
 
+(defn- study-weekdays->vec [study-weekdays]
+  (let [values (if (instance? java.sql.Array study-weekdays)
+                 (.getArray ^java.sql.Array study-weekdays)
+                 study-weekdays)]
+    (mapv int (or values []))))
+
+(defn- curriculum-row->map
+  "Convert database-specific schedule controls to plain Electric values."
+  [row]
+  (some-> row
+    (update :study_weekdays study-weekdays->vec)
+    (update :target_date #(some-> % str))))
+
 (defn- own-curriculum [connectable user-id curriculum-id]
-  (jdbc/execute-one! connectable
-    ["SELECT * FROM curricula WHERE id = ? AND user_id = ?" curriculum-id user-id]
-    opts))
+  (curriculum-row->map
+    (jdbc/execute-one! connectable
+      ["SELECT * FROM curricula WHERE id = ? AND user_id = ?" curriculum-id user-id]
+      opts)))
 
 (defn- own-block [connectable user-id block-id]
   (jdbc/execute-one! connectable
@@ -76,16 +90,17 @@
 (defn list-curricula
   "Return the user's curricula with progress counts."
   [_refresh user-id]
-  (jdbc/execute! db/ds
-    ["SELECT c.*,
-             count(b.id)::int AS block_count,
-             count(b.completed_at)::int AS completed_block_count
-        FROM curricula c
-        LEFT JOIN curriculum_blocks b ON b.curriculum_id = c.id
-       WHERE c.user_id = ?
-       GROUP BY c.id
-       ORDER BY c.updated_at DESC" user-id]
-    opts))
+  (mapv curriculum-row->map
+    (jdbc/execute! db/ds
+      ["SELECT c.*,
+               count(b.id)::int AS block_count,
+               count(b.completed_at)::int AS completed_block_count
+          FROM curricula c
+          LEFT JOIN curriculum_blocks b ON b.curriculum_id = c.id
+         WHERE c.user_id = ?
+         GROUP BY c.id
+         ORDER BY c.updated_at DESC" user-id]
+      opts)))
 
 (defn create-curriculum!
   "Create a personal curriculum.
