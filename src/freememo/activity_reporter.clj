@@ -35,11 +35,21 @@
    room for two missed ticks before a row reads as stale, which absorbs a GC
    pause or a slow query without lying about the work."
   (:require
+   [clojure.set :as set]
    [taoensso.telemere :as tel]
    [freememo.activity :as activity]
    [freememo.activity-registry :as registry]
    [freememo.user-state :as us])
   (:import [java.util.concurrent Executors ScheduledExecutorService TimeUnit]))
+
+(defonce ^{:private true
+           :doc "Activity rows whose owner state this process observed as live.
+Pre: an id enters only after this process reads live owner state.
+Post: a forgotten id can close only when it remains in this set.
+Invariant: another process cannot add an id here. A false local observation is
+an activity reporter bug."}
+  locally-observed-activity-ids
+  (atom #{}))
 
 (def tick-ms
   "How often each in-flight server-owned row is refreshed. See the interval
@@ -58,7 +68,7 @@
 
    Pre : `user-id` is a user.
    Post: every in-flight item of every server-tier type has a row. Returns the
-         number opened.
+         number opened and records each row as locally observed.
    Invariant: safe to call repeatedly. `activity/start!` is idempotent on
          (user, type, work_key), and the partial unique index — not a read here —
          is what arbitrates, so a concurrent pass cannot double-open.
@@ -79,8 +89,11 @@
                   ;; authority on "in flight"; the atom's keys are only where to
                   ;; look.
                   :when (some? state)]
-              (activity/start! user-id type work-key
-                (merge {:phase "starting" :subject-id subject-id} state))))
+              (let [activity-id
+                    (activity/start! user-id type work-key
+                      (merge {:phase "starting" :subject-id subject-id} state))]
+                (swap! locally-observed-activity-ids conj activity-id)
+                activity-id)))
           (catch Throwable t
             (tel/error! {:id ::open-type-failed
                          :data {:user-id user-id :type type}}
@@ -89,14 +102,17 @@
     0 (registry/server-tier-types)))
 
 (defn tick-once!
-  "One pass: open rows for newly-started work, refresh the rest, and close the
-   ones whose owner has finished.
+  "One pass: open rows for new work, refresh locally-owned rows, and close local
+   rows whose owner has finished.
 
    Pre : none — safe to call with no rows, an empty registry, or no scheduler
          running (the sweeps and tests call it directly).
-   Post: every row whose owner still knows it has `updated_at` advanced and its
-         progress written; every row whose owner has forgotten it is terminated.
+   Post: every row with local live state has `updated_at` advanced. A forgotten
+         row closes only when this process observed it live before.
+         A foreign row remains untouched and becomes interrupted through staleness.
          Returns `{:opened n :refreshed n :closed n}`.
+   Invariant: one process never assigns a terminal outcome to another process's
+         work. Violating that boundary is a reporter implementation bug.
    Invariant: one owner's failure never costs another its tick. An adapter reads
          a live atom and can throw on a shape it did not expect; a pass that
          aborted would silently interrupt every row after the bad one, because
@@ -112,21 +128,27 @@
                                   (tel/error! {:id ::open-failed :data {:user-id uid}} t)
                                   0))))
                  0 (us/users-with-state))
-        rows (activity/live-rows-for-tick (registry/server-tier-types))]
+        rows (activity/live-rows-for-tick (registry/server-tier-types))
+        live-row-ids (into #{} (map :id) rows)]
+    (swap! locally-observed-activity-ids set/intersection live-row-ids)
     (reduce
       (fn [acc {:keys [id user_id type work_key]}]
         (try
           (if-some [state (registry/read-state type user_id work_key)]
-            (do (activity/report! user_id id state)
+            (do (swap! locally-observed-activity-ids conj id)
+                (activity/report! user_id id state)
                 (update acc :refreshed inc))
-            ;; The owner has forgotten this work, so it is FINISHED — not stale.
-            ;; Staleness is for a reporter that stopped; this is a reporter that
-            ;; looked and found the work gone, which is a different fact and
-            ;; deserves a terminal outcome rather than a 60s wait.
-            (let [err (registry/work-error type user_id work_key)]
-              (activity/terminate! user_id id (if err "failure" "success")
-                {:error err})
-              (update acc :closed inc)))
+            (if (contains? @locally-observed-activity-ids id)
+              ;; This process saw the owner before it disappeared. The work is
+              ;; finished, not stale, and this process can assign its outcome.
+              (let [err (registry/work-error type user_id work_key)]
+                (activity/terminate! user_id id (if err "failure" "success")
+                  {:error err})
+                (swap! locally-observed-activity-ids disj id)
+                (update acc :closed inc))
+              ;; Another process owns this row. Only its reporter can close it.
+              ;; If that process died, the shared staleness rule interrupts it.
+              acc))
           (catch Throwable t
             (tel/error! {:id ::tick-failed
                          :data {:activity-id id :user-id user_id

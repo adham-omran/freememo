@@ -28,7 +28,8 @@
    #?(:clj [freememo.shell :as shell])
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
-   #?(:clj [freememo.activity-reporter :as activity-reporter])))
+   #?(:clj [freememo.activity-reporter :as activity-reporter])
+   #?(:clj [freememo.curriculum-exam :as curriculum-exam])))
 
 ;; Prod default card model — a freememo.card-models registry :id, used as the
 ;; default when a user has no allowed saved selection (overridable per-user
@@ -77,6 +78,31 @@
      []
      (when (contains? #{:google :both} (config/auth-mode))
        (google-oauth/report-unusable-sign-in!))))
+
+#?(:clj
+   (defn install-exam-generation-shutdown-hook!
+     "Install the production drain for accepted exam form work.
+
+      Pre: the activity reporter and form-generation executor exist. Boot owns
+      an early or duplicate call.
+      Post: JVM shutdown waits for accepted form work, publishes its final
+      activity outcome, and then stops the reporter.
+      Invariant: deployment cannot stop accepted form work before its 20-minute
+      timeout. This hook owns work lost during a normal container stop."
+     []
+     (.addShutdownHook
+       (Runtime/getRuntime)
+       (Thread.
+         ^Runnable
+         (fn []
+           (try
+             (curriculum-exam/await-form-generation-shutdown!)
+             (finally
+               (try
+                 (activity-reporter/tick-once!)
+                 (finally
+                   (activity-reporter/stop!))))))
+         "exam-form-generation-drain"))))
 
 #?(:clj
    (defn wrap-api-routes [handler]
@@ -161,6 +187,7 @@
        ;; setup-schema — it queries `activities`. Requiring this namespace is also
        ;; what registers the activity sweeps into the hourly sweep.
        (activity-reporter/start!)
+       (install-exam-generation-shutdown-hook!)
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.
        (seed-admin-user!)

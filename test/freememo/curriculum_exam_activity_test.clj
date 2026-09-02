@@ -1,5 +1,6 @@
 (ns freememo.curriculum-exam-activity-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [freememo.activity-registry :as registry]
    [freememo.cards :as cards]
@@ -7,7 +8,9 @@
    [freememo.curriculum :as curriculum]
    [freememo.curriculum-exam :as exam]
    [freememo.kg-llm :as llm]
-   [freememo.user-state :as us]))
+   [freememo.user-state :as us])
+  (:import
+   [java.util.concurrent Executors]))
 
 (defn- wait-until
   [predicate timeout-ms]
@@ -74,6 +77,37 @@
                    @(us/get-atom user-id :exam-form-generation-errors) work-key)))
         (is (empty? @(us/get-atom user-id :toasts))))
       (deliver release :continue))))
+
+(deftest form-generation-shutdown-waits-for-running-work
+  (let [drain (ns-resolve 'freememo.curriculum-exam
+                'drain-form-generation-executor!)
+        executor (Executors/newSingleThreadExecutor)
+        started (promise)
+        release (promise)]
+    (try
+      (.submit executor
+        ^Runnable (fn [] (deliver started true) @release))
+      @started
+      (is drain "the shutdown path needs a testable executor drain")
+      (when drain
+        (let [result (future (drain executor 1000))]
+          (Thread/sleep 50)
+          (is (not (realized? result))
+            "shutdown must wait while accepted work is still running")
+          (deliver release true)
+          (is (= :drained (deref result 1000 :test-timeout)))))
+      (finally
+        (deliver release true)
+        (.shutdownNow executor)))))
+
+(deftest production-shutdown-gives-exam-generation-time-to-finish
+  (let [compose (slurp "docker-compose.prod.yml")
+        prod-source (slurp "src-prod/prod.cljc")]
+    (is (str/includes? compose "stop_grace_period: 21m")
+      "Docker must wait longer than the 20-minute form-generation timeout")
+    (is (str/includes? prod-source
+          "(curriculum-exam/await-form-generation-shutdown!)")
+      "the production JVM must drain accepted form-generation work")))
 
 (def exam-rubric
   {:factual_accuracy "Facts match the evidence."

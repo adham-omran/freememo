@@ -45,10 +45,10 @@
    for a pull the pushed tier does not need, and a mirror would be a second copy
    of state the row already holds.
 
-   A reader returning nil means the owner no longer knows about this work. The
-   reporter does NOT terminate on nil — the owner owns the terminal state — so a
-   row whose owner vanished without terminating is left to go stale, which is
-   exactly what interruption means."
+   A reader returning nil means this process does not know the work. The reporter
+   closes it only when this process observed the same row as live. A row owned by
+   another process remains untouched and becomes interrupted if its owner stops
+   reporting."
   (:require
    [clojure.string :as str]
    [freememo.user-state :as us]))
@@ -437,8 +437,9 @@
    Pre : `type` is registered and server-tier (violation = caller bug — the
          reporter filters by `server-tier-types`).
    Post: nil, or a map carrying at least `:phase`.
-   Invariant: never terminates anything. A nil here is evidence for staleness,
-         and the owner alone writes a terminal outcome."
+   Invariant: never terminates anything. A nil value proves only that this
+         process has no owner state. The reporter must establish local ownership
+         before it assigns a terminal outcome."
   [type uid work-key]
   (when-some [read (:read (activity-type type))]
     (read uid work-key)))

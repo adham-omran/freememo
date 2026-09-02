@@ -17,7 +17,7 @@
    [taoensso.telemere :as tel])
   (:import
    [java.text Normalizer Normalizer$Form]
-   [java.util.concurrent Executors]
+   [java.util.concurrent ExecutorService Executors TimeUnit]
    [missionary Cancelled]))
 
 (def question-roles #{"explain" "compare" "apply" "evaluate" "synthesize"})
@@ -247,6 +247,46 @@
 
 (def ^:private form-generation-timeout-ms
   (* 20 60 1000))
+
+(def ^:private form-generation-shutdown-wait-ms
+  (+ form-generation-timeout-ms 30000))
+
+(defn- drain-form-generation-executor!
+  "Stop accepting form-generation work and wait for accepted work.
+
+   Pre: executor owns form-generation tasks. The caller owns an invalid timeout.
+   Post: returns :drained when accepted tasks finish, :timed-out after forced
+   cancellation, or :interrupted when the waiting thread is interrupted.
+   Invariant: accepted work is not cancelled before the timeout. This function
+   owns an early cancellation or an executor left accepting work."
+  [^ExecutorService executor timeout-ms]
+  (.shutdown executor)
+  (try
+    (if (.awaitTermination executor timeout-ms TimeUnit/MILLISECONDS)
+      :drained
+      (do
+        (.shutdownNow executor)
+        :timed-out))
+    (catch InterruptedException _
+      (.shutdownNow executor)
+      (.interrupt (Thread/currentThread))
+      :interrupted)))
+
+(defn await-form-generation-shutdown!
+  "Drain accepted exam form work during production shutdown.
+
+   Pre: the JVM has started shutdown. The production hook owns call timing.
+   Post: returns after all accepted work finishes or the shutdown wait expires.
+   Invariant: the wait exceeds the task timeout. This function owns a shorter
+   wait that lets deployment discard an accepted model call."
+  []
+  (let [outcome (drain-form-generation-executor!
+                  form-generation-executor form-generation-shutdown-wait-ms)]
+    (tel/log! {:level (if (= :drained outcome) :info :warn)
+               :id ::form-generation-shutdown
+               :data {:outcome outcome}}
+      "Exam form generation shutdown finished")
+    outcome))
 
 (defn- finish-form-generation!
   "Clear the live owner state and publish the result.
