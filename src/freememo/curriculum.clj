@@ -378,9 +378,17 @@
                          :evidence evidence}) bundles)
      :source-versions (mapv :digest bundles)}))
 
+(defn- subject-column+id
+  "Return the exam-form column and the subject id.
+   Pre: subject names exactly one of material-id or block-id."
+  [{:keys [material-id block-id]}]
+  (when (= (some? material-id) (some? block-id))
+    (throw (ex-info "Choose exactly one exam subject." {:type ::invalid-subject})))
+  (if material-id ["material_id" material-id] ["block_id" block-id]))
+
 (defn next-form-version [connectable user-id subject]
-  (let [{:keys [material-id block-id]} subject
-        [column id] (if material-id ["material_id" material-id] ["block_id" block-id])]
+  (let [{:keys [material-id]} subject
+        [column id] (subject-column+id subject)]
     (require-owned! (if material-id
                       (own-material connectable user-id id)
                       (own-block connectable user-id id))
@@ -411,20 +419,94 @@
       (bump! user-id)
       (:id row))))
 
-(defn update-draft-form!
-  "Replace editable draft fields. Approved forms are immutable."
-  [user-id form-id {:keys [threshold blueprint questions]}]
-  (let [form (require-owned! (own-form db/ds user-id form-id) :exam-form form-id)]
-    (when-not (= "draft" (:status form))
-      (throw (ex-info "Approved exam forms are immutable." {:type ::approved-form})))
-    (when-not (= 5 (count questions))
-      (throw (ex-info "An exam form must contain five questions."
-               {:type ::invalid-form})))
-    (jdbc/execute-one! db/ds
-      ["UPDATE curriculum_exam_forms
-          SET threshold = ?, blueprint = ?, questions = ? WHERE id = ?"
-       threshold (pg-json blueprint) (pg-json questions) form-id])
-    (bump! user-id)))
+(defn- questions-with-prompts
+  "Return the stored questions carrying the reader's prompts, in order.
+
+   Pre: prompts holds five strings, none of them blank.
+   Post: rubric and evidence survive untouched, because only :prompt is
+   replaced. The client therefore never sends a question map."
+  [questions prompts]
+  (when-not (= 5 (count prompts))
+    (throw (ex-info "An exam form must contain five questions."
+             {:type ::invalid-form :prompt-count (count prompts)})))
+  (let [prompts (mapv #(str/trim (str %)) prompts)]
+    (when (some str/blank? prompts)
+      (throw (ex-info "Every question needs text." {:type ::invalid-form})))
+    (mapv #(assoc %1 :prompt %2) questions prompts)))
+
+(defn- moved
+  "Return items with the entry at index swapped one step along direction."
+  [items index direction]
+  (let [items (vec items)
+        target (+ index direction)]
+    (if (or (neg? target) (>= target (count items)))
+      items
+      (assoc items index (nth items target) target (nth items index)))))
+
+(defn- require-threshold! [threshold]
+  (when-not (and (integer? threshold) (<= 1 threshold 100))
+    (throw (ex-info "Threshold must be from 1 to 100."
+             {:type ::invalid-threshold :threshold threshold}))))
+
+(defn save-form-edits!
+  "Persist edited prompts and a pass threshold.
+
+   Pre: the user owns form-id. prompts holds five non-blank strings, in the
+   order the reader sees them. The threshold is from 1 to 100.
+   Post: a draft is written in place, and its own id comes back. An approved
+   form yields a NEW draft version whose id comes back, and the approved
+   version stays byte-for-byte as it was.
+   Invariant: an approved form is never mutated. That is what lets a past
+   sitting keep rendering the questions it was taken against."
+  [user-id form-id {:keys [threshold prompts]}]
+  (require-threshold! threshold)
+  (let [id (jdbc/with-transaction [tx db/ds]
+             (let [form (require-owned! (own-form tx user-id form-id) :exam-form form-id)
+                   questions (questions-with-prompts (:questions form) prompts)]
+               (if (= "draft" (:status form))
+                 (do (jdbc/execute-one! tx
+                       ["UPDATE curriculum_exam_forms
+                           SET threshold = ?, questions = ? WHERE id = ?"
+                        threshold (pg-json questions) form-id])
+                     form-id)
+                 (let [subject {:material-id (:material_id form)
+                                :block-id (:block_id form)}
+                       version (next-form-version tx user-id subject)]
+                   (:id (jdbc/execute-one! tx
+                          ["INSERT INTO curriculum_exam_forms
+                              (user_id, block_id, material_id, version, form_kind,
+                               threshold, blueprint, questions, source_versions,
+                               accepted_source_versions)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+                           user-id (:block_id form) (:material_id form) version
+                           (:form_kind form) threshold
+                           (pg-json (:blueprint form)) (pg-json questions)
+                           (pg-json (:source_versions form))
+                           (pg-json (:accepted_source_versions form))]
+                          opts))))))]
+    (bump! user-id)
+    id))
+
+(defn reorder-draft-question!
+  "Write the live prompts, then move one question one step.
+
+   Pre: the user owns a DRAFT form. prompts holds the five prompts the reader
+   currently sees, in the current order.
+   Post: the stored questions carry those prompts in the new order.
+   Invariant: a move never reverts an unsaved prompt. The field keys are
+   positional, so writing the prompts first is what keeps them with their own
+   question across the swap."
+  [user-id form-id index direction prompts]
+  (jdbc/with-transaction [tx db/ds]
+    (let [form (require-owned! (own-form tx user-id form-id) :exam-form form-id)]
+      (when-not (= "draft" (:status form))
+        (throw (ex-info "Approved exam forms are immutable." {:type ::approved-form})))
+      (jdbc/execute-one! tx
+        ["UPDATE curriculum_exam_forms SET questions = ? WHERE id = ?"
+         (pg-json (moved (questions-with-prompts (:questions form) prompts)
+                    index direction))
+         form-id])))
+  (bump! user-id))
 
 (defn record-form-generation-charge!
   "Attach the actual completed-call charge to a persisted form."
@@ -448,24 +530,39 @@
     (not= current accepted)))
 
 (defn approve-form!
-  "Freeze a draft, or explicitly reapprove an outdated approved form."
-  [user-id form-id]
-  (jdbc/with-transaction [tx db/ds]
-    (let [form (require-owned! (own-form tx user-id form-id) :exam-form form-id)
-          subject {:material-id (:material_id form) :block-id (:block_id form)}
-          current (:source-versions (subject-evidence tx user-id subject))]
-      (jdbc/execute-one! tx
-        ["UPDATE curriculum_exam_forms
-            SET status = 'approved', approved_at = COALESCE(approved_at, now()),
-                accepted_source_versions = ? WHERE id = ?"
-         (pg-json current) form-id])))
-  (bump! user-id))
+  "Freeze a draft, or explicitly reapprove an outdated approved form.
+
+   Pre: the user owns form-id. For a draft, edits may carry the prompts and
+   threshold the reader currently sees.
+   Post: the form is approved and holds those edits. Reapproving an approved
+   form re-accepts current evidence and writes no prompts, which is this
+   function's second job.
+   Invariant: an approve never discards an unsaved prompt. Committing the edits
+   and freezing the form happen in one transaction, or neither happens."
+  ([user-id form-id] (approve-form! user-id form-id nil))
+  ([user-id form-id {:keys [threshold prompts]}]
+   (when (some? threshold) (require-threshold! threshold))
+   (jdbc/with-transaction [tx db/ds]
+     (let [form (require-owned! (own-form tx user-id form-id) :exam-form form-id)
+           subject {:material-id (:material_id form) :block-id (:block_id form)}
+           current (:source-versions (subject-evidence tx user-id subject))]
+       (when (and (= "draft" (:status form)) (seq prompts))
+         (jdbc/execute-one! tx
+           ["UPDATE curriculum_exam_forms
+               SET threshold = ?, questions = ? WHERE id = ?"
+            (or threshold (:threshold form))
+            (pg-json (questions-with-prompts (:questions form) prompts)) form-id]))
+       (jdbc/execute-one! tx
+         ["UPDATE curriculum_exam_forms
+             SET status = 'approved', approved_at = COALESCE(approved_at, now()),
+                 accepted_source_versions = ? WHERE id = ?"
+          (pg-json current) form-id])))
+   (bump! user-id)))
 
 (defn list-forms
   "Return forms for one subject with a computed stale flag."
   [user-id subject]
-  (let [[column id] (if-let [id (:material-id subject)] ["material_id" id]
-                      ["block_id" (:block-id subject)])]
+  (let [[column id] (subject-column+id subject)]
     (mapv (fn [row]
             (let [form (-> row
                          (update :blueprint read-json)
@@ -478,6 +575,59 @@
         [(str "SELECT * FROM curriculum_exam_forms
                 WHERE user_id = ? AND " column " = ? ORDER BY version DESC")
          user-id id] opts))))
+
+(defn form-summary
+  "Reduce one subject's forms to what a chip and a route need.
+
+   Pre: forms are that subject's rows, newest version first, with their
+   source-version JSON already read.
+   Post: returns nil for a subject with no form. Nil is what an exam chip
+   reads to offer generation.
+   Invariant: this is the ONLY definition of current and sittable. The current
+   form is the highest version, whatever its status. The sittable form is the
+   highest APPROVED version. A subject with no approved version cannot be sat."
+  [connectable user-id forms]
+  (when-let [current (first forms)]
+    (let [approved (first (filter #(= "approved" (:status %)) forms))
+          stale? (boolean (and approved (form-stale? connectable user-id approved)))]
+      {:form-id (:id current)
+       :version (:version current)
+       :status (:status current)
+       :form-kind (:form_kind current)
+       :threshold (:threshold current)
+       :version-count (count forms)
+       :approved-form-id (:id approved)
+       :stale? stale?
+       :sittable? (and (some? approved) (not stale?))})))
+
+(defn- subject-key [row]
+  (if-let [id (:material_id row)] [:material id] [:block (:block_id row)]))
+
+(defn exam-summaries
+  "Return one exam summary per subject in a curriculum, keyed by subject.
+
+   One statement reads every form the curriculum owns, because a per-chip
+   query would repeat the evidence walk once for each material.
+   Post: keys are [:material id] and [:block id]. A subject with no form is
+   absent, so `get` answers nil."
+  [connectable user-id curriculum-id]
+  (let [rows (mapv #(-> %
+                      (update :source_versions read-json)
+                      (update :accepted_source_versions read-json))
+               (jdbc/execute! connectable
+                 ["SELECT f.id, f.material_id, f.block_id, f.version, f.status,
+                          f.form_kind, f.threshold, f.source_versions,
+                          f.accepted_source_versions
+                     FROM curriculum_exam_forms f
+                     LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                     LEFT JOIN curriculum_blocks mb ON mb.id = m.block_id
+                     LEFT JOIN curriculum_blocks b ON b.id = f.block_id
+                    WHERE f.user_id = ?
+                      AND COALESCE(mb.curriculum_id, b.curriculum_id) = ?
+                    ORDER BY f.version DESC" user-id curriculum-id] opts))]
+    (into {}
+      (map (fn [[key subject-forms]] [key (form-summary connectable user-id subject-forms)]))
+      (group-by subject-key rows))))
 
 (defn start-sitting!
   "Start an approved, current form."
@@ -492,28 +642,88 @@
            ["INSERT INTO curriculum_exam_sittings (form_id, user_id)
              VALUES (?, ?) RETURNING id" form-id user-id] opts))))
 
-(defn submit-sitting!
-  "Freeze all five answers before grading.
-   Pre: each answer has text or explicit do-not-know true."
-  [user-id sitting-id answers]
-  (when-not (and (= 5 (count answers))
-              (every? #(or (not (str/blank? (str (:answer %)))) (:do-not-know %)) answers))
-    (throw (ex-info "Answer every question or select “I do not know.”"
-             {:type ::incomplete-sitting})))
-  (let [row (jdbc/execute-one! db/ds
-              ["UPDATE curriculum_exam_sittings
-                  SET answers = ?, submitted_at = now()
-                WHERE id = ? AND user_id = ? AND submitted_at IS NULL
-                RETURNING id"
-               (pg-json answers) sitting-id user-id] opts)]
-    (when-not row
-      (require-owned!
-        (jdbc/execute-one! db/ds
-          ["SELECT id FROM curriculum_exam_sittings
-            WHERE id = ? AND user_id = ? AND submitted_at IS NOT NULL"
-           sitting-id user-id] opts)
-        :sitting sitting-id))
-    (bump! user-id)))
+(def ^:private blank-answer-draft
+  "The shape an answer draft starts from. Five slots, in question order."
+  (vec (repeat 5 {:answer "" :do-not-know false})))
+
+(defn- answers-complete? [answers]
+  (and (= 5 (count answers))
+    (every? #(or (not (str/blank? (str (:answer %)))) (:do-not-know %)) answers)))
+
+(defn- merge-answer-slots
+  "Return the draft with each slot written at its own index.
+   Pre: every slot carries an index from 0 to 4. A bad index is a caller bug."
+  [draft slots]
+  (reduce (fn [answers {:keys [index answer do-not-know]}]
+            (when-not (and (integer? index) (<= 0 index 4))
+              (throw (ex-info "The answer index must be from 0 to 4."
+                       {:type ::invalid-answer-index :index index})))
+            (assoc answers index {:answer (str answer)
+                                  :do-not-know (boolean do-not-know)}))
+    (vec (or draft blank-answer-draft))
+    slots))
+
+(defn save-answer-draft!
+  "Merge answer slots into an open sitting's draft.
+
+   Pre: the user owns sitting-id. Each slot carries an index from 0 to 4, an
+   answer, and a do-not-know flag.
+   Post: returns :saved, or :already-submitted when the sitting is closed.
+   Throws only when the user owns no such sitting.
+   Invariant: a submitted sitting never changes. :already-submitted is an
+   OUTCOME and not an exception, because a focus change fired by the Submit
+   click lands beside the finalize and must not read as a failure."
+  [user-id sitting-id slots]
+  (let [outcome
+        (jdbc/with-transaction [tx db/ds]
+          (let [sitting (require-owned!
+                          (jdbc/execute-one! tx
+                            ["SELECT id, submitted_at, draft_answers
+                                FROM curriculum_exam_sittings
+                               WHERE id = ? AND user_id = ? FOR UPDATE"
+                             sitting-id user-id] opts)
+                          :sitting sitting-id)]
+            (if (:submitted_at sitting)
+              :already-submitted
+              (do (jdbc/execute-one! tx
+                    ["UPDATE curriculum_exam_sittings SET draft_answers = ? WHERE id = ?"
+                     (pg-json (merge-answer-slots (read-json (:draft_answers sitting))
+                                slots))
+                     sitting-id])
+                  :saved))))]
+    outcome))
+
+(defn finalize-sitting!
+  "Freeze the answer draft and close the sitting.
+
+   Pre: the user owns an open sitting whose draft answers are all complete.
+   Post: answers equals the draft, submitted_at is set, and :submitted comes
+   back. A closed sitting yields :already-submitted with nothing changed.
+   Invariant: no answer text crosses the wire at finalize time, because the
+   text is already on the server."
+  [user-id sitting-id]
+  (let [outcome
+        (jdbc/with-transaction [tx db/ds]
+          (let [sitting (require-owned!
+                          (jdbc/execute-one! tx
+                            ["SELECT id, submitted_at, draft_answers
+                                FROM curriculum_exam_sittings
+                               WHERE id = ? AND user_id = ? FOR UPDATE"
+                             sitting-id user-id] opts)
+                          :sitting sitting-id)]
+            (if (:submitted_at sitting)
+              :already-submitted
+              (let [answers (read-json (:draft_answers sitting))]
+                (when-not (answers-complete? answers)
+                  (throw (ex-info "Answer every question or select “I do not know.”"
+                           {:type ::incomplete-sitting})))
+                (jdbc/execute-one! tx
+                  ["UPDATE curriculum_exam_sittings
+                      SET answers = ?, submitted_at = now() WHERE id = ?"
+                   (pg-json answers) sitting-id])
+                :submitted))))]
+    (when (= :submitted outcome) (bump! user-id))
+    outcome))
 
 (defn sitting-for-grade
   "Return one submitted sitting with its frozen form."
@@ -671,7 +881,8 @@
                            user-id curriculum-id] opts)
         score-by-material (into {} (map (juxt :material_id :raw_score)) material-scores)
         passed (completed-subjects user-id)
-        passed-materials (into #{} (keep :material_id) passed)]
+        passed-materials (into #{} (keep :material_id) passed)
+        summaries (exam-summaries db/ds user-id curriculum-id)]
     (assoc curriculum
       :complete? (and (seq blocks) (every? :completed_at blocks))
       :blocks
@@ -680,10 +891,121 @@
                 (assoc block
                   :materials (mapv #(assoc %
                                       :exam-passed? (contains? passed-materials (:id %))
-                                      :latest-exam-score (get score-by-material (:id %)))
+                                      :latest-exam-score (get score-by-material (:id %))
+                                      :exam (get summaries [:material (:id %)]))
                                block-materials)
-                  :forms (list-forms user-id {:block-id (:id block)}))))
+                  :exam (get summaries [:block (:id block)]))))
         blocks))))
+
+;; ── Exam page read model ───────────────────────────────────────────────────
+
+(defn- subject-form-rows
+  "Return one subject's form rows, newest version first, without questions."
+  [connectable user-id subject]
+  (let [[column id] (subject-column+id subject)]
+    (mapv #(-> %
+             (update :source_versions read-json)
+             (update :accepted_source_versions read-json))
+      (jdbc/execute! connectable
+        [(str "SELECT id, material_id, block_id, version, status, form_kind,
+                      threshold, source_versions, accepted_source_versions
+                 FROM curriculum_exam_forms
+                WHERE user_id = ? AND " column " = ? ORDER BY version DESC")
+         user-id id] opts))))
+
+(defn- form-breadcrumb
+  "Resolve the curriculum, block, and material names from a form id alone.
+
+   The curriculum id in the exam URL is display context. This read is what
+   makes it so, and what lets a cold load render the trail."
+  [connectable user-id form-id]
+  (jdbc/execute-one! connectable
+    ["SELECT c.id AS curriculum_id, c.title AS curriculum_title,
+             b.id AS block_id, b.title AS block_title,
+             m.id AS material_id, t.title AS material_title
+        FROM curriculum_exam_forms f
+        LEFT JOIN curriculum_materials m ON m.id = f.material_id
+        LEFT JOIN topics t ON t.id = m.topic_id
+        LEFT JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+        JOIN curricula c ON c.id = b.curriculum_id
+       WHERE f.id = ? AND f.user_id = ?" form-id user-id] opts))
+
+(defn- sitting-rows
+  "Return every sitting of one form, newest first, with server-derived elapsed."
+  [connectable user-id form-id]
+  (mapv (fn [row]
+          (-> row
+            (update :started_at #(some-> % str))
+            (update :submitted_at #(some-> % str))
+            (update :draft_answers read-json)))
+    (jdbc/execute! connectable
+      ["SELECT s.id, s.started_at, s.submitted_at, s.draft_answers,
+               GREATEST(0, floor(EXTRACT(EPOCH FROM
+                 (COALESCE(s.submitted_at, now()) - s.started_at))))::int
+                 AS elapsed_seconds,
+               g.raw_score, g.passed
+          FROM curriculum_exam_sittings s
+          LEFT JOIN LATERAL (SELECT raw_score, passed
+                               FROM curriculum_grade_revisions
+                              WHERE sitting_id = s.id
+                              ORDER BY revision DESC LIMIT 1) g ON true
+         WHERE s.user_id = ? AND s.form_id = ?
+         ORDER BY s.started_at DESC" user-id form-id] opts)))
+
+(defn exam-page-model
+  "Return everything the exam page renders for one form.
+
+   Pre: the user owns form-id. sitting-id is nil, or a sitting of that form.
+   Post: returns nil when the user owns no such form, which is what renders
+   Not found. Elapsed seconds are derived on the SERVER from started_at, so a
+   reload 20 minutes into a sitting shows 20 minutes and no clock is compared.
+   Invariant: the blueprint here carries no evidence packets. Those hold whole
+   source passages, and `form-evidence-packets` fetches them only when a reader
+   opens them."
+  [_refresh user-id form-id sitting-id]
+  (when-let [form (own-form db/ds user-id form-id)]
+    (let [subject {:material-id (:material_id form) :block-id (:block_id form)}
+          rows (subject-form-rows db/ds user-id subject)
+          sittings (sitting-rows db/ds user-id form-id)
+          open (first (filter #(nil? (:submitted_at %)) sittings))
+          chosen (when sitting-id (first (filter #(= sitting-id (:id %)) sittings)))]
+      {:form {:id (:id form)
+              :version (:version form)
+              :status (:status form)
+              :form-kind (:form_kind form)
+              :threshold (:threshold form)
+              :questions (:questions form)
+              :assessed-outcomes (vec (:assessed_outcomes (:blueprint form)))
+              :unassessed-outcomes (vec (:unassessed_outcomes (:blueprint form)))
+              :evidence-packet-count (count (:evidence_packets (:blueprint form)))
+              :generation-cost (some-> (:generation_cost_credits form) double)
+              :stale? (and (= "approved" (:status form))
+                        (form-stale? db/ds user-id form))}
+       :subject subject
+       :breadcrumb (form-breadcrumb db/ds user-id form-id)
+       :summary (form-summary db/ds user-id rows)
+       :versions (mapv #(select-keys % [:id :version :status :threshold]) rows)
+       :sittings (mapv #(dissoc % :draft_answers) sittings)
+       :open-sitting (when open
+                       {:id (:id open)
+                        :elapsed-seconds (:elapsed_seconds open)
+                        :draft-answers (or (:draft_answers open) blank-answer-draft)})
+       :sitting (when chosen
+                  {:id (:id chosen)
+                   :submitted-at (:submitted_at chosen)
+                   :elapsed-seconds (:elapsed_seconds chosen)
+                   :draft-answers (or (:draft_answers chosen) blank-answer-draft)
+                   :submitted? (some? (:submitted_at chosen))
+                   :grade (latest-grade user-id (:id chosen))
+                   :history (grade-history user-id (:id chosen))})})))
+
+(defn form-evidence-packets
+  "Return one form's blueprint evidence packets, on demand.
+   Pre: the user owns form-id."
+  [_refresh user-id form-id]
+  (vec (:evidence_packets
+         (:blueprint (require-owned! (own-form db/ds user-id form-id)
+                       :exam-form form-id)))))
 
 (defn- allowed-date? [weekdays ^LocalDate date]
   (or (empty? weekdays) (contains? weekdays (.getValue (.getDayOfWeek date)))))

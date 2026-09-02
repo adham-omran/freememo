@@ -26,15 +26,25 @@
     (some #(and (seq? %) (= symbol (first %)))
       (tree-seq coll? seq form))))
 
-(def source-forms
+(def page-source-forms
   (read-source-forms "src/freememo/curriculum_page.cljc"))
 
-(defn- definition [name]
-  (some #(when (and (seq? %)
-                 (= 'e/defn (first %))
-                 (= name (second %)))
-           %)
-    source-forms))
+(def exam-source-forms
+  (read-source-forms "src/freememo/curriculum_exam_page.cljc"))
+
+;; Both files carry the same Electric and Forms5 obligations. The exam route
+;; moved nine components out of the curriculum page, so a contract checked over
+;; one file only would stop covering them.
+(def source-forms (into page-source-forms exam-source-forms))
+
+(defn- definition
+  ([name] (definition source-forms name))
+  ([forms name]
+   (some #(when (and (seq? %)
+                  (= 'e/defn (first %))
+                  (= name (second %)))
+            %)
+     forms)))
 
 (deftest every-curriculum-collection-loop-has-a-differential-source
   (let [loops (forms-matching
@@ -44,6 +54,9 @@
         (->> loops
           (map #(-> % second second))
           (remove #{'commits})
+          ;; `dom/On-all` already yields a differential collection of
+          ;; [token value] branches, so it needs no `e/diff-by`.
+          (remove #(calls? 'dom/On-all %))
           (remove #(calls? 'e/diff-by %)))]
     (is (empty? invalid-sources)
       (str "e/for requires e/diff-by for plain Curriculum collections: "
@@ -82,8 +95,8 @@
         (pr-str (map first detached-streams))))))
 
 (deftest exam-generation-control-shows-its-lifecycle
-  (let [trigger (definition 'GenerateExamTrigger)
-        control (definition 'GenerateExamButton)
+  (let [trigger (definition exam-source-forms 'GenerateExamTrigger)
+        control (definition exam-source-forms 'GenerateExamButton)
         trigger-nodes (tree-seq coll? seq trigger)
         control-nodes (tree-seq coll? seq control)]
     (testing "a model request cannot look like an ignored click"

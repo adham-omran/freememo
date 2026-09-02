@@ -128,6 +128,14 @@
        ;; SchedulePage, so a forecast survives a reload and is linkable.
        :schedule-detail (list 'schedule (:id nav-map))
        :curriculum-detail (list 'curriculum (:id nav-map))
+       ;; /curriculum/<id>/exam/<form-id>[/sitting/<sitting-id>]. CurriculumPage
+       ;; reads these segments after `r/pop`, so the exam page needs no
+       ;; active-tab branch of its own and the Routes count stays 14.
+       :curriculum-exam (list 'curriculum (:curriculum-id nav-map)
+                          'exam (:form-id nav-map))
+       :curriculum-sitting (list 'curriculum (:curriculum-id nav-map)
+                             'exam (:form-id nav-map)
+                             'sitting (:sitting-id nav-map))
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
        ;; Entities/Questions carry an OPTIONAL doc-id: arriving from a document

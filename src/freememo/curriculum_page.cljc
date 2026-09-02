@@ -8,8 +8,10 @@
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
    [freememo.typeahead :as typeahead]
+   ;; One way only. The exam page never requires this namespace back, because
+   ;; the chip below and that page share `GenerateExamButton`.
+   [freememo.curriculum-exam-page :as exam-page]
    #?(:clj [freememo.curriculum :as curriculum])
-   #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.user-state :as us])))
 
 (def weekdays
@@ -20,9 +22,6 @@
    {:value 5 :key :fri :label "Fri"}
    {:value 6 :key :sat :label "Sat"}
    {:value 7 :key :sun :label "Sun"}])
-
-(def question-field-keys [:question-1 :question-2 :question-3 :question-4 :question-5])
-(def unknown-field-keys [:unknown-1 :unknown-2 :unknown-3 :unknown-4 :unknown-5])
 
 (defn parse-positive-int [value]
   (let [value (str/trim (str value))]
@@ -79,52 +78,32 @@
 (defn unlock-next* [user-id block-id]
   #?(:clj (result #(curriculum/unlock-next-block! user-id block-id)) :cljs nil))
 
-(defn list-forms* [refresh user-id subject]
-  #?(:clj (do refresh (curriculum/list-forms user-id subject)) :cljs nil))
 
-(defn generate-form* [user-id subject form-kind threshold]
-  #?(:clj (curriculum-exam/start-form-generation!
-            user-id subject form-kind threshold)
-     :cljs nil))
 
-(defn form-generation-work-key* [subject]
-  #?(:clj (curriculum-exam/form-generation-work-key subject) :cljs nil))
 
-(defn update-form* [user-id form-id attrs]
-  #?(:clj (result #(curriculum/update-draft-form! user-id form-id attrs)) :cljs nil))
 
-(defn approve-form* [user-id form-id]
-  #?(:clj (result #(curriculum/approve-form! user-id form-id)) :cljs nil))
 
-(defn start-sitting* [user-id form-id]
-  #?(:clj (result #(curriculum/start-sitting! user-id form-id)) :cljs nil))
 
-(defn submit-sitting* [user-id sitting-id answers]
-  #?(:clj (result #(curriculum/submit-sitting! user-id sitting-id answers)) :cljs nil))
 
-(defn grade-sitting* [user-id sitting-id]
-  #?(:clj (curriculum-exam/grade-sitting! user-id sitting-id) :cljs nil))
 
-(defn latest-grade* [refresh user-id sitting-id]
-  #?(:clj (do refresh (curriculum/latest-grade user-id sitting-id)) :cljs nil))
 
-(defn grade-history* [refresh user-id sitting-id]
-  #?(:clj (do refresh (curriculum/grade-history user-id sitting-id)) :cljs nil))
 
-(defn record-self-correction* [user-id sitting-id score reason]
-  #?(:clj (result #(curriculum/record-self-correction! user-id sitting-id score reason))
-     :cljs nil))
 
-(defn format-elapsed [seconds]
-  (let [remaining (mod seconds 60)]
-    (str (quot seconds 60) ":" (when (< remaining 10) "0") remaining)))
 
-(e/defn AsyncButton [label class-name operation]
+(e/defn AsyncButton
+  "A button that runs one server operation and shows that it is running.
+
+   Pre: operation returns {:ok true} or {:ok false :error message}.
+   Post: the button is disabled and busy until the server answers."
+  [label class-name operation]
   (e/client
     (dom/button
-      (dom/props {:class class-name :type "button"})
-      (dom/text label)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
+        (dom/props {:class class-name :type "button"
+                    :disabled (some? token)
+                    :aria-busy (some? token)
+                    :aria-invalid (some? error)})
+        (dom/text (if token (str label "…") label))
         (when token
           (let [response (operation)]
             (if (e/server (:ok response))
@@ -349,372 +328,47 @@
     (if (or (neg? target) (>= target (count ids))) ids
       (assoc ids index (nth ids target) target (nth ids index)))))
 
-(e/defn ExamSitting [user-id form !sitting-id !closed?]
-  (e/client
-    (let [questions (:questions form)
-          !elapsed (atom 0)
-          elapsed (e/watch !elapsed)
-          timer #?(:cljs (js/setInterval #(swap! !elapsed inc) 1000) :clj nil)
-          seed (merge (into {} (map (fn [key] [key ""]) question-field-keys))
-                 (into {} (map (fn [key] [key false]) unknown-field-keys)))
-          commits
-          (dom/div
-            (dom/props {:class "curriculum-sitting"})
-            (forms/Form! seed
-              (e/fn Fields [fields]
-                (e/amb
-                (dom/div (dom/props {:class "curriculum-honor-note"})
-                  (icons/Icon :book-open :size 16)
-                  (dom/span
-                    (dom/text "Closed book is the intention. FreeMemo does not enforce it."))
-                  (dom/time
-                    (dom/text (str "Elapsed " (format-elapsed elapsed)
-                                " · suggested 45 min · no enforced limit"))))
-                (e/for [[index question key unknown-key]
-                        (e/diff-by first
-                          (map vector (range 1 6) questions question-field-keys
-                            unknown-field-keys))]
-                  (dom/section
-                    (dom/props {:class "curriculum-exam-question"})
-                    (e/amb
-                      (dom/div (dom/props {:class "curriculum-question-meta"})
-                        (dom/span (dom/text (str "Question " index)))
-                        (dom/span (dom/text (str/capitalize (:role question)))))
-                      (dom/h3 (dom/text (:prompt question)))
-                      (forms/Input! key (get fields key) :as :textarea
-                        :class "input curriculum-answer" :rows 8
-                        :placeholder "Write your answer")
-                      (dom/label (dom/props {:class "curriculum-unknown-answer"})
-                        (e/amb
-                          (forms/Input! unknown-key (boolean (get fields unknown-key))
-                            :type "checkbox")
-                          (dom/span (dom/text "I do not know")))))))
-                (forms/SubmitButton! :label "Submit all five answers"
-                  :class "btn btn-primary")))
-              :Parse (e/fn [fields _]
-                       (let [answers (mapv (fn [key unknown-key]
-                                            (let [answer (str/trim (get fields key))
-                                                  unknown? (true? (get fields unknown-key))]
-                                              {:answer answer
-                                               :do-not-know unknown?}))
-                                       question-field-keys unknown-field-keys)]
-                         (if (every? #(or (seq (:answer %)) (:do-not-know %)) answers)
-                           [`SubmitSitting {:answers answers}]
-                           (ex-info "Answer every question or write “I do not know.”" {}))))
-              :type :command :show-buttons false))]
-      (e/on-unmount #?(:cljs #(js/clearInterval timer) :clj (fn [] nil)))
-      (e/for [[token command] commits]
-        (let [sitting-id (e/watch !sitting-id)
-              saved (e/server (e/Offload
-                               #(submit-sitting* user-id sitting-id
-                                  (:answers (second command)))))]
-          (if (e/server (:ok saved))
-            (let [graded (e/server (e/Offload #(grade-sitting* user-id sitting-id)))]
-              (if (e/server (:success graded))
-                (do (e/on-unmount #(reset! !closed? true)) (token))
-                (token (e/server (:error graded)))))
-            (token (e/server (:error saved)))))))))
 
-(e/defn SelfCorrectionForm [user-id sitting-id]
-  (e/client
-    (let [commits
-          (dom/div
-            (dom/props {:class "curriculum-self-correction"})
-            (forms/Form! {:score "" :reason ""}
-              (e/fn Fields [{:keys [score reason]}]
-                (e/amb
-                  (dom/label (dom/props {:class "curriculum-field-label"})
-                    (dom/text "Self-correction score"))
-                  (forms/Input! :score score :type "number" :class "input curriculum-threshold")
-                  (dom/label (dom/props {:class "curriculum-field-label"})
-                    (dom/text "What changed in your assessment?"))
-                  (forms/Input! :reason reason :as :textarea :class "input" :rows 3)
-                  (forms/SubmitButton! :label "Save reflection" :class "btn")))
-              :Parse (e/fn [fields _]
-                       (let [score (parse-positive-int (:score fields))]
-                         (if (and score (<= score 100) (not (str/blank? (:reason fields))))
-                           [`SelfCorrection {:score score :reason (:reason fields)}]
-                           (ex-info "Enter a score from 1 to 100 and a reason." {}))))
-              :type :command :show-buttons false))]
-      (e/for [[token command] commits]
-        (let [{:keys [score reason]} (second command)
-              response (e/server (e/Offload
-                                  #(record-self-correction* user-id sitting-id score reason)))]
-          (if (e/server (:ok response)) (token)
-            (token (e/server (:error response)))))))))
 
-(e/defn GradeResult [user-id sitting-id subject threshold]
-  (e/client
-    (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          grade (e/server (latest-grade* refresh user-id sitting-id))
-          history (e/server (grade-history* refresh user-id sitting-id))]
-      (when grade
-        (dom/div
-          (dom/props {:class (str "curriculum-grade "
-                              (if (:passed grade) "is-pass" "is-fail"))})
-          (dom/div (dom/props {:class "curriculum-grade-score"})
-            (dom/strong (dom/text (str (:raw_score grade) "%")))
-            (dom/span (dom/text (if (:passed grade) "Passed" "Not passed"))))
-          (dom/p (dom/text (:explanation grade)))
-          (dom/details
-            (dom/summary (dom/text "Question scores and evidence deductions"))
-            (e/for [[index question-grade]
-                    (e/diff-by first (map-indexed vector (:criteria grade)))]
-              (dom/section (dom/props {:class "curriculum-grade-question"})
-                (dom/strong (dom/text (str "Question " (inc index))))
-                (dom/div (dom/props {:class "curriculum-criterion-scores"})
-                  (e/for [[criterion score]
-                          (e/diff-by first (:criteria question-grade))]
-                    (dom/span (dom/text (str (name criterion) " " score "/4")))))
-                (e/for [[_ deduction]
-                        (e/diff-by first
-                          (map-indexed vector (:deductions question-grade)))]
-                  (dom/blockquote
-                    (dom/text (str (:criterion deduction) ": " (:reason deduction)
-                                " — “" (:citation deduction) "”")))))))
-          (dom/p (dom/props {:class "curriculum-help"})
-            (dom/text "The latest successful AI revision is authoritative. Self-correction is for reflection only."))
-          (dom/div (dom/props {:class "curriculum-form-actions"})
-            (dom/button
-              (dom/props {:type "button" :class "btn"})
-              (dom/text "Regrade with AI")
-              (let [[token error] (e/Token (dom/On "click" identity nil))]
-                (when token
-                  (let [response (e/server (e/Offload #(grade-sitting* user-id sitting-id)))]
-                    (if (e/server (:success response)) (token)
-                      (token (e/server (:error response))))))
-                (when error
-                  (dom/span (dom/props {:class "curriculum-inline-error"})
-                    (dom/text error)))))
-            (when-not (:passed grade)
-              (dom/button
-                (dom/props {:type "button" :class "btn btn-primary"})
-                (dom/text "Generate targeted retry")
-                (let [[token error] (e/Token (dom/On "click" identity nil))]
-                  (when token
-                    (let [response (e/server (e/Offload
-                                              #(generate-form* user-id subject
-                                                 "targeted-retry" threshold)))]
-                      (if (e/server (:success response)) (token)
-                        (token (e/server (:error response))))))
-                  (when error
-                    (dom/span (dom/props {:class "curriculum-inline-error"})
-                      (dom/text error)))))))
-          (dom/details
-            (dom/summary (dom/text (str (count history) " AI grade revision"
-                                     (when (not= 1 (count history)) "s"))))
-            (e/for [revision (e/diff-by :revision history)]
-              (dom/p
-                (dom/text (str "Revision " (:revision revision) " · "
-                            (:raw_score revision) "% · "
-                            (if (:passed revision) "passed" "not passed"))))))
-          (SelfCorrectionForm user-id sitting-id))))))
 
-(defn moved-items [items index direction]
-  (let [target (+ index direction)
-        items (vec items)]
-    (if (or (neg? target) (>= target (count items))) items
-      (assoc items index (nth items target) target (nth items index)))))
 
-(e/defn DraftQuestionMove [user-id form index direction]
-  (e/client
-    (dom/button
-      (dom/props {:type "button" :class "curriculum-icon-button"
-                  :disabled (or (and (neg? direction) (zero? index))
-                              (and (pos? direction)
-                                (= index (dec (count (:questions form))))))
-                  :aria-label (if (neg? direction) "Move question up" "Move question down")})
-      (icons/Icon (if (neg? direction) :chevron-up :chevron-down) :size 14)
-      (let [[token error] (e/Token (dom/On "click" identity nil))]
-        (when token
-          (let [response (e/server (e/Offload
-                                    #(update-form* user-id (:id form)
-                                       {:threshold (:threshold form)
-                                        :blueprint (:blueprint form)
-                                        :questions (moved-items (:questions form)
-                                                     index direction)})))]
-            (if (e/server (:ok response)) (token)
-              (token (e/server (:error response))))))
-        (when error
-          (dom/span (dom/props {:class "sr-only"}) (dom/text error)))))))
 
-(e/defn DraftEditor [user-id form]
-  (e/client
-    (let [questions (:questions form)
-          seed (merge {:threshold (str (:threshold form))}
-                 (into {} (map (fn [[key question]] [key (:prompt question)])
-                            (map vector question-field-keys questions))))
-          commits
-          (forms/Form! seed
-            (e/fn Fields [fields]
-              (e/amb
-                (dom/label (dom/props {:class "curriculum-field-label"})
-                  (dom/text "Pass threshold"))
-                (forms/Input! :threshold (:threshold fields)
-                  :type "number" :class "input curriculum-threshold")
-                (e/for [[index key question]
-                        (e/diff-by first
-                          (map vector (range 1 6) question-field-keys questions))]
-                  (dom/div (dom/props {:class "curriculum-draft-question"})
-                    (e/amb
-                      (dom/div (dom/props {:class "curriculum-question-meta"})
-                        (dom/span (dom/text (str index ". " (str/capitalize (:role question)))))
-                        (dom/span (dom/props {:class "curriculum-draft-order"})
-                          (DraftQuestionMove user-id form (dec index) -1)
-                          (DraftQuestionMove user-id form (dec index) 1)))
-                      (forms/Input! key (get fields key) :as :textarea
-                        :class "input" :rows 3)
-                      (dom/details
-                        (dom/summary (dom/text "Review rubric and evidence"))
-                        (dom/ul
-                          (e/for [criterion
-                                  (e/diff-by identity
-                                    [:factual_accuracy :reasoning :source_evidence
-                                     :integration :completeness])]
-                            (dom/li
-                              (dom/strong (dom/text (str (name criterion) ": ")))
-                              (dom/span (dom/text (get-in question [:rubric criterion]))))))
-                        (e/for [[_ evidence]
-                                (e/diff-by first
-                                  (map-indexed vector (:evidence question)))]
-                          (dom/blockquote (dom/text (:quote evidence))))))))
-                (forms/SubmitButton! :label "Save draft" :class "btn")))
-            :Parse (e/fn [fields _]
-                     (let [threshold (parse-positive-int (:threshold fields))
-                           prompts (mapv #(str/trim (get fields %)) question-field-keys)]
-                       (cond
-                         (not (and threshold (<= threshold 100)))
-                         (ex-info "Threshold must be from 1 to 100." {})
-                         (some str/blank? prompts)
-                         (ex-info "Every question needs text." {})
-                         :else [`SaveDraft
-                                {:threshold threshold
-                                 :questions (mapv #(assoc %1 :prompt %2)
-                                              questions prompts)}])))
-            :type :command :show-buttons false)]
-      commits
-      (e/for [[token command] commits]
-        (let [attrs (second command)
-              response (e/server (e/Offload
-                                  #(update-form* user-id (:id form)
-                                     {:threshold (:threshold attrs)
-                                      :blueprint (:blueprint form)
-                                      :questions (:questions attrs)})))]
-          (if (e/server (:ok response)) (token)
-            (token (e/server (:error response)))))))))
 
-(e/defn GenerateExamTrigger [label class-name generation-active?]
-  (e/client
-    (dom/button
-      (let [[token error] (e/Token (dom/On "click" identity nil))]
-        (dom/props {:type "button"
-                    :class class-name
-                    :disabled (or generation-active? (some? token))
-                    :aria-busy (or generation-active? (some? token))
-                    :aria-invalid (some? error)})
-        (dom/text (if (or generation-active? token) "Generating exam…" label))
-        [token error]))))
 
-(e/defn GenerateExamButton [user-id subject form-kind threshold label class-name]
-  (e/client
-    (let [generations (e/server
-                        (e/watch (us/get-atom user-id :exam-form-generations)))
-          work-key (e/server (form-generation-work-key* subject))
-          generation-active? (e/server (contains? generations work-key))]
-      (dom/div
-        (dom/props {:class "curriculum-generate-control"})
-        (let [[token error]
-              (GenerateExamTrigger label class-name generation-active?)]
-          (when token
-            (let [response (e/server (e/Offload
-                                      #(generate-form* user-id subject form-kind threshold)))]
-              (if (e/server (:success response)) (token)
-                (token (e/server (:error response))))))
-          (when error
-            (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
-              (dom/text error))))))))
 
-(e/defn ApproveExamButton [user-id form]
-  (e/client
-    (dom/button
-      (dom/props {:type "button" :class "btn btn-primary"})
-      (dom/text (if (:stale? form) "Reapprove frozen form" "Approve form"))
-      (let [[token error] (e/Token (dom/On "click" identity nil))]
-        (when token
-          (let [response (e/server (e/Offload #(approve-form* user-id (:id form))))]
-            (if (e/server (:ok response)) (token)
-              (token (e/server (:error response))))))
-        (when error
-          (dom/span (dom/props {:class "curriculum-inline-error"})
-            (dom/text error)))))))
 
-(e/defn StartExamButton [user-id form !sitting-id]
-  (e/client
-    (dom/button
-      (dom/props {:type "button" :class "btn btn-primary"})
-      (dom/text "Take exam")
-      (let [[token error] (e/Token (dom/On "click" identity nil))]
-        (when token
-          (let [response (e/server (e/Offload #(start-sitting* user-id (:id form))))
-                started-id (e/server (:value response))]
-            (if (e/server (:ok response))
-              (do (e/on-unmount #(reset! !sitting-id started-id)) (token))
-              (token (e/server (:error response))))))
-        (when error
-          (dom/span (dom/props {:class "curriculum-inline-error"})
-            (dom/text error)))))))
 
-(e/defn ExamPanel [user-id subject label]
+
+(e/defn ExamChip
+  "One exam per subject, as a chip.
+
+   Pre: summary is the `curriculum/form-summary` map, or nil when the subject
+   has no form.
+   Post: a nil summary offers generation. A summary opens the exam route on
+   the CURRENT version. No question text and no textarea render here."
+  [user-id navigate! curriculum-id subject summary passed? score]
   (e/client
-    (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          forms-list (e/server (list-forms* refresh user-id subject))
-          exam-form (first forms-list)
-          !sitting-id (atom nil)
-          sitting-id (e/watch !sitting-id)
-          !closed? (atom false)
-          closed? (e/watch !closed?)]
-      (dom/div
-        (dom/props {:class "curriculum-exam-panel"})
-        (dom/div (dom/props {:class "curriculum-exam-heading"})
-          (dom/div
-            (dom/h3 (dom/text label))
-            (dom/p (dom/text "Five essay questions · evidence-bound grading · 70% suggested pass mark")))
-          (when-not exam-form
-            (GenerateExamButton user-id subject "standard" 70
-              "Generate exam form" "btn btn-primary")))
-        (when-not exam-form
-          (dom/p (dom/props {:class "curriculum-credit-note"})
-            (dom/text "Generating uses credits. FreeMemo records the actual charge after the model responds.")))
-        (when exam-form
-          (dom/div
-            (dom/props {:class "curriculum-form-status"})
-            (dom/span (dom/text (str "Form v" (:version exam-form) " · "
-                                  (str/capitalize (:status exam-form)))))
-            (when (:stale? exam-form)
-              (dom/span (dom/props {:class "curriculum-stale-badge"})
-                (dom/text "Outdated exam form"))))
-          (when (> (count forms-list) 1)
-            (dom/details
-              (dom/summary (dom/text (str (count forms-list) " form versions")))
-              (e/for [historical (e/diff-by :id forms-list)]
-                (dom/p
-                  (dom/text (str "Version " (:version historical) " · "
-                              (str/capitalize (:status historical)) " · "
-                              (:threshold historical) "% threshold"))))))
-          (when (= "draft" (:status exam-form))
-            (DraftEditor user-id exam-form))
-          (dom/div (dom/props {:class "curriculum-form-actions"})
-            (when (or (= "draft" (:status exam-form)) (:stale? exam-form))
-              (ApproveExamButton user-id exam-form))
-            (GenerateExamButton user-id subject
-              (if (= "targeted-retry" (:form_kind exam-form)) "targeted-retry" "standard")
-              (:threshold exam-form) "Regenerate" "btn")
-            (when (and (= "approved" (:status exam-form)) (not (:stale? exam-form)))
-              (StartExamButton user-id exam-form !sitting-id))))
-        (when (and sitting-id (not closed?))
-          (ExamSitting user-id exam-form !sitting-id !closed?))
-        (when (and sitting-id closed?)
-          (GradeResult user-id sitting-id subject (:threshold exam-form)))))))
+    (dom/div
+      (dom/props {:class "curriculum-exam-chip"})
+      (if-not summary
+        (exam-page/GenerateExamButton user-id subject "standard" nil
+          "Generate exam" "btn")
+        (dom/button
+          (dom/props {:type "button"
+                      :class (str "btn curriculum-exam-chip-open"
+                               (when passed? " is-passed"))})
+          (dom/text (str "Exam v" (:version summary) " · "
+                      (cond
+                        (= "draft" (:status summary)) "Draft"
+                        (:stale? summary) "Outdated"
+                        :else "Approved")
+                      (when score (str " · " score "%"))
+                      (when passed? " · passed")))
+          (dom/On "click"
+            (fn [_] (navigate! :curriculum
+                      {:type :curriculum-exam :curriculum-id curriculum-id
+                       :form-id (:form-id summary)}))
+            nil))))))
 
 (e/defn MaterialEstimate [user-id material]
   (e/client
@@ -764,7 +418,13 @@
         (dom/div (dom/props {:class "curriculum-material-title"})
           (dom/span (dom/props {:class (str "type-badge type-badge-" (:kind material))})
             (dom/text (:kind material)))
-          (dom/strong (dom/text (:title material))))
+          (dom/button
+            (dom/props {:type "button" :class "link-button curriculum-material-link"})
+            (dom/text (:title material))
+            (dom/On "click"
+              (fn [_] (navigate! :viewer {:type :topic
+                                          :topic-id (:topic_id material)}))
+              nil)))
         (dom/div (dom/props {:class "curriculum-material-meta"})
           (MaterialEstimate user-id material)
           (dom/span (dom/text (str (:anki_cards material) " Anki cards")))
@@ -775,7 +435,8 @@
         (dom/span (dom/props {:class "curriculum-done-badge"}) (dom/text "Studied"))
         (AsyncButton "Mark studied" "btn"
           (e/fn [] (e/server (e/Offload #(mark-studied* user-id (:id material)))))))
-      (ExamPanel user-id {:material-id (:id material)} "Material exam"))))
+      (ExamChip user-id navigate! (:curriculum_id block) {:material-id (:id material)}
+        (:exam material) (:exam-passed? material) (:latest-exam-score material)))))
 
 (e/defn BlockCard [user-id curriculum-id blocks index block navigate!]
   (e/client
@@ -833,7 +494,8 @@
                   (dom/text "Add material")
                   (dom/On "click" (fn [_] (reset! !add-material? true)) nil)))
               (when (seq materials)
-                (ExamPanel user-id {:block-id (:id block)} "Block exam"))
+                (ExamChip user-id navigate! curriculum-id {:block-id (:id block)}
+                  (:exam block) (some? (:completed_at block)) nil))
               (when-not (:completed_at block)
                 (AsyncButton "Unlock next block" "btn btn-subtle"
                   (e/fn [] (e/server (e/Offload #(unlock-next* user-id (:id block))))))))))))))
@@ -970,13 +632,24 @@
                 (dom/text "Add block")
                 (dom/On "click" (fn [_] (reset! !add-block? true)) nil)))))))))
 
-(e/defn CurriculumPage [user-id navigate!]
+(e/defn CurriculumPage
+  "The curriculum tab. Three screens live behind one active-tab branch.
+
+   `/curriculum` lists curricula. `/curriculum/<id>` is one curriculum.
+   `/curriculum/<id>/exam/<form-id>[/sitting/<sitting-id>]` is the exam page,
+   which renders in place of the curriculum tree. Dispatching here rather than
+   in `Main` is what holds the Routes coverage count at 14."
+  [user-id navigate!]
   (e/client
-    (let [[sub] r/route
+    (let [[sub segment form-id _sitting-segment sitting-id] r/route
           selected-id (when (int? sub) sub)
+          exam-form-id (when (and (= (quote exam) segment) (int? form-id)) form-id)
+          exam-sitting-id (when (int? sitting-id) sitting-id)
           !new-open? (atom false)
           new-open? (e/watch !new-open?)]
-      (dom/div
+      (if exam-form-id
+        (exam-page/ExamRoute user-id navigate! exam-form-id exam-sitting-id)
+        (dom/div
         (dom/props {:class "page-container curriculum-page"})
         (if selected-id
           (CurriculumDetail user-id selected-id navigate!)
@@ -992,4 +665,4 @@
                   (dom/text "New curriculum")
                   (dom/On "click" (fn [_] (reset! !new-open? true)) nil))))
             (when new-open? (NewCurriculumForm user-id navigate! !new-open?))
-            (CurriculumDashboard user-id navigate!)))))))
+            (CurriculumDashboard user-id navigate!))))))))

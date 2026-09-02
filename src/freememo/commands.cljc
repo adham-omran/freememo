@@ -88,6 +88,14 @@
                                   :curriculum_exam_forms :curriculum_exam_sittings
                                   :curriculum_grade_revisions :curriculum_unlock_overrides}
                          :views #{:curriculum-mutations :schedule-mutations}}
+     ;; An exam answer draft autosaves on blur, so it bumps NOTHING. A channel
+     ;; here would re-run the exam page model at every field boundary, and no
+     ;; other view reads a draft answer. The write is silent by design.
+     :save-exam-answer-draft {:label "Save exam answer draft" :class :mutation
+                              :palette-hidden true
+                              :data {:sitting-id :payload :index :payload
+                                     :answer :payload :do-not-know :payload}
+                              :table #{:curriculum_exam_sittings} :views #{}}
      :add-card         {:label "Add card" :class :mutation :when #{:viewer}
                         :palette-hidden true ; submitted by AddCardModal; :add-new opens it
                         :data {:topic-id :payload :root-topic-id :payload
@@ -373,6 +381,7 @@
      :go-search     {:label "Go to Search"   :class :nav :nav-tab :search}
      :go-import     {:label "Go to Import"   :class :nav :nav-tab :import}
      :go-settings   {:label "Go to Settings" :class :nav :nav-tab :settings}
+     :go-curriculum {:label "Go to Curriculum" :class :nav :nav-tab :curriculum}
      :open-topic    {:label "Open topic"     :class :nav :nav-tab :viewer
                      :data {:topic-id :payload} :palette-hidden true}
      :start-learn-session {:label "Start learn session" :class :nav :nav-tab :viewer}

@@ -5515,3 +5515,48 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
   .curriculum-material-row > .curriculum-done-badge { grid-column: 2; justify-self: start; }
   .curriculum-schedule-summary { min-width: 0; width: 100%; }
 }
+
+/* ── Curriculum exam route ─────────────────────────────────────────────── */
+/* `.input` sets no width, so a bare textarea falls back to the browser
+   default box. `.curriculum-answer` already fixes that for an answer, and its
+   150px floor suits an essay rather than a prompt. */
+.curriculum-prompt-input { width: 100%; resize: vertical; }
+
+.curriculum-exam-page { display: flex; flex-direction: column; gap: 18px; }
+.curriculum-exam-header { margin-bottom: 0; }
+.curriculum-exam-section {
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 16px;
+    background: var(--color-bg-card);
+}
+.curriculum-exam-section > h2 { margin: 0 0 12px; font-size: 16px; }
+.curriculum-section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 12px;
+}
+.curriculum-section-head > h2 { margin: 0; font-size: 16px; }
+.curriculum-outcome-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.curriculum-outcome-group > h4 { margin: 0 0 6px; font-size: 13px; }
+.curriculum-outcome-group ul { margin: 0; padding-left: 18px; }
+.curriculum-evidence-packet {
+    margin: 8px 0; padding-left: 10px;
+    border-left: 3px solid var(--color-bg-subtle);
+    color: var(--color-text-secondary); font-size: 13px;
+}
+.curriculum-sitting-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.curriculum-sitting-table th {
+    text-align: left; font-weight: 600; padding: 6px 8px;
+    border-bottom: 2px solid var(--color-border);
+}
+.curriculum-sitting-row { cursor: pointer; }
+.curriculum-sitting-row td {
+    padding: 8px; border-bottom: 1px solid var(--color-bg-subtle);
+}
+.curriculum-sitting-row:hover { background: var(--color-bg-subtle); }
+.curriculum-exam-chip { display: flex; align-items: center; gap: 8px; }
+.curriculum-exam-chip-open.is-passed { border-color: var(--color-success, #2f855a); }
+.curriculum-material-link { text-align: left; font-weight: 600; }
+.curriculum-grade.is-ungraded { border-left: 4px solid var(--color-border); }

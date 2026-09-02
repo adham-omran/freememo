@@ -1857,6 +1857,11 @@
       self_correction_score INTEGER CHECK (self_correction_score BETWEEN 0 AND 100),
       self_correction_reason TEXT
     )"])
+  ;; Answer drafts autosave here while a sitting is open. `answers` stays the
+  ;; frozen submission, so a resumed sitting reads `draft_answers` and a graded
+  ;; one reads `answers`. Finalize copies one column to the other unchanged.
+  (jdbc/execute! ds ["ALTER TABLE curriculum_exam_sittings
+                      ADD COLUMN IF NOT EXISTS draft_answers JSONB"])
 
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS curriculum_grade_revisions (

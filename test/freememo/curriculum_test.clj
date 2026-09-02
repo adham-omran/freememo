@@ -156,10 +156,14 @@
                          :source-versions (:source-versions evidence)})
               _approved (curriculum/approve-form! user-id form-id)
               sitting-id (curriculum/start-sitting! user-id form-id)
-              _submitted (curriculum/submit-sitting! user-id sitting-id
-                           (vec (repeat 5 {:answer "Answer" :do-not-know false})))
-              _resubmitted (curriculum/submit-sitting! user-id sitting-id
-                             (vec (repeat 5 {:answer "Changed" :do-not-know false})))
+              _drafted (curriculum/save-answer-draft! user-id sitting-id
+                         (mapv (fn [index] {:index index :answer "Answer"
+                                            :do-not-know false})
+                           (range 5)))
+              submitted (curriculum/finalize-sitting! user-id sitting-id)
+              late-draft (curriculum/save-answer-draft! user-id sitting-id
+                           [{:index 0 :answer "Changed" :do-not-know false}])
+              resubmitted (curriculum/finalize-sitting! user-id sitting-id)
               passing-criteria (vec (repeat 5 {:criteria
                                                 {:factual_accuracy 3 :reasoning 3
                                                  :source_evidence 3 :integration 3
@@ -170,6 +174,10 @@
                                               :completeness 0}}))
               _pass (curriculum/record-grade-revision! user-id sitting-id
                       {:raw-score 70 :criteria passing-criteria :explanation "Pass."})]
+          (is (= :submitted submitted) "the first finalize closes the sitting")
+          (is (= :already-submitted late-draft)
+            "a blur that lands after the finalize is an outcome, not a failure")
+          (is (= :already-submitted resubmitted) "a second finalize changes nothing")
           (is (= "Answer" (-> (curriculum/sitting-for-grade user-id sitting-id)
                              :answers first :answer))
             "the first submitted answer set is frozen")
