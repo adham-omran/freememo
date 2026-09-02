@@ -6,11 +6,12 @@
    gates and `record-cost-charge!` debits a completed action; `start-checkout!`
    creates a Wayl top-up link."
   (:require
+   [clojure.string :as str]
    [freememo.config :as config]
    [freememo.db :as db]
+   [freememo.user-state :as us]
    [freememo.wayl :as wayl]
-   [taoensso.telemere :as tel]
-   [clojure.string :as str]))
+   [taoensso.telemere :as tel]))
 
 (defn request-base-url
   "Public origin for an incoming Ring request — `https://freememo.net` in prod,
@@ -81,7 +82,11 @@
    Returns `cost` on success, or nil after exhaustion. Exhaustion logs
    ::credit-charge-failed with `fail-data` (the inputs needed to reconcile the
    charge by hand) and triggers the alert email when SMTP is configured.
-   Pre: cost >= 0. Post: balance debited by cost, or nil + alert on total failure."
+   Pre: cost >= 0. The caller owns invalid cost input.
+   Post: a successful debit increments :credits-refresh once and returns cost.
+   A failed debit returns nil, logs an alert, and does not publish a refresh.
+   Invariant: the refresh follows the committed ledger write. This function owns
+   a missing or early refresh."
   [user-id endpoint model cost ledger fail-data]
   (try
     (let [max-attempts (inc (count debit-retry-sleeps-ms))]
@@ -99,6 +104,7 @@
                   (recur (inc attempt)))
               (throw e)) ; outer catch logs ::credit-charge-failed
             (let [new-bal (:balance result)]
+              (swap! (us/get-atom user-id :credits-refresh) inc)
               (tel/log! {:level :info :id ::credit-debit
                          :data {:user-id user-id :endpoint endpoint :model model
                                 :cost-iqd cost :balance-after new-bal :debit-attempt attempt}}
@@ -196,4 +202,3 @@
             (zero? iqd) "~$0.00"
             (< usd 0.01) "<$0.01"
             :else (format "~$%.2f" usd)))))))
-

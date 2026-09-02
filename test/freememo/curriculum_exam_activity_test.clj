@@ -145,6 +145,56 @@
             (validate materials
               [(assoc-in question [:evidence 0 :topic_id] 45)]))))))
 
+(deftest failed-form-validation-records-the-completed-model-cost
+  (let [user-id 987654325
+        subject {:material-id 43}
+        charges (atom [])
+        saves (atom 0)
+        generated-form
+        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
+         :questions (mapv #(exam-question % "invented evidence") (range 5))}]
+    (with-redefs [curriculum/subject-evidence
+                  (fn [_connectable _user-id _subject]
+                    {:materials [{:material-id 43
+                                  :topic-id 44
+                                  :digest "digest"
+                                  :evidence [{:topic-id 44 :text "frozen evidence"}]}]
+                     :source-versions ["digest"]})
+                  llm/resolve-model+gate!
+                  (fn [_user-id _step]
+                    {:api-key "test" :entry {:id "test-model"} :model-fields {}})
+                  llm/chat!
+                  (fn [& _args] {:parsed generated-form :cost 0.25})
+                  cards/load-prompt-template (fn [_name] "prompt")
+                  curriculum/save-draft-form!
+                  (fn [& _args] (swap! saves inc) 103)
+                  credits/record-cost-charge!
+                  (fn [& args] (swap! charges conj args) 12)]
+      (let [result (exam/generate-form! user-id subject "standard" 70)]
+        (is (false? (:success result)))
+        (is (zero? @saves))
+        (is (= [[user-id :curriculum.exam-form "test-model" 0.25]]
+              @charges))))))
+
+(deftest failed-grade-validation-records-the-completed-model-cost
+  (let [user-id 987654326
+        sitting-id 104
+        charges (atom [])]
+    (with-redefs [curriculum/sitting-for-grade
+                  (fn [_user-id _sitting-id]
+                    {:questions [] :blueprint {} :answers {} :threshold 70})
+                  llm/resolve-model+gate!
+                  (fn [_user-id _step]
+                    {:api-key "test" :entry {:id "test-model"} :model-fields {}})
+                  llm/chat! (fn [& _args] {:parsed {} :cost 0.5})
+                  cards/load-prompt-template (fn [_name] "prompt")
+                  credits/record-cost-charge!
+                  (fn [& args] (swap! charges conj args) 24)]
+      (let [result (exam/grade-sitting! user-id sitting-id)]
+        (is (false? (:success result)))
+        (is (= [[user-id :curriculum.exam-grade "test-model" 0.5]]
+              @charges))))))
+
 (deftest cancelled-generation-does-not-save-a-late-form
   (let [user-id 987654323
         subject {:material-id 43}

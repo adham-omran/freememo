@@ -190,9 +190,12 @@
 (defn generate-form!
   "Generate and persist one five-question draft.
 
-   Pre: the user owns subject. The caller runs this action through m/via.
-   Post: a successful result identifies the saved draft and its charge.
-   Invariant: cancellation after the model call prevents form persistence."
+   Pre: the user owns subject. The caller owns an invalid or unowned subject.
+   Post: each returned model cost is charged once. A successful result identifies
+   the saved draft and its charge.
+   Invariant: output validation cannot suppress a returned model cost. A cancel
+   after the model call prevents form persistence. This function owns charging
+   and form persistence."
   [user-id subject form-kind threshold]
   (try
     (let [work-key (form-generation-work-key subject)
@@ -212,14 +215,14 @@
                                   (llm-json/write-prompt-input payload)
                                   :form :map
                                   {:feature :curriculum-exam-form :user-id user-id})
+          charge (credits/record-cost-charge! user-id :curriculum.exam-form
+                   (:id entry) cost)
           {:keys [blueprint questions]} (validate-generated-form! parsed)
           questions (validate-citations! materials questions)]
       ;; OpenRouter ignores thread interruption during its socket read. This
       ;; check prevents a cancelled request from saving its late result.
       (if (generation-cancelled? user-id work-key)
-        (let [charge (credits/record-cost-charge! user-id :curriculum.exam-form
-                       (:id entry) cost)]
-          {:success false :cancelled? true :charged-credits charge})
+        {:success false :cancelled? true :charged-credits charge}
         (let [form-id (curriculum/save-draft-form! user-id subject
                         {:form-kind (or form-kind "standard")
                          :threshold (or threshold curriculum/default-threshold)
@@ -227,8 +230,6 @@
                          :questions questions
                          :source-versions source-versions
                          :cost nil})
-              charge (credits/record-cost-charge! user-id :curriculum.exam-form
-                       (:id entry) cost)
               _recorded-charge (curriculum/record-form-generation-charge!
                                  user-id form-id charge)]
           {:success true :form-id form-id :charged-credits charge})))
@@ -406,7 +407,13 @@
 
 (defn grade-sitting!
   "Grade one submitted sitting and append an immutable revision.
-   A failed call changes no sitting, answer, grade, or progression data."
+
+   Pre: the user owns a submitted sitting. The caller owns an invalid id.
+   Post: each returned model cost is charged once. Valid output adds one Grade
+   Revision. Invalid output adds no revision.
+   Invariant: output validation cannot suppress a returned model cost. A failed
+   call changes no sitting, answer, or progression data. This function owns the
+   charge and Grade Revision transition."
   [user-id sitting-id]
   (try
     (let [sitting (or (curriculum/sitting-for-grade user-id sitting-id)
@@ -422,11 +429,11 @@
                                   (llm-json/write-prompt-input payload)
                                   :grade :map
                                   {:feature :curriculum-exam-grade :user-id user-id})
+          charge (credits/record-cost-charge! user-id :curriculum.exam-grade
+                   (:id entry) cost)
           grade (validate-grade! parsed (:blueprint sitting))
           revision-id (curriculum/record-grade-revision! user-id sitting-id
                         (assoc grade :cost nil))
-          charge (credits/record-cost-charge! user-id :curriculum.exam-grade
-                   (:id entry) cost)
           _recorded-charge (curriculum/record-grade-charge!
                              user-id revision-id charge)]
       {:success true :revision-id revision-id :charged-credits charge

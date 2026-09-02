@@ -33,6 +33,8 @@
    "kg.distill"        "KG distill"
    "kg.questions"      "KG questions"
    "ocr.extract"       "OCR extract"
+   "curriculum.exam-form"  "Exam form generation"
+   "curriculum.exam-grade" "Exam grading"
    ;; One endpoint for both the audio kind and video: same model, same price,
    ;; same operation — the source kind is not a billing distinction, and two
    ;; labels would put "Transcription" in the Feature filter twice.
