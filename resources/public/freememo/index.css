@@ -5576,6 +5576,19 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     padding: 8px; border-bottom: 1px solid var(--color-bg-subtle);
 }
 .curriculum-sitting-row:hover { background: var(--color-bg-subtle); }
+/* A cancelled sitting stays legible but stops competing with the real
+   attempts above it. Its Archive control sits in the Outcome cell, beside the
+   word it acts on. */
+.curriculum-sitting-row.is-cancelled td { color: var(--color-text-secondary); }
+.curriculum-archive-sitting { margin-left: 10px; font-size: 12px; }
+.curriculum-cancel-sitting {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 4px;
+}
+.curriculum-cancel-sitting .curriculum-help { margin: 0; }
 .curriculum-exam-chip { display: flex; align-items: center; gap: 8px; }
 .curriculum-exam-chip .btn { white-space: nowrap; }
 .curriculum-exam-chip-open { gap: 6px; color: var(--color-text-secondary); background: var(--color-bg-subtle); border: 1px solid var(--color-border); }

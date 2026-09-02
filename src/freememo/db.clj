@@ -1862,6 +1862,15 @@
   ;; one reads `answers`. Finalize copies one column to the other unchanged.
   (jdbc/execute! ds ["ALTER TABLE curriculum_exam_sittings
                       ADD COLUMN IF NOT EXISTS draft_answers JSONB"])
+  ;; A sitting the learner abandons. `cancelled_at` closes it without freezing
+  ;; answers, so an accidental start costs nothing and no grade can follow.
+  ;; `archived_at` then takes it off the list. Both are nullable event stamps,
+  ;; matching started_at and submitted_at — a sitting is a sequence of events,
+  ;; not a status column.
+  (jdbc/execute! ds ["ALTER TABLE curriculum_exam_sittings
+                      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ"])
+  (jdbc/execute! ds ["ALTER TABLE curriculum_exam_sittings
+                      ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ"])
 
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS curriculum_grade_revisions (

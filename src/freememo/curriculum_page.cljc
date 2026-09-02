@@ -56,14 +56,14 @@
 (defn add-block* [user-id curriculum-id title]
   #?(:clj (result #(curriculum/add-block! user-id curriculum-id title)) :cljs nil))
 
-(defn reorder-blocks* [user-id curriculum-id ids]
-  #?(:clj (result #(curriculum/reorder-blocks! user-id curriculum-id ids)) :cljs nil))
+(defn move-block* [user-id block-id direction]
+  #?(:clj (result #(curriculum/move-block! user-id block-id direction)) :cljs nil))
 
 (defn add-material* [user-id block-id topic-id minutes]
   #?(:clj (result #(curriculum/add-material! user-id block-id topic-id minutes)) :cljs nil))
 
-(defn reorder-materials* [user-id block-id ids]
-  #?(:clj (result #(curriculum/reorder-materials! user-id block-id ids)) :cljs nil))
+(defn move-material* [user-id material-id direction]
+  #?(:clj (result #(curriculum/move-material! user-id material-id direction)) :cljs nil))
 
 (defn mark-studied* [user-id material-id]
   #?(:clj (result #(curriculum/mark-material-studied! user-id material-id)) :cljs nil))
@@ -336,11 +336,16 @@
               (token (e/server (:error response))))))
         (when error (dom/span (dom/props {:class "sr-only"}) (dom/text error)))))))
 
-(defn moved-ids [items index direction]
-  (let [target (+ index direction)
-        ids (mapv :id items)]
-    (if (or (neg? target) (>= target (count ids))) ids
-      (assoc ids index (nth ids target) target (nth ids index)))))
+(defn by-id
+  "Key a `[index item]` pair by the item's id.
+
+   Pre: every item carries a distinct `:id`.
+   Post: `e/for` keys the row frame to the ITEM, so a move emits a permutation
+   and Electric moves the row's DOM nodes. Keying by the index instead emits a
+   change at every moved index, which rewrites each row's contents in place —
+   the repainting a reorder used to produce."
+  [pair]
+  (:id (second pair)))
 
 
 
@@ -415,19 +420,24 @@
                 (do (e/on-unmount #(reset! !editing? false)) (token))
                 (token (e/server (:error response)))))))))))
 
-(e/defn MaterialRow [user-id block materials index material navigate!]
+(e/defn MaterialRow
+  "One material inside a block.
+
+   Pre: `index` is the material's place in the block, `material-count` the
+   block's material count.
+   Invariant: the move buttons send `material-id` and a direction. They must
+   NOT send an order computed from the block's material list — that list is
+   what the write rewrites, so the call would restart against its own result."
+  [user-id block material-count index material navigate!]
   (e/client
+    (let [material-id (:id material)]
     (dom/div
       (dom/props {:class "curriculum-material-row"})
       (dom/div (dom/props {:class "curriculum-order-controls"})
         (MoveButton "Move up" (zero? index)
-          (e/fn [] (e/server (e/Offload
-                              #(reorder-materials* user-id (:block_id material)
-                                 (moved-ids materials index -1))))))
-        (MoveButton "Move down" (= index (dec (count materials)))
-          (e/fn [] (e/server (e/Offload
-                              #(reorder-materials* user-id (:block_id material)
-                                 (moved-ids materials index 1)))))))
+          (e/fn [] (e/server (e/Offload #(move-material* user-id material-id -1)))))
+        (MoveButton "Move down" (= index (dec material-count))
+          (e/fn [] (e/server (e/Offload #(move-material* user-id material-id 1))))))
       (dom/div (dom/props {:class "curriculum-material-main"})
         (dom/div (dom/props {:class "curriculum-material-title"})
           (dom/span (dom/props {:class (str "type-badge type-badge-" (:kind material))})
@@ -451,12 +461,20 @@
           (dom/span (dom/props {:class "curriculum-done-badge"}) (dom/text "Studied"))
           (AsyncButton "Mark studied" "btn btn-sm"
             (e/fn [] (e/server (e/Offload #(mark-studied* user-id (:id material)))))))
-        (ExamChip user-id navigate! (:curriculum_id block) {:material-id (:id material)}
-          (:exam material) (:exam-passed? material) (:latest-exam-score material))))))
+        (ExamChip user-id navigate! (:curriculum_id block) {:material-id material-id}
+          (:exam material) (:exam-passed? material) (:latest-exam-score material)))))))
 
-(e/defn BlockCard [user-id curriculum-id blocks index block navigate!]
+(e/defn BlockCard
+  "One block and its materials.
+
+   Pre: `index` is the block's place in the curriculum, `block-count` the
+   curriculum's block count.
+   Invariant: as `MaterialRow` — a block id and a direction, never an order."
+  [user-id curriculum-id block-count index block navigate!]
   (e/client
-    (let [materials (:materials block)
+    (let [block-id (:id block)
+          materials (:materials block)
+          material-count (count materials)
           !add-material? (atom false)
           add-material? (e/watch !add-material?)]
       (dom/section
@@ -472,13 +490,9 @@
           (dom/header (dom/props {:class "curriculum-block-header"})
             (dom/div (dom/props {:class "curriculum-order-controls"})
               (MoveButton "Move up" (zero? index)
-                (e/fn [] (e/server (e/Offload
-                                    #(reorder-blocks* user-id curriculum-id
-                                       (moved-ids blocks index -1))))))
-              (MoveButton "Move down" (= index (dec (count blocks)))
-                (e/fn [] (e/server (e/Offload
-                                    #(reorder-blocks* user-id curriculum-id
-                                       (moved-ids blocks index 1)))))))
+                (e/fn [] (e/server (e/Offload #(move-block* user-id block-id -1)))))
+              (MoveButton "Move down" (= index (dec block-count))
+                (e/fn [] (e/server (e/Offload #(move-block* user-id block-id 1))))))
             (dom/div (dom/props {:class "curriculum-block-title"})
               (dom/h2 (dom/text (:title block)))
               (cond
@@ -500,8 +514,9 @@
                 (dom/p (dom/props {:class "curriculum-help"})
                   (dom/text "Add imported material to this block."))
                 (e/for [[material-index material]
-                        (e/diff-by first (map-indexed vector materials))]
-                  (MaterialRow user-id block materials material-index material navigate!)))
+                        (e/diff-by by-id (map-indexed vector materials))]
+                  (MaterialRow user-id block material-count material-index material
+                    navigate!)))
               (if add-material?
                 (AddMaterialWizard user-id (:id block) navigate! !add-material?)
                 (dom/button
@@ -610,6 +625,7 @@
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
           detail (e/server (e/Offload #(curriculum-detail* refresh user-id curriculum-id)))
           blocks (:blocks detail)
+          block-count (count blocks)
           !add-block? (atom false)
           add-block? (e/watch !add-block?)
           !edit? (atom false)
@@ -638,8 +654,8 @@
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
             (e/for [[index block]
-                    (e/diff-by first (map-indexed vector blocks))]
-              (BlockCard user-id curriculum-id blocks index block navigate!))
+                    (e/diff-by by-id (map-indexed vector blocks))]
+              (BlockCard user-id curriculum-id block-count index block navigate!))
             (if add-block?
               (AddBlockForm user-id curriculum-id !add-block?)
               (dom/button

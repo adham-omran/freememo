@@ -96,6 +96,19 @@
                               :data {:sitting-id :payload :index :payload
                                      :answer :payload :do-not-know :payload}
                               :table #{:curriculum_exam_sittings} :views #{}}
+     ;; Cancel and archive are palette-hidden for the reason the answer draft is:
+     ;; both need a sitting id that only the exam page holds, so a palette entry
+     ;; could name the action but never supply its subject.
+     :cancel-exam-sitting {:label "Cancel exam sitting" :class :mutation
+                           :palette-hidden true
+                           :data {:sitting-id :payload}
+                           :table #{:curriculum_exam_sittings}
+                           :views #{:curriculum-mutations}}
+     :archive-exam-sitting {:label "Archive exam sitting" :class :mutation
+                            :palette-hidden true
+                            :data {:sitting-id :payload}
+                            :table #{:curriculum_exam_sittings}
+                            :views #{:curriculum-mutations}}
      :add-card         {:label "Add card" :class :mutation :when #{:viewer}
                         :palette-hidden true ; submitted by AddCardModal; :add-new opens it
                         :data {:topic-id :payload :root-topic-id :payload

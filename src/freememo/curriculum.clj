@@ -201,20 +201,43 @@
       (bump! user-id)
       block-id)))
 
-(defn reorder-blocks!
-  "Replace the complete block order.
-   Pre: ids are exactly the curriculum's current block ids."
-  [user-id curriculum-id ids]
+(defn- stepped
+  "Move one id one step through a vector of ids.
+
+   Pre: `ids` holds `id` at most once. `direction` is -1 or 1.
+   Post: `id` and its neighbour exchange places. A step off either end, or an
+   id the vector does not hold, returns `ids` unchanged — a stale click is
+   nothing to do, not an error."
+  [ids id direction]
+  (let [index (.indexOf ^java.util.List ids id)
+        target (+ index direction)]
+    (if (or (neg? index) (neg? target) (>= target (count ids)))
+      ids
+      (assoc ids index (nth ids target) target id))))
+
+(defn- ids-in-order [connectable table parent-column parent-id]
+  (mapv :id (jdbc/execute! connectable
+              [(str "SELECT id FROM " table " WHERE " parent-column " = ? ORDER BY position")
+               parent-id] opts)))
+
+(defn move-block!
+  "Move one block one step through its curriculum.
+
+   Pre: the user owns the block. `direction` is -1 (earlier) or 1 (later).
+   Post: the block and its neighbour exchange positions, or nothing changes at
+   an end.
+   Invariant: the caller sends a block and a direction, NEVER a computed order.
+   An order computed on the client is a function of the very list this write
+   rewrites, so an Electric re-read restarts the call with the new order and
+   steps the block back — an oscillation whose parity, not the click, decides
+   where the block lands."
+  [user-id block-id direction]
   (jdbc/with-transaction [tx db/ds]
-    (require-owned! (own-curriculum tx user-id curriculum-id) :curriculum curriculum-id)
-    (let [current (mapv :id (jdbc/execute! tx
-                              ["SELECT id FROM curriculum_blocks
-                                 WHERE curriculum_id = ? ORDER BY position" curriculum-id]
-                              opts))]
-      (when-not (= (set current) (set ids))
-        (throw (ex-info "Block order does not match this curriculum."
-                 {:type ::invalid-order})))
-      (resequence! tx "curriculum_blocks" "curriculum_id" curriculum-id ids)
+    (let [block (require-owned! (own-block tx user-id block-id) :block block-id)
+          curriculum-id (:curriculum_id block)
+          ids (ids-in-order tx "curriculum_blocks" "curriculum_id" curriculum-id)]
+      (resequence! tx "curriculum_blocks" "curriculum_id" curriculum-id
+        (stepped ids block-id direction))
       (jdbc/execute-one! tx ["UPDATE curricula SET updated_at = now() WHERE id = ?"
                              curriculum-id])))
   (bump! user-id))
@@ -271,18 +294,21 @@
     (bump! user-id)
     material-id))
 
-(defn reorder-materials!
-  "Replace the complete material order inside one block."
-  [user-id block-id ids]
+(defn move-material!
+  "Move one material one step through its block.
+
+   Pre: the user owns the material. `direction` is -1 (earlier) or 1 (later).
+   Post: the material and its neighbour exchange positions, or nothing changes
+   at an end.
+   Invariant: as `move-block!` — a direction, never a computed order."
+  [user-id material-id direction]
   (jdbc/with-transaction [tx db/ds]
-    (require-owned! (own-block tx user-id block-id) :block block-id)
-    (let [current (mapv :id (jdbc/execute! tx
-                              ["SELECT id FROM curriculum_materials
-                                WHERE block_id = ? ORDER BY position" block-id] opts))]
-      (when-not (= (set current) (set ids))
-        (throw (ex-info "Material order does not match this block."
-                 {:type ::invalid-order})))
-      (resequence! tx "curriculum_materials" "block_id" block-id ids)))
+    (let [material (require-owned! (own-material tx user-id material-id)
+                     :material material-id)
+          block-id (:block_id material)
+          ids (ids-in-order tx "curriculum_materials" "block_id" block-id)]
+      (resequence! tx "curriculum_materials" "block_id" block-id
+        (stepped ids material-id direction))))
   (bump! user-id))
 
 (defn mark-material-studied!
@@ -687,23 +713,25 @@
 
    Pre: the user owns sitting-id. Each slot carries an index from 0 to 4, an
    answer, and a do-not-know flag.
-   Post: returns :saved, or :already-submitted when the sitting is closed.
-   Throws only when the user owns no such sitting.
-   Invariant: a submitted sitting never changes. :already-submitted is an
-   OUTCOME and not an exception, because a focus change fired by the Submit
-   click lands beside the finalize and must not read as a failure."
+   Post: returns :saved, or :already-closed when the sitting is submitted or
+   cancelled. Throws only when the user owns no such sitting.
+   Invariant: a closed sitting never changes. :already-closed is an OUTCOME and
+   not an exception, because a focus change fired by the Submit click lands
+   beside the finalize and must not read as a failure. A cancelled sitting is
+   closed for the same reason a submitted one is: nothing may be written to a
+   sitting the learner has walked away from."
   [user-id sitting-id slots]
   (let [outcome
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT id, submitted_at, draft_answers
+                            ["SELECT id, submitted_at, cancelled_at, draft_answers
                                 FROM curriculum_exam_sittings
                                WHERE id = ? AND user_id = ? FOR UPDATE"
                              sitting-id user-id] opts)
                           :sitting sitting-id)]
-            (if (:submitted_at sitting)
-              :already-submitted
+            (if (or (:submitted_at sitting) (:cancelled_at sitting))
+              :already-closed
               (do (jdbc/execute-one! tx
                     ["UPDATE curriculum_exam_sittings SET draft_answers = ? WHERE id = ?"
                      (pg-json (merge-answer-slots (read-json (:draft_answers sitting))
@@ -717,21 +745,23 @@
 
    Pre: the user owns an open sitting whose draft answers are all complete.
    Post: answers equals the draft, submitted_at is set, and :submitted comes
-   back. A closed sitting yields :already-submitted with nothing changed.
+   back. A submitted or cancelled sitting yields :already-closed with nothing
+   changed.
    Invariant: no answer text crosses the wire at finalize time, because the
-   text is already on the server."
+   text is already on the server. A cancelled sitting can never be finalized,
+   so no grade can follow a sitting the learner abandoned."
   [user-id sitting-id]
   (let [outcome
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT id, submitted_at, draft_answers
+                            ["SELECT id, submitted_at, cancelled_at, draft_answers
                                 FROM curriculum_exam_sittings
                                WHERE id = ? AND user_id = ? FOR UPDATE"
                              sitting-id user-id] opts)
                           :sitting sitting-id)]
-            (if (:submitted_at sitting)
-              :already-submitted
+            (if (or (:submitted_at sitting) (:cancelled_at sitting))
+              :already-closed
               (let [answers (read-json (:draft_answers sitting))]
                 (when-not (answers-complete? answers)
                   (throw (ex-info "Answer every question or select “I do not know.”"
@@ -743,6 +773,49 @@
                 :submitted))))]
     (when (= :submitted outcome) (bump! user-id))
     outcome))
+
+(defn cancel-sitting!
+  "Close an open sitting without freezing its answers.
+
+   Pre: the user owns the sitting.
+   Post: :cancelled when this call closed it. :already-closed when the sitting
+   was already submitted, already cancelled, or archived — nothing changes and
+   no exception is raised, because a second click is not a caller error.
+   Invariant: a SUBMITTED sitting can never be cancelled. Its answers are
+   frozen and a grade may already cite them, so cancelling would orphan a
+   revision and a block completion."
+  [user-id sitting-id]
+  (let [updated (jdbc/execute-one! db/ds
+                  ["UPDATE curriculum_exam_sittings SET cancelled_at = now()
+                     WHERE id = ? AND user_id = ?
+                       AND submitted_at IS NULL AND cancelled_at IS NULL
+                     RETURNING id" sitting-id user-id] opts)]
+    (bump! user-id)
+    (if updated :cancelled :already-closed)))
+
+(defn archive-sitting!
+  "Take a cancelled sitting off the sittings list.
+
+   Pre: the user owns the sitting and it is cancelled.
+   Post: :archived when this call hid it. :not-cancelled when the sitting is
+   open or submitted — a submitted sitting is the record of a graded attempt
+   and must stay visible. :already-archived when it was already hidden.
+   Invariant: archiving hides a row and deletes nothing. The grade revisions
+   and the answers stay, so an account export still carries the whole history."
+  [user-id sitting-id]
+  (let [sitting (jdbc/execute-one! db/ds
+                  ["SELECT cancelled_at, archived_at FROM curriculum_exam_sittings
+                     WHERE id = ? AND user_id = ?" sitting-id user-id] opts)]
+    (cond
+      (nil? sitting) (throw (ex-info "Sitting not found"
+                              {:type ::not-found :entity :sitting :id sitting-id}))
+      (some? (:archived_at sitting)) :already-archived
+      (nil? (:cancelled_at sitting)) :not-cancelled
+      :else (do (jdbc/execute-one! db/ds
+                  ["UPDATE curriculum_exam_sittings SET archived_at = now()
+                     WHERE id = ? AND user_id = ?" sitting-id user-id])
+              (bump! user-id)
+              :archived))))
 
 (defn sitting-for-grade
   "Return one submitted sitting with its frozen form."
@@ -972,11 +1045,13 @@
           (-> row
             (update :started_at #(some-> % str))
             (update :submitted_at #(some-> % str))
+            (update :cancelled_at #(some-> % str))
             (update :draft_answers read-json)))
     (jdbc/execute! connectable
-      ["SELECT s.id, s.started_at, s.submitted_at, s.draft_answers,
+      ["SELECT s.id, s.started_at, s.submitted_at, s.cancelled_at, s.draft_answers,
                GREATEST(0, floor(EXTRACT(EPOCH FROM
-                 (COALESCE(s.submitted_at, now()) - s.started_at))))::int
+                 (COALESCE(s.submitted_at, s.cancelled_at, now())
+                  - s.started_at))))::int
                  AS elapsed_seconds,
                g.raw_score, g.passed
           FROM curriculum_exam_sittings s
@@ -984,7 +1059,7 @@
                                FROM curriculum_grade_revisions
                               WHERE sitting_id = s.id
                               ORDER BY revision DESC LIMIT 1) g ON true
-         WHERE s.user_id = ? AND s.form_id = ?
+         WHERE s.user_id = ? AND s.form_id = ? AND s.archived_at IS NULL
          ORDER BY s.started_at DESC" user-id form-id] opts)))
 
 (defn exam-page-model
@@ -1002,7 +1077,8 @@
     (let [subject {:material-id (:material_id form) :block-id (:block_id form)}
           rows (subject-form-rows db/ds user-id subject)
           sittings (sitting-rows db/ds user-id form-id)
-          open (first (filter #(nil? (:submitted_at %)) sittings))
+          open (first (filter #(and (nil? (:submitted_at %)) (nil? (:cancelled_at %)))
+                        sittings))
           chosen (when sitting-id (first (filter #(= sitting-id (:id %)) sittings)))]
       {:form {:id (:id form)
               :version (:version form)
@@ -1028,6 +1104,7 @@
        :sitting (when chosen
                   {:id (:id chosen)
                    :submitted-at (:submitted_at chosen)
+                   :cancelled? (some? (:cancelled_at chosen))
                    :elapsed-seconds (:elapsed_seconds chosen)
                    :draft-answers (or (:draft_answers chosen) blank-answer-draft)
                    :submitted? (some? (:submitted_at chosen))

@@ -69,6 +69,12 @@
 (defn finalize-sitting* [user-id sitting-id]
   #?(:clj (result #(curriculum/finalize-sitting! user-id sitting-id)) :cljs nil))
 
+(defn cancel-sitting* [user-id sitting-id]
+  #?(:clj (result #(curriculum/cancel-sitting! user-id sitting-id)) :cljs nil))
+
+(defn archive-sitting* [user-id sitting-id]
+  #?(:clj (result #(curriculum/archive-sitting! user-id sitting-id)) :cljs nil))
+
 (defn grade-sitting* [user-id sitting-id]
   #?(:clj (curriculum-exam/grade-sitting! user-id sitting-id) :cljs nil))
 
@@ -503,26 +509,59 @@
 
 ;; ── Sittings ───────────────────────────────────────────────────────────────
 
-(e/defn SittingRow [navigate! breadcrumb form-id sitting]
+(e/defn ArchiveSittingButton
+  "Take one cancelled sitting off the list.
+
+   Pre: the sitting is cancelled.
+   Post: returns the archive commit pair.
+   Invariant: the click must not reach the row. A sitting row navigates on
+   click, so a control inside it owes its own `stopPropagation`."
+  [sitting-id]
   (e/client
-    (dom/tr
-      (dom/props {:class "curriculum-sitting-row"})
-      (dom/On "click"
-        (fn [_] (navigate! :curriculum
-                  {:type :curriculum-sitting
-                   :curriculum-id (:curriculum_id breadcrumb)
-                   :form-id form-id :sitting-id (:id sitting)}))
-        nil)
-      (dom/td (dom/text (str (:started_at sitting))))
-      (dom/td (dom/text (format-elapsed (:elapsed_seconds sitting))))
-      (dom/td (dom/text (cond
-                          (nil? (:submitted_at sitting)) "In progress"
-                          (nil? (:raw_score sitting)) "Not graded"
-                          :else (str (:raw_score sitting) "%"))))
-      (dom/td (dom/text (cond
-                          (nil? (:passed sitting)) "—"
-                          (:passed sitting) "Passed"
-                          :else "Not passed"))))))
+    (dom/button
+      (dom/props {:type "button" :class "link-button curriculum-archive-sitting"})
+      (dom/text "Archive")
+      (let [click (dom/On "click" (fn [event] (.stopPropagation event) event) nil)
+            [token error] (e/Token click)]
+        (e/When (some? error)
+          (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
+            (dom/text error)))
+        (e/When (some? token) [token [:archive-sitting {:sitting-id sitting-id}]])))))
+
+(e/defn SittingRow
+  "One sitting in the list.
+
+   Pre: `sitting` carries :submitted_at and :cancelled_at, both nilable.
+   Post: returns the archive commit for a cancelled row, an empty `e/amb` for
+   every other row. The last form of each nested body is its value, so the
+   commits reach the caller through the Outcome cell."
+  [navigate! breadcrumb form-id sitting]
+  (e/client
+    (let [cancelled? (some? (:cancelled_at sitting))
+          submitted? (some? (:submitted_at sitting))]
+      (dom/tr
+        (dom/props {:class (str "curriculum-sitting-row"
+                             (when cancelled? " is-cancelled"))})
+        (dom/On "click"
+          (fn [_] (navigate! :curriculum
+                    {:type :curriculum-sitting
+                     :curriculum-id (:curriculum_id breadcrumb)
+                     :form-id form-id :sitting-id (:id sitting)}))
+          nil)
+        (dom/td (dom/text (str (:started_at sitting))))
+        (dom/td (dom/text (format-elapsed (:elapsed_seconds sitting))))
+        (dom/td (dom/text (cond
+                            cancelled? "—"
+                            (not submitted?) "In progress"
+                            (nil? (:raw_score sitting)) "Not graded"
+                            :else (str (:raw_score sitting) "%"))))
+        (dom/td
+          (dom/text (cond
+                      cancelled? "Cancelled"
+                      (nil? (:passed sitting)) "—"
+                      (:passed sitting) "Passed"
+                      :else "Not passed"))
+          (e/When cancelled? (ArchiveSittingButton (:id sitting))))))))
 
 (e/defn SittingsSection [navigate! model]
   (e/client
@@ -531,9 +570,13 @@
       (dom/section
         (dom/props {:class "curriculum-exam-section"})
         (dom/h2 (dom/text "Sittings"))
-        (if (empty? sittings)
+        ;; Two siblings, not an `if`. The section's value is its LAST form, so
+        ;; the table's archive commits reach the service loop while the empty
+        ;; note contributes nothing.
+        (e/When (empty? sittings)
           (dom/p (dom/props {:class "curriculum-help"})
-            (dom/text "No sitting yet. Approve the form, then take the exam."))
+            (dom/text "No sitting yet. Approve the form, then take the exam.")))
+        (e/When (seq sittings)
           (dom/table
             (dom/props {:class "curriculum-sitting-table"})
             (dom/thead
@@ -544,8 +587,7 @@
                 (dom/th (dom/text "Outcome"))))
             (dom/tbody
               (e/for [sitting (e/diff-by :id sittings)]
-                (SittingRow navigate! (:breadcrumb model) form-id sitting)))))
-        (e/amb)))))
+                (SittingRow navigate! (:breadcrumb model) form-id sitting)))))))))
 
 ;; ── Taking the exam ────────────────────────────────────────────────────────
 
@@ -736,6 +778,39 @@
                     (CreditNote))))))
           (SelfCorrectionForm (:id sitting)))))))
 
+(e/defn CancelSittingButton
+  "Abandon an open sitting.
+
+   Pre: the sitting is neither submitted nor cancelled.
+   Post: returns the cancel commit pair. The help text is a sibling, so the
+   button's commits are this component's value."
+  [sitting-id]
+  (e/client
+    (dom/div
+      (dom/props {:class "curriculum-cancel-sitting"})
+      (dom/p (dom/props {:class "curriculum-help"})
+        (dom/text (str "Cancelling closes this sitting without grading it. "
+                    "Nothing is charged, and your answers stay on the sitting.")))
+      (CommandButton "Cancel this sitting" "btn btn-subtle"
+        [:cancel-sitting {:sitting-id sitting-id}]))))
+
+(e/defn CancelledSitting
+  "What a cancelled sitting shows instead of an answer sheet.
+
+   Post: returns an empty `e/amb`. Archiving lives in the sittings list, where
+   the reader can see the row it removes."
+  []
+  (e/client
+    (dom/div
+      (dom/props {:class "curriculum-grade is-ungraded"})
+      (dom/div (dom/props {:class "curriculum-grade-score"})
+        (dom/strong (dom/text "—"))
+        (dom/span (dom/text "Cancelled")))
+      (dom/p (dom/text (str "You cancelled this sitting, so it was never graded. "
+                         "Take the exam again when you are ready, or archive "
+                         "this row from the Sittings list."))))
+    (e/amb)))
+
 ;; ── The one service loop ───────────────────────────────────────────────────
 ;;
 ;; Every page-local command lands here, so no component above holds both a
@@ -804,8 +879,18 @@
           arg (second command)
           sitting-id (:sitting-id arg)]
       (cond
-        ;; :already-submitted comes back as {:ok true}, so a focus change fired
-        ;; by the Submit click spends its token in silence.
+        (= :cancel-sitting head)
+        (let [response (e/server (e/Offload #(cancel-sitting* user-id sitting-id)))]
+          (if (e/server (:ok response)) (token)
+            (token (e/server (:error response)))))
+
+        (= :archive-sitting head)
+        (let [response (e/server (e/Offload #(archive-sitting* user-id sitting-id)))]
+          (if (e/server (:ok response)) (token)
+            (token (e/server (:error response)))))
+
+        ;; :already-closed comes back as {:ok true}, so a focus change fired by
+        ;; the Submit click spends its token in silence.
         (= :save-answers head)
         (let [response (e/server (e/Offload
                                   #(save-answer-draft* user-id sitting-id (:slots arg))))]
@@ -941,16 +1026,26 @@
 (e/defn SittingBody [user-id navigate! model]
   (e/client
     (let [sitting (e/server (:sitting model))
+          sitting-id (e/server (:id sitting))
           submitted? (e/server (:submitted? sitting))
+          cancelled? (e/server (:cancelled? sitting))
           commits
           (dom/div
             (dom/props {:class "page-container curriculum-exam-page"})
             (e/amb
               (ExamBreadcrumb navigate! model)
-              (if submitted?
-                (GradeResult user-id (e/server (:subject model)) (e/server sitting))
-                (SittingForm (e/server (get-in model [:form :questions]))
-                  (e/server sitting)))))]
+              ;; A cancelled sitting takes no answers, so it must not render an
+              ;; answer sheet. The server refuses the write either way, and a
+              ;; textarea that silently discards what a reader types is worse
+              ;; than no textarea.
+              (cond
+                cancelled? (CancelledSitting)
+                submitted? (GradeResult user-id (e/server (:subject model))
+                             (e/server sitting))
+                :else (e/amb
+                        (SittingForm (e/server (get-in model [:form :questions]))
+                          (e/server sitting))
+                        (CancelSittingButton sitting-id)))))]
       (ExamService user-id navigate! model commits))))
 
 (e/defn ExamRoute

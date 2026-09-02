@@ -99,11 +99,14 @@
 (defn- db-up? []
   (try (jdbc/execute-one! db/ds ["SELECT 1"]) true (catch Exception _ false)))
 
-(deftest reordering-writes-positions-a-check-constraint-accepts
+(deftest moving-one-step-writes-positions-a-check-constraint-accepts
   ;; `curriculum_materials.position` carries CHECK (position >= 0) and
   ;; UNIQUE (block_id, position). `resequence!` parks rows before it writes the
   ;; new order, and the park used to be negative — so every reorder rolled back
   ;; and the arrows looked dead. Only a real database can catch that.
+  ;;
+  ;; The step also has to be idempotent at each end. The client sends a
+  ;; direction, so an end-stop is an ordinary no-op, not an error.
   (if-not (db-up?)
     (is true "PostgreSQL is unavailable; integration assertion skipped")
     (let [tag (str "reorder-" (System/nanoTime))
@@ -130,22 +133,88 @@
                                     ["SELECT id FROM curriculum_materials
                                       WHERE block_id = ? ORDER BY position" block-id]
                                     {:builder-fn rs/as-unqualified-maps})))]
-          (curriculum/reorder-materials! user-id block-id [b a c])
-          (is (= [b a c] (ordered)) "a material swap commits")
-          (curriculum/reorder-materials! user-id block-id [c b a])
-          (is (= [c b a] (ordered)) "a full reversal commits")
+          (curriculum/move-material! user-id a 1)
+          (is (= [b a c] (ordered)) "a material swaps with its neighbour")
+          (curriculum/move-material! user-id a 1)
+          (is (= [b c a] (ordered)) "a second step keeps going")
+          (curriculum/move-material! user-id a 1)
+          (is (= [b c a] (ordered)) "a step off the end changes nothing")
+          (curriculum/move-material! user-id b -1)
+          (is (= [b c a] (ordered)) "a step off the start changes nothing")
           (is (empty? (jdbc/execute! db/ds
                         ["SELECT id FROM curriculum_materials
                           WHERE block_id = ? AND position < 0" block-id]))
             "no row is left at a negative position")
-          (curriculum/reorder-blocks! user-id curriculum-id [second-block block-id])
+          (curriculum/move-block! user-id block-id 1)
           (is (= [second-block block-id]
                 (mapv :id (jdbc/execute! db/ds
                             ["SELECT id FROM curriculum_blocks
                               WHERE curriculum_id = ? ORDER BY position" curriculum-id]
                             {:builder-fn rs/as-unqualified-maps})))
-            "a block swap commits"))
+            "a block swaps with its neighbour"))
         (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
+(deftest a-cancelled-sitting-is-closed-and-can-be-archived
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "cancel-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")]
+                         {:builder-fn rs/as-unqualified-maps}))
+          topic-id (:id (jdbc/execute-one! db/ds
+                          ["INSERT INTO topics (user_id, title, kind, content_text)
+                            VALUES (?, 'Evidence', 'markdown', 'frozen evidence') RETURNING id"
+                           user-id]
+                          {:builder-fn rs/as-unqualified-maps}))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum!
+                              user-id {:title "Cancel test" :daily-minutes 60
+                                       :study-weekdays []})
+              block-id (curriculum/add-block! user-id curriculum-id "Only")
+              _material (curriculum/add-material! user-id block-id topic-id 30)
+              evidence (curriculum/subject-evidence db/ds user-id {:block-id block-id})
+              form-id (curriculum/save-draft-form! user-id {:block-id block-id}
+                        {:threshold 70
+                         :blueprint {:assessed_outcomes ["a"] :unassessed_outcomes []
+                                     :evidence_packets []}
+                         :questions (mapv question (range 5))
+                         :source-versions (:source-versions evidence)})
+              _approved (curriculum/approve-form! user-id form-id)
+              sitting-id (curriculum/start-sitting! user-id form-id)
+              listed (fn [] (:sittings (curriculum/exam-page-model 0 user-id form-id nil)))
+              open-id (fn [] (:id (:open-sitting
+                                    (curriculum/exam-page-model 0 user-id form-id nil))))]
+          (is (= sitting-id (open-id)) "a fresh sitting is the open one")
+          (is (= :not-cancelled (curriculum/archive-sitting! user-id sitting-id))
+            "an open sitting cannot be archived")
+          (is (= :cancelled (curriculum/cancel-sitting! user-id sitting-id)))
+          (is (nil? (open-id)) "a cancelled sitting is no longer open")
+          (is (= :already-closed
+                (curriculum/save-answer-draft! user-id sitting-id
+                  [{:index 0 :answer "Late" :do-not-know false}]))
+            "a cancelled sitting takes no answers")
+          (is (= :already-closed (curriculum/finalize-sitting! user-id sitting-id))
+            "a cancelled sitting can never be graded")
+          (is (= :already-closed (curriculum/cancel-sitting! user-id sitting-id))
+            "a second cancel changes nothing")
+          (is (= [sitting-id] (mapv :id (listed))) "a cancelled sitting still lists")
+          (is (= :archived (curriculum/archive-sitting! user-id sitting-id)))
+          (is (empty? (listed)) "an archived sitting leaves the list")
+          (is (= :already-archived (curriculum/archive-sitting! user-id sitting-id))
+            "a second archive changes nothing")
+          (let [submitted (curriculum/start-sitting! user-id form-id)]
+            (curriculum/save-answer-draft! user-id submitted
+              (mapv (fn [index] {:index index :answer "Answer" :do-not-know false})
+                (range 5)))
+            (is (= :submitted (curriculum/finalize-sitting! user-id submitted)))
+            (is (= :already-closed (curriculum/cancel-sitting! user-id submitted))
+              "a submitted sitting can never be cancelled")
+            (is (= :not-cancelled (curriculum/archive-sitting! user-id submitted))
+              "a submitted sitting stays visible")))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
 
 (defn- sql-smallint-array [values]
@@ -224,9 +293,9 @@
               _pass (curriculum/record-grade-revision! user-id sitting-id
                       {:raw-score 70 :criteria passing-criteria :explanation "Pass."})]
           (is (= :submitted submitted) "the first finalize closes the sitting")
-          (is (= :already-submitted late-draft)
+          (is (= :already-closed late-draft)
             "a blur that lands after the finalize is an outcome, not a failure")
-          (is (= :already-submitted resubmitted) "a second finalize changes nothing")
+          (is (= :already-closed resubmitted) "a second finalize changes nothing")
           (is (= "Answer" (-> (curriculum/sitting-for-grade user-id sitting-id)
                              :answers first :answer))
             "the first submitted answer set is frozen")
