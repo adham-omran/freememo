@@ -187,6 +187,30 @@
 
 ;; ── Generation, shared with the curriculum chip ────────────────────────────
 
+(e/defn CreditNote
+  "The notice every paid action owes before the reader spends anything.
+
+   One definition, because four buttons on this page cost credits and a second
+   wording would make one of them look cheaper than it is."
+  []
+  (e/client
+    (dom/p (dom/props {:class "curriculum-credit-note"})
+      (dom/text "Uses credits. FreeMemo records the charge after the model answers."))
+    (e/amb)))
+
+(e/defn RecordedCharge
+  "What FreeMemo actually charged for a completed paid action.
+
+   Pre: charge is a whole number of credits, or nil when nothing was recorded.
+   Post: nil renders nothing, because an absent charge is not a free action —
+   it is one whose charge never came back."
+  [label charge]
+  (e/client
+    (when (some? charge)
+      (dom/span (dom/props {:class "curriculum-recorded-charge"})
+        (dom/text (str label " " charge " credits"))))
+    (e/amb)))
+
 (e/defn GenerateExamTrigger [label class-name generation-active?]
   (e/client
     (dom/button
@@ -220,8 +244,7 @@
           (when error
             (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
               (dom/text error))))
-        (dom/p (dom/props {:class "curriculum-credit-note"})
-          (dom/text "Uses credits. FreeMemo records the charge after the model answers.")))
+        (CreditNote))
       (e/amb))))
 
 ;; ── Blueprint ──────────────────────────────────────────────────────────────
@@ -645,11 +668,15 @@
               (dom/text (str "Revision " (:revision revision) " · "
                           (:raw_score revision) "% · "
                           (if (:passed revision) "passed" "not passed"))))))
+        (RecordedCharge "Graded for" (:grading_cost_credits grade))
         (e/amb
           (dom/div (dom/props {:class "curriculum-form-actions"})
             (e/amb
-              (CommandButton "Regrade with AI" "btn"
-                [:regrade {:sitting-id (:id sitting)}])
+              (dom/div (dom/props {:class "curriculum-paid-action"})
+                (e/amb
+                  (CommandButton "Regrade with AI" "btn"
+                    [:regrade {:sitting-id (:id sitting)}])
+                  (CreditNote)))
               (e/When (and (some? grade) (not (:passed grade)))
                 (GenerateExamButton user-id subject "targeted-retry" nil
                   "Generate targeted retry" "btn btn-primary"))))
@@ -797,6 +824,7 @@
       (when (e/server (:stale? form))
         (dom/span (dom/props {:class "curriculum-stale-badge"})
           (dom/text "Outdated exam form")))
+      (RecordedCharge "Generated for" (e/server (:generation-cost form)))
       (when (> (count versions) 1)
         (dom/details
           (dom/summary (dom/text (str (count versions) " form versions")))

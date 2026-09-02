@@ -5560,3 +5560,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .curriculum-exam-chip-open.is-passed { border-color: var(--color-success, #2f855a); }
 .curriculum-material-link { text-align: left; font-weight: 600; }
 .curriculum-grade.is-ungraded { border-left: 4px solid var(--color-border); }
+.curriculum-recorded-charge {
+    display: inline-block; margin-left: 8px;
+    color: var(--color-text-secondary); font-size: 12px;
+}
+.curriculum-paid-action { display: flex; flex-direction: column; gap: 2px; }

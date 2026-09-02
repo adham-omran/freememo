@@ -930,6 +930,22 @@
         JOIN curricula c ON c.id = b.curriculum_id
        WHERE f.id = ? AND f.user_id = ?" form-id user-id] opts))
 
+(defn- charge->long
+  "Return a recorded charge as a plain long.
+
+   The column is NUMERIC, so JDBC hands back a BigDecimal that no Electric
+   transfer can carry. Credits are whole IQD, so nothing is lost."
+  [value]
+  (some-> value bigdec (.setScale 0 java.math.RoundingMode/HALF_UP) .longValue))
+
+(defn- grade-row->map
+  "Return one grade revision in a shape Electric can transfer.
+   Post: the charge is a long and the timestamp is a string."
+  [row]
+  (some-> row
+    (update :grading_cost_credits charge->long)
+    (update :created_at #(some-> % str))))
+
 (defn- sitting-rows
   "Return every sitting of one form, newest first, with server-derived elapsed."
   [connectable user-id form-id]
@@ -978,7 +994,7 @@
               :assessed-outcomes (vec (:assessed_outcomes (:blueprint form)))
               :unassessed-outcomes (vec (:unassessed_outcomes (:blueprint form)))
               :evidence-packet-count (count (:evidence_packets (:blueprint form)))
-              :generation-cost (some-> (:generation_cost_credits form) double)
+              :generation-cost (charge->long (:generation_cost_credits form))
               :stale? (and (= "approved" (:status form))
                         (form-stale? db/ds user-id form))}
        :subject subject
@@ -996,8 +1012,9 @@
                    :elapsed-seconds (:elapsed_seconds chosen)
                    :draft-answers (or (:draft_answers chosen) blank-answer-draft)
                    :submitted? (some? (:submitted_at chosen))
-                   :grade (latest-grade user-id (:id chosen))
-                   :history (grade-history user-id (:id chosen))})})))
+                   :grade (grade-row->map (latest-grade user-id (:id chosen)))
+                   :history (mapv grade-row->map
+                              (grade-history user-id (:id chosen)))})})))
 
 (defn form-evidence-packets
   "Return one form's blueprint evidence packets, on demand.
