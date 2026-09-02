@@ -187,15 +187,24 @@
 
 ;; ── Generation, shared with the curriculum chip ────────────────────────────
 
-(e/defn CreditNote
+(def credit-notice
   "The notice every paid action owes before the reader spends anything.
 
-   One definition, because four buttons on this page cost credits and a second
+   One string, because five controls across two pages cost credits and a second
    wording would make one of them look cheaper than it is."
+  "Uses credits. FreeMemo records the charge after the model answers.")
+
+(e/defn CreditNote
+  "The notice as visible text, under the control it belongs to.
+
+   The CALLER mounts it, because where the notice belongs is the page's
+   judgement. On the exam page it sits under each paid button. On a curriculum
+   row it would repeat once per material, so the chip carries the same words as
+   a tooltip instead."
   []
   (e/client
     (dom/p (dom/props {:class "curriculum-credit-note"})
-      (dom/text "Uses credits. FreeMemo records the charge after the model answers."))
+      (dom/text credit-notice))
     (e/amb)))
 
 (e/defn RecordedCharge
@@ -217,6 +226,7 @@
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (dom/props {:type "button"
                     :class class-name
+                    :data-tooltip credit-notice
                     :disabled (or generation-active? (some? token))
                     :aria-busy (or generation-active? (some? token))
                     :aria-invalid (some? error)})
@@ -243,8 +253,7 @@
                 (token (e/server (:error response))))))
           (when error
             (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
-              (dom/text error))))
-        (CreditNote))
+              (dom/text error)))))
       (e/amb))))
 
 ;; ── Blueprint ──────────────────────────────────────────────────────────────
@@ -678,8 +687,11 @@
                     [:regrade {:sitting-id (:id sitting)}])
                   (CreditNote)))
               (e/When (and (some? grade) (not (:passed grade)))
-                (GenerateExamButton user-id subject "targeted-retry" nil
-                  "Generate targeted retry" "btn btn-primary"))))
+                (dom/div (dom/props {:class "curriculum-paid-action"})
+                  (e/amb
+                    (GenerateExamButton user-id subject "targeted-retry" nil
+                      "Generate targeted retry" "btn btn-primary")
+                    (CreditNote))))))
           (SelfCorrectionForm (:id sitting)))))))
 
 ;; ── The one service loop ───────────────────────────────────────────────────
@@ -849,8 +861,11 @@
           (e/When (or (= "draft" status) stale?) (ApproveButton form))
           (e/When (and (= "approved" status) sittable?)
             (CommandButton "Take exam" "btn btn-primary" [:start {}]))
-          (GenerateExamButton user-id subject form-kind threshold
-            "Regenerate" "btn"))))))
+          (dom/div (dom/props {:class "curriculum-paid-action"})
+            (e/amb
+              (GenerateExamButton user-id subject form-kind threshold
+                "Regenerate" "btn")
+              (CreditNote))))))))
 
 (e/defn QuestionsSection [user-id model form]
   (e/client

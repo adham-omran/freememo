@@ -352,10 +352,10 @@
       (dom/props {:class "curriculum-exam-chip"})
       (if-not summary
         (exam-page/GenerateExamButton user-id subject "standard" nil
-          "Generate exam" "btn")
+          "Generate exam" "btn btn-sm")
         (dom/button
           (dom/props {:type "button"
-                      :class (str "btn curriculum-exam-chip-open"
+                      :class (str "btn btn-sm curriculum-exam-chip-open"
                                (when passed? " is-passed"))})
           (dom/text (str "Exam v" (:version summary) " · "
                       (cond
@@ -431,12 +431,14 @@
           (when (pos? (:anki_cards material))
             (dom/span (dom/text (str "readiness "
                                   (.toFixed #?(:cljs (:anki_stability material) :clj 0) 1)))))))
-      (if (:studied_at material)
-        (dom/span (dom/props {:class "curriculum-done-badge"}) (dom/text "Studied"))
-        (AsyncButton "Mark studied" "btn"
-          (e/fn [] (e/server (e/Offload #(mark-studied* user-id (:id material)))))))
-      (ExamChip user-id navigate! (:curriculum_id block) {:material-id (:id material)}
-        (:exam material) (:exam-passed? material) (:latest-exam-score material)))))
+      (dom/div
+        (dom/props {:class "curriculum-material-actions"})
+        (if (:studied_at material)
+          (dom/span (dom/props {:class "curriculum-done-badge"}) (dom/text "Studied"))
+          (AsyncButton "Mark studied" "btn btn-sm"
+            (e/fn [] (e/server (e/Offload #(mark-studied* user-id (:id material)))))))
+        (ExamChip user-id navigate! (:curriculum_id block) {:material-id (:id material)}
+          (:exam material) (:exam-passed? material) (:latest-exam-score material))))))
 
 (e/defn BlockCard [user-id curriculum-id blocks index block navigate!]
   (e/client

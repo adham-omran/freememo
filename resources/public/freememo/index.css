@@ -162,6 +162,19 @@ html, body {
 }
 .btn:disabled { cursor: not-allowed; opacity: 0.65; }
 
+/* An inline text button. It reads as a link and carries no chrome, so it can
+   sit inside a sentence or a title without opening a box there. */
+.link-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-primary-text);
+    font: inherit;
+    text-align: inherit;
+    cursor: pointer;
+}
+.link-button:hover:not(:disabled) { text-decoration: underline; }
+
 .btn-primary { background: var(--color-primary); color: white; }
 .btn-primary:not(:disabled):hover { background: var(--color-primary-hover); }
 .btn-primary:disabled { background: var(--color-primary-light); opacity: 1; }
@@ -5450,12 +5463,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .curriculum-icon-button { display: grid; place-items: center; width: 22px; height: 18px; padding: 0; color: var(--color-text-hint); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
 .curriculum-icon-button:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-bg-subtle); }
 .curriculum-icon-button:disabled { opacity: .25; cursor: default; }
-.curriculum-material-row { display: grid; grid-template-columns: 26px minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: 10px 10px 0 0; background: var(--color-bg-card); }
+.curriculum-material-row { display: grid; grid-template-columns: 26px minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-card); }
+.curriculum-material-actions { display: flex; align-items: center; gap: 8px; }
 .curriculum-material-main { min-width: 0; }
 .curriculum-material-title { display: flex; align-items: center; gap: 8px; }
-.curriculum-material-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.curriculum-material-title strong,
+.curriculum-material-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .curriculum-material-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; color: var(--color-text-hint); font-size: 11px; }
-.curriculum-material-row > .curriculum-exam-panel { grid-column: 1 / -1; margin: 4px -12px -12px; border-width: 1px 0 0; border-radius: 0; }
 .curriculum-add-material { margin: 9px 0 18px; }
 .curriculum-add-block { display: flex; align-items: center; justify-content: center; gap: 7px; width: calc(100% - 54px); margin-left: 54px; padding: 14px; color: var(--color-text-secondary); background: transparent; border: 1px dashed var(--color-border); border-radius: 10px; cursor: pointer; }
 .curriculum-kind-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
@@ -5467,10 +5481,6 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .curriculum-credit-note { margin: 8px 0 0; }
 .curriculum-generate-control { display: flex; flex-direction: column; align-items: flex-end; }
 .curriculum-inline-error { display: block; margin-top: 5px; color: var(--color-danger, #b91c1c); font-size: 11px; }
-.curriculum-exam-panel { margin: 14px 0; padding: 14px; background: color-mix(in srgb, var(--color-bg-subtle) 72%, transparent); border: 1px solid var(--color-border); border-radius: 10px; }
-.curriculum-exam-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.curriculum-exam-heading h3 { margin: 0; font-size: 14px; }
-.curriculum-exam-heading p { margin: 3px 0 0; color: var(--color-text-hint); font-size: 11px; }
 .curriculum-form-status { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 12px; font-weight: 650; }
 .curriculum-threshold { width: 100px; }
 .curriculum-draft-question { margin: 10px 0; }
@@ -5557,7 +5567,10 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 .curriculum-sitting-row:hover { background: var(--color-bg-subtle); }
 .curriculum-exam-chip { display: flex; align-items: center; gap: 8px; }
-.curriculum-exam-chip-open.is-passed { border-color: var(--color-success, #2f855a); }
+.curriculum-exam-chip .btn { white-space: nowrap; }
+.curriculum-exam-chip-open { gap: 6px; color: var(--color-text-secondary); background: var(--color-bg-subtle); border: 1px solid var(--color-border); }
+.curriculum-exam-chip-open:hover { background: var(--color-bg-card); }
+.curriculum-exam-chip-open.is-passed { color: var(--color-success, #2f855a); border-color: var(--color-success, #2f855a); }
 .curriculum-material-link { text-align: left; font-weight: 600; }
 .curriculum-grade.is-ungraded { border-left: 4px solid var(--color-border); }
 .curriculum-recorded-charge {
