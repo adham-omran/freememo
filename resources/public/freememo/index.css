@@ -5532,7 +5532,17 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    150px floor suits an essay rather than a prompt. */
 .curriculum-prompt-input { width: 100%; resize: vertical; }
 
-.curriculum-exam-page { display: flex; flex-direction: column; gap: 18px; }
+/* The exam route owns its own scroller, the way `.curriculum-page` does.
+   `#main-content` sets `overflow: hidden` for the Curriculum tab, so a page
+   under it that does not scroll is simply cut off — no scrollbar, no way to
+   reach the actions below the questions. */
+.curriculum-exam-page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    height: 100%;
+    overflow: auto;
+}
 .curriculum-exam-header { margin-bottom: 0; }
 .curriculum-exam-section {
     border: 1px solid var(--color-border);

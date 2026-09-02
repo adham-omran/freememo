@@ -258,6 +258,40 @@
 
 ;; ── Blueprint ──────────────────────────────────────────────────────────────
 
+(defn readable
+  "The first non-blank string among `ks` in `m`.
+
+   Pre: `m` is a map. `ks` are keys whose values a reader can read.
+   Post: nil when every candidate is blank."
+  [m ks]
+  (some #(let [text (str/trim (str (get m %)))] (when-not (str/blank? text) text)) ks))
+
+(defn outcome-text
+  "One blueprint outcome as a sentence.
+
+   Pre: `outcome` is a stored outcome — the map a generated form holds, or a
+   plain string an older form holds.
+   Post: never EDN punctuation, unless the map carries no readable field at
+   all. Showing the raw map then is worse than a blank line, so it stays as the
+   last resort rather than the first thing the reader sees."
+  [outcome]
+  (if (map? outcome)
+    (or (readable outcome [:statement :text :outcome]) (pr-str outcome))
+    (str outcome)))
+
+(defn packet-text
+  "One evidence packet as the passage it froze.
+
+   Pre: `packet` is a stored packet — {:digest … :sections [{:text …}]}, or an
+   older shape carrying the text at the top level.
+   Post: the section texts in order, one blank line apart."
+  [packet]
+  (if (map? packet)
+    (or (not-empty (str/join "\n\n" (keep #(readable % [:text :quote]) (:sections packet))))
+      (readable packet [:quote :text])
+      (pr-str packet))
+    (str packet)))
+
 (e/defn OutcomeList [heading outcomes]
   (e/client
     (dom/div
@@ -267,7 +301,7 @@
         (dom/p (dom/props {:class "curriculum-help"}) (dom/text "None."))
         (dom/ul
           (e/for [[_ outcome] (e/diff-by first (map-indexed vector outcomes))]
-            (dom/li (dom/text (str outcome)))))))))
+            (dom/li (dom/text (outcome-text outcome)))))))))
 
 (e/defn BlueprintSection
   "Assessed and unassessed coverage, with the source passages behind a
@@ -298,7 +332,7 @@
                                      (map-indexed vector (e/server packets)))]
                   (dom/blockquote
                     (dom/props {:class "curriculum-evidence-packet"})
-                    (dom/text (str (or (:quote packet) (:text packet) packet))))))))))
+                    (dom/text (packet-text packet)))))))))
       (e/amb))))
 
 ;; ── Questions, read-only ───────────────────────────────────────────────────
@@ -681,9 +715,17 @@
         (e/amb
           (dom/div (dom/props {:class "curriculum-form-actions"})
             (e/amb
+              ;; The label names what the click does, and an ungraded sitting
+              ;; is the primary thing to do here. Submit already asks for a
+              ;; grade, but that request runs in the frame the submit itself
+              ;; unmounts, so a rejected model answer leaves this screen
+              ;; ungraded with nothing said. This button is the recovery, and
+              ;; `CommandButton` renders its own error — so a second failure
+              ;; reaches the reader instead of the server log.
               (dom/div (dom/props {:class "curriculum-paid-action"})
                 (e/amb
-                  (CommandButton "Regrade with AI" "btn"
+                  (CommandButton (if grade "Regrade with AI" "Grade with AI")
+                    (if grade "btn" "btn btn-primary")
                     [:regrade {:sitting-id (:id sitting)}])
                   (CreditNote)))
               (e/When (and (some? grade) (not (:passed grade)))
