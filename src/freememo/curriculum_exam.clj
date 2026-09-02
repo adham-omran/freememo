@@ -9,9 +9,15 @@
    [freememo.db :as db]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
+   [freememo.toasts :as toasts]
+   [freememo.user-state :as us]
+   [missionary.core :as m]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
-   [taoensso.telemere :as tel]))
+   [taoensso.telemere :as tel])
+  (:import
+   [java.util.concurrent Executors]
+   [missionary Cancelled]))
 
 (def question-roles #{"explain" "compare" "apply" "evaluate" "synthesize"})
 (def criterion-keys
@@ -30,9 +36,6 @@
     (when-not (non-blank? (:prompt question))
       (throw (ex-info "The model returned a blank exam question."
                {:type ::invalid-form :question index :field :prompt})))
-    (when-not (non-blank? (:grading_guide question))
-      (throw (ex-info "The model returned no grading guide."
-               {:type ::invalid-form :question index :field :grading-guide})))
     (when-not (and (map? rubric) (every? #(non-blank? (get rubric %)) criterion-keys))
       (throw (ex-info "The model returned an incomplete question rubric."
                {:type ::invalid-form :question index :field :rubric})))
@@ -42,7 +45,15 @@
                            (non-blank? (:quote %))) evidence))
       (throw (ex-info "The model returned a question without source evidence."
                {:type ::invalid-form :question index :field :evidence})))
-    (assoc question :id (or (:id question) (str (random-uuid))) :role role)))
+    ;; The grading guide repeats the required rubric. Some structured-output
+    ;; providers omit this redundant field. Preserve the complete rubric as the
+    ;; guide instead of discarding a valid five-question form.
+    (assoc question
+      :id (or (:id question) (str (random-uuid)))
+      :role role
+      :grading_guide (if (non-blank? (:grading_guide question))
+                       (:grading_guide question)
+                       (str/join " " (map rubric criterion-keys))))))
 
 (defn validate-generated-form!
   "Validate the model contract and return a normalized form.
@@ -125,12 +136,35 @@
                  :else raw)]
     (vec (distinct (mapcat :weaknesses parsed)))))
 
+(defn form-generation-work-key
+  "Return the activity key for one material or block exam subject.
+
+   Pre: subject contains exactly one positive material or block id.
+   Post: returns `material/<id>` or `block/<id>`.
+   Invariant: the key identifies one exam subject inside one user's state."
+  [{:keys [material-id block-id]}]
+  (when (= (some? material-id) (some? block-id))
+    (throw (ex-info "Choose exactly one exam subject." {:type ::invalid-subject})))
+  (let [[kind id] (if material-id ["material" material-id] ["block" block-id])]
+    (when-not (and (integer? id) (pos? id))
+      (throw (ex-info "The exam subject id must be positive."
+               {:type ::invalid-subject :id id})))
+    (str kind "/" id)))
+
+(defn- generation-cancelled?
+  [user-id work-key]
+  (contains? @(us/get-atom user-id :exam-form-generation-cancelled) work-key))
+
 (defn generate-form!
   "Generate and persist one five-question draft.
-   The caller must run this blocking action through e/Offload."
+
+   Pre: the user owns subject. The caller runs this action through m/via.
+   Post: a successful result identifies the saved draft and its charge.
+   Invariant: cancellation after the model call prevents form persistence."
   [user-id subject form-kind threshold]
   (try
-    (let [{:keys [materials source-versions]}
+    (let [work-key (form-generation-work-key subject)
+          {:keys [materials source-versions]}
           (curriculum/subject-evidence db/ds user-id subject)
           retry? (= "targeted-retry" form-kind)
           weaknesses (when retry? (latest-weaknesses user-id (:block-id subject)))
@@ -147,19 +181,25 @@
                                   :form :map
                                   {:feature :curriculum-exam-form :user-id user-id})
           {:keys [blueprint questions]} (validate-generated-form! parsed)
-          questions (validate-citations! materials questions)
-          form-id (curriculum/save-draft-form! user-id subject
-                    {:form-kind (or form-kind "standard")
-                     :threshold (or threshold curriculum/default-threshold)
-                     :blueprint (assoc blueprint :evidence_packets (:evidence payload))
-                     :questions questions
-                     :source-versions source-versions
-                     :cost nil})
-          charge (credits/record-cost-charge! user-id :curriculum.exam-form
-                   (:id entry) cost)
-          _recorded-charge (curriculum/record-form-generation-charge!
-                             user-id form-id charge)]
-      {:success true :form-id form-id :charged-credits charge})
+          questions (validate-citations! materials questions)]
+      ;; OpenRouter ignores thread interruption during its socket read. This
+      ;; check prevents a cancelled request from saving its late result.
+      (if (generation-cancelled? user-id work-key)
+        (let [charge (credits/record-cost-charge! user-id :curriculum.exam-form
+                       (:id entry) cost)]
+          {:success false :cancelled? true :charged-credits charge})
+        (let [form-id (curriculum/save-draft-form! user-id subject
+                        {:form-kind (or form-kind "standard")
+                         :threshold (or threshold curriculum/default-threshold)
+                         :blueprint (assoc blueprint :evidence_packets (:evidence payload))
+                         :questions questions
+                         :source-versions source-versions
+                         :cost nil})
+              charge (credits/record-cost-charge! user-id :curriculum.exam-form
+                       (:id entry) cost)
+              _recorded-charge (curriculum/record-form-generation-charge!
+                                 user-id form-id charge)]
+          {:success true :form-id form-id :charged-credits charge})))
     (catch Exception error
       (when-not (llm/insufficient-credits? error)
         (tel/error! {:id ::generate-form :data {:user-id user-id :subject subject}} error))
@@ -169,6 +209,115 @@
                      (llm/insufficient-credits? error) :insufficient-credits
                      (= ::insufficient-evidence (:type (ex-data error))) :insufficient-evidence
                      :else :generation-failed)})))
+
+(defonce ^:private form-generation-executor (Executors/newFixedThreadPool 2))
+
+(def ^:private form-generation-timeout-ms
+  (* 20 60 1000))
+
+(defn- finish-form-generation!
+  "Clear the live owner state and publish the result.
+
+   Pre: result is the terminal task result for work-key.
+   Post: live membership and its canceller are absent.
+   Invariant: an error is stored before membership is removed."
+  [user-id work-key result]
+  (when (and (not (:success result))
+          (not (:cancelled? result)))
+    (swap! (us/get-atom user-id :exam-form-generation-errors)
+      assoc work-key (:error result)))
+  (swap! (us/get-atom user-id :exam-form-generation-cancellers) dissoc work-key)
+  (swap! (us/get-atom user-id :exam-form-generations) disj work-key)
+  (cond
+    (:success result)
+    (do
+      (tel/log! {:level :info :id ::form-generation-complete
+                 :data {:user-id user-id :work-key work-key
+                        :form-id (:form-id result)}}
+        "Exam form generation completed")
+      (toasts/push! user-id
+        {:level :success :message "The exam form is ready."}))
+
+    (:cancelled? result)
+    nil
+
+    :else
+    (do
+      (tel/log! {:level :warn :id ::form-generation-failed
+                 :data {:user-id user-id :work-key work-key
+                        :error-type (:error-type result)}}
+        "Exam form generation failed")
+      (toasts/push! user-id
+        {:level :error
+         :message (or (:error result) "Exam form generation failed.")
+         :actions (if (= :insufficient-credits (:error-type result))
+                    [{:label "Top up credits" :nav :settings}]
+                    [])})))
+  nil)
+
+(defn start-form-generation!
+  "Start one server-owned exam form generation task.
+
+   Pre: the user owns subject. The threshold is from 1 to 100.
+   Post: returns after task submission. The model result arrives independently.
+   Invariant: at most one task is published for each user and exam subject."
+  [user-id subject form-kind threshold]
+  (try
+    (when-not (and (integer? threshold) (<= 1 threshold 100))
+      (throw (ex-info "The exam threshold must be from 1 to 100."
+               {:type ::invalid-threshold :threshold threshold})))
+    (let [work-key (form-generation-work-key subject)
+          generations (us/get-atom user-id :exam-form-generations)
+          [before _after] (swap-vals! generations conj work-key)]
+      (if (contains? before work-key)
+        {:success true :started false :work-key work-key}
+        (let [cancelled (us/get-atom user-id :exam-form-generation-cancelled)
+              cancellers (us/get-atom user-id :exam-form-generation-cancellers)
+              cancel-task (atom nil)
+              owner-cancel
+              (fn []
+                (swap! cancelled conj work-key)
+                (when-some [cancel @cancel-task] (cancel)))]
+          (try
+            (swap! cancelled disj work-key)
+            (swap! (us/get-atom user-id :exam-form-generation-errors) dissoc work-key)
+            (swap! cancellers assoc work-key owner-cancel)
+            (tel/log! {:level :info :id ::form-generation-started
+                       :data {:user-id user-id :work-key work-key}}
+              "Exam form generation started")
+            (us/work-started! user-id)
+            (let [cancel
+                  ((m/timeout
+                     (m/via form-generation-executor
+                       (generate-form! user-id subject form-kind threshold))
+                     form-generation-timeout-ms
+                     {:success false
+                      :timed-out? true
+                      :error-type :generation-timeout
+                      :error "Exam form generation timed out after 20 minutes."})
+                   (fn [result]
+                     (when (:timed-out? result)
+                       (swap! cancelled conj work-key))
+                     (finish-form-generation! user-id work-key result))
+                   (fn [error]
+                     (if (or (instance? Cancelled error)
+                           (generation-cancelled? user-id work-key))
+                       (do
+                         (swap! cancellers dissoc work-key)
+                         (swap! generations disj work-key))
+                       (finish-form-generation!
+                         user-id work-key
+                         {:success false :error (ex-message error)
+                          :error-type :generation-failed}))))]
+              (reset! cancel-task cancel)
+              (when (generation-cancelled? user-id work-key) (cancel))
+              {:success true :started true :work-key work-key})
+            (catch Throwable error
+              (swap! cancellers dissoc work-key)
+              (swap! generations disj work-key)
+              (throw error))))))
+    (catch Exception error
+      {:success false :error (ex-message error)})))
 
 (defn- criterion-score [question-index scores criterion]
   (let [score (get scores criterion)]

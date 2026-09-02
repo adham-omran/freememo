@@ -83,7 +83,12 @@
   #?(:clj (do refresh (curriculum/list-forms user-id subject)) :cljs nil))
 
 (defn generate-form* [user-id subject form-kind threshold]
-  #?(:clj (curriculum-exam/generate-form! user-id subject form-kind threshold) :cljs nil))
+  #?(:clj (curriculum-exam/start-form-generation!
+            user-id subject form-kind threshold)
+     :cljs nil))
+
+(defn form-generation-work-key* [subject]
+  #?(:clj (curriculum-exam/form-generation-work-key subject) :cljs nil))
 
 (defn update-form* [user-id form-id attrs]
   #?(:clj (result #(curriculum/update-draft-form! user-id form-id attrs)) :cljs nil))
@@ -598,31 +603,36 @@
           (if (e/server (:ok response)) (token)
             (token (e/server (:error response)))))))))
 
-(e/defn GenerateExamTrigger [label class-name]
+(e/defn GenerateExamTrigger [label class-name generation-active?]
   (e/client
     (dom/button
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (dom/props {:type "button"
                     :class class-name
-                    :disabled (some? token)
-                    :aria-busy (some? token)
+                    :disabled (or generation-active? (some? token))
+                    :aria-busy (or generation-active? (some? token))
                     :aria-invalid (some? error)})
-        (dom/text (if token "Generating exam…" label))
+        (dom/text (if (or generation-active? token) "Generating exam…" label))
         [token error]))))
 
 (e/defn GenerateExamButton [user-id subject form-kind threshold label class-name]
   (e/client
-    (dom/div
-      (dom/props {:class "curriculum-generate-control"})
-      (let [[token error] (GenerateExamTrigger label class-name)]
-        (when token
-          (let [response (e/server (e/Offload
-                                    #(generate-form* user-id subject form-kind threshold)))]
-            (if (e/server (:success response)) (token)
-              (token (e/server (:error response))))))
-        (when error
-          (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
-            (dom/text error)))))))
+    (let [generations (e/server
+                        (e/watch (us/get-atom user-id :exam-form-generations)))
+          work-key (e/server (form-generation-work-key* subject))
+          generation-active? (e/server (contains? generations work-key))]
+      (dom/div
+        (dom/props {:class "curriculum-generate-control"})
+        (let [[token error]
+              (GenerateExamTrigger label class-name generation-active?)]
+          (when token
+            (let [response (e/server (e/Offload
+                                      #(generate-form* user-id subject form-kind threshold)))]
+              (if (e/server (:success response)) (token)
+                (token (e/server (:error response))))))
+          (when error
+            (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
+              (dom/text error))))))))
 
 (e/defn ApproveExamButton [user-id form]
   (e/client

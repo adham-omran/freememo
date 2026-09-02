@@ -1,5 +1,6 @@
 (ns freememo.curriculum-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [freememo.curriculum :as curriculum]
    [freememo.curriculum-exam :as exam]
@@ -35,6 +36,13 @@
            :questions (mapv question (range 4))})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Add material"
         (exam/validate-generated-form! {:insufficient true :reason "Too little evidence."}))))
+
+(deftest generated-form-recovers-a-missing-redundant-grading-guide
+  (let [form {:blueprint {:assessed_outcomes ["a"] :unassessed_outcomes []}
+              :questions (mapv #(dissoc (question %) :grading_guide) (range 5))}
+        validated (exam/validate-generated-form! form)]
+    (is (every? #(not (str/blank? (:grading_guide %)))
+          (:questions validated)))))
 
 (def full-score
   {:factual_accuracy 4 :reasoning 4 :source_evidence 4

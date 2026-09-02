@@ -1,0 +1,126 @@
+(ns freememo.curriculum-exam-activity-test
+  (:require
+   [clojure.test :refer [deftest is testing]]
+   [freememo.activity-registry :as registry]
+   [freememo.cards :as cards]
+   [freememo.credits :as credits]
+   [freememo.curriculum :as curriculum]
+   [freememo.curriculum-exam :as exam]
+   [freememo.kg-llm :as llm]
+   [freememo.user-state :as us]))
+
+(defn- wait-until
+  [predicate timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond
+        (predicate) true
+        (< (System/currentTimeMillis) deadline)
+        (do (Thread/sleep 10) (recur))
+        :else false))))
+
+(deftest exam-form-generation-outlives-the-start-request
+  (let [start-var (ns-resolve 'freememo.curriculum-exam 'start-form-generation!)
+        user-id 987654321
+        subject {:block-id 42}
+        work-key "block/42"
+        release (promise)]
+    (testing "the server owns the long-running generation task"
+      (is start-var "start-form-generation! must start a detached server task")
+      (when start-var
+        (with-redefs [exam/generate-form!
+                      (fn [_user-id _subject _form-kind _threshold]
+                        @release
+                        {:success true :form-id 99})]
+          (let [started-at (System/nanoTime)
+                response (start-var user-id subject "standard" 70)
+                elapsed-ms (/ (- (System/nanoTime) started-at) 1000000.0)]
+            (is (:success response))
+            (is (< elapsed-ms 250.0) "the start request must not await the model")
+            (is (contains? @(us/get-atom user-id :exam-form-generations) work-key))
+            (is (fn? (registry/owner-cancel-fn
+                       :exam-form-generation user-id work-key)))
+            (is (= "generating" (:phase
+                                  (registry/read-state
+                                    :exam-form-generation user-id work-key))))
+            (deliver release :continue)
+            (is (wait-until
+                  #(not (contains?
+                          @(us/get-atom user-id :exam-form-generations) work-key))
+                  1000)
+              "the server must clear activity state after completion")))))))
+
+(deftest exam-form-generation-is-cancellable-from-the-activity-manager
+  (let [user-id 987654322
+        subject {:material-id 43}
+        work-key "material/43"
+        release (promise)]
+    (with-redefs [exam/generate-form!
+                  (fn [_user-id _subject _form-kind _threshold]
+                    @release
+                    {:success true :form-id 100})]
+      (is (:success (exam/start-form-generation! user-id subject "standard" 70)))
+      (let [cancel (registry/owner-cancel-fn
+                     :exam-form-generation user-id work-key)]
+        (is (fn? cancel))
+        (cancel)
+        (is (contains?
+              @(us/get-atom user-id :exam-form-generation-cancelled) work-key))
+        (is (wait-until
+              #(not (contains?
+                      @(us/get-atom user-id :exam-form-generations) work-key))
+              1000))
+        (is (not (contains?
+                   @(us/get-atom user-id :exam-form-generation-errors) work-key)))
+        (is (empty? @(us/get-atom user-id :toasts))))
+      (deliver release :continue))))
+
+(def exam-rubric
+  {:factual_accuracy "Facts match the evidence."
+   :reasoning "The claim follows from the evidence."
+   :source_evidence "The answer uses the evidence."
+   :integration "The answer connects relevant points."
+   :completeness "The answer covers the prompt."})
+
+(defn- exam-question [index]
+  {:role (nth ["explain" "compare" "apply" "evaluate" "synthesize"] index)
+   :prompt (str "Question " index)
+   :grading_guide "Use the cited evidence."
+   :evidence [{:material_id 43 :topic_id 44 :quote "frozen evidence"}]
+   :rubric exam-rubric})
+
+(deftest cancelled-generation-does-not-save-a-late-form
+  (let [user-id 987654323
+        subject {:material-id 43}
+        work-key "material/43"
+        saves (atom 0)
+        charges (atom 0)
+        generated-form
+        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
+         :questions (mapv exam-question (range 5))}]
+    (swap! (us/get-atom user-id :exam-form-generation-cancelled) conj work-key)
+    (with-redefs [curriculum/subject-evidence
+                  (fn [_connectable _user-id _subject]
+                    {:materials [{:material-id 43
+                                  :topic-id 44
+                                  :digest "digest"
+                                  :evidence [{:topic-id 44
+                                              :title "Evidence"
+                                              :kind "markdown"
+                                              :page nil
+                                              :text "frozen evidence"}]}]
+                     :source-versions ["digest"]})
+                  llm/resolve-model+gate!
+                  (fn [_user-id _step]
+                    {:api-key "test" :entry {:id "test-model"} :model-fields {}})
+                  llm/chat!
+                  (fn [& _args] {:parsed generated-form :cost 0.01})
+                  cards/load-prompt-template (fn [_name] "prompt")
+                  curriculum/save-draft-form!
+                  (fn [& _args] (swap! saves inc) 101)
+                  credits/record-cost-charge!
+                  (fn [& _args] (swap! charges inc) 1)]
+      (let [result (exam/generate-form! user-id subject "standard" 70)]
+        (is (:cancelled? result))
+        (is (zero? @saves) "a cancelled OpenRouter result must not save a form")
+        (is (= 1 @charges) "the completed OpenRouter call still costs credits")))))

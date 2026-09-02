@@ -248,6 +248,16 @@
     :state-key :generating-questions :phase "generating"
     :canceller-key :question-cancellers}
 
+   :exam-form-generation
+   {:label "Generating exam form"
+    :tier :server :subject :none :work-key identity
+    :state-key :exam-form-generations :phase "generating"
+    :key-fn identity
+    :canceller-key :exam-form-generation-cancellers
+    :cancelled-key :exam-form-generation-cancelled
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :exam-form-generation-errors) work-key))}
+
    :exam-grade
    {:label "Grading exam"
     :tier :server

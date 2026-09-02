@@ -78,6 +78,13 @@
           :repo-distill-cancellers (atom {}); repo root topic id -> missionary cancel fn
           :generating-questions (atom #{})  ; root topic ids with a question run in flight
           :question-cancellers (atom {})    ; root topic id -> missionary cancel fn
+          ;; Each key identifies one material or block exam form request.
+          ;; Cancellation cannot stop the OpenRouter request. The cancelled set
+          ;; prevents that request from saving a form after the user cancels it.
+          :exam-form-generations (atom #{})
+          :exam-form-generation-cancellers (atom {})
+          :exam-form-generation-cancelled (atom #{})
+          :exam-form-generation-errors (atom {})
           :exam-grading     (atom {})       ; session id -> [graded total] during end-of-exam grading
           ;; Account transfer publishes membership so the Activity reporter can
           ;; discover it like any other server-owned work. One at a time per
