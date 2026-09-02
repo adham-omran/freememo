@@ -16,6 +16,7 @@
    [next.jdbc.result-set :as rs]
    [taoensso.telemere :as tel])
   (:import
+   [java.text Normalizer Normalizer$Form]
    [java.util.concurrent Executors]
    [missionary Cancelled]))
 
@@ -82,17 +83,48 @@
                  {:type ::invalid-form :field :duplicate-questions})))
       {:blueprint blueprint :questions questions})))
 
-(defn- validate-citations! [materials questions]
+(def ^:private citation-punctuation
+  {\‘ "'" \’ "'" \‚ "'" \‛ "'" \ʼ "'"
+   \“ "\"" \” "\"" \„ "\"" \‟ "\""
+   \‐ "-" \‑ "-" \‒ "-" \– "-" \— "-" \― "-" \− "-"
+   \… "..."})
+
+(defn- normalize-citation-text
+  "Return a comparison-only form of source evidence.
+
+   Pre: text is a source string or a model citation string.
+   Post: Unicode compatibility forms, typographic punctuation, and whitespace
+   have canonical forms.
+   Invariant: persisted source text and citations remain unchanged. The caller
+   must still require exact containment inside the declared material and topic.
+   A failed comparison is blamed on the model citation, not the frozen source."
+  [text]
+  (-> (Normalizer/normalize text Normalizer$Form/NFKC)
+    (str/escape citation-punctuation)
+    (str/replace #"[\p{Z}\s]+" " ")
+    str/trim))
+
+(defn- validate-citations!
+  "Require each citation to occur in its declared frozen source section.
+
+   Pre: materials contain frozen evidence and questions contain normalized form
+   data from the model.
+   Post: returns questions when every normalized quote is an exact substring.
+   Invariant: normalization permits formatting changes only. It does not permit
+   paraphrases, cross-topic matches, or invented evidence. A mismatch is blamed
+   on the generated form."
+  [materials questions]
   (let [source-text (into {}
                       (mapcat
                         (fn [{:keys [material-id evidence]}]
                           (map (fn [{:keys [topic-id text]}]
-                                 [[material-id topic-id] text]) evidence))
+                                 [[material-id topic-id]
+                                  (normalize-citation-text text)]) evidence))
                         materials))]
     (doseq [[question-index question] (map-indexed vector questions)
             {:keys [material_id topic_id quote]} (:evidence question)]
       (when-not (some-> (get source-text [material_id topic_id])
-                  (str/includes? quote))
+                  (str/includes? (normalize-citation-text quote)))
         (throw (ex-info "The model cited text that is not in the frozen source."
                  {:type ::invalid-form :question (inc question-index)
                   :material-id material_id :topic-id topic_id}))))

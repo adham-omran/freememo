@@ -82,12 +82,68 @@
    :integration "The answer connects relevant points."
    :completeness "The answer covers the prompt."})
 
-(defn- exam-question [index]
-  {:role (nth ["explain" "compare" "apply" "evaluate" "synthesize"] index)
-   :prompt (str "Question " index)
-   :grading_guide "Use the cited evidence."
-   :evidence [{:material_id 43 :topic_id 44 :quote "frozen evidence"}]
-   :rubric exam-rubric})
+(defn- exam-question
+  ([index]
+   (exam-question index "frozen evidence"))
+  ([index quote]
+   {:role (nth ["explain" "compare" "apply" "evaluate" "synthesize"] index)
+    :prompt (str "Question " index)
+    :grading_guide "Use the cited evidence."
+    :evidence [{:material_id 43 :topic_id 44 :quote quote}]
+    :rubric exam-rubric}))
+
+(deftest citation-validation-accepts-formatting-only-differences
+  (let [user-id 987654324
+        subject {:material-id 43}
+        saves (atom 0)
+        source "Frozen\u00a0evidence\nsays \u201cspaced \u2014 text\u201d\u2026"
+        quote "Frozen evidence says \"spaced - text\"..."
+        generated-form
+        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
+         :questions (mapv #(exam-question % quote) (range 5))}]
+    (with-redefs [curriculum/subject-evidence
+                  (fn [_connectable _user-id _subject]
+                    {:materials [{:material-id 43
+                                  :topic-id 44
+                                  :digest "digest"
+                                  :evidence [{:topic-id 44
+                                              :title "Evidence"
+                                              :kind "markdown"
+                                              :page nil
+                                              :text source}]}]
+                     :source-versions ["digest"]})
+                  llm/resolve-model+gate!
+                  (fn [_user-id _step]
+                    {:api-key "test" :entry {:id "test-model"} :model-fields {}})
+                  llm/chat!
+                  (fn [& _args] {:parsed generated-form :cost 0.01})
+                  cards/load-prompt-template (fn [_name] "prompt")
+                  curriculum/save-draft-form!
+                  (fn [& _args] (swap! saves inc) 102)
+                  curriculum/record-form-generation-charge! (fn [& _args] nil)
+                  credits/record-cost-charge! (fn [& _args] 1)]
+      (let [result (exam/generate-form! user-id subject "standard" 70)]
+        (is (:success result))
+        (is (= 1 @saves))))))
+
+(deftest citation-validation-remains-bound-to-the-declared-source
+  (let [validate (ns-resolve 'freememo.curriculum-exam 'validate-citations!)
+        materials [{:material-id 43
+                    :evidence [{:topic-id 44 :text "The source makes one claim."}]}]
+        question (exam-question 0 "The source makes one claim.")]
+    (testing "a paraphrase remains invalid"
+      (is (thrown-with-msg?
+            clojure.lang.ExceptionInfo
+            #"not in the frozen source"
+            (validate materials
+              [(assoc-in question [:evidence 0 :quote]
+                 "The material presents a single assertion.")]))))
+    (testing "an exact quote under the wrong topic remains invalid"
+      (is (thrown-with-msg?
+            clojure.lang.ExceptionInfo
+            #"not in the frozen source"
+            (validate materials
+              [(assoc-in question [:evidence 0 :topic_id] 45)]))))))
 
 (deftest cancelled-generation-does-not-save-a-late-form
   (let [user-id 987654323
