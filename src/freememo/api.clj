@@ -19,6 +19,7 @@
    [freememo.commands :as commands]
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
+   [freememo.input-check :as input]
    [freememo.import-staging :as staging]
    [freememo.live-doc :as live-doc]
    [freememo.markdown :as md]
@@ -706,18 +707,19 @@
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
           (if-let [file-row (db/get-topic-file topic-id)]
-            (let [title (:topics/title topic)
-                  download-name (if (re-find #"(?i)\.pdf$" title)
-                                  title
-                                  (str title ".pdf"))]
-              {:status 200
-               ;; Live Documents mutate the blob behind this stable URL on every
-               ;; append; the IndexedDB cache (pdf-cache) is the perf layer, so a
-               ;; second HTTP cache here would only be a stale source.
-               :headers {"Content-Type" "application/pdf"
-                         "Cache-Control" "no-store"
-                         "Content-Disposition" (str "inline; filename=\"" download-name "\"")}
-               :body (io/input-stream (:topic_files/file_data file-row))})
+            {:status 200
+             ;; Live Documents mutate the blob behind this stable URL on every
+             ;; append; the IndexedDB cache (pdf-cache) is the perf layer, so a
+             ;; second HTTP cache here would only be a stale source.
+             :headers {"Content-Type" "application/pdf"
+                       "Cache-Control" "no-store"
+                       ;; A title may hold a quotation mark, a slash or a
+                       ;; non-Latin script — `sanitize-title` keeps all three.
+                       ;; `content-disposition` is what makes this one header
+                       ;; line whatever the title is.
+                       "Content-Disposition" (input/content-disposition
+                                               "inline" (:topics/title topic) ".pdf")}
+             :body (io/input-stream (:topic_files/file_data file-row))}
             {:status 404
              :body "PDF not found"})
           {:status 404
@@ -752,7 +754,11 @@
                               (if (audio-role-kinds (:topics/kind topic)) "audio" "main"))]
             {:status 200
              :headers {"Content-Type" (or (:topic_files/mime_type file-row) "audio/mpeg")
-                       "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
+                       ;; No extension: audio formats vary and `topic_files`
+                       ;; records a mime type, not a suffix. The Content-Type
+                       ;; above is what the player reads either way.
+                       "Content-Disposition" (input/content-disposition
+                                               "inline" (:topics/title topic) nil)}
              :body (io/input-stream (:topic_files/file_data file-row))}
             {:status 404 :body "Audio not found"})
           {:status 404 :body "Audio not found"}))

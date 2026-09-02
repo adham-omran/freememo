@@ -2812,7 +2812,7 @@
    :source-id attaches an existing `sources` row (bibliography).
    Returns the created row with :topics/id."
   [attrs]
-  (let [clean-title (input/prettify-title (input/sanitize-filename (:title attrs)))
+  (let [clean-title (input/prettify-title (input/sanitize-title (:title attrs)))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
         row (cond-> {:kind (or (:kind attrs) "basic")
@@ -3044,7 +3044,7 @@
   (when (or (nil? new-title) (str/blank? new-title))
     (throw (ex-info "title must not be blank"
              {:type ::blank-title :id id})))
-  (let [clean-title (input/sanitize-filename new-title)]
+  (let [clean-title (input/sanitize-title new-title)]
     (input/check-length! :title clean-title input/title-max)
     (jdbc/execute-one! ds
       (sql/format {:update :topics
@@ -3620,7 +3620,7 @@
    Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns the result with :topics/id."
   [user-id filename file-bytes file-size page-count]
-  (let [clean-name (input/prettify-title (input/sanitize-filename filename))]
+  (let [clean-name (input/prettify-title (input/sanitize-title filename))]
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
@@ -3659,7 +3659,7 @@
    transcript instead of showing a permanent loading spinner.
    Returns the result with :topics/id."
   [user-id filename file-bytes file-size mime-type]
-  (let [clean-name (input/prettify-title (input/sanitize-filename filename))]
+  (let [clean-name (input/prettify-title (input/sanitize-title filename))]
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
@@ -3696,7 +3696,7 @@
    Atomically checks quota against the combined byte size.
    Returns the result with :topics/id."
   [user-id title ^bytes pdf-bytes ^bytes audio-bytes audio-mime]
-  (let [clean-name (input/prettify-title (input/sanitize-filename title))
+  (let [clean-name (input/prettify-title (input/sanitize-title title))
         pdf-size (alength pdf-bytes)
         audio-size (alength audio-bytes)]
     (input/check-length! :title clean-name input/title-max)
@@ -3901,7 +3901,7 @@
    and links topics.source_id. :source-type 'wikipedia' tags
    csl.container-title='Wikipedia'."
   [user-id title html-content bib]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))
+  (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
         url (some-> bib :url str/trim not-empty)
@@ -3923,7 +3923,7 @@
 (defn create-markdown-topic!
   "Create a Markdown-imported topic. Returns topic-id."
   [user-id title html-content]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))
+  (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
@@ -3952,7 +3952,7 @@
    `finalize-epub-session!` (large object, chunked) share one definition of what
    an EPUB topic IS. Only the blob row differs between them."
   [tx user-id title parent-id chapters]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))
+  (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         csl {:type "book" :title clean-title
              :accessed {:date-parts (now-date-parts)}}
@@ -4012,7 +4012,7 @@
    A chunk-uploaded book goes through `finalize-epub-session!` instead and
    stores a large object — see plans/large-epub-import.md §7.4."
   [user-id title file-bytes file-size chapters]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))]
+  (let [clean-title (input/prettify-title (input/sanitize-title title))]
     (input/check-length! :title clean-title input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
@@ -4027,7 +4027,7 @@
 (defn create-standalone-topic!
   "Create a standalone empty topic. Returns {:topic-id N}."
   [user-id title]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))
+  (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
@@ -7971,7 +7971,7 @@
                             " of " (:total_bytes row) " bytes")}
 
         :else
-        (let [clean-name (input/prettify-title (input/sanitize-filename (:filename row)))
+        (let [clean-name (input/prettify-title (input/sanitize-title (:filename row)))
               _ (input/check-length! :title clean-name input/title-max)
               csl {:type "motion_picture" :title clean-name
                    :accessed {:date-parts (now-date-parts)}}
@@ -8034,7 +8034,7 @@
   "§4.10 10.1 — the parent a multi-file upload hangs its videos under.
    An ordinary topic of kind `video-playlist` holding no bytes of its own."
   [user-id title]
-  (let [clean-name (input/prettify-title (input/sanitize-filename title))]
+  (let [clean-name (input/prettify-title (input/sanitize-title title))]
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (let [topic (jdbc/execute-one! tx

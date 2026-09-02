@@ -176,7 +176,7 @@
    than rejected: a documentation heading is the page's only name, and losing
    the page over its length is the worse trade."
   [s]
-  (let [t (input/sanitize-filename s)]
+  (let [t (input/sanitize-title s)]
     (if (> (count t) input/title-max) (subs t 0 input/title-max) t)))
 
 (defn- humanize

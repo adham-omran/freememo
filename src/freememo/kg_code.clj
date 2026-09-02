@@ -187,13 +187,6 @@
         (str/split (str source) #"\n" -1)))
     "</div>"))
 
-(defn- path->title
-  "Repo-relative path → a title that survives create-topic!'s sanitize-filename
-   (which strips / and \\). Separators become \" > \" so the file's location
-   stays legible in a flat list (directory nesting is out of scope for v1)."
-  [rel-path]
-  (str/replace rel-path #"[\\/]+" " > "))
-
 (def ^:private clojure-ext-re #"(?i)\.clj[cs]?$")
 
 (defn- quill-language
@@ -257,8 +250,13 @@
   (let [root-id (:topics/id (db/create-topic! {:user-id user-id :kind "code" :title repo-name}))
         files (clojure-source-files root-dir)]
     (doseq [{:keys [rel source lang]} files]
+      ;; The repo-relative path IS the title. It collapsed to "src > freememo >
+       ;; db.clj" only because create-topic! stripped separators; sanitize-title
+       ;; keeps them, so the workaround went with its cause and a file is named
+       ;; the way its repo names it. Repos imported before this keep the old
+       ;; titles — a re-import is what renames them.
       (db/create-topic! {:user-id user-id :kind "code" :parent-id root-id
-                        :title (path->title rel)
+                        :title rel
                         :content (source->code-block-html source lang)}))
     {:root-id root-id :file-topics (count files)}))
 

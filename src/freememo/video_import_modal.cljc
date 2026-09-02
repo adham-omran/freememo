@@ -267,7 +267,7 @@
   "A playlist title from the first staged filename, extension stripped.
 
    An approximation of what the server will store: `input-check/prettify-title`
-   and `sanitize-filename` live in a .clj namespace the client cannot call, and
+   and `sanitize-title` live in a .clj namespace the client cannot call, and
    they still run on whatever is submitted. Post: \"\" when there is no file,
    which the caller treats as 'nothing to prefill'."
   [filename]
