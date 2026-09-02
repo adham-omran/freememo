@@ -93,9 +93,15 @@
 (e/defn AsyncButton
   "A button that runs one server operation and shows that it is running.
 
-   Pre: operation returns {:ok true} or {:ok false :error message}.
-   Post: the button is disabled and busy until the server answers."
-  [label class-name operation]
+   Pre: `Operation` is an `e/fn` that returns {:ok true} or
+   {:ok false :error message}.
+   Post: the button is disabled and busy until the server answers.
+
+   The parameter is capitalized because that is what makes `(Operation)` an
+   Electric call. `lang3/electric-sym?` reads the first character of the head
+   symbol, so a lowercase name compiles to a plain CLJS call on the arity map
+   an `e/fn` value is, and the click throws `Invalid arity: 0`."
+  [label class-name Operation]
   (e/client
     (dom/button
       (let [[token error] (e/Token (dom/On "click" identity nil))]
@@ -105,7 +111,7 @@
                     :aria-invalid (some? error)})
         (dom/text (if token (str label "…") label))
         (when token
-          (let [response (operation)]
+          (let [response (Operation)]
             (if (e/server (:ok response))
               (token)
               (token (e/server (:error response))))))
@@ -309,7 +315,15 @@
             (do (e/on-unmount #(reset! !open? false)) (token))
             (token (e/server (:error response)))))))))
 
-(e/defn MoveButton [label disabled? operation]
+(e/defn MoveButton
+  "One reorder arrow.
+
+   Pre: `Operation` is an `e/fn` that returns {:ok true} or
+   {:ok false :error message}.
+   Post: a failure reaches a screen reader and leaves the row where it was.
+
+   `Operation` is capitalized for the reason `AsyncButton` records."
+  [label disabled? Operation]
   (e/client
     (dom/button
       (dom/props {:type "button" :class "curriculum-icon-button"
@@ -317,7 +331,7 @@
       (icons/Icon (if (= label "Move up") :chevron-up :chevron-down) :size 14)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (when token
-          (let [response (operation)]
+          (let [response (Operation)]
             (if (e/server (:ok response)) (token)
               (token (e/server (:error response))))))
         (when error (dom/span (dom/props {:class "sr-only"}) (dom/text error)))))))

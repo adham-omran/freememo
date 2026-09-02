@@ -99,6 +99,55 @@
 (defn- db-up? []
   (try (jdbc/execute-one! db/ds ["SELECT 1"]) true (catch Exception _ false)))
 
+(deftest reordering-writes-positions-a-check-constraint-accepts
+  ;; `curriculum_materials.position` carries CHECK (position >= 0) and
+  ;; UNIQUE (block_id, position). `resequence!` parks rows before it writes the
+  ;; new order, and the park used to be negative — so every reorder rolled back
+  ;; and the arrows looked dead. Only a real database can catch that.
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "reorder-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")]
+                         {:builder-fn rs/as-unqualified-maps}))
+          topic! (fn [title]
+                   (:id (jdbc/execute-one! db/ds
+                          ["INSERT INTO topics (user_id, title, kind, content_text)
+                            VALUES (?, ?, 'markdown', 'body') RETURNING id" user-id title]
+                          {:builder-fn rs/as-unqualified-maps})))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum!
+                              user-id {:title "Reorder" :daily-minutes 60
+                                       :study-weekdays []})
+              block-id (curriculum/add-block! user-id curriculum-id "Only")
+              second-block (curriculum/add-block! user-id curriculum-id "Next")
+              a (curriculum/add-material! user-id block-id (topic! "A") 30)
+              b (curriculum/add-material! user-id block-id (topic! "B") 30)
+              c (curriculum/add-material! user-id block-id (topic! "C") 30)
+              ordered (fn []
+                        (mapv :id (jdbc/execute! db/ds
+                                    ["SELECT id FROM curriculum_materials
+                                      WHERE block_id = ? ORDER BY position" block-id]
+                                    {:builder-fn rs/as-unqualified-maps})))]
+          (curriculum/reorder-materials! user-id block-id [b a c])
+          (is (= [b a c] (ordered)) "a material swap commits")
+          (curriculum/reorder-materials! user-id block-id [c b a])
+          (is (= [c b a] (ordered)) "a full reversal commits")
+          (is (empty? (jdbc/execute! db/ds
+                        ["SELECT id FROM curriculum_materials
+                          WHERE block_id = ? AND position < 0" block-id]))
+            "no row is left at a negative position")
+          (curriculum/reorder-blocks! user-id curriculum-id [second-block block-id])
+          (is (= [second-block block-id]
+                (mapv :id (jdbc/execute! db/ds
+                            ["SELECT id FROM curriculum_blocks
+                              WHERE curriculum_id = ? ORDER BY position" curriculum-id]
+                            {:builder-fn rs/as-unqualified-maps})))
+            "a block swap commits"))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
 (defn- sql-smallint-array [values]
   (reify java.sql.Array
     (getBaseTypeName [_] "int2")

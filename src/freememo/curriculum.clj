@@ -145,15 +145,34 @@
        (into-array Short (map short weekdays)) curriculum-id user-id])
     (bump! user-id)))
 
-(defn- resequence! [tx table parent-column parent-id ids]
-  (doseq [[position id] (map-indexed vector ids)]
-    (jdbc/execute-one! tx
-      [(str "UPDATE " table " SET position = ? WHERE id = ? AND " parent-column " = ?")
-       (- -100000 position) id parent-id]))
-  (doseq [[position id] (map-indexed vector ids)]
-    (jdbc/execute-one! tx
-      [(str "UPDATE " table " SET position = ? WHERE id = ? AND " parent-column " = ?")
-       position id parent-id])))
+(defn- resequence!
+  "Write `ids` as positions 0, 1, 2 … under one parent.
+
+   Pre: `ids` is exactly the parent's current child ids. The caller checks that.
+   Post: every child holds its index in `ids`.
+   Invariant: no statement writes a negative position, and no two children of
+   one parent hold the same position at any point inside the transaction.
+
+   The two passes exist because `UNIQUE (parent, position)` rejects a direct
+   swap. The park range starts ABOVE the highest position in use, because
+   `CHECK (position >= 0)` rejects a negative one. Parking below zero is what
+   this used to do, so every reorder raised
+   `curriculum_materials_position_check` and rolled back — a button that
+   looked dead."
+  [tx table parent-column parent-id ids]
+  (let [park (inc (or (:max (jdbc/execute-one! tx
+                              [(str "SELECT max(position) AS max FROM " table
+                                 " WHERE " parent-column " = ?") parent-id]
+                              opts))
+                    0))]
+    (doseq [[position id] (map-indexed vector ids)]
+      (jdbc/execute-one! tx
+        [(str "UPDATE " table " SET position = ? WHERE id = ? AND " parent-column " = ?")
+         (+ park position) id parent-id]))
+    (doseq [[position id] (map-indexed vector ids)]
+      (jdbc/execute-one! tx
+        [(str "UPDATE " table " SET position = ? WHERE id = ? AND " parent-column " = ?")
+         position id parent-id]))))
 
 (defn add-block!
   "Append a block. The first block starts unlocked and focused."

@@ -112,3 +112,35 @@
         "the control must render a visible error alert")
       (is (not-any? #(and (map? %) (= "alert" (:role %))) trigger-nodes)
         "the error must not become part of the button's accessible name"))))
+
+(defn- e-fn? [x]
+  (and (seq? x) (= 'e/fn (first x))))
+
+(defn- local-definitions [forms]
+  (into {}
+    (keep (fn [form]
+            (when (and (seq? form) (= 'e/defn (first form)))
+              (when-some [params (first (filter vector? (drop 2 form)))]
+                [(second form) params]))))
+    forms))
+
+(deftest an-electric-fn-argument-lands-on-a-capitalized-parameter
+  ;; `lang3/electric-sym?` reads the first character of a call's head symbol.
+  ;; A lowercase parameter therefore compiles to a plain CLJS call on the arity
+  ;; map an `e/fn` value is, and the call throws `Invalid arity: 0` at run time
+  ;; with no compile warning. MoveButton shipped that way.
+  (let [params-by-name (local-definitions source-forms)
+        bad (atom [])]
+    (doseq [form source-forms
+            node (tree-seq coll? seq form)]
+      (when (and (seq? node) (symbol? (first node))
+              (contains? params-by-name (first node)))
+        (let [params (get params-by-name (first node))]
+          (doseq [[index argument] (map-indexed vector (rest node))]
+            (when (e-fn? argument)
+              (let [parameter (get params index)]
+                (when (and (symbol? parameter)
+                        (Character/isLowerCase (.charAt (name parameter) 0)))
+                  (swap! bad conj [(first node) parameter]))))))))
+    (is (empty? @bad)
+      (str "An e/fn argument needs a capitalized parameter: " (pr-str @bad)))))
