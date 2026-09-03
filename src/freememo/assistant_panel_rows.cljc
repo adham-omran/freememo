@@ -70,7 +70,7 @@
    With a chat open a pill tap is a real mutation on that chat's row — mode is
    per chat, so the pills show the open chat's persona rather than a standing
    preference. With no chat open there is nothing to mutate yet, so the tap only
-   stages `!pending-mode`, which rides the first send (ensure-and-send! →
+   stages `!pending-mode`, which rides the first send (submit-chat-input! →
    start-chat!) or `＋ New`.
 
    The click atom is created HERE, not passed in: an `e/Token` input that arrives

@@ -15,7 +15,10 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [taoensso.telemere :as tel]
-   [freememo.logging :as log]))
+   [freememo.logging :as log])
+  (:import
+   [java.io BufferedReader InputStreamReader]
+   [java.nio.charset StandardCharsets]))
 
 (def ^:private base-url "https://openrouter.ai/api/v1")
 
@@ -162,6 +165,147 @@
    Post: the parsed 200 body; throws ::api-error on non-200."
   ([api-key body] (chat-completion! api-key body nil))
   ([api-key body ctx] (ok-body (post! api-key "/chat/completions" body ctx))))
+
+(defn stream-chunk-metadata
+  "Normalize provider facts carried by one OpenRouter streaming chunk.
+   Pre: chunk is a parsed SSE JSON object. Post: a map containing only reported
+   facts. Missing values stay absent, so callers never confuse zero with unknown."
+  [chunk]
+  (let [usage (:usage chunk)
+        prompt-details (:prompt_tokens_details usage)
+        completion-details (:completion_tokens_details usage)
+        router (:openrouter_metadata chunk)]
+    (cond-> {}
+      (:id chunk) (assoc :generation-id (:id chunk))
+      (:model chunk) (assoc :resolved-model (:model chunk))
+      (or (:provider chunk) (:provider_name router))
+      (assoc :provider-name (or (:provider chunk) (:provider_name router)))
+      (some? (:prompt_tokens usage)) (assoc :input-tokens (:prompt_tokens usage))
+      (some? (:completion_tokens usage)) (assoc :output-tokens (:completion_tokens usage))
+      (some? (or (:reasoning_tokens usage) (:reasoning_tokens completion-details)))
+      (assoc :reasoning-tokens
+        (or (:reasoning_tokens usage) (:reasoning_tokens completion-details)))
+      (some? (:cached_tokens prompt-details))
+      (assoc :cached-tokens (:cached_tokens prompt-details))
+      (some? (:cache_write_tokens prompt-details))
+      (assoc :cache-write-tokens (:cache_write_tokens prompt-details))
+      (some? (:cost usage)) (assoc :cost-usd (:cost usage)))))
+
+(defn- parse-sse-data
+  "Parse one SSE data payload. [DONE] returns nil.
+   A provider error becomes an ExceptionInfo so the run fails with its message."
+  [payload]
+  (when-not (= "[DONE]" payload)
+    (let [chunk (json/parse-string payload true)]
+      (if-let [error (:error chunk)]
+        (throw (ex-info (or (:message error) "OpenRouter stream failed.")
+                 {:type ::stream-error :provider-error error}))
+        chunk))))
+
+(defn- generation-id-header [headers]
+  (or (get headers "x-generation-id")
+    (get headers "X-Generation-Id")
+    (get headers :x-generation-id)))
+
+(defn chat-completion-stream!
+  "Stream one chat completion and drain it to its terminal SSE event.
+
+   `on-delta` receives each non-empty text delta. `on-metadata` receives each
+   newly reported fact and the final merged facts. The caller decides whether a
+   delta still belongs in local state. This function never treats local Stop as
+   remote cancellation.
+
+   Pre: body contains :stream true. Callbacks do not block indefinitely.
+   Post: returns {:text :metadata :headers}. Every accepted SSE delta appears in
+   :text once. Non-200 responses throw api-error. The response stream closes.
+   Invariant: the reader continues through [DONE], so terminal usage remains
+   available after local delivery stops."
+  [api-key body ctx on-delta on-metadata]
+  (let [started-ns (System/nanoTime)
+        first-token-ns (volatile! nil)
+        elapsed-ms #(long (/ (- (System/nanoTime) started-ns) 1000000))]
+    (try
+      (let [response (http/post (str base-url "/chat/completions")
+                       {:headers {"Authorization" (str "Bearer " api-key)
+                                  "X-OpenRouter-Metadata" "enabled"}
+                        :content-type :json
+                        :as :stream
+                        :throw-exceptions false
+                        :body (json/generate-string (assoc body :stream true))})]
+        (when-not (= 200 (:status response))
+          (with-open [reader (BufferedReader.
+                               (InputStreamReader. (:body response) StandardCharsets/UTF_8))]
+            (throw (api-error (assoc response :body (slurp reader))))))
+        (with-open [reader (BufferedReader.
+                             (InputStreamReader. (:body response) StandardCharsets/UTF_8))]
+          (loop [text (StringBuilder.)
+                 metadata (cond-> {}
+                            (generation-id-header (:headers response))
+                            (assoc :generation-id
+                              (generation-id-header (:headers response))))]
+            (if-let [line (.readLine reader)]
+              (if (str/starts-with? line "data:")
+                (let [payload (str/trim (subs line 5))]
+                  (if-let [chunk (parse-sse-data payload)]
+                    (let [delta (-> chunk :choices first :delta :content)
+                          chunk-metadata (stream-chunk-metadata chunk)]
+                      (when (and (string? delta) (not (empty? delta)))
+                        (when-not @first-token-ns
+                          (vreset! first-token-ns (System/nanoTime)))
+                        (.append text delta)
+                        (on-delta delta))
+                      (when (seq chunk-metadata)
+                        (on-metadata chunk-metadata))
+                      (recur text (merge metadata chunk-metadata)))
+                    (let [facts (cond-> metadata
+                                  @first-token-ns
+                                  (assoc :first-token-ms
+                                    (long (/ (- (long @first-token-ns) started-ns) 1000000)))
+                                  true (assoc :provider-latency-ms (elapsed-ms)))]
+                      (on-metadata facts)
+                      (log/external! {:id ::stream-call :feature (or (:feature ctx) :assistant)
+                                      :user-id (:user-id ctx) :outcome :ok
+                                      :duration-ms (elapsed-ms)
+                                      :provider (:provider-name facts)})
+                      {:text (str text) :metadata facts :headers (:headers response)})))
+                (recur text metadata))
+              (let [facts (cond-> metadata
+                            @first-token-ns
+                            (assoc :first-token-ms
+                              (long (/ (- (long @first-token-ns) started-ns) 1000000)))
+                            true (assoc :provider-latency-ms (elapsed-ms)))]
+                (on-metadata facts)
+                {:text (str text) :metadata facts :headers (:headers response)})))))
+      (catch Throwable error
+        (log/external! {:id ::stream-call :feature (or (:feature ctx) :assistant)
+                        :user-id (:user-id ctx) :outcome :error
+                        :duration-ms (elapsed-ms) :error (ex-message error)})
+        (throw error)))))
+
+(defn generation-metadata!
+  "Get finalized OpenRouter metadata for generation-id.
+   Post: normalized provider facts. Non-200 responses throw api-error."
+  [api-key generation-id ctx]
+  (let [response (http/get (str base-url "/generation")
+                   {:headers {"Authorization" (str "Bearer " api-key)}
+                    :query-params {:id generation-id}
+                    :as :json :throw-exceptions false})]
+    (when-not (= 200 (:status response))
+      (throw (api-error response)))
+    (let [generation (:data (:body response))]
+      (cond-> {}
+        (:id generation) (assoc :generation-id (:id generation))
+        (:model generation) (assoc :resolved-model (:model generation))
+        (:provider_name generation) (assoc :provider-name (:provider_name generation))
+        (some? (:tokens_prompt generation)) (assoc :input-tokens (:tokens_prompt generation))
+        (some? (:tokens_completion generation)) (assoc :output-tokens (:tokens_completion generation))
+        (some? (:native_tokens_reasoning generation))
+        (assoc :reasoning-tokens (:native_tokens_reasoning generation))
+        (some? (:native_tokens_cached generation))
+        (assoc :cached-tokens (:native_tokens_cached generation))
+        (some? (:total_cost generation)) (assoc :cost-usd (:total_cost generation))
+        (some? (:latency generation)) (assoc :provider-latency-ms (:latency generation))
+        (some? (:generation_time generation)) (assoc :generation-ms (:generation_time generation))))))
 
 (def ^:private refusal-finish-reasons
   "finish_reason / native_finish_reason values meaning the model declined.

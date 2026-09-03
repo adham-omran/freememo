@@ -36,6 +36,8 @@
 (declare run-grandfather-migration!)
 (declare normalize-inline-card-images!)
 (declare start-purge-scheduler!)
+(declare ->jsonb)
+(declare pgobject->clj)
 ;; Defined in the Incremental Video section; called from complete-credit-order!,
 ;; which sits far above it.
 (declare promote-to-paid-storage-tier!)
@@ -613,14 +615,13 @@
 )
 
 (defn- setup-schema-assistant!
-  "Socratic AI assistant chats + message transcripts.
+  "AI assistant chats, message transcripts, durable runs, and evidence.
    Split out of setup-schema (see 7.4); called from it in order."
   []
   ;; Socratic AI assistant — per-document chats + their message transcripts.
   ;; A chat is scoped to (user_id, root_topic_id): the document being read.
   ;; The transcript holds learner/assistant turns only; the learner's live
-  ;; reading context is injected transiently per send, never persisted
-  ;; (see freememo.assistant/current-context-messages).
+  ;; reading context is retained with each run, not stored as transcript rows.
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS assistant_chats (
       id SERIAL PRIMARY KEY,
@@ -652,6 +653,109 @@
   ;; that predates the column, which resolve-mode maps to the Socratic default —
   ;; correct, since Socratic was the only persona that ever existed before it.
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS mode TEXT"])
+  ;; An opaque chat identity gives OpenRouter a stable sticky-routing key. It is
+  ;; not derived from a user id, chat id, or document id.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS provider_session_id TEXT"])
+  (jdbc/execute! ds ["UPDATE assistant_chats
+                         SET provider_session_id = md5(random()::text || clock_timestamp()::text || id::text)
+                       WHERE provider_session_id IS NULL"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ALTER COLUMN provider_session_id SET NOT NULL"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_chats_provider_session
+                      ON assistant_chats(provider_session_id)"])
+
+  ;; A run is the authority for one answer or one /compact operation. Response
+  ;; text is append-only while active. Terminal transitions close that boundary.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS assistant_runs (
+      id BIGSERIAL PRIMARY KEY,
+      run_uuid TEXT NOT NULL UNIQUE,
+      chat_id INTEGER NOT NULL REFERENCES assistant_chats(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('answer','compact')),
+      status TEXT NOT NULL CHECK (status IN
+        ('queued','streaming','stop-requested','stopped','completed','failed')),
+      user_message_id INTEGER REFERENCES assistant_messages(id) ON DELETE CASCADE,
+      assistant_message_id INTEGER REFERENCES assistant_messages(id) ON DELETE CASCADE,
+      retry_of_run_uuid TEXT,
+      provider_session_id TEXT NOT NULL,
+      requested_model TEXT,
+      resolved_model TEXT,
+      provider_name TEXT,
+      generation_id TEXT,
+      request_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      source_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+      response_text TEXT NOT NULL DEFAULT '',
+      error_text TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      cached_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      cost_usd NUMERIC(16,8),
+      provider_latency_ms BIGINT,
+      generation_ms BIGINT,
+      first_token_ms BIGINT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      started_at TIMESTAMP,
+      first_token_at TIMESTAMP,
+      stopped_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      failed_at TIMESTAMP,
+      CHECK ((kind = 'answer' AND user_message_id IS NOT NULL AND assistant_message_id IS NOT NULL)
+          OR (kind = 'compact' AND user_message_id IS NULL AND assistant_message_id IS NULL))
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_runs_chat
+                      ON assistant_runs(chat_id, id)"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_runs_one_active
+                      ON assistant_runs(chat_id)
+                      WHERE status IN ('queued','streaming','stop-requested')"])
+
+  ;; A checkpoint is a completed compaction event. Covered messages remain in
+  ;; the transcript. Future requests replace that range with this summary.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS assistant_checkpoints (
+      id BIGSERIAL PRIMARY KEY,
+      chat_id INTEGER NOT NULL REFERENCES assistant_chats(id) ON DELETE CASCADE,
+      run_id BIGINT NOT NULL UNIQUE REFERENCES assistant_runs(id) ON DELETE CASCADE,
+      summary TEXT NOT NULL,
+      covered_from_message_id INTEGER NOT NULL REFERENCES assistant_messages(id) ON DELETE CASCADE,
+      covered_through_message_id INTEGER NOT NULL REFERENCES assistant_messages(id) ON DELETE CASCADE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (covered_from_message_id <= covered_through_message_id)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_checkpoints_chat
+                      ON assistant_checkpoints(chat_id, id)"])
+
+  ;; Evidence is separate from rendered answer text. The model cites citation_key
+  ;; values. Navigation uses retained targets and degrades when live content moves.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS assistant_evidence (
+      id BIGSERIAL PRIMARY KEY,
+      run_id BIGINT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
+      citation_key TEXT NOT NULL,
+      document_topic_id INTEGER,
+      page_topic_id INTEGER,
+      page_number INTEGER,
+      anchor TEXT,
+      quoted_text TEXT,
+      document_title TEXT NOT NULL,
+      display_label TEXT NOT NULL,
+      source_revision TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(run_id, citation_key)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_evidence_run
+                      ON assistant_evidence(run_id, citation_key)"])
+  ;; No provider worker survives a JVM restart. Close runs that the previous
+  ;; process owned, preserve their last stored text, and make them retryable.
+  (jdbc/with-transaction [tx ds]
+    (jdbc/execute! tx
+      [(str "UPDATE assistant_messages m SET content = r.response_text "
+         "FROM assistant_runs r WHERE m.id = r.assistant_message_id "
+         "AND r.status IN ('queued','streaming','stop-requested')")])
+    (jdbc/execute! tx
+      [(str "UPDATE assistant_runs SET status = 'failed', "
+         "error_text = 'Interrupted by server restart.', failed_at = CURRENT_TIMESTAMP "
+         "WHERE status IN ('queued','streaming','stop-requested')")]))
 )
 
 (defn- setup-schema-annotations!
@@ -2337,7 +2441,8 @@
                      :values [{:user_id user-id
                                :root_topic_id root-topic-id
                                :title title
-                               :mode mode}]
+                               :mode mode
+                               :provider_session_id (str (random-uuid))}]
                      :returning [:id]}))
     :assistant_chats/id))
 
@@ -2348,7 +2453,7 @@
    resolve it through assistant-modes/resolve-mode, never read it raw."
   [user-id chat-id]
   (jdbc/execute-one! ds
-    (sql/format {:select [:id :root_topic_id :title :mode]
+    (sql/format {:select [:id :root_topic_id :title :mode :provider_session_id]
                  :from [:assistant_chats]
                  :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
@@ -2386,10 +2491,347 @@
    reading context is injected transiently per send, not stored here)."
   [chat-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :role :content :client_id]
+    (sql/format {:select [:id :role :content :client_id :created_at]
                  :from [:assistant_messages]
                  :where [:= :chat_id chat-id]
                  :order-by [[:id :asc]]})))
+
+(defn get-assistant-message
+  "One message IFF its chat belongs to user-id, else nil."
+  [user-id message-id]
+  (jdbc/execute-one! ds
+    [(str "SELECT m.* FROM assistant_messages m "
+       "JOIN assistant_chats c ON c.id = m.chat_id "
+       "WHERE c.user_id = ? AND m.id = ?")
+     user-id message-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(def ^:private active-assistant-run-statuses
+  ["queued" "streaming" "stop-requested"])
+
+(defn- insert-assistant-run-evidence!
+  "Insert the evidence records for one new run inside its creation transaction.
+   Pre: run-id belongs to the transaction's new run. Each record has a unique
+   :citation-key. Post: every record points to run-id. Empty evidence is a no-op."
+  [tx run-id evidence]
+  (when (seq evidence)
+    (jdbc/execute! tx
+      (sql/format
+        {:insert-into :assistant_evidence
+         :values (mapv (fn [{:keys [citation-key document-topic-id page-topic-id
+                                    page-number anchor quoted-text document-title
+                                    display-label source-revision]}]
+                         {:run_id run-id
+                          :citation_key citation-key
+                          :document_topic_id document-topic-id
+                          :page_topic_id page-topic-id
+                          :page_number page-number
+                          :anchor anchor
+                          :quoted_text quoted-text
+                          :document_title document-title
+                          :display_label display-label
+                          :source_revision source-revision})
+                   evidence)}))))
+
+(defn create-assistant-answer-run!
+  "Create one user turn, its assistant placeholder, and its durable run.
+
+   Pre: chat-id exists and the caller already passed the ownership and credit
+   gates. `run` contains :run-uuid, snapshots, provider session, and model.
+   Post: returns {:created true :run-id :run-uuid :user-message-id
+   :assistant-message-id}, or {:created false :active-run-uuid}.
+   Invariant: one chat has at most one active answer or compaction run. This
+   transaction owns the chat lock that enforces the invariant."
+  [chat-id user-text client-id
+   {:keys [run-uuid retry-of-run-uuid provider-session-id requested-model
+           request-snapshot source-snapshot evidence]}]
+  (jdbc/with-transaction [tx ds]
+    (jdbc/execute-one! tx ["SELECT id FROM assistant_chats WHERE id = ? FOR UPDATE" chat-id])
+    (if-let [active (jdbc/execute-one! tx
+                      [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
+                         "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
+                       chat-id]
+                      {:builder-fn rs/as-unqualified-maps})]
+      {:created false :active-run-uuid (:run_uuid active)}
+      (let [user-message-id
+            (:assistant_messages/id
+              (jdbc/execute-one! tx
+                (sql/format {:insert-into :assistant_messages
+                             :values [{:chat_id chat-id :role "user" :content user-text
+                                       :client_id client-id}]
+                             :returning [:id]})))
+            assistant-message-id
+            (:assistant_messages/id
+              (jdbc/execute-one! tx
+                (sql/format {:insert-into :assistant_messages
+                             :values [{:chat_id chat-id :role "assistant" :content ""}]
+                             :returning [:id]})))
+            run-id
+            (:assistant_runs/id
+              (jdbc/execute-one! tx
+                (sql/format {:insert-into :assistant_runs
+                             :values [{:run_uuid run-uuid
+                                       :chat_id chat-id
+                                       :kind "answer"
+                                       :status "queued"
+                                       :user_message_id user-message-id
+                                       :assistant_message_id assistant-message-id
+                                       :retry_of_run_uuid retry-of-run-uuid
+                                       :provider_session_id provider-session-id
+                                       :requested_model requested-model
+                                       :request_snapshot (->jsonb request-snapshot)
+                                       :source_snapshot (->jsonb (or source-snapshot []))}]
+                             :returning [:id]})))]
+        (insert-assistant-run-evidence! tx run-id evidence)
+        (jdbc/execute! tx ["UPDATE assistant_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                           chat-id])
+        {:created true :run-id run-id :run-uuid run-uuid
+         :user-message-id user-message-id
+         :assistant-message-id assistant-message-id}))))
+
+(defn create-assistant-compact-run!
+  "Create a compaction run without adding a learner or assistant message.
+   Pre: chat-id belongs to the caller and request-snapshot names a non-empty
+   covered range. Post: the same creation result shape as answer runs.
+   Invariant: the chat lock rejects concurrent answer or compact operations."
+  [chat-id {:keys [run-uuid provider-session-id requested-model request-snapshot
+                   source-snapshot]}]
+  (jdbc/with-transaction [tx ds]
+    (jdbc/execute-one! tx ["SELECT id FROM assistant_chats WHERE id = ? FOR UPDATE" chat-id])
+    (if-let [active (jdbc/execute-one! tx
+                      [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
+                         "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
+                       chat-id]
+                      {:builder-fn rs/as-unqualified-maps})]
+      {:created false :active-run-uuid (:run_uuid active)}
+      (let [run-id
+            (:assistant_runs/id
+              (jdbc/execute-one! tx
+                (sql/format {:insert-into :assistant_runs
+                             :values [{:run_uuid run-uuid :chat_id chat-id
+                                       :kind "compact" :status "queued"
+                                       :provider_session_id provider-session-id
+                                       :requested_model requested-model
+                                       :request_snapshot (->jsonb request-snapshot)
+                                       :source_snapshot (->jsonb (or source-snapshot []))}]
+                             :returning [:id]})))]
+        {:created true :run-id run-id :run-uuid run-uuid}))))
+
+(defn append-assistant-run-text!
+  "Append one provider delta while the run is active.
+   Pre: delta is a non-empty string. Post: returns the complete stored text, or
+   nil when Stop or another terminal transition already closed the boundary.
+   Invariant: text never changes after a terminal state. The conditional UPDATE
+   owns this invariant."
+  [run-uuid delta]
+  (some-> (jdbc/execute-one! ds
+            [(str "UPDATE assistant_runs SET response_text = response_text || ?, "
+               "status = 'streaming', started_at = COALESCE(started_at, CURRENT_TIMESTAMP), "
+               "first_token_at = COALESCE(first_token_at, CURRENT_TIMESTAMP) "
+               "WHERE run_uuid = ? AND status IN ('queued','streaming') "
+               "RETURNING response_text")
+             delta run-uuid]
+            {:builder-fn rs/as-unqualified-maps})
+    :response_text))
+
+(defn update-assistant-run-metadata!
+  "Merge provider metadata without changing status or response text.
+   Pre: attrs contains only known provider fields. Post: known non-nil values
+   replace prior values in every run state, including stopped."
+  [run-uuid attrs]
+  (let [allowed {:resolved-model :resolved_model
+                 :provider-name :provider_name
+                 :generation-id :generation_id
+                 :input-tokens :input_tokens
+                 :output-tokens :output_tokens
+                 :reasoning-tokens :reasoning_tokens
+                 :cached-tokens :cached_tokens
+                 :cache-write-tokens :cache_write_tokens
+                 :cost-usd :cost_usd
+                 :provider-latency-ms :provider_latency_ms
+                 :generation-ms :generation_ms
+                 :first-token-ms :first_token_ms}
+        fields (into {} (keep (fn [[k column]]
+                                (when-some [v (get attrs k)] [column v]))) allowed)]
+    (when (seq fields)
+      (jdbc/execute! ds
+        (sql/format {:update :assistant_runs :set fields
+                     :where [:= :run_uuid run-uuid]})))))
+
+(defn complete-assistant-answer-run!
+  "Complete an active answer and copy its durable text to the transcript row.
+   Post: true when this call won the terminal transition. False means Stop or
+   another terminal transition won first. Late text never reaches the message."
+  [run-uuid]
+  (jdbc/with-transaction [tx ds]
+    (if-let [run (jdbc/execute-one! tx
+                    [(str "UPDATE assistant_runs SET status = 'completed', "
+                       "completed_at = CURRENT_TIMESTAMP "
+                       "WHERE run_uuid = ? AND status IN ('queued','streaming') "
+                       "RETURNING assistant_message_id, response_text")
+                     run-uuid]
+                    {:builder-fn rs/as-unqualified-maps})]
+      (do
+        (jdbc/execute! tx ["UPDATE assistant_messages SET content = ? WHERE id = ?"
+                           (:response_text run) (:assistant_message_id run)])
+        true)
+      false)))
+
+(defn complete-assistant-compact-run!
+  "Complete an active compaction run and publish its checkpoint atomically.
+   Pre: the covered ids belong to the run's chat. Post: true when one checkpoint
+   was inserted, false when the run was already terminal."
+  [run-uuid summary covered-from-message-id covered-through-message-id]
+  (jdbc/with-transaction [tx ds]
+    (if-let [run (jdbc/execute-one! tx
+                    [(str "UPDATE assistant_runs SET status = 'completed', response_text = ?, "
+                       "completed_at = CURRENT_TIMESTAMP "
+                       "WHERE run_uuid = ? AND status IN ('queued','streaming') "
+                       "RETURNING id, chat_id")
+                     summary run-uuid]
+                    {:builder-fn rs/as-unqualified-maps})]
+      (do
+        (jdbc/execute! tx
+          (sql/format {:insert-into :assistant_checkpoints
+                       :values [{:chat_id (:chat_id run) :run_id (:id run)
+                                 :summary summary
+                                 :covered_from_message_id covered-from-message-id
+                                 :covered_through_message_id covered-through-message-id}]}))
+        true)
+      false)))
+
+(defn fail-assistant-run!
+  "Fail an active run and preserve any partial answer in its transcript row.
+   Post: true when this call won the terminal transition. A stopped run remains
+   stopped and receives no late error text."
+  [run-uuid error-text]
+  (jdbc/with-transaction [tx ds]
+    (if-let [run (jdbc/execute-one! tx
+                    [(str "UPDATE assistant_runs SET status = 'failed', error_text = ?, "
+                       "failed_at = CURRENT_TIMESTAMP "
+                       "WHERE run_uuid = ? AND status IN ('queued','streaming','stop-requested') "
+                       "RETURNING assistant_message_id, response_text")
+                     error-text run-uuid]
+                    {:builder-fn rs/as-unqualified-maps})]
+      (do
+        (when-let [message-id (:assistant_message_id run)]
+          (jdbc/execute! tx ["UPDATE assistant_messages SET content = ? WHERE id = ?"
+                             (:response_text run) message-id]))
+        true)
+      false)))
+
+(defn stop-assistant-run!
+  "Stop the active run in an owned chat at the last durable text boundary.
+   Post: {:stopped true :run-uuid} when a transition occurred, else
+   {:stopped false}. The assistant transcript receives exactly response_text."
+  [user-id chat-id]
+  (jdbc/with-transaction [tx ds]
+    (if-let [run (jdbc/execute-one! tx
+                    [(str "UPDATE assistant_runs r SET status = 'stopped', "
+                       "stopped_at = CURRENT_TIMESTAMP "
+                       "FROM assistant_chats c WHERE r.chat_id = c.id "
+                       "AND c.user_id = ? AND c.id = ? "
+                       "AND r.status IN ('queued','streaming','stop-requested') "
+                       "RETURNING r.run_uuid, r.assistant_message_id, r.response_text")
+                     user-id chat-id]
+                    {:builder-fn rs/as-unqualified-maps})]
+      (do
+        (when-let [message-id (:assistant_message_id run)]
+          (jdbc/execute! tx ["UPDATE assistant_messages SET content = ? WHERE id = ?"
+                             (:response_text run) message-id]))
+        {:stopped true :run-uuid (:run_uuid run)})
+      {:stopped false})))
+
+(defn get-active-assistant-run
+  "The active run for an owned chat, or nil."
+  [user-id chat-id]
+  (jdbc/execute-one! ds
+    [(str "SELECT r.* FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? "
+       "AND r.status IN ('queued','streaming','stop-requested') LIMIT 1")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-run
+  "One run with parsed snapshots IFF its chat belongs to user-id."
+  [user-id run-uuid]
+  (some-> (jdbc/execute-one! ds
+            [(str "SELECT r.* FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+               "WHERE c.user_id = ? AND r.run_uuid = ?")
+             user-id run-uuid]
+            {:builder-fn rs/as-unqualified-maps})
+    (update :request_snapshot pgobject->clj)
+    (update :source_snapshot pgobject->clj)))
+
+(defn get-assistant-run-evidence
+  "Evidence for an owned run, ordered by stored citation key."
+  [user-id run-uuid]
+  (jdbc/execute! ds
+    [(str "SELECT e.* FROM assistant_evidence e "
+       "JOIN assistant_runs r ON r.id = e.run_id "
+       "JOIN assistant_chats c ON c.id = r.chat_id "
+       "WHERE c.user_id = ? AND r.run_uuid = ? ORDER BY e.id")
+     user-id run-uuid]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-evidence-for-chat
+  "All retained evidence for an owned chat, ordered by run and insertion."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    [(str "SELECT e.*, r.run_uuid FROM assistant_evidence e "
+       "JOIN assistant_runs r ON r.id = e.run_id "
+       "JOIN assistant_chats c ON c.id = r.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? ORDER BY r.id, e.id")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-runs-for-chat
+  "Runs for an owned chat, oldest first, with parsed snapshots."
+  [user-id chat-id]
+  (mapv #(-> %
+           (update :request_snapshot pgobject->clj)
+           (update :source_snapshot pgobject->clj))
+    (jdbc/execute! ds
+      [(str "SELECT r.* FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+         "WHERE c.user_id = ? AND c.id = ? ORDER BY r.id")
+       user-id chat-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-assistant-run-summaries-for-chat
+  "Run fields needed by the transcript. Large snapshots stay server-side until
+   the owner opens the details modal."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    [(str "SELECT r.id, r.run_uuid, r.chat_id, r.kind, r.status, "
+       "r.user_message_id, r.assistant_message_id, r.retry_of_run_uuid, "
+       "r.response_text, r.error_text, r.created_at, r.started_at, "
+       "r.first_token_at, r.stopped_at, r.completed_at, r.failed_at "
+       "FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? ORDER BY r.id")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-checkpoints
+  "Completed checkpoints for an owned chat, oldest first."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    [(str "SELECT cp.*, r.run_uuid FROM assistant_checkpoints cp "
+       "JOIN assistant_runs r ON r.id = cp.run_id "
+       "JOIN assistant_chats c ON c.id = cp.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? ORDER BY cp.id")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn latest-assistant-checkpoint
+  "The newest completed checkpoint for an owned chat, or nil."
+  [user-id chat-id]
+  (jdbc/execute-one! ds
+    [(str "SELECT cp.*, r.run_uuid FROM assistant_checkpoints cp "
+       "JOIN assistant_runs r ON r.id = cp.run_id "
+       "JOIN assistant_chats c ON c.id = cp.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? ORDER BY cp.id DESC LIMIT 1")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
 
 (defn set-assistant-chat-title!
   "Rename a chat."
@@ -4132,7 +4574,7 @@
   "Get content from page topics in a range, for card generation context."
   [parent-id start-page end-page]
   (jdbc/execute! ds
-    (sql/format {:select [:page_number :content]
+    (sql/format {:select [:id :page_number :content :created_at :updated_at]
                  :from [:topics]
                  :where [:and
                          [:= :parent_id parent-id]

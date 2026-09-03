@@ -7,11 +7,13 @@
    choices[0].message.content was null, and the parser reported it as
    unreadable structured output. Each cause below must classify distinctly, and the terminal
    one (refusal) must not be retried."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clj-http.client :as http]
+            [clojure.test :refer [deftest is testing]]
             [freememo.card-models :as card-models]
             [freememo.llm-json :as llm-json]
             [freememo.ocr-models :as ocr-models]
-            [freememo.openrouter :as openrouter]))
+            [freememo.openrouter :as openrouter])
+  (:import [java.io ByteArrayInputStream]))
 
 (defn- body
   "A parsed 200 chat-completion body with one choice built from `choice`."
@@ -191,6 +193,53 @@
     (doseq [entry (concat card-models/registry ocr-models/registry)
             :when (:openrouter-model entry)]
       (is (string? (:model (openrouter/model-fields entry))) (:id entry)))))
+
+(deftest stream-chunk-metadata-keeps-only-reported-facts
+  (is (= {:generation-id "gen-1"
+          :resolved-model "provider/model"
+          :provider-name "Provider"
+          :input-tokens 120
+          :output-tokens 35
+          :reasoning-tokens 9
+          :cached-tokens 80
+          :cache-write-tokens 12
+          :cost-usd 0.0042}
+        (openrouter/stream-chunk-metadata
+          {:id "gen-1"
+           :model "provider/model"
+           :provider "Provider"
+           :usage {:prompt_tokens 120
+                   :completion_tokens 35
+                   :cost 0.0042
+                   :prompt_tokens_details {:cached_tokens 80
+                                           :cache_write_tokens 12}
+                   :completion_tokens_details {:reasoning_tokens 9}}})))
+  (is (= {} (openrouter/stream-chunk-metadata {:choices []}))))
+
+(deftest streaming-preserves-whitespace-and-publishes-early-metadata
+  (let [sse (str "data: {\"id\":\"gen-1\",\"model\":\"provider/model\","
+              "\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
+              "data: {\"choices\":[{\"delta\":{\"content\":\" \"}}]}\n\n"
+              "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}],"
+              "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,"
+              "\"cost\":0.001}}\n\n"
+              "data: [DONE]\n\n")
+        deltas (atom [])
+        metadata (atom [])]
+    (with-redefs [http/post
+                  (fn [_ _]
+                    {:status 200 :headers {}
+                     :body (ByteArrayInputStream. (.getBytes sse "UTF-8"))})]
+      (let [result (openrouter/chat-completion-stream!
+                     "key" {:stream true :messages []} {:feature :test}
+                     #(swap! deltas conj %)
+                     #(swap! metadata conj %))]
+        (is (= ["Hello" " " "world"] @deltas))
+        (is (= "Hello world" (:text result)))
+        (is (= "gen-1" (:generation-id (first @metadata))))
+        (is (= 7 (:input-tokens (:metadata result))))
+        (is (= 3 (:output-tokens (:metadata result))))
+        (is (= 0.001 (:cost-usd (:metadata result))))))))
 
 (deftest glm-5-3-flash-is-pinned-to-z-ai-in-both-registries
   (testing "the pin is the reason the entry exists at its price"

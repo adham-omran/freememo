@@ -50,6 +50,7 @@
             [taoensso.telemere :as tel])
   (:import [java.io File]
            [java.security MessageDigest]
+           [java.util UUID]
            [org.postgresql.util PGobject]))
 
 ;; ── Remap specification ────────────────────────────────────────────
@@ -95,6 +96,14 @@
                                  :to_block_id :curriculum_blocks}
    :assistant_chats {:root_topic_id :topics}
    :assistant_messages {:chat_id :assistant_chats}
+   :assistant_runs {:chat_id :assistant_chats
+                    :user_message_id :assistant_messages
+                    :assistant_message_id :assistant_messages}
+   :assistant_checkpoints {:chat_id :assistant_chats :run_id :assistant_runs
+                           :covered_from_message_id :assistant_messages
+                           :covered_through_message_id :assistant_messages}
+   :assistant_evidence {:run_id :assistant_runs
+                        :document_topic_id :topics :page_topic_id :topics}
    :video_transcripts {:topic_id :topics}
    :video_segments {:topic_id :topics}
    :kg_facts {:subject_entity_id :kg_entities :predicate_id :kg_predicates
@@ -121,6 +130,10 @@
    :curriculum_unlock_overrides #{:curriculum_id :from_block_id :to_block_id}
    :assistant_chats #{:root_topic_id}
    :assistant_messages #{:chat_id}
+   :assistant_runs #{:chat_id :user_message_id :assistant_message_id}
+   :assistant_checkpoints #{:chat_id :run_id :covered_from_message_id
+                            :covered_through_message_id}
+   :assistant_evidence #{:run_id}
    :video_transcripts #{:topic_id}
    :video_segments #{:topic_id}
    :neoreader_highlights #{:root_topic_id}
@@ -660,7 +673,7 @@
 (defn- table-specific-remap
   "The remaps unique to one table, applied after `remap-row`.
    Post: {:row M} or {:drop reason}."
-  [table row maps media-map]
+  [tx table row maps media-map]
   (let [with-jsonb-html
         (reduce (fn [m col]
                   (if (contains? m col)
@@ -668,6 +681,31 @@
                     m))
           row (get jsonb-html-columns table []))]
     (case table
+      :assistant_chats
+      {:row (assoc with-jsonb-html :provider_session_id (str (UUID/randomUUID)))}
+      :assistant_runs
+      (let [session-id (:provider_session_id
+                         (jdbc/execute-one! tx
+                           ["SELECT provider_session_id FROM assistant_chats WHERE id = ?"
+                            (:chat_id with-jsonb-html)]
+                           {:builder-fn rs/as-unqualified-maps}))
+            interrupted? (#{"queued" "streaming" "stop-requested"}
+                           (:status with-jsonb-html))
+            remapped (cond-> (-> with-jsonb-html
+                               (assoc :run_uuid (str (UUID/randomUUID))
+                                      :retry_of_run_uuid nil
+                                      :provider_session_id session-id)
+                               (update :request_snapshot
+                                 #(if (map? %) (assoc % :session_id session-id) %)))
+                       interrupted?
+                       (assoc :status "failed"
+                              :error_text "Interrupted during account export."
+                              :failed_at (str (java.time.LocalDateTime/now))))]
+        (when (and interrupted? (:assistant_message_id remapped))
+          (jdbc/execute! tx
+            ["UPDATE assistant_messages SET content = ? WHERE id = ?"
+             (:response_text remapped) (:assistant_message_id remapped)]))
+        {:row remapped})
       :card_versions (remap-card-versions-scope with-jsonb-html maps)
       :score_groups {:row (update with-jsonb-html :geometry
                             #(remap-score-geometry % media-map))}
@@ -723,7 +761,8 @@
                                         :default-parent-id parent-topic-id})]
           (if (:drop r1)
             (update acc :dropped conj {:table table :id (:id row) :reason (:drop r1)})
-            (let [r2 (table-specific-remap table (:row r1) (assoc maps table (:map acc)) media-map)]
+            (let [r2 (table-specific-remap tx table (:row r1)
+                       (assoc maps table (:map acc)) media-map)]
               (if (:drop r2)
                 (update acc :dropped conj {:table table :id (:id row) :reason (:drop r2)})
                 (let [merged-id (when lookup-sql

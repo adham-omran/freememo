@@ -2,14 +2,12 @@
   "AI assistant tab content for the right side panel: chat picker + New Chat,
    transcript, and composer.
 
-   Chats are per-document (root-topic-id). Sending with no active chat creates
-   one first. The learner's reading context is not stored in the transcript —
-   it is injected transiently per send server-side, so the transcript shown here
-   is exactly the learner/assistant turns.
+   Chats are per-document. Sending with no active chat creates one first. Each
+   submitted turn creates a durable streamed run. Reading sources stay outside
+   the transcript and remain available in the answer details.
 
-   Reactivity: subscribes to :assistant-mutations (bumped on chat create + each
-   message insert) so the list and transcript re-query. The learner's own turn
-   appears before the reply because send! bumps right after persisting it.
+   Reactivity: subscribes to :assistant-mutations. Stream workers publish at a
+   bounded rate so the transcript can show durable partial text.
 
    Persona: each chat carries its own mode (freememo.assistant-modes). The Mode
    pills therefore show the OPEN chat's persona, not a standing preference; with
@@ -20,12 +18,13 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-rows :as rows]
+   [freememo.assistant-run-details :as run-details]
    [freememo.math :as math]
    [freememo.typeahead :refer [Typeahead]]
-   [freememo.viewport :as viewport]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.user-state :as us])))
@@ -53,16 +52,95 @@
   #?(:cljs (set! (.-scrollTop node) (.-scrollHeight node))
      :clj nil))
 
-(defn focus!
-  "CLJS-only: focus `node` when `armed?` is true. Called in the reactive body so
-   Electric re-fires it only when `armed?` changes value — i.e. once when a send
-   completes and the composer re-enables (armed? = (not sending?) rises), not on
-   every frame, so it never fights the learner's own focus. Defers a tick so the
-   `disabled` prop has cleared before focus. CLJ no-op; plain defn for parity."
-  [node armed?]
-  #?(:cljs (when (and node armed?)
-             (js/setTimeout (fn [] (.focus node)) 0))
-     :clj nil))
+(e/defn AssistantTranscriptEntry
+  [message user-id page-topic-id root-topic-id sending? !details-run !error]
+  (e/client
+    (cond
+      (= "event" (:assistant_messages/role message))
+      (dom/element "details"
+        (dom/props {:class "assistant-compact-event"})
+        (dom/element "summary" (dom/text "Context compacted"))
+        (dom/p
+          (dom/props {:class "assistant-compact-event__range"})
+          (dom/text (str "Messages " (:assistant_event/covered_from message)
+                      "–" (:assistant_event/covered_through message))))
+        (dom/div
+          (dom/props {:class "assistant-compact-event__summary" :dir "auto"})
+          (dom/text (:assistant_messages/content message))))
+
+      (= "assistant" (:assistant_messages/role message))
+      (let [status (:assistant_run/status message)
+            content (:assistant_messages/content message)
+            run-uuid (:assistant_run/uuid message)]
+        (dom/div
+          (dom/props {:class "assistant-msg-group"})
+          (dom/div
+            (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
+            (if (str/blank? content)
+              (when-not (or (= "failed" status) (= "stopped" status))
+                (dom/span
+                  (dom/props {:class "assistant-msg-status"})
+                  (dom/text "Thinking…")))
+              (do
+                (set! (.-innerHTML dom/node)
+                  (or (:assistant_messages/content-html message) ""))
+                (math/render-math! dom/node)))
+            (when (= "stopped" status)
+              (dom/div
+                (dom/props {:class "assistant-msg-status"})
+                (dom/text "Stopped")))
+            (when (= "failed" status)
+              (dom/div
+                (dom/props {:class "assistant-msg-status assistant-msg-status--failed"})
+                (dom/text (str "Failed"
+                            (when-let [failure (:assistant_run/error message)]
+                              (str ": " failure)))))))
+          (when run-uuid
+            (dom/div
+              (dom/props {:class "assistant-msg-actions"})
+              (when-not (str/blank? content)
+                (dom/button
+                  (dom/props {:class "assistant-msg-card" :type "button"
+                              :title "Generate a flashcard from this reply"
+                              :aria-label "Generate a flashcard from this reply"
+                              :disabled sending?})
+                  (let [click (dom/On "click" identity nil)
+                        [generate-token _] (e/Token click)
+                        generating? (some? generate-token)]
+                    (dom/props {:disabled (or sending? generating?)})
+                    (dom/text (if generating? "✦…" "✦"))
+                    (when generate-token
+                      (case (e/server (e/Offload
+                                        #(assistant/reply->cards!
+                                           user-id page-topic-id root-topic-id content)))
+                        (generate-token))))))
+              (dom/button
+                (dom/props {:class "assistant-msg-card" :type "button"
+                            :title "Answer details" :aria-label "Answer details"})
+                (dom/text "[i]")
+                (dom/On "click" (fn [_] (reset! !details-run run-uuid)) nil))
+              (when (= "failed" status)
+                (dom/button
+                  (dom/props {:class "assistant-msg-card" :type "button"
+                              :title "Retry answer" :aria-label "Retry answer"
+                              :disabled sending?})
+                  (dom/text "↻")
+                  (let [retry-click (dom/On "click" identity nil)
+                        [retry-token _] (e/Token retry-click)]
+                    (when retry-token
+                      (let [result (e/server
+                                     (e/Offload
+                                       #(assistant/retry-answer-run!
+                                          user-id run-uuid (str (random-uuid)))))]
+                        (case result
+                          (case (reset! !error (when-not (:ok result) (:error result)))
+                            (retry-token))))))))))))
+
+      :else
+      (dom/div
+        (dom/props {:class (str "assistant-msg assistant-msg--"
+                             (:assistant_messages/role message))})
+        (dom/text (:assistant_messages/content message))))))
 
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
@@ -75,6 +153,8 @@
           [t _] (e/Token submit)
           !error (atom nil)
           error (e/watch !error)
+          !details-run (atom nil)
+          details-run (e/watch !details-run)
           ;; @-referenced documents queued for the next send (shown as chips);
           ;; their ids ride the submit payload and clear on a successful send.
           !refs (atom [])
@@ -88,7 +168,7 @@
           picked (e/watch !picked)
           ;; Optimistic echo of the just-sent user turn: {:id :text} or nil.
           ;; Rendered as a user bubble until the persisted row carrying this :id
-          ;; appears in the transcript (send! stores :id as the row's client_id and
+          ;; appears in the transcript (run creation stores :id as client_id and
           ;; bumps before the reply), so the echo and the real row never both show.
           !echo (atom nil)
           echo (e/watch !echo)
@@ -118,13 +198,17 @@
                      (mapv (fn [m]
                              (if (= "assistant" (:assistant_messages/role m))
                                (assoc m :assistant_messages/content-html
-                                 (-> (:assistant_messages/content m)
+                                 (-> (assistant/render-evidence-citations
+                                       (:assistant_messages/content m)
+                                       (:assistant_run/evidence m))
                                    markdown/unwrap-non-math-dollars
                                    markdown/parse-markdown
                                    markdown/dollar-math->tex))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
-          sending? (some? t)
+          active-run (e/server (assistant/active-run* assistant-rev user-id active))
+          details (e/server (assistant/run-details* assistant-rev user-id details-run))
+          sending? (some? active-run)
           ;; The persona in force: the open chat's own mode, else the staged one.
           ;; The fallback also covers the gap right after ＋ New, before the
           ;; :assistant-mutations bump puts the new chat in chat-options — the
@@ -134,38 +218,33 @@
           ;; column (every chat predating it) reads as Socratic.
           mode-entry (modes/resolve-mode
                        (or (some (fn [c] (when (= active (:id c)) (:mode c))) chat-options)
-                         pending-mode))
-          ;; Touch devices: never steal focus into the composer — an autofocus
-          ;; here pops the on-screen keyboard the moment the panel opens.
-          coarse? (e/watch viewport/!coarse?)]
+                         pending-mode))]
 
-      ;; Send effect: fires when a submit payload is produced (Send / Enter /
-      ;; suggested prompt). ensure-and-send! creates the chat when :chat is nil,
-      ;; so the very first message auto-creates a chat carrying this page context.
+      ;; Submit effect: ordinary text starts a streamed answer. `/compact` starts
+      ;; a separate compaction run and never enters the transcript as user text.
       (when t
         (let [{:keys [id text chat mode] ref-ids :refs} submit
-              refs-snapshot (e/snapshot refs)] ; frozen at mount for failure-restore
+              refs-snapshot (e/snapshot refs)
+              compact? (= "/compact" (str/trim text))]
           (if (str/blank? text)
             (t)
-            ;; Optimistic: clear composer + chips and echo the turn immediately.
-            ;; All are restored below if the send fails, so nothing is lost.
             (do
               (reset! !draft "")
               (reset! !refs [])
-              (reset! !echo {:id id :text text})
+              (reset! !echo (when-not compact? {:id id :text text}))
               (let [r (e/server (e/Offload
-                                  #(assistant/ensure-and-send!
+                                  #(assistant/submit-chat-input!
                                      user-id root-topic-id page-topic-id chat mode
                                      text ref-ids id)))]
                 (case r
                   (do
-                    (reset! !active (:chat-id r)) ; select the (possibly new) chat
+                    (reset! !active (:chat-id r))
                     (if (:ok r)
-                      (reset! !error nil) ; chips consumed by this turn
+                      (reset! !error nil)
                       (do (reset! !error (:error r))
                           (reset! !draft text)
-                          (reset! !refs refs-snapshot)))
-                    (reset! !echo nil) ; echo already stopped rendering on id correlation
+                          (reset! !refs refs-snapshot)
+                          (reset! !echo nil)))
                     (t))))))))
 
       ;; @-reference commit: Typeahead wrote the chosen document's id to !picked.
@@ -183,6 +262,12 @@
           (reset! !at-open? false)
           (reset! !picked nil)
           (pt)))
+
+      ;; Retire the optimistic echo after its durable user row arrives. This
+      ;; also prevents a completed echo from appearing after a chat switch.
+      (when (and echo
+              (some #(= (:id echo) (:assistant_messages/client_id %)) messages))
+        (reset! !echo nil))
 
       (dom/div
         (dom/props {:class "assistant-panel"})
@@ -208,43 +293,8 @@
               (when (and (not sending?) (nil? echo))
                 (rows/EmptyChatStarters mode-entry !submit !active !refs))
               (e/for-by :assistant_messages/id [m visible]
-                (if (= "assistant" (:assistant_messages/role m))
-                  ;; Assistant: rendered Markdown HTML (math typeset) + a per-reply
-                  ;; ✦ card-gen button. innerHTML is set on a dedicated child so it
-                  ;; never clobbers the sibling button; dir="auto" keeps RTL right.
-                  (dom/div
-                    (dom/props {:class "assistant-msg-group"})
-                    (dom/div
-                      (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
-                      ;; innerHTML + render-math!, NOT math/set-html!: that fn
-                      ;; short-circuits on a missing `\(`, and a reply may carry
-                      ;; only display math (`\[…\]`), which it would skip.
-                      (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
-                      (math/render-math! dom/node))
-                    (dom/div
-                      (dom/props {:class "assistant-msg-actions"})
-                      (dom/button
-                        (dom/props {:class "assistant-msg-card" :type "button"
-                                    :title "Generate a flashcard from this reply"
-                                    :aria-label "Generate a flashcard from this reply"})
-                        ;; Per-bubble token (this row's frame): captures run
-                        ;; concurrently across bubbles, disabling only their own.
-                        (let [click (dom/On "click" identity nil)
-                              [gt _] (e/Token click)
-                              gen-active? (some? gt)]
-                          (dom/props {:disabled gen-active?})
-                          (dom/text (if gen-active? "✦…" "✦"))
-                          (when gt
-                            (let [content (:assistant_messages/content m)]
-                              (case (e/server (e/Offload
-                                                #(assistant/reply->cards!
-                                                   user-id page-topic-id root-topic-id content)))
-                                (gt))))))))
-                  ;; User: literal text, no Markdown/math.
-                  (dom/div
-                    (dom/props {:class (str "assistant-msg assistant-msg--"
-                                         (:assistant_messages/role m))})
-                    (dom/text (:assistant_messages/content m)))))))
+                (AssistantTranscriptEntry m user-id page-topic-id root-topic-id
+                  sending? !details-run !error))))
           ;; Optimistic echo of the just-sent turn (user bubble). Rendered only
           ;; until the persisted row carrying this echo's id lands in the
           ;; transcript — a pure id correlation, so the echo and the real row
@@ -256,13 +306,17 @@
             (dom/div
               (dom/props {:class "assistant-msg assistant-msg--user"})
               (dom/text e-text)))
-          (when sending?
+          (when (and sending? (= "compact" (:kind active-run)))
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
-              (dom/text "Thinking…")))
+              (dom/text "Compacting context…")))
           ;; Scroll to bottom when a message lands, "Thinking…" toggles, or the
           ;; optimistic echo appears — follows the user's turn down, then the reply.
-          (scroll-to-bottom! dom/node [(count messages) sending? (:id echo)]))
+          (scroll-to-bottom! dom/node
+            [(count messages) sending? (:id echo)
+             (some-> messages last :assistant_messages/content count)]))
+
+        (run-details/RunDetailsModal !details-run details)
 
         (when error
           (dom/div
@@ -295,36 +349,52 @@
                       (swap! !refs (fn [rs] (into [] (remove #(= (:id r) (:id %))) rs)))
                       (rt))))))))
 
-        ;; Composer: Enter sends, Shift+Enter newlines, `@` opens the doc picker.
-        ;; The Send (↑) button sits beside the input, aligned to its bottom.
+        ;; Forms5 owns the composer and command buttons. The service acknowledges
+        ;; local draft edits immediately and sequences server commands by token.
         (dom/div
           (dom/props {:class "assistant-panel__composer"})
-          (dom/textarea
-            (dom/props {:class "input assistant-panel__input" :dir "auto" :rows "2"
-                        :placeholder "Ask about this page… (@ to reference a document)"
-                        :value draft :disabled sending?})
-            (let [v (dom/On "input" #(-> % .-target .-value) nil)]
-              (when (some? v) (reset! !draft v)))
-            (dom/On "keydown"
-              (fn [e]
-                (cond
-                  (and (= (.-key e) "Enter") (not (.-shiftKey e)))
-                  (do (.preventDefault e)
-                    (when-let [ed (submit-edit !draft !active !refs (:id mode-entry))]
-                      (reset! !submit ed)))
-                  (= (.-key e) "@")
-                  (reset! !at-open? true))) ; the `@` still types into the draft
-              nil)
-            ;; Return the caret to the composer once a reply lands (edge-fired).
-            (case (focus! dom/node (and (not sending?) (not coarse?))) nil))
-          (dom/div
-            (dom/props {:class "assistant-panel__composer-actions"})
-            (dom/button
-              (dom/props {:class "btn btn-primary assistant-panel__send"
-                          :type "button" :title "Send" :aria-label "Send"
-                          :disabled (or sending? (str/blank? draft))})
-              (dom/text "↑")
-              (dom/On "click"
-                (fn [_] (when-let [ed (submit-edit !draft !active !refs (:id mode-entry))]
-                          (reset! !submit ed)))
-                nil))))))))
+          (dom/On "keydown"
+            (fn [event]
+              (cond
+                (and (= (.-key event) "Enter")
+                  (not (.-shiftKey event))
+                  (not sending?))
+                (do
+                  (.preventDefault event)
+                  (when-let [edit (submit-edit !draft !active !refs (:id mode-entry))]
+                    (reset! !submit edit)))
+
+                (= (.-key event) "@")
+                (reset! !at-open? true)))
+            nil)
+          (e/for [[command-token command]
+                  (e/amb
+                    (forms/Input! :assistant/draft draft :as :textarea
+                      :class "input assistant-panel__input" :dir "auto" :rows 2
+                      :placeholder "Ask about this page… (@ to reference a document)"
+                      :aria-label "Assistant message" :disabled sending?)
+                    (if sending?
+                      (forms/Button! [::stop]
+                        :class "btn btn-secondary assistant-panel__send"
+                        :label "Stop" :aria-label "Stop response")
+                      (forms/Button! [::submit]
+                        :class "btn btn-primary assistant-panel__send"
+                        :label "↑" :aria-label "Send"
+                        :disabled (str/blank? draft))))]
+            (cond
+              (map? command)
+              (case (reset! !draft (:assistant/draft command))
+                (command-token))
+
+              (= [::submit] command)
+              (case (when-let [edit (submit-edit !draft !active !refs (:id mode-entry))]
+                      (reset! !submit edit))
+                (command-token))
+
+              (= [::stop] command)
+              (let [result (e/server (e/Offload
+                                       #(assistant/stop-active-run! user-id active)))]
+                (case result
+                  (case (reset! !error (when-not (:stopped result)
+                                         "No active response to stop."))
+                    (command-token)))))))))))

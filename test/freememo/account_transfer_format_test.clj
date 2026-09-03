@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-34-in-a-fixed-order
-  (is (= 34 (count fmt/entity-tables)))
-  (is (= 34 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-37-in-a-fixed-order
+  (is (= 37 (count fmt/entity-tables)))
+  (is (= 37 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -94,6 +94,12 @@
              [:curriculum_unlock_overrides :curriculum_blocks]
              [:assistant_chats :topics]
              [:assistant_messages :assistant_chats]
+             [:assistant_runs :assistant_chats]
+             [:assistant_runs :assistant_messages]
+             [:assistant_checkpoints :assistant_chats]
+             [:assistant_checkpoints :assistant_runs]
+             [:assistant_checkpoints :assistant_messages]
+             [:assistant_evidence :assistant_runs]
              [:kg_facts :kg_entities]
              [:kg_facts :kg_predicates]
              [:kg_facts :topics]

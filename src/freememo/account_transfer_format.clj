@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 34 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 37 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -116,6 +116,9 @@
    :curriculum_unlock_overrides
    :assistant_chats
    :assistant_messages
+   :assistant_runs
+   :assistant_checkpoints
+   :assistant_evidence
    :kg_entities
    :kg_predicates
    :kg_facts
@@ -340,6 +343,22 @@
 
    :assistant_messages {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
                                  " WHERE user_id = ? AND root_topic_id IN ("
+                                 owned-topics "))")
+                        :params 2 :order "t.id"}
+
+   :assistant_runs {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
+                             " WHERE user_id = ? AND root_topic_id IN ("
+                             owned-topics "))")
+                    :params 2 :order "t.id"}
+
+   :assistant_checkpoints {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
+                                    " WHERE user_id = ? AND root_topic_id IN ("
+                                    owned-topics "))")
+                           :params 2 :order "t.id"}
+
+   :assistant_evidence {:where (str "t.run_id IN (SELECT r.id FROM assistant_runs r"
+                                 " JOIN assistant_chats c ON c.id = r.chat_id"
+                                 " WHERE c.user_id = ? AND c.root_topic_id IN ("
                                  owned-topics "))")
                         :params 2 :order "t.id"}
 

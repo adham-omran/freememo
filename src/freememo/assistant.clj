@@ -1,15 +1,11 @@
 (ns freememo.assistant
   "Server-side AI assistant for the reading view.
 
-   One chat is a conversation about one document (root topic), held in ONE
-   persona — its `mode` column, an :id from freememo.assistant-modes. Each send
-   assembles [system persona (+ approved KG facts)] ++ a transient turn holding
-   the learner's LIVE reading context (breadcrumb + the current page, or a
-   ±window page span for PDFs) ++ any @-referenced documents ++ the stored
-   transcript, calls OpenRouter, persists the reply, and bills usage.cost through
-   the same credit path as card generation (no-op on self-host). The reading
-   context is recomputed per send (never persisted), so it tracks the page on
-   screen. No streaming (v1)."
+   One chat is a conversation about one document and uses one persona and one
+   opaque provider session. Each submitted turn creates a durable run before it
+   starts a provider stream. The run owns its exact request, retained evidence,
+   partial text, provider facts, and terminal state. Stop closes the local text
+   boundary while the provider stream drains for final usage data."
   (:require
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -23,7 +19,10 @@
    [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [freememo.db :as db]
-   [taoensso.telemere :as tel]))
+   [missionary.core :as m]
+   [taoensso.telemere :as tel])
+  (:import
+   [java.util.concurrent Executors]))
 
 (def ^:private mode-system-prompts
   "mode :id → delay over that persona's prompt file. One delay per entry, so a
@@ -49,6 +48,8 @@
 (defn- bump! [user-id]
   (commands/bump-channels! user-id #{:assistant-mutations}))
 
+(declare start-compact-run!)
+
 ;; ── Context resolution ─────────────────────────────────────────────────────
 
 (def ^:private max-context-facts
@@ -62,97 +63,28 @@
   40000)
 
 (defn- resolve-context
-  "Resolve the learner's live reading context for one send, from the currently
-   open topic. Single lookup point so grounding and the context turn agree.
-   Pre: root-topic-id owned by user-id; page-topic-id is the on-screen topic
-   (a PDF page topic, or the topic itself for non-PDF kinds).
+  "Resolve the learner's live reading context for one run. The client-provided
+   page must belong to the user and descend from the chat's root. An invalid
+   page falls back to the owned root.
+   Pre: root-topic-id is the root of an owned chat.
    Post: {:root-id :root-kind :pdf? :page-topic-id :center-page :window};
    :center-page is the 1-based page number for a PDF page, else nil."
   [user-id root-topic-id page-topic-id]
-  (let [root (db/get-topic root-topic-id)
+  (let [root (db/get-topic-for-user user-id root-topic-id)
+        candidate (when page-topic-id (db/get-topic-for-user user-id page-topic-id))
+        valid-page? (and candidate
+                      (some #{root-topic-id} (db/get-ancestor-ids page-topic-id)))
+        resolved-page-id (if valid-page? page-topic-id root-topic-id)
+        resolved-page (if valid-page? candidate root)
         pdf? (= "pdf" (:topics/kind root))
         center-page (when pdf?
-                      (:topics/page_number (db/get-topic page-topic-id)))]
+                      (:topics/page_number resolved-page))]
     {:root-id root-topic-id
      :root-kind (:topics/kind root)
      :pdf? pdf?
-     :page-topic-id page-topic-id
+     :page-topic-id resolved-page-id
      :center-page center-page
      :window (settings/get-assistant-pdf-window user-id)}))
-
-(defn- breadcrumb-line
-  "One line locating the open node within its document tree, root→node, so the
-   model knows it is reading a section rather than the whole document.
-   Pre: page-topic-id may be nil. Post: a non-blank string when the node has ≥1
-   ancestor (path length > 1), else nil (nothing useful to say for a bare root)."
-  [page-topic-id]
-  (let [ids (db/get-ancestor-ids page-topic-id)] ; [self … root], nearest-first
-    (when (> (count ids) 1)
-      (let [titles (db/get-topic-titles ids)
-            path (mapv #(or (get titles %) "Untitled") (reverse ids))]
-        (str "You are reading a section of the document \"" (first path) "\".\n"
-          "Location (root → current): " (str/join " › " path) ".")))))
-
-(defn- pdf-window-text
-  "Text of the PDF pages within ±window of `center-page`, in reading order, each
-   page delimited and the current page marked. Blank/unextracted pages are
-   skipped. The combined length is capped at `max-window-chars`, dropping the
-   pages farthest from center first; the center page is always kept.
-   Pre: center-page is a 1-based page number; window ≥ 0.
-   Post: a non-blank string, or nil when no page in range has extracted text."
-  [root-id center-page window]
-  (when (and root-id center-page)
-    (let [start (max 1 (- center-page window))
-          end   (+ center-page window)
-          pages (->> (db/get-context-pages root-id start end)
-                  (keep (fn [row]
-                          (when-let [c (some-> (:topics/content row) str/trim not-empty)]
-                            {:page (:topics/page_number row) :text c}))))
-          ;; nearest-first so the farthest pages fall off the char budget first
-          ordered (sort-by #(Math/abs (- (int (:page %)) (int center-page))) pages)
-          {:keys [kept omitted]}
-          (reduce (fn [{:keys [kept total omitted]} {:keys [text] :as p}]
-                    (let [len (count text)]
-                      (if (or (empty? kept) (<= (+ total len) max-window-chars))
-                        {:kept (conj kept p) :total (+ total len) :omitted omitted}
-                        {:kept kept :total total :omitted (inc omitted)})))
-            {:kept [] :total 0 :omitted 0} ordered)]
-      (when (seq kept)
-        (let [body (->> kept
-                     (sort-by :page)
-                     (map (fn [{:keys [page text]}]
-                            (str "--- Page " page
-                              (when (= page center-page) " (current page)") " ---\n"
-                              text)))
-                     (str/join "\n\n"))]
-          (if (pos? omitted)
-            (str body "\n\n(" omitted " nearby page(s) omitted for length.)")
-            body))))))
-
-(defn- reading-material
-  "The text the learner is currently reading: a ±window page span for a PDF,
-   else the open topic's own content. Post: non-blank string or nil."
-  [ctx]
-  (if (:pdf? ctx)
-    (pdf-window-text (:root-id ctx) (:center-page ctx) (:window ctx))
-    (some-> (:page-topic-id ctx) db/get-topic :topics/content str/trim not-empty)))
-
-(defn- current-context-messages
-  "The learner's live reading context as a single transient user turn: a
-   breadcrumb locating the open node plus the reading material. Recomputed each
-   send and never persisted, so it always reflects the page on screen now.
-   Pre: ctx from resolve-context. Post: [] when nothing locatable, else a
-   one-element vector [{:role \"user\" :content s}]."
-  [ctx]
-  (let [crumb    (breadcrumb-line (:page-topic-id ctx))
-        material (reading-material ctx)
-        sections (remove str/blank?
-                   [crumb
-                    (when material
-                      (str "Material the learner is currently reading:\n\n" material))])]
-    (if (empty? sections)
-      []
-      [{:role "user" :content (str/join "\n\n" sections)}])))
 
 (defn- title-from
   "A short chat title derived from the learner's first message."
@@ -222,52 +154,236 @@
         "The learner is studying this document to: " goal "\n"
         "Ground your questions in this goal; prioritize what serves it."))))
 
-(defn- reference-context-messages
-  "Transient OpenRouter context turns for @-referenced documents — one per
-   referenced doc, full content, not persisted. Each id is re-checked for
-   ownership here (the client-offered list is not trusted); foreign, missing,
-   or empty docs are skipped.
-   Pre: ref-topic-ids is a (possibly empty/nil) seq of root-topic ids.
-   Post: order follows ref-topic-ids; every emitted turn belongs to user-id."
-  [user-id ref-topic-ids]
-  (into []
-    (keep (fn [id]
-            (when-let [t (db/get-topic-for-user user-id id)]
-              (let [content (some-> (:topics/content t) str/trim)]
-                (when-not (str/blank? content)
-                  {:role "user"
-                   :content (str "Referenced document \""
-                              (or (:topics/title t) "Untitled") "\":\n\n" content)})))))
-    (or ref-topic-ids [])))
-
 ;; ── Message assembly ───────────────────────────────────────────────────────
 
-(defn- assemble-messages
-  "[{:role \"system\" persona+suffix}] ++ transient context turns ++ stored
-   transcript, all mapped to OpenRouter shape. `mode-id` picks the persona;
-   `system-suffix` (string|nil) grounds it; `extra-context-msgs` are
-   non-persisted turns (referenced documents).
-   Pre:  `mode-id` is a string or nil — an unrecognized value resolves to the
-         default persona, it does not blank the system message.
-   Post: exactly one system message, first."
-  [chat-id mode-id system-suffix extra-context-msgs]
-  (into (into [{:role "system" :content (str (mode-system-prompt mode-id) system-suffix)}]
-          (or extra-context-msgs []))
-    (map (fn [m] {:role (:assistant_messages/role m)
-                  :content (:assistant_messages/content m)}))
+;; ── Durable run assembly ───────────────────────────────────────────────────
+
+(def ^:private evidence-token-pattern
+  #"\[evidence:([A-Za-z0-9_-]+)\]")
+
+(def ^:private evidence-system-instructions
+  "\n\n# Evidence citations\n\nCite supplied sources only with their exact token, such as [evidence:E1]. Do not invent evidence keys. Place each citation after the claim it supports.")
+
+(defn- source-revision
+  "Stable revision text for one retained source snapshot."
+  [topic]
+  (some-> (or (:topics/updated_at topic) (:topics/created_at topic)) str))
+
+(defn- evidence-key [index]
+  (str "E" index))
+
+(defn- evidence-excerpt [text]
+  (let [text (or text "")]
+    (subs text 0 (min 1000 (count text)))))
+
+(defn- pdf-context-packet
+  "Build page-level evidence and one rendered source turn for the current PDF.
+   Pre: ctx identifies a PDF page. Post: {:messages :evidence :next-index}.
+   Every included page has one evidence key and the character budget matches the
+   legacy reading window."
+  [ctx root-title first-index]
+  (let [center (:center-page ctx)
+        window (:window ctx)
+        pages (if center
+                (db/get-context-pages (:root-id ctx) (max 1 (- center window)) (+ center window))
+                [])
+        candidates (->> pages
+                     (keep (fn [page]
+                             (when-let [text (some-> (:topics/content page) str/trim not-empty)]
+                               {:topic page :page (:topics/page_number page) :text text})))
+                     (sort-by #(Math/abs (- (int (:page %)) (int center)))))
+        kept (->> candidates
+               (reduce (fn [{:keys [pages total]} page]
+                         (let [length (count (:text page))]
+                           (if (or (empty? pages) (<= (+ total length) max-window-chars))
+                             {:pages (conj pages page) :total (+ total length)}
+                             {:pages pages :total total})))
+                 {:pages [] :total 0})
+               :pages
+               (sort-by :page)
+               vec)
+        evidence (mapv (fn [offset {:keys [topic page text]}]
+                         {:citation-key (evidence-key (+ first-index offset))
+                          :document-topic-id (:root-id ctx)
+                          :page-topic-id (:topics/id topic)
+                          :page-number page
+                          :document-title root-title
+                          :display-label "document-level evidence"
+                          :source-revision (source-revision topic)
+                          :quoted-text (evidence-excerpt text)
+                          :snapshot-content text})
+                   (range) kept)
+        content (->> (map vector evidence kept)
+                  (map (fn [[source page]]
+                         (str "Source " (:citation-key source) " — " root-title
+                           ", page " (:page page) "\n" (:text page))))
+                  (str/join "\n\n"))]
+    {:messages (if (str/blank? content) [] [{:role "user" :content content}])
+     :evidence evidence
+     :next-index (+ first-index (count evidence))}))
+
+(defn- topic-context-packet
+  "Build one document-level source for the current non-PDF topic."
+  [ctx root-title first-index]
+  (if-let [topic (some-> (:page-topic-id ctx) db/get-topic)]
+    (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
+      (let [source {:citation-key (evidence-key first-index)
+                    :document-topic-id (:root-id ctx)
+                    :page-topic-id (:topics/id topic)
+                    :page-number (:topics/page_number topic)
+                    :document-title root-title
+                    :display-label "document-level evidence"
+                    :source-revision (source-revision topic)
+                    :quoted-text (evidence-excerpt content)
+                    :snapshot-content content}]
+        {:messages [{:role "user"
+                     :content (str "Source " (:citation-key source) " — " root-title
+                                "\n" content)}]
+         :evidence [source] :next-index (inc first-index)})
+      {:messages [] :evidence [] :next-index first-index})
+    {:messages [] :evidence [] :next-index first-index}))
+
+(defn- reference-context-packet
+  "Build retained document-level sources for owned @ references."
+  [user-id ref-topic-ids first-index]
+  (reduce
+    (fn [{:keys [messages evidence next-index]} topic-id]
+      (if-let [topic (db/get-topic-for-user user-id topic-id)]
+        (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
+          (let [title (or (:topics/title topic) "Untitled")
+                source {:citation-key (evidence-key next-index)
+                        :document-topic-id topic-id
+                        :page-topic-id topic-id
+                        :page-number (:topics/page_number topic)
+                        :document-title title
+                        :display-label "document-level evidence"
+                        :source-revision (source-revision topic)
+                        :quoted-text (evidence-excerpt content)
+                        :snapshot-content content}]
+            {:messages (conj messages
+                         {:role "user"
+                          :content (str "Source " (:citation-key source) " — " title
+                                     "\n" content)})
+             :evidence (conj evidence source)
+             :next-index (inc next-index)})
+          {:messages messages :evidence evidence :next-index next-index})
+        {:messages messages :evidence evidence :next-index next-index}))
+    {:messages [] :evidence [] :next-index first-index}
+    (or ref-topic-ids [])))
+
+(defn- run-source-packet
+  "Resolve current reading sources, @ references, and grounded fact evidence.
+   Post: every source shown to the model has one retained evidence record."
+  [user-id ctx mode ref-topic-ids]
+  (let [root (db/get-topic (:root-id ctx))
+        root-title (or (:topics/title root) "Untitled")
+        current (if (:pdf? ctx)
+                  (pdf-context-packet ctx root-title 1)
+                  (topic-context-packet ctx root-title 1))
+        refs (reference-context-packet user-id ref-topic-ids (:next-index current))
+        grounding (grounding-system-suffix user-id ctx mode)
+        facts-source (when-not (str/blank? grounding)
+                       {:citation-key (evidence-key (:next-index refs))
+                        :document-topic-id (:root-id ctx)
+                        :page-topic-id (:page-topic-id ctx)
+                        :page-number (:center-page ctx)
+                        :document-title root-title
+                        :display-label "document-level evidence"
+                        :source-revision (source-revision root)
+                        :quoted-text (evidence-excerpt grounding)
+                        :snapshot-content grounding})]
+    {:messages (into (:messages current) (:messages refs))
+     :evidence (cond-> (into (:evidence current) (:evidence refs))
+                 facts-source (conj facts-source))
+     :grounding-suffix (when grounding
+                         (str grounding "\n\nEvidence key for these established facts: "
+                           "[evidence:" (:citation-key facts-source) "]."))}))
+
+(defn- transcript-messages-after-checkpoint
+  "Provider transcript after the newest checkpoint's covered range.
+   Blank assistant placeholders never enter a request."
+  [chat-id checkpoint]
+  (into []
+    (comp
+      (filter #(> (:assistant_messages/id %) (or (:covered_through_message_id checkpoint) 0)))
+      (filter #(or (= "user" (:assistant_messages/role %))
+                 (not (str/blank? (:assistant_messages/content %)))))
+      (map (fn [message]
+             {:role (:assistant_messages/role message)
+              :content (:assistant_messages/content message)})))
     (db/get-assistant-messages chat-id)))
+
+(defn- answer-request
+  "Render the exact provider request for one new answer.
+   Stable instructions and the latest checkpoint form the request prefix.
+   Later transcript, current sources, and the new user turn follow it."
+  [user-id chat page-topic-id user-text ref-topic-ids model-fields]
+  (let [chat-id (:assistant_chats/id chat)
+        root-topic-id (:assistant_chats/root_topic_id chat)
+        mode (modes/resolve-mode (:assistant_chats/mode chat))
+        ctx (resolve-context user-id root-topic-id page-topic-id)
+        sources (run-source-packet user-id ctx mode ref-topic-ids)
+        checkpoint (db/latest-assistant-checkpoint user-id chat-id)
+        system-content (str (mode-system-prompt (:id mode))
+                         (mission-suffix user-id root-topic-id)
+                         evidence-system-instructions)
+        prefix (cond-> [{:role "system" :content system-content}]
+                 checkpoint (conj {:role "system"
+                                    :content (str "# Conversation checkpoint\n\n"
+                                               (:summary checkpoint))}))
+        later-transcript (transcript-messages-after-checkpoint chat-id checkpoint)
+        dynamic-grounding (when-let [grounding (:grounding-suffix sources)]
+                            [{:role "system" :content grounding}])
+        messages (into (into (into (into prefix later-transcript)
+                                dynamic-grounding)
+                         (:messages sources))
+                   [{:role "user" :content user-text}])]
+    {:provider-request (assoc model-fields
+                         :stream true
+                         :session_id (:assistant_chats/provider_session_id chat)
+                         :messages messages)
+     :source-snapshot (:evidence sources)
+     :evidence (:evidence sources)}))
+
+(defn citation-target
+  "Relative viewer target for one retained evidence record."
+  [evidence]
+  (when-let [document-id (or (:document_topic_id evidence)
+                           (:document-topic-id evidence))]
+    (str "/viewer/topic/" document-id
+      (when-let [page (or (:page_number evidence) (:page-number evidence))]
+        (str "/" page))
+      (when-let [anchor (:anchor evidence)]
+        (str "#" anchor)))))
+
+(defn render-evidence-citations
+  "Replace valid evidence tokens with Markdown links and remove invalid tokens.
+   Pre: evidence belongs to the answer run. Post: every rendered citation has a
+   retained target. Modified clicks use the browser's native new-tab behavior."
+  [answer evidence]
+  (let [by-key (into {} (map (juxt :citation_key identity)) evidence)]
+    (str/replace (or answer "") evidence-token-pattern
+      (fn [[_ citation-key]]
+        (if-let [source (get by-key citation-key)]
+          (if-let [target (citation-target source)]
+            (str "[" (or (:display_label source) "document-level evidence")
+              "](" target ")")
+            "")
+          "")))))
 
 ;; ── Commands ───────────────────────────────────────────────────────────────
 
 (defn start-chat!
   "Create a chat for (user-id, root-topic-id) in `mode-id`. Returns the new chat
-   id and bumps :assistant-mutations. The page context is no longer frozen here —
-   each send injects the learner's live reading context (see
-   current-context-messages).
-   Pre:  `mode-id` is a string or nil (the client's pill selection; unrecognized
-         values are resolved, not rejected — creating a chat must not fail on it).
+   id and bumps :assistant-mutations. The page context is resolved for each run.
+   Pre: root-topic-id belongs to user-id. A violation throws because the caller
+   supplied a foreign document. `mode-id` can be nil or unrecognized.
    Post: the row's mode is a canonical registry :id, never nil and never junk."
   [user-id root-topic-id mode-id]
+  (when-not (db/get-topic-for-user user-id root-topic-id)
+    (throw (ex-info "Cannot create a chat for a document the user does not own."
+             {:type ::foreign-chat-document :user-id user-id
+              :root-topic-id root-topic-id})))
   (let [chat-id (db/create-assistant-chat! user-id root-topic-id "New chat"
                   (:id (modes/resolve-mode mode-id)))]
     (bump! user-id)
@@ -299,86 +415,302 @@
                                                 :mode mode-id}} e)
         {:success false :error "Failed to switch mode."}))))
 
-(defn send!
-  "Send `user-text` to `chat-id` and return {:ok true :reply s} or {:error s}.
-   `page-topic-id` is the learner's on-screen topic NOW (a PDF page topic or a
-   plain topic); its live reading context (breadcrumb + page/window) is injected
-   as a transient turn this send. `ref-topic-ids` (seq, may be empty/nil) are
-   @-referenced documents, also transient. Approved KG facts (page-windowed for
-   PDFs) ground the system prompt each send.
-   The persona comes from the chat's own `mode` column — read off the row this
-   fn already fetches for the ownership gate, so mode costs no extra query.
-   Order: ownership gate → key/blank checks → credit gate → persist user turn →
-   resolve live context → call model → persist reply → charge usage.cost →
-   title backfill → bump.
-   `client-id` is the client's echo-correlation id, stored on the user turn so
-   the optimistic echo retires when its persisted row lands (nil = no echo).
-   Pre: chat-id owned by user-id (else {:error}). Post: on success exactly one
-   assistant row is appended and one usage charge recorded; on model failure the
-   user turn persists but no assistant row is added; reading context, referenced
-   docs, and facts are never persisted to the transcript."
-  [user-id chat-id page-topic-id user-text ref-topic-ids client-id]
+(defonce ^:private assistant-run-executor
+  (Executors/newFixedThreadPool 4))
+
+(defn- model-entry
+  "Resolve the effective assistant model for one document."
+  [user-id root-topic-id]
+  (let [model-id (settings/effective-assistant-model user-id root-topic-id)]
+    (or (card-models/resolve-model model-id)
+      (card-models/resolve-model settings/assistant-default-model-id))))
+
+(defn- poll-generation-metadata
+  "Fetch finalized metadata after a stream ended without complete usage.
+   Post: normalized facts or nil after bounded retries."
+  [api-key generation-id user-id]
+  (when generation-id
+    (loop [[delay-ms & remaining] [0 250 1000 3000]]
+      (when delay-ms
+        (when (pos? delay-ms) (Thread/sleep (long delay-ms)))
+        (let [{:keys [metadata error]}
+              (try
+                {:metadata (openrouter/generation-metadata! api-key generation-id
+                             {:feature :assistant-metadata :user-id user-id})}
+                (catch Exception error
+                  {:error error}))]
+          (if metadata
+            metadata
+            (do
+              (when (empty? remaining)
+                (tel/log! {:level :warn :id ::metadata-reconciliation-failed
+                           :data {:user-id user-id :generation-id generation-id
+                                  :error (ex-message error)}}
+                  "Assistant metadata reconciliation failed"))
+              (recur remaining))))))))
+
+(defn- charge-run!
+  "Record one provider-reported run charge in the independent billing ledger."
+  [user-id endpoint model-id metadata]
+  (when-some [cost (:cost-usd metadata)]
+    (credits/record-cost-charge! user-id endpoint model-id (double cost))))
+
+(defn- execute-provider-run!
+  "Drain one provider stream and settle its durable answer or checkpoint.
+
+   Pre: run is queued and provider-request is its immutable request snapshot.
+   Post: the run is completed, stopped, or failed. Provider metadata can update
+   every state. Billing uses the final known cost once in this worker.
+   Invariant: on-delta writes through the database's active-state predicate.
+   This worker never writes late response text after Stop."
+  [user-id chat-id run-uuid run-kind api-key model-id provider-request
+   compact-range]
+  (let [metadata* (volatile! {})
+        charged?* (volatile! false)
+        charge-known! (fn [metadata]
+                        (when (and (some? (:cost-usd metadata))
+                                (not @charged?*))
+                          (charge-run! user-id
+                            (if (= "compact" run-kind)
+                              :assistant.compact :assistant.chat)
+                            model-id metadata)
+                          (vreset! charged?* true)))
+        last-publish-ns* (volatile! 0)
+        publish! (fn []
+                   (let [now (System/nanoTime)]
+                     (when (> (- now (long @last-publish-ns*)) 50000000)
+                       (vreset! last-publish-ns* now)
+                       (bump! user-id))))]
+    (try
+      (let [result (openrouter/chat-completion-stream!
+                     api-key provider-request
+                     {:feature (if (= "compact" run-kind)
+                                 :assistant-compact :assistant)
+                      :user-id user-id}
+                     (fn [delta]
+                       (when (db/append-assistant-run-text! run-uuid delta)
+                         (publish!)))
+                     (fn [metadata]
+                       (vswap! metadata* merge metadata)
+                       (db/update-assistant-run-metadata! run-uuid metadata)))
+            reported @metadata*
+            reconciled (if (and (:generation-id reported)
+                             (or (nil? (:cost-usd reported))
+                               (nil? (:provider-name reported))))
+                         (or (poll-generation-metadata
+                               api-key (:generation-id reported) user-id) {})
+                         {})
+            metadata (merge reported reconciled)
+            response (:text result)]
+        (db/update-assistant-run-metadata! run-uuid metadata)
+        (if (str/blank? response)
+          (db/fail-assistant-run! run-uuid "The model returned an empty response.")
+          (if (= "compact" run-kind)
+            (db/complete-assistant-compact-run! run-uuid (str/trim response)
+              (:from compact-range) (:through compact-range))
+            (db/complete-assistant-answer-run! run-uuid)))
+        (charge-known! metadata)
+        (bump! user-id)
+        {:success true})
+      (catch Throwable error
+        (let [known @metadata*
+              reconciled (or (poll-generation-metadata
+                               api-key (:generation-id known) user-id) {})
+              metadata (merge known reconciled)]
+          (db/update-assistant-run-metadata! run-uuid metadata)
+          (charge-known! metadata)
+          (db/fail-assistant-run! run-uuid
+            (or (ex-message error) "Assistant request failed."))
+          (tel/error! {:id ::assistant-run
+                       :data {:user-id user-id :chat-id chat-id
+                              :run-uuid run-uuid :kind run-kind}} error)
+          (bump! user-id)
+          {:success false :error (ex-message error)})))))
+
+(defn- start-provider-run!
+  "Submit one accepted run to the bounded assistant executor.
+   Post: returns immediately. The worker owns every terminal transition."
+  [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range]
+  ((m/via assistant-run-executor
+     (execute-provider-run! user-id chat-id run-uuid run-kind api-key model-id
+       provider-request compact-range))
+   (fn [_result] nil)
+   (fn [error]
+     (db/fail-assistant-run! run-uuid
+       (or (ex-message error) "Assistant request failed."))
+     (bump! user-id)))
+  nil)
+
+(defn start-answer-run!
+  "Create and start one streamed answer in an owned chat.
+
+   Pre: user-text is non-blank. Post: {:ok true :run-uuid} after durable creation
+   and worker submission, or {:error}. The call does not wait for the provider.
+   Invariant: the database rejects a second active operation in the chat."
+  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id]
+   (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
+     client-id nil nil nil nil))
+  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
+    retry-of-run-uuid exact-request exact-evidence exact-model-id]
+   (let [chat (db/get-assistant-chat user-id chat-id)
+         api-key (settings/get-openrouter-api-key user-id)]
+     (cond
+       (nil? chat) {:error "Chat not found."}
+       (str/blank? user-text) {:error "Message is empty."}
+       (str/blank? api-key) {:error "OpenRouter API key not configured."}
+       :else
+       (let [gate (credits/check-cost-billed-balance! user-id)]
+         (if-not (:ok gate)
+           {:error (:error gate)}
+           (let [entry (or (some-> exact-model-id card-models/resolve-model)
+                         (model-entry user-id (:assistant_chats/root_topic_id chat)))
+                 run-model-id (or exact-model-id (:id entry))
+                 model-fields (openrouter/chat-completion-fields entry
+                                {:reasoning_effort (settings/get-reasoning user-id)})
+                 rendered (if exact-request
+                            {:provider-request exact-request
+                             :source-snapshot exact-evidence
+                             :evidence exact-evidence}
+                            (answer-request user-id chat page-topic-id user-text
+                              ref-topic-ids model-fields))
+                 run-uuid (str (random-uuid))
+                 created (db/create-assistant-answer-run!
+                           chat-id user-text client-id
+                           {:run-uuid run-uuid
+                            :retry-of-run-uuid retry-of-run-uuid
+                            :provider-session-id
+                            (:assistant_chats/provider_session_id chat)
+                            :requested-model run-model-id
+                            :request-snapshot (:provider-request rendered)
+                            :source-snapshot (:source-snapshot rendered)
+                            :evidence (:evidence rendered)})]
+             (if-not (:created created)
+               {:error "This chat already has an active operation."
+                :active-run-uuid (:active-run-uuid created)}
+               (do
+                 (when (= "New chat" (:assistant_chats/title chat))
+                   (db/set-assistant-chat-title! chat-id (title-from user-text)))
+                 (bump! user-id)
+                 (start-provider-run! user-id chat-id run-uuid "answer" api-key
+                   run-model-id (:provider-request rendered) nil)
+                 {:ok true :run-uuid run-uuid})))))))))
+
+(defn ensure-and-start-answer-run!
+  "Start an answer, creating the selected-mode chat when necessary."
+  [user-id root-topic-id page-topic-id chat-id mode-id user-text ref-topic-ids client-id]
+  (let [resolved-chat-id (or chat-id (start-chat! user-id root-topic-id mode-id))]
+    (assoc (start-answer-run! user-id resolved-chat-id page-topic-id user-text
+             ref-topic-ids client-id)
+      :chat-id resolved-chat-id)))
+
+(defn submit-chat-input!
+  "Dispatch composer input at the assistant boundary.
+   `/compact` is an application command and never becomes a user message."
+  [user-id root-topic-id page-topic-id chat-id mode-id user-text ref-topic-ids client-id]
+  (if (= "/compact" (str/trim user-text))
+    (if chat-id
+      (assoc (start-compact-run! user-id chat-id) :chat-id chat-id :command :compact)
+      {:error "Start a chat before compacting context." :chat-id nil :command :compact})
+    (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
+             chat-id mode-id user-text ref-topic-ids client-id)
+      :command :answer)))
+
+(defn start-compact-run!
+  "Start `/compact` as a separate paid run without adding a user message.
+   Post: a completed worker creates one checkpoint event. Original messages stay
+   unchanged. Empty transcripts and concurrent operations return an error."
+  [user-id chat-id]
   (let [chat (db/get-assistant-chat user-id chat-id)
         api-key (settings/get-openrouter-api-key user-id)]
     (cond
       (nil? chat) {:error "Chat not found."}
-      (str/blank? user-text) {:error "Message is empty."}
       (str/blank? api-key) {:error "OpenRouter API key not configured."}
       :else
-      (let [gate (credits/check-cost-billed-balance! user-id)]
-        (if-not (:ok gate)
-          {:error (:error gate)}
-          (do
-            (db/insert-assistant-message! chat-id "user" user-text client-id)
-            (bump! user-id) ; show the learner's turn immediately
-            (let [root-topic-id (:assistant_chats/root_topic_id chat)
-                  mode (modes/resolve-mode (:assistant_chats/mode chat))
-                  ctx (resolve-context user-id root-topic-id page-topic-id)
-                  context-msgs (into (current-context-messages ctx)
-                                 (reference-context-messages user-id ref-topic-ids))
-                  model-id (settings/effective-assistant-model user-id root-topic-id)
-                  entry (or (card-models/resolve-model model-id)
-                          (card-models/resolve-model settings/assistant-default-model-id))
-                  model-fields (openrouter/chat-completion-fields entry
-                                 {:reasoning_effort (settings/get-reasoning user-id)})]
-              (try
-                (let [body (openrouter/chat-completion! api-key
-                             (assoc model-fields
-                               :messages (assemble-messages chat-id (:id mode)
-                                           (not-empty
-                                             (str (mission-suffix user-id root-topic-id)
-                                               (grounding-system-suffix user-id ctx mode)))
-                                           context-msgs))
-                             {:feature :assistant :user-id user-id})
-                      reply (-> body :choices first :message :content)
-                      cost (double (or (-> body :usage :cost) 0))]
-                  (if (str/blank? reply)
-                    {:error "The model returned an empty response."}
-                    (do
-                      (db/insert-assistant-message! chat-id "assistant" reply nil)
-                      (credits/record-cost-charge! user-id :assistant.chat (:id entry) cost)
-                      (when (= "New chat" (:assistant_chats/title chat))
-                        (db/set-assistant-chat-title! chat-id (title-from user-text)))
-                      (bump! user-id)
-                      {:ok true :reply reply})))
-                (catch Exception e
-                  (tel/error! {:id ::assistant-send :data {:user-id user-id :chat-id chat-id}} e)
-                  {:error (or (ex-message e) "Assistant request failed.")})))))))))
+      (let [gate (credits/check-cost-billed-balance! user-id)
+            messages (db/get-assistant-messages chat-id)]
+        (cond
+          (not (:ok gate)) {:error (:error gate)}
+          (empty? messages) {:error "There is no chat context to compact."}
+          :else
+          (let [entry (model-entry user-id (:assistant_chats/root_topic_id chat))
+                model-fields (openrouter/chat-completion-fields entry
+                               {:reasoning_effort (settings/get-reasoning user-id)})
+                checkpoint (db/latest-assistant-checkpoint user-id chat-id)
+                later (transcript-messages-after-checkpoint chat-id checkpoint)
+                summary-input (cond-> []
+                                checkpoint
+                                (conj {:role "system"
+                                       :content (str "Existing conversation checkpoint:\n\n"
+                                                  (:summary checkpoint))})
+                                true (into later))
+                provider-request (assoc model-fields
+                                   :stream true
+                                   :session_id (:assistant_chats/provider_session_id chat)
+                                   :messages
+                                   (into [{:role "system"
+                                           :content (str "Summarize this conversation for future model turns. "
+                                                      "Preserve decisions, definitions, unresolved questions, "
+                                                      "and source references. Return only the summary.")}]
+                                     summary-input))
+                run-uuid (str (random-uuid))
+                covered {:from (:assistant_messages/id (first messages))
+                         :through (:assistant_messages/id (last messages))}
+                created (db/create-assistant-compact-run!
+                          chat-id {:run-uuid run-uuid
+                                   :provider-session-id
+                                   (:assistant_chats/provider_session_id chat)
+                                   :requested-model (:id entry)
+                                   :request-snapshot provider-request
+                                   :source-snapshot []})]
+            (if-not (:created created)
+              {:error "This chat already has an active operation."
+               :active-run-uuid (:active-run-uuid created)}
+              (do
+                (bump! user-id)
+                (start-provider-run! user-id chat-id run-uuid "compact" api-key
+                  (:id entry) provider-request covered)
+                {:ok true :run-uuid run-uuid}))))))))
 
-(defn ensure-and-send!
-  "Send to `chat-id`, creating a fresh chat first when `chat-id` is nil (the
-   learner typed before any chat existed). `ref-topic-ids` are @-referenced
-   documents for this turn; `client-id` correlates the client's optimistic echo.
-   Returns the send result plus the :chat-id actually used, so the client can
-   select it.
-   `mode-id` is used ONLY on the create path — an existing chat keeps its own
-   persona, so the panel's pills cannot retroactively change a live chat here
-   (that is set-chat-mode!'s job, and it is an explicit user action).
-   Pre:  when chat-id is non-nil it must be owned by user-id (send! gates it).
-   Post: the returned :chat-id is non-nil."
-  [user-id root-topic-id page-topic-id chat-id mode-id user-text ref-topic-ids client-id]
-  (let [cid (or chat-id (start-chat! user-id root-topic-id mode-id))]
-    (assoc (send! user-id cid page-topic-id user-text ref-topic-ids client-id) :chat-id cid)))
+(defn stop-active-run!
+  "Stop local delivery for the active run in an owned chat.
+   The provider reader keeps draining for usage and cost metadata."
+  [user-id chat-id]
+  (let [result (db/stop-assistant-run! user-id chat-id)]
+    (when (:stopped result) (bump! user-id))
+    result))
+
+(defn- imported-evidence->creation-evidence
+  [source]
+  {:citation-key (:citation_key source)
+   :document-topic-id (:document_topic_id source)
+   :page-topic-id (:page_topic_id source)
+   :page-number (:page_number source)
+   :anchor (:anchor source)
+   :quoted-text (:quoted_text source)
+   :document-title (:document_title source)
+   :display-label (:display_label source)
+   :source-revision (:source_revision source)})
+
+(defn retry-answer-run!
+  "Retry one failed answer with its exact provider request and evidence snapshot.
+   Post: creates a new user turn and run. The failed run stays unchanged."
+  [user-id run-uuid client-id]
+  (if-let [failed-run (db/get-assistant-run user-id run-uuid)]
+    (cond
+      (not= "answer" (:kind failed-run)) {:error "Only answers can be retried."}
+      (not= "failed" (:status failed-run)) {:error "Only failed answers can be retried."}
+      :else
+      (let [user-message (db/get-assistant-message user-id (:user_message_id failed-run))
+            snapshots (into {} (map (juxt :citation-key identity))
+                        (:source_snapshot failed-run))
+            evidence (mapv (fn [source]
+                             (let [creation (imported-evidence->creation-evidence source)]
+                               (merge (get snapshots (:citation-key creation)) creation)))
+                       (db/get-assistant-run-evidence user-id run-uuid))]
+        (start-answer-run! user-id (:chat_id failed-run) nil
+          (:content user-message) [] client-id run-uuid
+          (:request_snapshot failed-run) evidence (:requested_model failed-run))))
+    {:error "Answer run not found."}))
 
 (def ^:private feedback-anchor
   "Verbatim heading the Socratic persona emits to open the feedback section. The
@@ -470,7 +802,63 @@
   (db/get-assistant-chats user-id root-topic-id))
 
 (defn messages*
-  "Transcript for `chat-id` IFF owned by `user-id`. `_rev` forces re-query."
+  "Transcript and checkpoint events for an owned chat. `_rev` forces re-query.
+   Active answer rows read their durable response text from the run authority."
   [_rev user-id chat-id]
   (when (and chat-id (db/get-assistant-chat user-id chat-id))
-    (db/get-assistant-messages chat-id)))
+    (let [messages (db/get-assistant-messages chat-id)
+          runs (db/get-assistant-run-summaries-for-chat user-id chat-id)
+          run-by-message (into {} (keep (fn [run]
+                                          (when-let [message-id (:assistant_message_id run)]
+                                            [message-id run]))) runs)
+          evidence-by-run (group-by :run_uuid
+                            (db/get-assistant-evidence-for-chat user-id chat-id))
+          message-events
+          (mapv (fn [message]
+                  (if-let [run (get run-by-message (:assistant_messages/id message))]
+                    (assoc message
+                      :assistant_messages/content (:response_text run)
+                      :assistant_run/uuid (:run_uuid run)
+                      :assistant_run/status (:status run)
+                      :assistant_run/error (:error_text run)
+                      :assistant_run/retry_of (:retry_of_run_uuid run)
+                      :assistant_run/evidence (get evidence-by-run (:run_uuid run) []))
+                    message))
+            messages)
+          checkpoint-events
+          (mapv (fn [checkpoint]
+                  {:assistant_messages/id (str "checkpoint-" (:id checkpoint))
+                   :assistant_messages/role "event"
+                   :assistant_messages/content (:summary checkpoint)
+                   :assistant_event/type "compact"
+                   :assistant_event/covered_from (:covered_from_message_id checkpoint)
+                   :assistant_event/covered_through (:covered_through_message_id checkpoint)
+                   :assistant_run/uuid (:run_uuid checkpoint)
+                   :timeline/order (inc (* 2 (:covered_through_message_id checkpoint)))})
+            (db/get-assistant-checkpoints user-id chat-id))]
+      (->> (concat
+             (map #(assoc % :timeline/order (* 2 (:assistant_messages/id %))) message-events)
+             checkpoint-events)
+        (sort-by :timeline/order)
+        (mapv #(dissoc % :timeline/order))))))
+
+(defn active-run*
+  "Active run summary for an owned chat. `_rev` forces re-query."
+  [_rev user-id chat-id]
+  (when chat-id
+    (some-> (db/get-active-assistant-run user-id chat-id)
+      (select-keys [:run_uuid :kind :status]))))
+
+(defn run-details*
+  "Owner-scoped answer details with retained evidence and wire-safe timestamps."
+  [_rev user-id run-uuid]
+  (when run-uuid
+    (when-let [run (db/get-assistant-run user-id run-uuid)]
+      (let [timestamp-keys [:created_at :started_at :first_token_at :stopped_at
+                            :completed_at :failed_at]
+            wire-run (reduce (fn [result key]
+                               (update result key #(some-> % str)))
+                       run timestamp-keys)]
+        (assoc wire-run
+          :cost_usd (some-> (:cost_usd wire-run) double)
+          :evidence (db/get-assistant-run-evidence user-id run-uuid))))))
