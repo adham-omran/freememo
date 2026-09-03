@@ -982,10 +982,17 @@
       WHERE s.user_id = ? AND g.passed" user-id] opts))
 
 (defn curriculum-detail
-  "Return one curriculum with nested blocks, materials, readiness, and forms."
+  "Return one curriculum with nested blocks, materials, readiness, and forms.
+
+   Post: nil when the curriculum is absent or belongs to another account.
+   A READER does not blame its caller for a row that is gone. A live page
+   holds the id of a curriculum that another act can delete under it, so
+   `require-owned!` here reported the delete as a server exception, which
+   Electric propagates as a reactor failure and a closed WebSocket. Writers
+   keep throwing, because a writer that names a row it does not own IS a
+   caller bug."
   [_refresh user-id curriculum-id]
-  (let [curriculum (require-owned! (own-curriculum db/ds user-id curriculum-id)
-                     :curriculum curriculum-id)
+  (let [curriculum (own-curriculum db/ds user-id curriculum-id)
         blocks (jdbc/execute! db/ds
                  ["SELECT * FROM curriculum_blocks WHERE curriculum_id = ? ORDER BY position"
                   curriculum-id] opts)
@@ -1017,19 +1024,20 @@
         passed (completed-subjects user-id)
         passed-materials (into #{} (keep :material_id) passed)
         summaries (exam-summaries db/ds user-id curriculum-id)]
-    (assoc curriculum
-      :complete? (and (seq blocks) (every? :completed_at blocks))
-      :blocks
-      (mapv (fn [block]
-              (let [block-materials (filterv #(= (:id block) (:block_id %)) materials)]
-                (assoc block
-                  :materials (mapv #(assoc %
-                                      :exam-passed? (contains? passed-materials (:id %))
-                                      :latest-exam-score (get score-by-material (:id %))
-                                      :exam (get summaries [:material (:id %)]))
-                               block-materials)
-                  :exam (get summaries [:block (:id block)]))))
-        blocks))))
+    (when curriculum
+      (assoc curriculum
+        :complete? (and (seq blocks) (every? :completed_at blocks))
+        :blocks
+        (mapv (fn [block]
+                (let [block-materials (filterv #(= (:id block) (:block_id %)) materials)]
+                  (assoc block
+                    :materials (mapv #(assoc %
+                                        :exam-passed? (contains? passed-materials (:id %))
+                                        :latest-exam-score (get score-by-material (:id %))
+                                        :exam (get summaries [:material (:id %)]))
+                                 block-materials)
+                    :exam (get summaries [:block (:id block)]))))
+          blocks)))))
 
 ;; ── Exam page read model ───────────────────────────────────────────────────
 
@@ -1193,7 +1201,12 @@
 
 (defn build-schedule
   "Derive the current plan from incomplete work.
-   Work is sequential. Focus-block work comes before other available blocks."
+   Work is sequential. Focus-block work comes before other available blocks.
+
+   Post: nil when the curriculum is absent, for the reason
+   `curriculum-detail` states. The bindings above the guard are safe on an
+   absent curriculum: `blocks` is nil, so `tasks` is empty and
+   `allocate-work` returns without forcing its infinite date sequence."
   [_refresh user-id curriculum-id]
   (let [{:keys [target_date daily_minutes study_weekdays blocks] :as detail}
         (curriculum-detail 0 user-id curriculum-id)
@@ -1254,16 +1267,17 @@
         allocations (allocate-work tasks start weekdays derived-daily)
         earliest (some-> allocations last :date LocalDate/parse)
         feasible? (or (nil? target) (nil? earliest) (not (.isAfter earliest target)))]
-    {:curriculum (select-keys detail [:id :title :target_date :daily_minutes :study_weekdays])
-     :tasks allocations
-     :total-minutes total-minutes
-     :daily-minutes derived-daily
-     :feasible? feasible?
-     :earliest-date (some-> earliest str)
-     :target-date (some-> target str)
-     :adjustment (when-not feasible?
-                   {:earliest-date (str earliest)
-                    :required-daily-minutes (if (pos? available-days)
-                                              (int (Math/ceil (/ total-minutes
-                                                                 (double available-days))))
-                                              total-minutes)})}))
+    (when detail
+      {:curriculum (select-keys detail [:id :title :target_date :daily_minutes :study_weekdays])
+       :tasks allocations
+       :total-minutes total-minutes
+       :daily-minutes derived-daily
+       :feasible? feasible?
+       :earliest-date (some-> earliest str)
+       :target-date (some-> target str)
+       :adjustment (when-not feasible?
+                     {:earliest-date (str earliest)
+                      :required-daily-minutes (if (pos? available-days)
+                                                (int (Math/ceil (/ total-minutes
+                                                                   (double available-days))))
+                                                total-minutes)})})))

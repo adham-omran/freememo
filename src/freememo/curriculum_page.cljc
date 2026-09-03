@@ -619,11 +619,19 @@
                       "btn btn-sm curriculum-unlock-override"
                       (e/fn [] (e/server (e/Offload #(unlock-next* user-id (:id block))))))))))))))))
 
-(e/defn ScheduleSummary [user-id curriculum-id]
+(e/defn ScheduleSummary
+  "The plan panel beside the curriculum title.
+
+   Pre: none. A nil plan is a curriculum that is gone, not an error — this
+   component stays mounted while a delete commits, and it re-queries on the
+   bump that delete raises.
+   Post: nothing renders for a nil plan."
+  [user-id curriculum-id]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
           plan (e/server (curriculum-schedule* refresh user-id curriculum-id))]
-      (dom/aside
+      (when (e/server (some? plan))
+       (dom/aside
         (dom/props {:class "curriculum-schedule-summary"})
         (dom/div (dom/props {:class "curriculum-schedule-title"})
           (icons/Icon :clock :size 16)
@@ -647,7 +655,7 @@
             (dom/div
               (dom/time (dom/text (:date task)))
               (dom/span (dom/text (:title task)))
-              (dom/em (dom/text (str (:minutes task) " min"))))))))))
+              (dom/em (dom/text (str (:minutes task) " min")))))))))))
 
 (e/defn EditCurriculumForm [user-id detail !open?]
   (e/client
@@ -761,11 +769,17 @@
               "exams and the exam results go with it. The imported documents stay. "
               "A generated exam costs credits to make again.")
             "Delete curriculum" "btn btn-danger-fill"
+            ;; The navigate rides `e/on-unmount`, not the success branch.
+            ;; `delete-curriculum!` bumps `:curriculum-mutations` inside the
+            ;; same server call whose result this reads, so `detail` goes nil
+            ;; in the same tick and tears down the subtree holding this
+            ;; `e/fn`. A navigate sequenced after the answer races that
+            ;; teardown; one registered here fires whichever teardown wins.
             (e/fn [_payload]
               (let [response (e/server (e/Offload
                                         #(delete-curriculum* user-id curriculum-id)))]
                 (if (e/server (:ok response))
-                  (case (navigate! :curriculum) :deleted)
+                  (do (e/on-unmount #(navigate! :curriculum)) :deleted)
                   (case (reset! !delete-error (e/server (:error response))) :failed)))))
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})

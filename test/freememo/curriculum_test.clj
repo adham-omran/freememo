@@ -317,3 +317,36 @@
         (finally
           (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
+(deftest a-deleted-curriculum-reads-as-nil-not-as-an-exception
+  ;; The readers a MOUNTED page holds must answer nil for a curriculum that is
+  ;; gone. `require-owned!` reported it as a server exception instead, which
+  ;; Electric propagates as a reactor failure — so deleting a curriculum closed
+  ;; the WebSocket before the client could navigate away, and the page froze on
+  ;; the row it had just removed. Writers keep throwing; a writer that names a
+  ;; row it does not own IS a caller bug.
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "curriculum-del-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, password_hash)
+                           VALUES (?, 'x') RETURNING id" tag]
+                         {:builder-fn rs/as-unqualified-maps}))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum! user-id
+                              {:title tag :daily-minutes 30 :study-weekdays [1 2 3 4 5]})]
+          (curriculum/add-block! user-id curriculum-id "Block one")
+          (is (some? (curriculum/curriculum-detail 0 user-id curriculum-id)))
+          (is (some? (curriculum/build-schedule 0 user-id curriculum-id)))
+          (is (= :deleted (curriculum/delete-curriculum! user-id curriculum-id)))
+          (is (nil? (curriculum/curriculum-detail 0 user-id curriculum-id))
+            "a reader answers nil for a curriculum that is gone")
+          (is (nil? (curriculum/build-schedule 0 user-id curriculum-id))
+            "the schedule panel re-queries on the delete's own bump")
+          (is (empty? (curriculum/list-curricula 0 user-id))
+            "the cascade removed the blocks with it")
+          (is (thrown? clojure.lang.ExceptionInfo
+                (curriculum/delete-curriculum! user-id curriculum-id))
+            "a WRITER still blames a caller that names a row it does not own"))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
