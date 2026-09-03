@@ -145,6 +145,25 @@
        (into-array Short (map short weekdays)) curriculum-id user-id])
     (bump! user-id)))
 
+(defn delete-curriculum!
+  "Delete one curriculum and everything under it.
+
+   Pre: `curriculum-id` belongs to `user-id`. The ownership clause is in the
+   statement as well as in the check, so a race cannot delete another
+   account's row.
+   Post: the curriculum row is gone. PostgreSQL cascades to the blocks, the
+   materials, the exam forms, the sittings, the grade revisions and the unlock
+   overrides. Nothing here restores any of them, and a generated exam costs
+   credits to make again.
+   Invariant: the source topics stay. A material row points at a topic and
+   does not own it."
+  [user-id curriculum-id]
+  (require-owned! (own-curriculum db/ds user-id curriculum-id) :curriculum curriculum-id)
+  (jdbc/execute-one! db/ds
+    ["DELETE FROM curricula WHERE id = ? AND user_id = ?" curriculum-id user-id])
+  (bump! user-id)
+  :deleted)
+
 (defn- resequence!
   "Write `ids` as positions 0, 1, 2 … under one parent.
 
@@ -200,6 +219,29 @@
               (:id row)))]
       (bump! user-id)
       block-id)))
+
+(defn rename-block!
+  "Give one block a new name.
+
+   Pre: `block-id` belongs to `user-id`, and `title` holds a character that is
+   not white space.
+   Post: the block holds the trimmed title, and the curriculum records the
+   change time. The two writes share one transaction, so a reader never sees a
+   renamed block under a stale curriculum time.
+   Invariant: the block keeps its position, its unlock state and its
+   materials. A name is the only thing this writes."
+  [user-id block-id title]
+  (let [title (str/trim (str title))]
+    (when (str/blank? title)
+      (throw (ex-info "Enter a block name." {:type ::invalid-block})))
+    (jdbc/with-transaction [tx db/ds]
+      (let [block (require-owned! (own-block tx user-id block-id) :block block-id)]
+        (jdbc/execute-one! tx
+          ["UPDATE curriculum_blocks SET title = ? WHERE id = ?" title block-id])
+        (jdbc/execute-one! tx
+          ["UPDATE curricula SET updated_at = now() WHERE id = ?" (:curriculum_id block)])))
+    (bump! user-id)
+    :renamed))
 
 (defn- stepped
   "Move one id one step through a vector of ids.

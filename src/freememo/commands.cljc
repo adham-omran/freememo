@@ -109,6 +109,19 @@
                             :data {:sitting-id :payload}
                             :table #{:curriculum_exam_sittings}
                             :views #{:curriculum-mutations}}
+     ;; Both are hidden for the reason cancel and archive are: each needs a
+     ;; subject the detail page holds, and the palette can name the act but
+     ;; never supply the curriculum or the block.
+     :delete-curriculum {:label "Delete curriculum" :class :mutation
+                         :palette-hidden true
+                         :data {:curriculum-id :payload}
+                         :table #{:curricula}
+                         :views #{:curriculum-mutations :schedule-mutations}}
+     :rename-block     {:label "Rename curriculum block" :class :mutation
+                        :palette-hidden true
+                        :data {:block-id :payload :title :payload}
+                        :table #{:curriculum_blocks}
+                        :views #{:curriculum-mutations}}
      :add-card         {:label "Add card" :class :mutation :when #{:viewer}
                         :palette-hidden true ; submitted by AddCardModal; :add-new opens it
                         :data {:topic-id :payload :root-topic-id :payload

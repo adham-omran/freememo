@@ -7,6 +7,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    [freememo.typeahead :as typeahead]
    ;; One way only. The exam page never requires this namespace back, because
    ;; the chip below and that page share `GenerateExamButton`.
@@ -55,6 +56,12 @@
 
 (defn add-block* [user-id curriculum-id title]
   #?(:clj (result #(curriculum/add-block! user-id curriculum-id title)) :cljs nil))
+
+(defn delete-curriculum* [user-id curriculum-id]
+  #?(:clj (result #(curriculum/delete-curriculum! user-id curriculum-id)) :cljs nil))
+
+(defn rename-block* [user-id block-id title]
+  #?(:clj (result #(curriculum/rename-block! user-id block-id title)) :cljs nil))
 
 (defn move-block* [user-id block-id direction]
   #?(:clj (result #(curriculum/move-block! user-id block-id direction)) :cljs nil))
@@ -253,6 +260,12 @@
       "Search imported material…" nil false)
     (e/amb)))
 
+(def material-kind-filters
+  "The Add-material kind row. `nil` is every kind, and it is the default —
+   the search reaches all imported material before the row is touched."
+  [[nil "All"] ["pdf" "PDF"] ["markdown" "Markdown"]
+   ["web" "Web"] ["wikipedia" "Wikipedia"]])
+
 (e/defn AddMaterialWizard [user-id block-id navigate! !open?]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :tree-mutations)))
@@ -260,7 +273,16 @@
           !kind (atom nil)
           kind (e/watch !kind)
           !topic-id (atom nil)
-          filtered (if kind (filterv #(= kind (:kind %)) docs) docs)
+          topic-id (e/watch !topic-id)
+          ;; The kind row narrows the list, and the chosen material stays in
+          ;; the list whatever the row says. `Typeahead` displays an id its
+          ;; options do not hold as BLANK, so a narrowing that drops the
+          ;; selection shows an empty field that still submits the earlier
+          ;; material. Keeping the row in `options` is what makes the field and
+          ;; the atom agree.
+          filtered (if kind
+                     (filterv #(or (= kind (:kind %)) (= topic-id (:id %))) docs)
+                     docs)
           commits
           (dom/div
             (dom/props {:class "curriculum-form-card curriculum-material-wizard"})
@@ -268,28 +290,39 @@
             (forms/Form! {:minutes ""}
               (e/fn Fields [{:keys [minutes]}]
                 (e/amb
-                (dom/div (dom/props {:class "curriculum-kind-row"})
-                  (e/for [[value label]
-                          (e/diff-by first
-                            [["pdf" "PDF"] ["markdown" "Markdown"]
-                             ["web" "Web article"] ["wikipedia" "Wikipedia"]])]
+                ;; Both of these divs end in `(e/amb)`, as `MaterialPicker`
+                ;; does. Everything inside this `Fields` body is merged as form
+                ;; EDITS, so a body whose last form yields an ordinary value
+                ;; hands `forms5/MergeEdits` something that is not an edit. A
+                ;; chip callback returning the kind string killed the client
+                ;; peer with `No protocol method IMapEntry.-key ... for type
+                ;; string`, which names neither the chip nor this form.
+                (dom/div
+                  (dom/props {:class "curriculum-picker-step"})
+                  (dom/label (dom/props {:class "curriculum-field-label"})
+                    (dom/text "Search all imported material"))
+                  (MaterialPicker !topic-id filtered)
+                  (dom/p (dom/props {:class "curriculum-help"})
+                    (dom/text "The material is missing? ")
                     (dom/button
-                      (dom/props {:type "button"
-                                  :class (str "curriculum-kind-button"
-                                           (when (= kind value) " is-selected"))})
-                      (dom/text label)
-                      (dom/On "click" (fn [_] (reset! !kind value)
-                                        (reset! !topic-id nil)) nil))))
-                (when kind
-                  (dom/div
-                    (dom/props {:class "curriculum-picker-step"})
-                    (MaterialPicker !topic-id filtered)
-                    (dom/p (dom/props {:class "curriculum-help"})
-                      (dom/text "The material is missing? ")
+                      (dom/props {:type "button" :class "link-button"})
+                      (dom/text "Import it first")
+                      (dom/On "click" (fn [_] (navigate! :import)) nil)))
+                  (e/amb))
+                (dom/div
+                  (dom/props {:class "curriculum-kind-filter"})
+                  (dom/label (dom/props {:class "curriculum-field-label"})
+                    (dom/text "Narrow the search"))
+                  (dom/div (dom/props {:class "curriculum-kind-row"})
+                    (e/for [[value label] (e/diff-by second material-kind-filters)]
                       (dom/button
-                        (dom/props {:type "button" :class "link-button"})
-                        (dom/text "Import it first")
-                        (dom/On "click" (fn [_] (navigate! :import)) nil)))))
+                        (dom/props {:type "button"
+                                    :class (str "curriculum-kind-button"
+                                             (when (= kind value) " is-selected"))
+                                    :aria-pressed (= kind value)})
+                        (dom/text label)
+                        (dom/On "click" (fn [_] (reset! !kind value)) nil))))
+                  (e/amb))
                 (dom/label (dom/props {:class "curriculum-field-label"})
                   (dom/text "Estimated minutes (blank = FreeMemo estimate)"))
                 (forms/Input! :minutes minutes :type "number" :class "input")
@@ -464,6 +497,53 @@
         (ExamChip user-id navigate! (:curriculum_id block) {:material-id material-id}
           (:exam material) (:exam-passed? material) (:latest-exam-score material)))))))
 
+(e/defn BlockTitle
+  "The block name, and the form that renames it.
+
+   Pre: `block` carries `:id` and `:title`.
+   Post: the name on screen is the name in the database. The form closes only
+   after the server answers, so a rejected name keeps the text the user typed.
+   Invariant: `!editing?` is local to this component, because it feeds no
+   `e/Token`."
+  [user-id block]
+  (e/client
+    (let [!editing? (atom false)
+          editing? (e/watch !editing?)]
+      (if-not editing?
+        (e/amb
+          (dom/h2 (dom/text (:title block)))
+          (dom/button
+            (dom/props {:type "button" :class "link-button curriculum-rename-block"
+                        :data-tooltip "Rename block"
+                        :aria-label (str "Rename " (:title block))})
+            (icons/Icon :pen-line :size 13)
+            (dom/On "click" (fn [_] (reset! !editing? true)) nil)))
+        (let [commits
+              (dom/div
+                (dom/props {:class "curriculum-rename-form"})
+                (forms/Form! {:title (:title block)}
+                  (e/fn Fields [{:keys [title]}]
+                    (e/amb
+                      (forms/Input! :title title :class "input"
+                        :placeholder "Block name")
+                      (forms/SubmitButton! :label "Save" :class "btn btn-sm btn-primary")
+                      (dom/button
+                        (dom/props {:type "button" :class "btn btn-sm"})
+                        (dom/text "Cancel")
+                        (dom/On "click" (fn [_] (reset! !editing? false)) nil))))
+                  :Parse (e/fn [fields _]
+                           (if (str/blank? (str (:title fields)))
+                             (ex-info "Enter a block name." {})
+                             [`RenameBlock {:title (str/trim (str (:title fields)))}]))
+                  :type :command :show-buttons false))]
+          (e/for [[token command] commits]
+            (let [response (e/server (e/Offload
+                                      #(rename-block* user-id (:id block)
+                                         (:title (second command)))))]
+              (if (e/server (:ok response))
+                (do (e/on-unmount #(reset! !editing? false)) (token))
+                (token (e/server (:error response)))))))))))
+
 (e/defn BlockCard
   "One block and its materials.
 
@@ -494,7 +574,7 @@
               (MoveButton "Move down" (= index (dec block-count))
                 (e/fn [] (e/server (e/Offload #(move-block* user-id block-id 1))))))
             (dom/div (dom/props {:class "curriculum-block-title"})
-              (dom/h2 (dom/text (:title block)))
+              (BlockTitle user-id block)
               (cond
                 (:completed_at block) (dom/span (dom/props {:class "curriculum-done-badge"})
                                         (dom/text "Complete"))
@@ -524,12 +604,20 @@
                   (icons/Icon :plus :size 14)
                   (dom/text "Add material")
                   (dom/On "click" (fn [_] (reset! !add-material? true)) nil)))
-              (when (seq materials)
-                (ExamChip user-id navigate! curriculum-id {:block-id (:id block)}
-                  (:exam block) (some? (:completed_at block)) nil))
-              (when-not (:completed_at block)
-                (AsyncButton "Unlock next block" "btn btn-subtle"
-                  (e/fn [] (e/server (e/Offload #(unlock-next* user-id (:id block))))))))))))))
+              (dom/div
+                (dom/props {:class "curriculum-block-footer"})
+                (when (seq materials)
+                  (ExamChip user-id navigate! curriculum-id {:block-id (:id block)}
+                    (:exam block) (some? (:completed_at block)) nil))
+                ;; The override is a separate step, under a rule, and it says
+                ;; what it skips. It sat beside the exam button in one plain
+                ;; `btn`, and the two read as one pair of equal choices.
+                (when-not (:completed_at block)
+                  (dom/div
+                    (dom/props {:class "curriculum-block-override"})
+                    (AsyncButton "Unlock next block without the exam"
+                      "btn btn-sm curriculum-unlock-override"
+                      (e/fn [] (e/server (e/Offload #(unlock-next* user-id (:id block))))))))))))))))
 
 (e/defn ScheduleSummary [user-id curriculum-id]
   (e/client
@@ -629,7 +717,10 @@
           !add-block? (atom false)
           add-block? (e/watch !add-block?)
           !edit? (atom false)
-          edit? (e/watch !edit?)]
+          edit? (e/watch !edit?)
+          !confirm-delete (atom nil)
+          !delete-error (atom nil)
+          delete-error (e/watch !delete-error)]
       (if-not detail
         (dom/div (dom/props {:class "curriculum-empty"}) (dom/text "Curriculum not found."))
         (dom/div
@@ -646,11 +737,36 @@
               (when (:complete? detail)
                 (dom/span (dom/props {:class "curriculum-done-badge"})
                   (dom/text "Curriculum complete")))
-              (dom/button
-                (dom/props {:type "button" :class "link-button"})
-                (dom/text "Edit schedule controls")
-                (dom/On "click" (fn [_] (reset! !edit? true)) nil)))
+              (dom/div
+                (dom/props {:class "curriculum-detail-actions"})
+                (dom/button
+                  (dom/props {:type "button" :class "link-button"})
+                  (dom/text "Edit schedule controls")
+                  (dom/On "click" (fn [_] (reset! !edit? true)) nil))
+                (dom/button
+                  (dom/props {:type "button" :class "link-button link-button-danger"})
+                  (icons/Icon :trash-2 :size 13)
+                  (dom/text "Delete curriculum")
+                  (dom/On "click" (fn [_] (reset! !delete-error nil)
+                                    (reset! !confirm-delete {:id curriculum-id})) nil)))
+              (when delete-error
+                (dom/p (dom/props {:class "curriculum-inline-error"})
+                  (dom/text delete-error))))
             (ScheduleSummary user-id curriculum-id))
+          ;; The confirm names what the cascade takes, because nothing here
+          ;; restores it and a generated exam costs credits to make again.
+          (modal/ConfirmModal !confirm-delete
+            "Delete curriculum?"
+            (str "Delete \"" (:title detail) "\"? The blocks, the materials, the "
+              "exams and the exam results go with it. The imported documents stay. "
+              "A generated exam costs credits to make again.")
+            "Delete curriculum" "btn btn-danger-fill"
+            (e/fn [_payload]
+              (let [response (e/server (e/Offload
+                                        #(delete-curriculum* user-id curriculum-id)))]
+                (if (e/server (:ok response))
+                  (case (navigate! :curriculum) :deleted)
+                  (case (reset! !delete-error (e/server (:error response))) :failed)))))
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
             (e/for [[index block]
