@@ -3826,6 +3826,15 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border-color: var(--color-primary);
 }
 .assistant-msg-card:disabled { opacity: 0.6; cursor: default; }
+.assistant-msg-details {
+    display: inline-grid;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    place-items: center;
+    border-radius: 6px;
+}
+.assistant-msg-details svg { display: block; }
 
 .assistant-msg-status {
     margin-top: 5px;

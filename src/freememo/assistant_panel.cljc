@@ -23,6 +23,7 @@
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-rows :as rows]
    [freememo.assistant-run-details :as run-details]
+   [freememo.icons :as icons]
    [freememo.math :as math]
    [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.assistant :as assistant])
@@ -115,9 +116,9 @@
                                            user-id page-topic-id root-topic-id content)))
                         (generate-token))))))
               (dom/button
-                (dom/props {:class "assistant-msg-card" :type "button"
+                (dom/props {:class "assistant-msg-card assistant-msg-details" :type "button"
                             :title "Answer details" :aria-label "Answer details"})
-                (dom/text "[i]")
+                (icons/Icon :info :size 14)
                 (dom/On "click" (fn [_] (reset! !details-run run-uuid)) nil))
               (when (= "failed" status)
                 (dom/button
