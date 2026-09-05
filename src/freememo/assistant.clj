@@ -11,6 +11,7 @@
    [clojure.string :as str]
    [freememo.openrouter :as openrouter]
    [freememo.settings :as settings]
+   [freememo.assistant-evidence :as evidence]
    [freememo.assistant-modes :as modes]
    [freememo.card-models :as card-models]
    [freememo.cards :as cards]
@@ -347,19 +348,13 @@
 
 (defn citation-target
   "Relative viewer target for one retained evidence record."
-  [evidence]
-  (when-let [document-id (or (:document_topic_id evidence)
-                           (:document-topic-id evidence))]
-    (str "/viewer/topic/" document-id
-      (when-let [page (or (:page_number evidence) (:page-number evidence))]
-        (str "/" page))
-      (when-let [anchor (:anchor evidence)]
-        (str "#" anchor)))))
+  [source]
+  (evidence/citation-target source))
 
 (defn render-evidence-citations
   "Replace valid evidence tokens with Markdown links and remove invalid tokens.
    Pre: evidence belongs to the answer run. Post: every rendered citation has a
-   retained target. Modified clicks use the browser's native new-tab behavior."
+   retained target. The assistant panel opens retained evidence in a dialog."
   [answer evidence]
   (let [by-key (into {} (map (juxt :citation_key identity)) evidence)]
     (str/replace (or answer "") evidence-token-pattern

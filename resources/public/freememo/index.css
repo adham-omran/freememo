@@ -3609,18 +3609,18 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1;
 }
 
-/* Pin side panel — collapsible right-side viewer for topic pins */
-.pin-side-panel {
+/* Viewer side panels. Pins share the left panel with Hierarchy. */
+.assistant-side-panel {
     display: flex;
     flex-direction: column;
-    width: 180px;
+    width: 360px;
     flex-shrink: 0;
     border-left: 1px solid var(--color-border);
     background: var(--color-bg-card, #fff);
     overflow: hidden;
 }
 
-.pin-side-panel--collapsed {
+.assistant-side-panel--collapsed {
     width: 32px;
 }
 
@@ -3644,7 +3644,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
    Cap each open panel so the content always keeps room; the collapsed 32px
    state is below the cap and unaffected. */
 @media (max-width: 900px) {
-    .pin-side-panel,
+    .assistant-side-panel,
     .hierarchy-side-panel {
         max-width: 60vw;
     }
@@ -3659,10 +3659,10 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     flex-shrink: 0;
 }
 
-/* Right-side pin panel mirrors the left: hamburger anchors to the outer
+/* The right-side assistant mirrors the left: hamburger anchors to the outer
    (right) edge, title sits to its left. Row-reverse keeps the toggle pinned
    to the panel's right edge so it does not slide when the panel collapses. */
-.pin-side-panel .side-panel__header {
+.assistant-side-panel .side-panel__header {
     flex-direction: row-reverse;
 }
 
@@ -3698,7 +3698,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     flex: 1;
 }
 
-/* Right-panel tab switch (Pins | Assistant), sits in the header when open. */
+/* Left-panel tab switch for Hierarchy and Pins. */
 .side-panel__tabs {
     display: flex;
     gap: 2px;
@@ -3766,38 +3766,8 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
    is what has to flex. */
 .assistant-panel__chats { flex: 1; min-width: 0; }
 
-.assistant-panel__model {
-    padding: 0 8px 6px;
-    flex-shrink: 0;
-}
-
-/* Both panel picklists are Typeaheads (bare input, no dropdown arrow). Pull the
-   widget's 14px input and 14px rows down to the panel's own 12-13px scale. */
-.assistant-panel__chats .input,
-.assistant-panel__model .input { font-size: 12px; padding: 4px 8px; }
-
-.assistant-panel__chats .tape-scroll td,
-.assistant-panel__model .tape-scroll td { font-size: 12px; }
-
-/* Mode pills: one row of personas, reusing the Pins/Assistant tab styling
-   (.side-panel__tab) so the two toggles in this panel read as one system. */
-.assistant-panel__modes {
-    padding: 0 8px 6px;
-    flex-shrink: 0;
-}
-
-.assistant-panel__modes-label {
-    display: block;
-    font-size: 11px;
-    color: var(--color-text-secondary);
-    margin-bottom: 4px;
-}
-
-.assistant-panel__mode-pills {
-    display: flex;
-    gap: 2px;
-    min-width: 0;
-}
+.assistant-panel__chats .input { font-size: 12px; padding: 4px 8px; }
+.assistant-panel__chats .tape-scroll td { font-size: 12px; }
 
 .assistant-panel__transcript {
     flex: 1;
@@ -3985,19 +3955,100 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     flex-shrink: 0;
 }
 
-.assistant-panel__composer {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 6px;
+.assistant-panel__composer-shell {
+    position: relative;
     padding: 8px;
     border-top: 1px solid var(--color-border);
+    background: var(--color-bg-card, #fff);
     flex-shrink: 0;
 }
 
-.assistant-panel__input { flex: 1; min-width: 0; resize: none; font-size: 13px; }
-.assistant-panel__composer-actions { display: flex; justify-content: flex-end; }
-.assistant-panel__send { flex-shrink: 0; }
+.assistant-panel__composer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.assistant-panel__input-row {
+    display: flex;
+    min-width: 0;
+    padding: 2px 4px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-bg-card, #fff);
+}
+
+.assistant-panel__input-row:focus-within {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.assistant-panel__input {
+    width: 100%;
+    min-width: 0;
+    min-height: 54px;
+    padding: 7px 8px;
+    resize: none;
+    border: 0;
+    outline: 0;
+    color: var(--color-text-primary);
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.assistant-panel__composer-footer {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    min-width: 0;
+}
+
+.assistant-panel__composer-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.assistant-panel__footer-field {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    color: var(--color-text-secondary);
+    font-size: 10px;
+}
+
+.assistant-panel__footer-field--model { flex: 1; }
+
+.assistant-panel__select {
+    min-width: 0;
+    max-width: 100%;
+    padding: 4px 20px 4px 5px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--color-text-primary);
+    background-color: transparent;
+    font-size: 11px;
+    text-overflow: ellipsis;
+}
+
+.assistant-panel__select:hover,
+.assistant-panel__select:focus-visible {
+    background-color: var(--color-bg-subtle);
+    outline: 1px solid var(--color-border);
+}
+
+.assistant-panel__send {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 999px;
+    flex-shrink: 0;
+}
 
 /* Empty-state starter prompts. */
 .assistant-panel__suggestions {
@@ -4020,11 +4071,46 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 .assistant-panel__suggestion:hover { background: var(--color-highlight, #e2e8f0); }
 
-/* @-reference picker popover, sits above the composer. */
-.assistant-panel__at-popover {
-    padding: 8px;
-    border-top: 1px solid var(--color-border);
-    flex-shrink: 0;
+/* The mention menu covers the transcript, never the message box. */
+.assistant-panel__mention-menu {
+    position: absolute;
+    right: 8px;
+    bottom: calc(100% + 6px);
+    left: 8px;
+    z-index: 4;
+    max-height: min(280px, 42vh);
+    padding: 5px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-bg-card, #fff);
+    box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
+}
+
+.assistant-panel__mention-option {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 8px;
+    color: var(--color-text-primary);
+    background: transparent;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.assistant-panel__mention-option:hover,
+.assistant-panel__mention-option--selected {
+    background: var(--color-highlight, #e2e8f0);
+}
+
+.assistant-panel__mention-empty {
+    padding: 9px 10px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
 }
 
 /* Queued @-reference chips. */
@@ -4032,7 +4118,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 0 8px 6px;
+    padding: 0 0 6px;
     flex-shrink: 0;
 }
 .assistant-panel__ref-chip {
@@ -4056,6 +4142,62 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     cursor: pointer;
 }
 .assistant-panel__ref-remove:hover { color: var(--color-danger-text, #b91c1c); }
+
+.assistant-evidence-backdrop { z-index: 1600; }
+
+.assistant-evidence {
+    width: min(680px, calc(100vw - 32px));
+    max-height: min(720px, calc(100vh - 32px));
+    overflow-y: auto;
+}
+
+.assistant-evidence__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.assistant-evidence__header h2 { margin: 0; }
+
+.assistant-evidence__location {
+    margin: 4px 0 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+
+.assistant-evidence__quote {
+    margin: 18px 0;
+    padding: 14px 16px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    border-left: 4px solid var(--color-primary);
+    border-radius: 0 10px 10px 0;
+    color: var(--color-text-primary);
+    background: var(--color-bg-subtle);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.assistant-evidence__empty { color: var(--color-text-secondary); }
+.assistant-evidence__open { display: inline-flex; text-decoration: none; }
+
+.document-workspace {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.document-workspace__main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
 
 .pin-thumb {
     position: relative;

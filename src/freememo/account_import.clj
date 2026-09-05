@@ -251,11 +251,11 @@
 
 (def ^:private settings-key-prefixes
   "Settings key prefixes whose suffix is a topic id (§5.4.8, settings.clj).
-   `hierarchy_open_`, `pins_open_` and `assistant_tab_` key on `pane-scope-id`,
-   which resolves to the document root topic id, so one translation serves all."
+   The panel keys use `pane-scope-id`. It resolves to the document root topic
+   id, so one translation serves all pages."
   ["last_page_" "pdf_layout_" "pdf_focus_" "extract_style_" "ocr_model_" "card_model_"
    "goal_" "assistant_model_" "anki_preset_" "hierarchy_open_" "pins_open_"
-   "assistant_tab_"
+   "assistant_tab_" "left_panel_tab_"
    ;; The per-document Anki header and tags (settings.clj). Each is two rows
    ;; keyed on the root topic id, with no account-wide row behind them, so an
    ;; untranslated suffix does not degrade to a global default — it points at

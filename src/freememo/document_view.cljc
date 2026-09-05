@@ -191,11 +191,11 @@
             (EditorPane)))))))
 
 (e/defn DocumentColumns
-  "Resizable top region of a document view: hierarchy sidebar | content column
-   (ContentColumn) | pin sidebar. Split across ContentColumn/PdfSplitPane so no
-   single e/defn exceeds Electric's 64KB-per-method cap. Behaviour unchanged;
-   the columns are reactively independent siblings. Reads ambient doc-context."
-  []
+  "Resizable top region of a document view: left panel, content, and optional
+   assistant panel. Split across ContentColumn/PdfSplitPane so no single e/defn
+   exceeds Electric's 64KB-per-method cap. The columns are independent reactive
+   siblings. Reads ambient doc-context."
+  [show-assistant?]
   (e/client
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id
           root-topic-id dctx/root-topic-id navigate! dctx/navigate!
@@ -221,9 +221,8 @@
         ;; MIDDLE: content column.
         (ContentColumn)
 
-        ;; RIGHT: side panel with Pins + AI Assistant tabs (collapsible).
-        ;; Hidden in reading-mode?.
-        (when-not reading-mode?
+        ;; RIGHT: collapsible assistant panel. Hidden in reading mode.
+        (when (and show-assistant? (not reading-mode?))
           (RightSidePanel page-topic-id root-topic-id user-id))))))
 
 

@@ -59,6 +59,7 @@
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
 (def ASSISTANT_MODEL "assistant_model")
+(def ASSISTANT_FULL_HEIGHT "assistant_full_height")
 (def FSRS_RETENTION "fsrs_retention")
 (def FSRS_NEW_PER_DAY "fsrs_new_per_day")
 (def FSRS_REVIEW_PER_DAY "fsrs_review_per_day")
@@ -358,6 +359,21 @@
       (catch Exception e
         (tel/error! {:id ::save-assistant-model} e)
         {:success false :error "Failed to save assistant model"}))))
+
+(defn get-assistant-full-height
+  "Whether the Viewer assistant spans the content and card-table rows."
+  [user-id]
+  (= "true" (db/get-setting user-id ASSISTANT_FULL_HEIGHT)))
+
+(defn save-assistant-full-height
+  "Save the Viewer assistant height preference."
+  [user-id full-height?]
+  (try
+    (db/set-setting user-id ASSISTANT_FULL_HEIGHT (str (boolean full-height?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-assistant-full-height} e)
+      {:success false :error "Failed to save the assistant panel layout"})))
 
 (defn save-kg-model
   "Persist a KG step model selection. Pre: `step` known and `value` a
@@ -703,36 +719,41 @@
 (defn save-pins-width [user-id topic-id px]
   (save-pane-width user-id topic-id "pins_width_" px ::save-pins-width))
 
-;; Right-panel active tab ("pins" | "assistant"), scoped per document like the
-;; pane open/width state above. Missing key → "pins".
-(def side-panel-tabs
-  "Tabs the right side panel can persist. `transcript` only exists on video
-   topics; `right-side-panel/resolve-tab` is what enforces that, since this
-   namespace has no business knowing a topic's kind."
-  #{"pins" "assistant" "transcript"})
+;; The assistant keeps the former right-panel open and width keys. This preserves
+;; each user's layout after Pins moves to the left panel.
+(defn get-assistant-open [user-id topic-id]
+  (get-pins-open user-id topic-id))
 
-(defn get-assistant-tab
-  "The tab the user last chose for this topic, or NIL when they never chose one.
+(defn save-assistant-open [user-id topic-id open?]
+  (save-pins-open user-id topic-id open?))
 
-   nil rather than a \"pins\" default on purpose: the sensible default depends on
-   the topic — a video should open on its transcript, everything else on pins —
-   and that decision belongs to the caller, which knows the kind. Returning
-   \"pins\" here made the caller's no-preference branch unreachable and the
-   transcript tab never opened by default."
+(defn get-assistant-width [user-id topic-id]
+  (get-pane-width user-id topic-id "pins_width_" 360))
+
+(defn save-assistant-width [user-id topic-id px]
+  (save-pins-width user-id topic-id px))
+
+(def left-panel-tabs #{"hierarchy" "pins"})
+
+(defn get-left-panel-tab
+  "Get the saved left-panel tab. The default is Hierarchy."
   [user-id topic-id]
   (try
-    (let [v (db/get-setting user-id (str "assistant_tab_" (pane-scope-id topic-id)))]
-      (when (side-panel-tabs v) v))
-    (catch Exception _ nil)))
+    (let [value (db/get-setting user-id
+                  (str "left_panel_tab_" (pane-scope-id topic-id)))]
+      (if (left-panel-tabs value) value "hierarchy"))
+    (catch Exception _ "hierarchy")))
 
-(defn save-assistant-tab [user-id topic-id tab]
+(defn save-left-panel-tab
+  "Save the left-panel tab for a document."
+  [user-id topic-id tab]
   (try
-    (db/set-setting user-id (str "assistant_tab_" (pane-scope-id topic-id))
-      (if (side-panel-tabs tab) tab "pins"))
+    (db/set-setting user-id (str "left_panel_tab_" (pane-scope-id topic-id))
+      (if (left-panel-tabs tab) tab "hierarchy"))
     {:success true}
     (catch Exception e
-      (tel/error! {:id ::save-assistant-tab} e)
-      {:success false})))
+      (tel/error! {:id ::save-left-panel-tab} e)
+      {:success false :error "Failed to save the left panel tab"})))
 
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)

@@ -1,13 +1,13 @@
 (ns freememo.pin-side-panel
-  "Pinned-image content for the right side panel's Pins tab.
+  "Pinned-image content for the left side panel's Pins tab.
    Each pin renders a thumbnail with an F/B placement badge and a × remove button.
    Badge click cycles placement front↔back. Remove button deletes the pin row.
 
    Reactivity: subscribes to :pin-mutations (bumped by pin insert/remove/update)
    so the list re-queries without touching the wider :refresh channel.
 
-   The collapsible/resizable panel chrome that hosts this body lives in
-   freememo.right-side-panel (shared with the AI assistant tab)."
+   The collapsible and resizable chrome lives in
+   freememo.hierarchy-side-panel."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -114,7 +114,7 @@
 
 (e/defn PinsBody
   "Scrollable pin-thumbnail list for `topic-id`. Re-queries on :pin-mutations.
-   Rendered inside the shared right-side-panel body; owns no panel chrome."
+   Rendered inside the shared left-panel body. It owns no panel chrome."
   [topic-id user-id]
   (e/client
     (dom/div

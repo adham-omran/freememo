@@ -16,7 +16,6 @@
    [freememo.video-http :as vh]
    [freememo.video-import-modal :as import-modal]
    [freememo.video-transcript :as vt]
-   [freememo.right-side-panel :as rsp]
    [freememo.settings :as settings]
    [freememo.transcribe-language :as tlang]
    [freememo.storage-meter :as meter]))
@@ -299,43 +298,11 @@
       (is (= (count labels) (count (set labels)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Right-panel tab resolution — the Transcript tab only exists on video topics
+;; Left-panel tabs
 ;; ---------------------------------------------------------------------------
 
-(deftest right-panel-tab-fallback
-  (testing "a persisted transcript tab falls back on a non-video topic"
-    (is (= "pins" (rsp/resolve-tab "transcript" false))
-      "otherwise navigating video→PDF selects a tab that is not rendered"))
-
-  (testing "it is honoured on a video topic"
-    (is (= "transcript" (rsp/resolve-tab "transcript" true))))
-
-  (testing "video topics default to the transcript when nothing is persisted"
-    ;; This branch was unreachable until settings/get-assistant-tab stopped
-    ;; defaulting to "pins" itself — the test passed while the app never did it.
-    (is (= "transcript" (rsp/resolve-tab nil true)))
-    (is (= "pins" (rsp/resolve-tab nil false))))
-
-  (testing "get-assistant-tab returns nil for 'never chosen', not a default"
-    (is (nil? (settings/get-assistant-tab -1 -1))
-      "a default here would make resolve-tab's kind-aware branch dead code"))
-
-  (testing "transcript is a persistable tab"
-    (is (contains? settings/side-panel-tabs "transcript")
-      "otherwise save-assistant-tab silently rewrites the user's choice to pins"))
-
-  (testing "explicit choices pass through on both kinds"
-    (is (= "assistant" (rsp/resolve-tab "assistant" true)))
-    (is (= "assistant" (rsp/resolve-tab "assistant" false)))
-    (is (= "pins" (rsp/resolve-tab "pins" true))))
-
-  (testing "an unrecognized value is treated as no preference, not as pins"
-    ;; "bogus" and nil both mean 'we have no usable preference', so the kind
-    ;; decides in both cases. get-assistant-tab already filters unknown values
-    ;; to nil, so this only guards direct callers — but the two must agree.
-    (is (= (rsp/resolve-tab nil true) (rsp/resolve-tab "bogus" true)))
-    (is (= (rsp/resolve-tab nil false) (rsp/resolve-tab "bogus" false)))
-    (is (= "pins" (rsp/resolve-tab "bogus" false)))))
+(deftest left-panel-tabs-include-the-default-and-pins
+  (is (= #{"hierarchy" "pins"} settings/left-panel-tabs)))
 
 ;; ---------------------------------------------------------------------------
 ;; Storage rate label — one formatter, two render sites

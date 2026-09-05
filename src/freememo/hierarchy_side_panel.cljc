@@ -1,7 +1,6 @@
 (ns freememo.hierarchy-side-panel
-  "Left side panel for the viewer — shows the parent + immediate siblings of
-   the current page topic, plus the current page's extract children. User can
-   expand other siblings to see their extracts.
+  "Left side panel for the viewer. Hierarchy is the default tab. Pins is the
+   second tab.
 
    Reactivity: subscribes to the per-user :tree-mutations atom (tree shape) and
    :meta-refresh (done-status, which drives the strike-through) — NOT :refresh.
@@ -17,6 +16,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.util :as util]
    [freememo.viewport :as viewport]
    [freememo.tree-dnd :as tree-dnd]
@@ -390,7 +390,13 @@
             width-px        (e/watch !width-px)
             !width-save     (atom nil)
             width-save      (e/watch !width-save)
-            [?width-token _] (e/Token width-save)]
+            [?width-token _] (e/Token width-save)
+            persisted-tab   (e/server (settings/get-left-panel-tab user-id root-topic-id))
+            !tab             (atom persisted-tab)
+            tab              (e/watch !tab)
+            !tab-save        (atom nil)
+            tab-save         (e/watch !tab-save)
+            [?tab-token _]   (e/Token tab-save)]
 
         (when-some [token ?save-token]
           (let [r (e/server (e/Offload #(settings/save-hierarchy-open user-id root-topic-id save-val)))]
@@ -398,6 +404,11 @@
 
         (when-some [token ?width-token]
           (let [r (e/server (e/Offload #(settings/save-hierarchy-width user-id root-topic-id width-save)))]
+            (case r (if (:success r) (token) (token (:error r))))))
+
+        (when-some [token ?tab-token]
+          (let [r (e/server (e/Offload
+                              #(settings/save-left-panel-tab user-id root-topic-id tab-save)))]
             (case r (if (:success r) (token) (token (:error r))))))
 
         (SidePanelShell
@@ -408,13 +419,27 @@
            :open? open? :!open? !open? :!save !save
            :width-px width-px :!width-px !width-px :!width-save !width-save}
           (e/fn []
-            (dom/span
-              (dom/props {:class "side-panel__title"})
-              (dom/text "Hierarchy")))
+            (dom/div
+              (dom/props {:class "side-panel__tabs" :role "tablist"
+                          :aria-label "Left panel"})
+              (e/for [entry (e/diff-by :id [{:id "hierarchy" :label "Hierarchy"}
+                                              {:id "pins" :label "Pins"}])]
+                (let [id (:id entry)
+                      selected? (= tab id)]
+                  (dom/button
+                    (dom/props {:class (str "side-panel__tab"
+                                         (when selected? " side-panel__tab--active"))
+                                :type "button" :role "tab"
+                                :aria-selected (str selected?)})
+                    (dom/text (:label entry))
+                    (dom/On "click"
+                      (fn [_] (reset! !tab id) (reset! !tab-save id)) nil))))))
           (e/fn []
-            (if (nil? page-topic-id)
-              (dom/div
-                (dom/props {:style {:padding "16px 12px" :font-size "13px"
-                                    :color "var(--color-text-secondary)"}})
-                (dom/text "No page selected."))
-              (HierarchyTree user-id page-topic-id navigate! !nav-target))))))))
+            (case tab
+              "pins" (PinsBody page-topic-id user-id)
+              (if (nil? page-topic-id)
+                (dom/div
+                  (dom/props {:style {:padding "16px 12px" :font-size "13px"
+                                      :color "var(--color-text-secondary)"}})
+                  (dom/text "No page selected."))
+                (HierarchyTree user-id page-topic-id navigate! !nav-target)))))))))

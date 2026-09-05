@@ -109,7 +109,8 @@
   ;; is a preference that applies to somebody else's document.
   (doseq [prefix ["last_page_" "pdf_layout_" "extract_style_" "ocr_model_"
                   "card_model_" "goal_" "assistant_model_" "anki_preset_"
-                  "hierarchy_open_" "pins_open_" "assistant_tab_"]]
+                  "hierarchy_open_" "pins_open_" "assistant_tab_"
+                  "left_panel_tab_"]]
     (is (= (str prefix 707) (remap-settings-key (str prefix 7) topic-map))
       (str "prefix " prefix))))
 

@@ -8,10 +8,9 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
-   [freememo.document-view :refer [DocumentColumns DocumentToolbars]]
-   [freememo.bottom-panel :refer [BottomPanel]]
+   [freememo.document-view :refer [DocumentToolbars]]
+   [freememo.document-workspace :refer [DocumentWorkspace]]
    [freememo.live-doc-wizard :refer [LiveDocEmptyState]]
-   [freememo.util :as util]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn DocumentBody
@@ -23,12 +22,12 @@
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id pdf-root-id dctx/pdf-root-id
           is-pdf? dctx/is-pdf? reading-mode? dctx/reading-mode?
           card-font-size dctx/card-font-size card-refresh dctx/card-refresh
-          !top-pct dctx/!top-pct top-pct dctx/top-pct
-          !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
           t-layout dctx/t-layout layout-save dctx/layout-save
           t-focus dctx/t-focus focus-save dctx/focus-save
           t-last-page dctx/t-last-page last-page-save dctx/last-page-save
-          is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?]
+          is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?
+          assistant-full-height? (e/server
+                                   (settings/get-assistant-full-height user-id))]
     ;; Persist layout on toggle.
     ;;
     ;; `e/drain` holds this sibling at size 0. A bare `(when t …)` is a 0-to-1
@@ -70,8 +69,8 @@
             (if (:success r) (case r (t-last-page)) (t-last-page (:error r)))))
         (t-last-page))))
 
-    ;; Blob-less Live Document: the upload wizard IS the whole body — no
-    ;; toolbars, hierarchy/pins, or card table. Normal layout returns once the
+    ;; Blob-less Live Document: the upload wizard is the whole body. It has no
+    ;; toolbars, navigation panel, or card table. Normal layout returns once the
     ;; first page commits (pdf-has-file? flips true → this gate is false).
     (if (and is-live? (not pdf-has-file?))
       (LiveDocEmptyState)
@@ -83,31 +82,7 @@
       ;; + modal. Forward the whole prop map (no new literal here).
       (DocumentToolbars)
 
-      ;; TOP REGION: hierarchy | content (PdfPane / EditorPane) | pins.
-      (DocumentColumns)
-
-      ;; Card table + its resize handle — hidden in reading-mode? (B1).
-      ;; Add-Card still works; success surfaces as a toast (card_modals).
-      (when-not reading-mode?
-        ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
-        ;; Drag persists the split on release; double-click resets to default.
-        (dom/div
-          (dom/props {:class "split-divider-v"
-                      :title "Drag to resize panels (double-click to reset)"
-                      :role "separator" :aria-orientation "horizontal"
-                      :aria-label "Resize content and card table" :tabindex "0"
-                      :aria-valuenow (str (int (or top-pct 0)))})
-          (dom/On "pointerdown"
-            (fn [e] (util/start-drag! e :y !top-pct {:on-commit #(reset! !top-pct-save %)}))
-            nil)
-          (dom/On "keydown"
-            (fn [e] (util/key-resize-pct! e :y !top-pct #(reset! !top-pct-save %)))
-            nil)
-          (dom/On "dblclick" (fn [_] (reset-split!)) nil)))
-
-      ;; BOTTOM BAR (full width): the card table.
-      (when-not reading-mode?
-        (BottomPanel))))
+      (DocumentWorkspace assistant-full-height?)))
     )))
 
 (e/defn DocumentRoot

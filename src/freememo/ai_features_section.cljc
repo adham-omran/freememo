@@ -16,6 +16,7 @@
    [freememo.ocr-models :as ocr-models]
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
+   [freememo.assistant-panel-setting :refer [AssistantPanelLayoutField]]
    [freememo.segmented :as seg]
    [freememo.pre-prompt-mode :as ppm]
    #?(:clj [freememo.ocr :as ocr])
@@ -628,6 +629,8 @@
           (CardQuizGradingField user-id credits-enabled?)
 
           (AssistantModelField user-id card-model-ids card-label-of)
+
+          (AssistantPanelLayoutField user-id)
 
           (KgModelsField user-id card-model-ids card-label-of)
 

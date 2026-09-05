@@ -2,6 +2,8 @@
   "Durable assistant-run transition and ownership contracts."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
+            [freememo.assistant-evidence :as evidence]
+            [freememo.assistant-panel :as panel]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
@@ -113,6 +115,25 @@
           "Claim [evidence:E1]. Missing [evidence:E9]."
           [{:citation_key "E1" :document_topic_id 7 :page_number 3
             :display_label "document-level evidence"}]))))
+
+(deftest document-mentions-use-the-message-draft
+  (is (= "front" (panel/mention-query "Compare this with @front")))
+  (is (= "" (panel/mention-query "@")))
+  (is (nil? (panel/mention-query "Use @front next")))
+  (is (= [{:id 2 :label "Frontend Design"}]
+        (panel/reference-options
+          [{:id 1 :label "Backend Notes"}
+           {:id 2 :label "Frontend Design"}]
+          "FRONT"))))
+
+(deftest citation-target-resolves-retained-evidence
+  (let [source {:citation_key "E1" :document_topic_id 7 :page_number 3
+                :quoted_text "Retained text"}]
+    (is (= "/viewer/topic/7/3" (evidence/citation-target source)))
+    (is (= source (evidence/source-for-target [source] "/viewer/topic/7/3")))
+    (is (nil? (evidence/source-for-target [source] "/viewer/topic/8")))
+    (is (false? (evidence/other-document? source "7")))
+    (is (true? (evidence/other-document? source 8)))))
 
 (deftest failed-run-retry-reuses-the-exact-snapshot
   (let [started (atom nil)

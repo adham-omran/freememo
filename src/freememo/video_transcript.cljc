@@ -306,8 +306,7 @@
           follow? (e/watch !follow-playhead?)
           !last-auto-top (atom -1)]
       (dom/div
-        ;; Fills its tab in RightSidePanel — the panel owns width, collapse and
-        ;; the border, so this must not set any of them.
+        ;; Fill the video content pane. The parent owns the width and border.
         (dom/props {:style {:display "flex" :flex-direction "column"
                             :flex "1" :min-height "0" :min-width "0"}})
         (TranscriptToolbar topic-id seg-count)

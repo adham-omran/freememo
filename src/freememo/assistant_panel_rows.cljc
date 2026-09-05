@@ -1,6 +1,5 @@
 (ns freememo.assistant-panel-rows
-  "Chrome rows of the assistant panel: the chat row, the Mode pill row, the model
-   row, and the empty-chat starters.
+  "Assistant controls, the document mention menu, and empty-chat starters.
 
    Split out of freememo.assistant-panel so each `e/defn` gets its own JVM method
    and the panel stays under the 64KB bytecode limit — the same reason
@@ -30,7 +29,7 @@
    clears the selection: that is the widget's documented postcondition, and it
    matches the `Chats…` option the `<select>` carried before.
 
-   `pending-mode` seeds a chat created by `＋ New`, so tapping a pill and then
+   `pending-mode` seeds a chat created by `＋ New`, so changing the mode and then
    `＋ New` gives you that persona rather than silently reverting to the default.
 
    Pre:  `chat-options` is a vec of {:id chat-id :label title}; `pending-mode` is
@@ -65,67 +64,43 @@
             (pt)))))))
 
 (e/defn ModeRow
-  "The `Mode` label and one pill per persona.
-
-   With a chat open a pill tap is a real mutation on that chat's row — mode is
-   per chat, so the pills show the open chat's persona rather than a standing
-   preference. With no chat open there is nothing to mutate yet, so the tap only
-   stages `!pending-mode`, which rides the first send (submit-chat-input! →
-   start-chat!) or `＋ New`.
-
-   The click atom is created HERE, not passed in: an `e/Token` input that arrives
-   through a parameter map re-fires on every unrelated change to that map.
-
-   Pre:  `mode-entry` is a registry entry (from modes/resolve-mode, never nil);
-         `active` is a chat id or nil.
-   Post: exactly one pill carries the active class."
+  "Select the mode for the open chat or the next new chat."
   [user-id active mode-entry !pending-mode]
   (e/client
-    (let [!click (atom nil)
-          click (e/watch !click)
-          [t ?error] (e/Token click)]
-      (dom/div
-        (dom/props {:class "assistant-panel__modes"})
-        (dom/span
-          (dom/props {:class "assistant-panel__modes-label"})
-          (dom/text "Mode"))
-        (dom/div
-          (dom/props {:class "assistant-panel__mode-pills" :role "tablist"})
-          (e/for [m (e/diff-by :id modes/registry)]
-            (let [mid (:id m)
-                  on? (= mid (:id mode-entry))]
-              (dom/button
-                (dom/props {:class (str "side-panel__tab"
-                                    (when on? " side-panel__tab--active"))
-                            :role "tab" :aria-selected (str on?) :type "button"
-                            :title (str (:label m) " mode")})
-                (dom/text (:label m))
-                ;; Staging every tap keeps `＋ New` and the first send in step
-                ;; with the pills whether or not a chat is open.
-                (dom/On "click"
-                  (fn [_] (reset! !pending-mode mid) (reset! !click mid))
-                  nil)))))
-        (when t
-          (if (nil? active)
-            (t) ; nothing persisted yet — the staged value rides chat creation
-            (let [r (e/server (e/Offload #(assistant/set-chat-mode! user-id active click)))]
-              (case r
-                (if (:success r) (t) (t (:error r)))))))
-        (when ?error
-          (dom/div
-            (dom/props {:class "assistant-panel__error"})
-            (dom/text ?error)))))))
+    (dom/label
+      (dom/props {:class "assistant-panel__footer-field"})
+      (dom/span (dom/text "Mode"))
+      (dom/select
+        (dom/props {:class "assistant-panel__select"
+                    :value (:id mode-entry)
+                    :aria-label "Assistant mode"})
+        (e/for [mode (e/diff-by :id modes/registry)]
+          (dom/option
+            (dom/props {:value (:id mode)
+                        :selected (= (:id mode) (:id mode-entry))})
+            (dom/text (:label mode))))
+        (let [change (dom/On "change"
+                       (fn [event]
+                         (let [mode-id (-> event .-target .-value)]
+                           (reset! !pending-mode mode-id)
+                           mode-id))
+                       nil)
+              [token _] (e/Token change)]
+          (dom/props {:disabled (some? token) :aria-busy (some? token)})
+          (when token
+            (if (nil? active)
+              (token)
+              (let [result (e/server (e/Offload
+                                      #(assistant/set-chat-mode!
+                                         user-id active change)))]
+                (case result
+                  (if (:success result)
+                    (token)
+                    (token (:error result)))))))
+          )))))
 
 (e/defn ModelRow
-  "Per-document assistant model picker. `\"\"` = use my global default.
-
-   A `Typeahead` rather than a `<select>` so 12 entries stay searchable. The
-   widget writes `!amodel` only on a definitive pick, so the save fires once per
-   selection instead of once per keystroke.
-
-   Pre:  root-topic-id is the open document.
-   Post: the saved value is `\"\"` or a card-models :id — save-assistant-model-for
-         rejects anything else."
+  "Select the model for this document. An empty value uses the global default."
   [user-id root-topic-id]
   (e/client
     (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
@@ -139,29 +114,65 @@
                     choices)
           !amodel (atom (e/snapshot (or current "")))
           amodel (e/watch !amodel)
-          !picked (atom nil)
-          picked (e/watch !picked)]
-      (dom/div
-        (dom/props {:class "assistant-panel__model"})
-        (Typeahead !amodel options "Search models…" !picked false)
-        ;; Typeahead clears !amodel to nil when the field is emptied and blurred,
-        ;; but it does not write the commit atom. Mirror that one transition, or
-        ;; the field reads as cleared while the old per-document model stays in
-        ;; force. "" and nil already mean the same thing to
-        ;; settings/effective-assistant-model.
-        (when (nil? amodel) (reset! !picked ""))
-        (let [[mt _] (e/Token picked)]
-          (when mt
-            (let [r (e/server (e/Offload
-                                #(settings/save-assistant-model-for
-                                   user-id root-topic-id picked)))]
-              (case r
-                (if (:success r) (mt) (mt (:error r)))))))))))
+          selected (or amodel "")]
+      (dom/label
+        (dom/props {:class "assistant-panel__footer-field assistant-panel__footer-field--model"})
+        (dom/span (dom/text "Model"))
+        (dom/select
+          (dom/props {:class "assistant-panel__select"
+                      :value selected :aria-label "Assistant model"})
+          (e/for [option (e/diff-by :id options)]
+            (dom/option
+              (dom/props {:value (:id option)
+                          :selected (= (:id option) selected)})
+              (dom/text (:label option))))
+          (let [change (dom/On "change"
+                         (fn [event]
+                           (let [model-id (-> event .-target .-value)]
+                             (reset! !amodel model-id)
+                             model-id))
+                         nil)
+                [token _] (e/Token change)]
+            (dom/props {:disabled (some? token) :aria-busy (some? token)})
+            (when token
+              (let [result (e/server (e/Offload
+                                      #(settings/save-assistant-model-for
+                                         user-id root-topic-id change)))]
+                (case result
+                  (if (:success result)
+                    (token)
+                    (token (:error result))))))
+            ))))))
+
+(e/defn ReferenceMenu
+  "Show document matches above the composer. The message box keeps focus and
+   remains visible."
+  [options selected-index !picked]
+  (e/client
+    (dom/div
+      (dom/props {:class "assistant-panel__mention-menu" :role "listbox"
+                  :aria-label "Reference a document"})
+      (if (seq options)
+        (e/for [option (e/diff-by :id
+                         (mapv (fn [index entry]
+                                 (assoc entry :menu-index index))
+                           (range) options))]
+          (let [selected? (= selected-index (:menu-index option))]
+            (dom/button
+              (dom/props {:class (str "assistant-panel__mention-option"
+                                   (when selected? " assistant-panel__mention-option--selected"))
+                          :type "button" :role "option"
+                          :aria-selected (str selected?)})
+              (dom/text (:label option))
+              (dom/On "click" (fn [_] (reset! !picked (:id option))) nil))))
+        (dom/div
+          (dom/props {:class "assistant-panel__mention-empty"})
+          (dom/text "No matching documents."))))))
 
 (e/defn EmptyChatStarters
   "Empty-chat hint plus this persona's four first-message starters.
 
-   Both come from the mode registry, so switching pills on an empty chat swaps
+   Both come from the mode registry, so changing the mode on an empty chat swaps
    the whole block. A tap sends immediately as the chat's first message, which
    creates the chat in the staged mode.
 

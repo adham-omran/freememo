@@ -51,10 +51,10 @@
             ["Sync again any time" "Every sync rebuilds from the export. A highlight you deleted on the device loses its mark, and your own edits inside a USER NOTES list do not survive."]]}
    {:title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
-    :steps [["Open it" "Right side panel → AI Assistant tab. New Chat starts a conversation scoped to the current document; your chats and transcripts are saved."]
+    :steps [["Open it" "Open the Assistant panel on the right. New Chat starts a saved conversation about the current document."]
             ["Pick a mode" "General answers directly and names the page it came from. Tutor guides you with questions. Socratic does the same in a fixed \"Where you are / Consider next\" shape. Each chat keeps its own mode."]
             ["Ask about the page" "Type a question about what you're reading. Every mode is grounded in the page in front of you. Markdown and math render inline."]
-            ["Pick its model" "The panel's model selector sets the assistant's model for this document; leave it on your default otherwise. Type to search it."]]}
+            ["Pick its model" "Use the model dropdown to set the assistant model for this document. Leave it on your default otherwise."]]}
    {:title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [["Generate ({generate})" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
@@ -110,7 +110,7 @@
     :intro "Search, browse, reshape, and review your growing library."
     :steps [["Search" "The Search tab finds topics by their text, Fuzzy or Exact. Card text is filtered separately in Library → Cards."]
             ["Browse the Library" "Library toggles between Documents (the knowledge tree) and Cards; Expand All / Collapse All opens the tree. Each document's Done and Synced columns show its progress."]
-            ["Re-nest topics" "Drag a row by its ⠿ grip onto a new parent, or click the grip to arm a move and click the destination (Esc cancels). Works in the Library tree and the Viewer's Hierarchy (☰) panel."]
+            ["Re-nest topics" "Use the Hierarchy tab in the left panel. Drag a row by its ⠿ grip to a new parent. You can also select the grip, then select the destination. Press Esc to cancel."]
             ["Review a subset" "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."]]}
    {:title "Keyboard & command palette"
     :intro "Reach any action without hunting for its button."
