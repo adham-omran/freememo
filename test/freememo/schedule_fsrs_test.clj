@@ -364,9 +364,14 @@
 (deftest the-deadline-token-tells-today-from-overdue
   (testing "the signed count, NOT days-until's floored one — that reports 0 for
             today and for last month alike"
-    (is (= ["12d" "1d" "today" "overdue" "overdue"]
+    (is (= ["12d" "1d" "today" "1d overdue" "30d overdue"]
           (mapv fc/deadline-token [12 1 0 -1 -30])))
-    (is (= "today" (fc/deadline-token nil)) "no date is no deadline to miss")))
+    (is (= "today" (fc/deadline-token nil)) "no date is no deadline to miss"))
+  (testing "the overdue side names its magnitude. A bare `overdue` read the same
+            the day after a target and four months later, and those call for
+            different actions — one is a date to nudge and the other is a
+            schedule to archive"
+    (is (not= (fc/deadline-token -1) (fc/deadline-token -120)))))
 
 (deftest an-infeasible-target-names-all-four-levers
   (testing "§6.6 — the warning names four levers whichever reason fired"

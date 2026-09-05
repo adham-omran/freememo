@@ -33,6 +33,11 @@
 
 ;; Pre:  user-id + bib-topic-id from doc-context; bib-topic-id is the document
 ;;       ROOT, which is what `study_schedules.root_topic_id` names.
+;; Pre:  `dctx/page-number` is the page in view, and it is nil for every
+;;       non-PDF — `document_view.cljc` binds it as `(when is-pdf? current-page)`
+;;       for this toolbar's subtree. It decides WHICH schedule this badge speaks
+;;       for on a document carrying more than one, so dropping it is not a
+;;       neutral simplification.
 ;; Post: one badge when an active schedule covers the document, nothing at all
 ;;       when none does.
 ;; Inv : its own e/defn, not a branch inside DocumentMetaGroup. Each e/defn
@@ -43,13 +48,20 @@
   (e/client
     (let [user-id dctx/user-id
           root-topic-id dctx/bib-topic-id
+          page dctx/page-number
           ;; A server-FORM binding, not an e/defn call: the map stays on the
           ;; server and each read below pulls one field. e/Offload because
           ;; `root-schedule-pace` projects every card in the document at h=0,
           ;; and a bare e/server would stall this session's reactive graph.
+          ;;
+          ;; `page` is a reactive dependency, so turning a page re-runs the
+          ;; selection. That is what a page-scoped answer costs, and the cost is
+          ;; one indexed read plus one h=0 projection — the same ~6 ms the badge
+          ;; already pays per mount. Latest-wins is correct here: a reader who
+          ;; pages past the boundary between two schedules wants the new one.
           pace (e/server
                  (let [refresh (e/watch (us/get-atom user-id :schedule-mutations))]
-                   (e/Offload #(sched/root-schedule-pace refresh user-id root-topic-id))))]
+                   (e/Offload #(sched/root-schedule-pace refresh user-id root-topic-id page))))]
       ;; No collapse class of its own: it sits inside the doc-meta group, so it
       ;; hides at tier 2 with the progress badge beside it. A tier-1 class was
       ;; tried and reverted — a 1200px window already reports collapse-1, so

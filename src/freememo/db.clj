@@ -11388,19 +11388,23 @@
   [user-id]
   (schedules-where user-id [:not= :s/archived_at nil]))
 
-(defn active-study-schedule-for-root
-  "The active schedule over `root-topic-id`, or nil when none covers it.
+(defn active-study-schedules-for-root
+  "EVERY active schedule over `root-topic-id`, soonest target first.
 
    Pre : ownership is checked HERE, in the same clause `schedules-where`
          applies to every other read of this table.
-   Post: the SOONEST target when more than one active schedule covers the root,
-         ties broken by lowest id. Nothing in the schema forbids two, and
-         `schedules-where` already orders by (target_date, id) — reading its
-         first row is what makes this agree with the row the Schedule tab lists
-         first, instead of naming a different schedule for the same document."
+   Post: a vector, empty when none covers the root. Nothing in the schema
+         forbids two schedules over one document — a book split into a finished
+         first half and a live second half is the ordinary case — so a reader
+         that took `first` of this list picked by target date, which is not the
+         question a reading view asks. `schedule-forecast/pick-for-page` ranks
+         them by the page in view; this query does not choose.
+   Post: the order is `schedules-where`'s (target_date, id), so a caller that
+         does want the most urgent one still reads it off the front and agrees
+         with the row the Schedule tab lists first."
   [user-id root-topic-id]
-  (first (schedules-where user-id [:and [:is :s/archived_at nil]
-                                   [:= :s/root_topic_id root-topic-id]])))
+  (schedules-where user-id [:and [:is :s/archived_at nil]
+                            [:= :s/root_topic_id root-topic-id]]))
 
 (defn get-study-schedule
   "One schedule, or nil when it is absent, another user's, or over a document

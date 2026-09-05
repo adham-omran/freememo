@@ -429,8 +429,13 @@
         (dom/div
           (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                               :margin-top "2px"}})
+          ;; `deadline-token`, the same fn the home card's badge reads, so the
+          ;; two lists cannot describe one target differently. It replaced a
+          ;; local `(if (pos? days-left) …  "today")`, which read `today` for
+          ;; every non-positive value — a schedule three weeks past its target
+          ;; looked due today on the one surface a user scans to triage.
           (dom/text (str (:target-date s) " · "
-                      (if (pos? (:days-left s)) (str (:days-left s) " days left") "today")
+                      (fc/deadline-token (:days-to-target s))
                       (when (:first-page s)
                         (str " · pages " (:first-page s) "–"
                           (or (:last-page s) "end"))))))))))
@@ -623,7 +628,7 @@
             (dom/props {:class "btn" :style {:margin-left "10px" :font-size "12px"}})
             (dom/text "Back to schedules")
             (dom/On "click" (fn [_] (navigate! :schedule)) nil)))
-        (ScheduleForecast user-id schedule-id forecast anki-status)))))
+        (ScheduleForecast user-id schedule-id forecast anki-status navigate!)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Home dashboard
@@ -749,7 +754,11 @@
           ;; acquisition serves every schedule (§1.3).
           anki-status (AnkiSync user-id)]
       (dom/div
-        (dom/props {:class "page-container"
+        ;; `sched-page` raises the shared 960px cap. This tab is a sidebar plus a
+        ;; forecast pane, and 960px left the pane about 640px wide — two rows of
+        ;; stat tiles and a plan table forced into its narrow column set on a
+        ;; full desktop window.
+        (dom/props {:class "page-container sched-page"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "12px"

@@ -5163,6 +5163,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    for the same reason — a `case` returning a background would put them back
    inline. */
 
+/* Wider than the 960px `.page-container` cap. This tab is a sidebar plus a
+   forecast pane, and at 960px the pane held about 640px — enough to wrap seven
+   stat tiles onto two rows and to force the plan table's five columns into the
+   900px narrow set on a full desktop window. The cap exists to keep prose
+   readable; nothing here is prose. */
+.sched-page { max-width: 1280px; }
+
 .sched-layout {
     flex: 1;
     min-height: 0;
@@ -5178,7 +5185,155 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     border-right: 1px solid var(--color-border);
 }
 
-.sched-pane { flex: 1; min-width: 0; overflow-y: auto; }
+/* A flex COLUMN, which is what reduces the pane to one scrollbar. Everything
+   above the table region sizes to its content and `.sched-tables` takes what is
+   left, so the pane's own content fits the pane and the bar it would otherwise
+   paint never appears. `overflow-y: auto` stays for the fallback: a window too
+   short even for the table's floor, and the two other views this pane hosts —
+   the dashboard and the new-schedule form — which are ordinary flowing content.
+
+   `scrollbar-gutter` reserves the lane whether or not that fallback fires, so
+   switching between the plan and the pages table cannot shift the layout
+   sideways by the bar's width. The padding is what keeps the lane clear of the
+   table card inside it. */
+.sched-pane {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding-right: 10px;
+    scrollbar-gutter: stable;
+}
+
+/* Content sizing, never flex sizing. Without this the tiles and the panels
+   shrink to share the height with the table, which is the opposite of the
+   arrangement: they are short and fixed, the table is what should absorb the
+   window. */
+.sched-pane > * { flex: none; }
+
+/* The one child that grows. `min-height: 0` on the CARD below is required — a
+   flex item's default `min-height: auto` is its content height, which for a
+   700-row table is 700 rows, and the item would refuse to shrink below it and
+   push the pane back into scrolling.
+
+   The floor here is the other half of that. It is deliberately low: about five
+   rows plus the header. A shorter table inside a page that does not scroll
+   beats a taller one inside a page that does — the reader can resize, and two
+   bars is the thing this change exists to remove. Below the floor the pane
+   scrolls again, which is the honest fallback and is what the frame and inset
+   on `.sched-tablecard` are for. */
+.sched-tables {
+    flex: 1 1 auto;
+    min-height: 210px;
+    display: flex;
+    flex-direction: column;
+}
+
+.sched-tables > .sched-tablecard {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.sched-tables > .sched-tablecard > .tape-scroll { flex: 1 1 auto; min-height: 0; }
+
+/* ── One scrollbar at a time ──────────────────────────────────────
+   A browser draws a scrollbar between the padding box and the border box, so
+   padding on a scroller never moves its own bar inward. Only a wrapper can, and
+   that is this element's whole job: the table's bar sits 10px inside a visible
+   border, and the pane's sits 10px outside it. Two bars that used to be about
+   fifteen pixels apart with nothing between them now have a frame and 20px.
+
+   The frame does a second job. It says the box scrolls, which is what a reader
+   needs in order to read the inner bar as belonging to the table rather than to
+   the page. */
+.sched-tablecard {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 6px);
+    background: var(--color-bg-card);
+    padding: 10px;
+}
+
+/* The plan/pages switch. A segmented control rather than two headings, because
+   only one of the two tables is mounted and the control is the only thing
+   saying the other one exists. */
+.sched-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.sched-tab {
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.sched-tab:hover { color: var(--color-text-primary); }
+
+.sched-tab.is-active {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    border-bottom-color: var(--color-primary);
+}
+
+/* The count of what the tab holds. Hiding a table behind a switch is only
+   honest if the switch says how much is behind it. */
+.sched-tab-count {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-hint);
+}
+
+.sched-tab.is-active .sched-tab-count { color: var(--color-text-secondary); }
+
+/* ── A schedule whose target has passed ───────────────────────────
+   Deliberately NOT the warning colour `FeasibilityPanel` uses. That box means
+   "this plan is in trouble and here is what moves it"; this one means "the time
+   is up, here is what it reached". A red box for a date that simply went by
+   reads as a fault the user caused. */
+.sched-ended {
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-text-secondary);
+    border-radius: var(--radius-md, 6px);
+    font-size: 13px;
+}
+
+.sched-ended-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.sched-ended-line { margin-bottom: 4px; color: var(--color-text-primary); }
+
+.sched-ended-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.sched-ended-error { color: var(--color-danger, #b91c1c); font-size: 12px; }
 
 /* Back to the list. Hidden wherever the list is still on screen — a back
    button pointing at something already visible is noise. */
@@ -5335,9 +5490,14 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    item overflows its container rather than shrinking, which is what pushed the
    tiles off the right edge of a phone. The floor drops with the viewport and
    `flex-basis` does the sizing. */
-.sched-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-.sched-tile { flex: 1 1 140px; min-width: 140px; padding: 12px 14px; }
-.sched-tile-value { font-size: 22px; font-weight: 700; color: var(--color-text-primary); }
+/* Seven tiles, and the basis is what decides whether they take one row or two.
+   At 140px they needed 1040px and the pane offers about 1000px even after the
+   tab was widened, so every desktop paid a second row — about 90px of the
+   height the table below wants. `min-width` is a FLOOR, not a hint: below it a
+   flex item overflows rather than shrinking, so the two move together. */
+.sched-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.sched-tile { flex: 1 1 124px; min-width: 116px; padding: 10px 12px; }
+.sched-tile-value { font-size: 21px; font-weight: 700; color: var(--color-text-primary); }
 .sched-tile-sub { font-size: 12px; color: var(--color-text-secondary); }
 
 @media (max-width: 900px) {
@@ -5362,7 +5522,24 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
         padding-bottom: var(--sp-3);
         overflow-y: visible;
     }
-    .sched-pane { overflow-y: visible; }
+    /* The pane stops being a scroller here, so the gutter it reserves and the
+       lane it kept clear of the table card have nothing left to separate. The
+       card keeps its border and loses its padding: at 320px, 10px on each side
+       is 6% of the viewport spent on a frame. */
+    /* The pane stops being a scroller and a flex column here: the phone shows
+       one column of flowing content and the page itself scrolls, so a table
+       sized to the pane's leftover height would be sized to nothing. It goes
+       back to a fixed box, and the page carries the rest. */
+    .sched-pane {
+        display: block;
+        overflow-y: visible;
+        padding-right: 0;
+        scrollbar-gutter: auto;
+    }
+    .sched-tables { display: block; min-height: 0; }
+    .sched-tablecard { padding: 0; }
+    .sched-tables > .sched-tablecard > .tape-scroll { max-height: 60vh; }
+    .sched-tab { padding: 7px 8px; font-size: 12px; }
 
     .sched-layout.is-detail .sched-sidebar { display: none; }
     .sched-layout.is-detail .sched-back {

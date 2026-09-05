@@ -355,6 +355,9 @@
      :maturity-unreachable — `maturation-lead` found no day at all. The gate
                          never opens under this deck config and θ, so no amount
                          of reading produces a known page.
+     :past-target      — the target date has gone by. The schedule has run its
+                         course, and what is left is a report and a decision,
+                         not advice about a plan that can still be met.
 
    Post: {:feasible? :reasons :peak-load :capacity :projected-known :required
           :horizon :maturation-lead :levers}. `:horizon` is echoed back beside
@@ -411,22 +414,43 @@
 
    `:not-started` is therefore reported and never counted. §6.6's done-condition
    still holds: a one-day target on an uncarded document warns, through
-   `:no-maturation-window`."
+   `:no-maturation-window`.
+
+   **`:past-target` SUPPRESSES `:no-maturation-window`, and that suppression is
+   the point of the reason.** `days-until` floors at 0, so a target three weeks
+   gone arrives here with `horizon` 0 — indistinguishable from a target today,
+   and every bit as short of the lead. The window reason then fired and rendered
+   `Cards need 11 days to mature and the target is 0 days away`, a sentence
+   about a horizon that is short when the horizon is in fact over. Both describe
+   the same arithmetic; only one of them is the fact the reader needs.
+
+   `:short-of-target` is deliberately KEPT alongside it. A passed target that
+   the projection did not reach is a real shortfall, and it is what makes
+   `earliest-feasible-day` run — which is the date the panel needs in order to
+   say when the covered pages become known.
+
+   Pre : `past-target?` is whether `schedule/signed-days-to-target` is negative.
+         It cannot be derived here: `horizon` has already been floored, and
+         floored is exactly what loses the distinction."
   [{:keys [projected-known required-pages reachable-pages peak-load
-           observed-capacity earliest-day horizon] lead :maturation-lead}]
+           observed-capacity earliest-day horizon past-target?]
+    lead :maturation-lead}]
   (let [reachable (long (or reachable-pages required-pages))
+        past? (boolean past-target?)
         short? (< (long projected-known) reachable)
         over? (and (pos? (double observed-capacity))
                 (> (double peak-load) (double observed-capacity)))
         unreachable? (nil? lead)
-        no-window? (and (some? lead) (<= (long horizon) (long lead)))
+        no-window? (and (not past?) (some? lead) (<= (long horizon) (long lead)))
         reasons (cond-> []
+                  past? (conj :past-target)
                   short? (conj :short-of-target)
                   over? (conj :over-capacity)
                   no-window? (conj :no-maturation-window)
                   unreachable? (conj :maturity-unreachable))]
     {:feasible? (empty? reasons)
      :reasons reasons
+     :past-target? past?
      :peak-load (double peak-load)
      :capacity (double observed-capacity)
      :projected-known (long projected-known)
@@ -671,7 +695,12 @@
          `days-until`'s. That one floors at 0, which reports the same value for
          today and for last month, and telling those apart is this fn's whole
          job.
-   Post: \"12d\" before the target, \"today\" on it, \"overdue\" after it.
+   Post: \"12d\" before the target, \"today\" on it, \"12d overdue\" after it.
+   Post: **the overdue side names its magnitude.** A bare \"overdue\" reads the
+         same on the day after the target and four months later, and those call
+         for different actions — one is a date to nudge, the other is a schedule
+         to archive. The unit is the same `Nd` the live side uses, so the two
+         halves of the readout stay comparable.
    Post: nil reads as \"today\" rather than throwing — a caller with no date has
          no deadline to miss."
   [days]
@@ -679,7 +708,7 @@
     (cond
       (pos? d) (str d "d")
       (zero? d) "today"
-      :else "overdue")))
+      :else (str (- d) "d overdue"))))
 
 (defn schedule-badge-face
   "The reading-view schedule badge's whole face: today's quota and the deadline.
@@ -765,3 +794,62 @@
                                  covered-today)))
    :reviews-today (double (get daily-load 0 0.0))
    :pages-remaining (long pages-remaining)})
+
+;; ---------------------------------------------------------------------------
+;; Which schedule a reading view is about
+;; ---------------------------------------------------------------------------
+
+(defn covers-page?
+  "Whether `page` falls inside a schedule row's page range.
+
+   Pre : `row` carries `:first-page` and `:last-page`, either of which may be
+         nil for an open end — the same shape `db/get-schedule-pages` reads,
+         where a nil first page means the start of the document and a nil last
+         page means the end of it.
+   Post: false for a nil `page`. A document with no page in view — a non-PDF, or
+         the PDF root's own screen — is not inside any range, and answering true
+         would make every schedule equally relevant instead of none."
+  [row page]
+  (let [p (when page (long page))
+        lo (some-> (:first-page row) long)
+        hi (some-> (:last-page row) long)]
+    (boolean (and p
+               (or (nil? lo) (>= p lo))
+               (or (nil? hi) (<= p hi))))))
+
+(defn pick-for-page
+  "The one schedule a reading view should speak for, out of every active
+   schedule over the same document.
+
+   Nothing in the schema forbids two, and the reader has exactly one question:
+   what does my schedule say about the pages in front of me. Ordering by target
+   date answers a different one — which deadline is nearest — and on a document
+   split into a finished first half and a live second half it named the half the
+   user had already left, with the target long past.
+
+   Pre : `rows` are ACTIVE schedules over ONE root, each carrying `:first-page`,
+         `:last-page`, `:days-to-target` (SIGNED, negative once the target is
+         past) and `:id`. Ownership is checked by whoever read them.
+   Post: nil for an empty `rows`, so the caller renders no badge at all.
+   Post: the row whose range holds `page`, when one does. That is the whole
+         point, and it outranks urgency: a schedule over the pages being read is
+         what the reader is asking about, even when its target has passed —
+         `overdue` is then the true answer rather than the wrong schedule's.
+   Post: among equals on that test, a LIVE schedule beats an expired one. With
+         no page to match, this is the whole rule, and it is already better than
+         soonest-target: an expired schedule is history and a live one is work.
+   Post: the last key is `abs(days-to-target)`, which reads in both directions
+         on purpose. Live, it is days remaining, so the soonest deadline wins.
+         Expired, it is days since, so the schedule that ran out most recently
+         wins over one that ran out in March.
+   Post: `:id` breaks a full tie, so the choice is stable across reads rather
+         than following whatever order the query returned."
+  [rows page]
+  (->> rows
+    (sort-by (fn [r]
+               (let [d (long (or (:days-to-target r) 0))]
+                 [(if (covers-page? r page) 0 1)
+                  (if (neg? d) 1 0)
+                  (Math/abs d)
+                  (long (or (:id r) 0))])))
+    first))

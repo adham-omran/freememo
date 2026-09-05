@@ -210,10 +210,126 @@
                               :color "var(--color-text-hint)"}})
           (dom/text "(not editable yet)"))))))
 
+;; Pre:  `forecast` reports `:past-target` among its feasibility reasons.
+;; Post: a REPORT and two ways to close the schedule out, not a warning. A
+;;       passed target is not a plan in trouble — it is a plan whose time is up,
+;;       and the two readings need different words, different colour and
+;;       different actions. `FeasibilityPanel`'s red box says "this target is
+;;       out of reach", which is advice about a date that can still be met.
+;; Inv : this panel and `FeasibilityPanel` are MUTUALLY EXCLUSIVE. Rendering
+;;       both would put a warning about a short horizon directly above a report
+;;       that the horizon is over.
+;; Inv : its own e/defn. One JVM method each keeps this namespace under the 64KB
+;;       prod cap, and the token here lives in the frame that mounts per panel.
+(e/defn PastTargetPanel [user-id schedule-id forecast navigate!]
+  (e/client
+    (let [feas (e/server (:feasibility forecast))
+          ;; NEGATIVE by construction — `:past-target` is what put this panel on
+          ;; screen. Negated once, here, so every sentence below reads forwards.
+          ago (e/server (- (long (or (:days-to-target forecast) 0))))
+          known (e/server (:projected-known feas))
+          not-started (e/server (:not-started feas))
+          covered (e/server (get-in forecast [:progress :covered]))
+          total (e/server (get-in forecast [:progress :total]))
+          target (e/server (str (get-in forecast [:schedule :study_schedules/target_date])))
+          ;; Non-nil only when `:short-of-target` also fired, which is what pays
+          ;; for the seventeen extra projections the search costs. When it is
+          ;; nil the projection already reaches every carded page, and the
+          ;; schedule is finished rather than late.
+          finish (e/server (:earliest-date feas))]
+      (dom/div
+        (dom/props {:class "sched-ended"})
+        (dom/div
+          (dom/props {:class "sched-ended-head"})
+          (icons/Icon :flag :size 16)
+          (dom/text "The target date has passed"))
+        ;; Three sentences, in the order a reader needs them: when it ended,
+        ;; what it reached, and when the outstanding cards mature. The last one
+        ;; is the question this panel exists for — a covered page is not a known
+        ;; page until its cards clear the retention gate, and nothing on the tab
+        ;; said when that happens.
+        (dom/div
+          (dom/props {:class "sched-ended-line"})
+          (dom/text (str "Target was " target " — "
+                      ago " day" (when (not= 1 ago) "s") " ago.")))
+        ;; ONE denominator, and it is the tiles'. `:reachable` is the smaller
+        ;; count the projection can move, and quoting it here would put a second
+        ;; `7 of N` on the screen next to `Known now 7 / 23` with nothing saying
+        ;; the two Ns mean different things. The unstarted pages are named as a
+        ;; remainder instead, which is the same fact without the collision.
+        (dom/div
+          (dom/props {:class "sched-ended-line"})
+          (dom/text (str "It reached " known " of " total
+                      " page" (when (not= 1 total) "s") " known, and "
+                      covered " of " total " covered."
+                      (when (pos? (long (or not-started 0)))
+                        (str " " not-started " page"
+                          (when (not= 1 not-started) "s")
+                          " still have no cards, so no projection can move "
+                          (if (= 1 not-started) "it." "them."))))))
+        (dom/div
+          (dom/props {:class "sched-ended-line"})
+          (dom/text (if finish
+                      (str "Every carded page reaches the retention target on "
+                        finish ". That is when this schedule finishes.")
+                      (str "Every carded page in the range is already known. "
+                        "This schedule is finished."))))
+        (dom/div
+          (dom/props {:class "sched-ended-actions"})
+          ;; The date lever, as a button rather than a bullet. It is the same
+          ;; write `LeverRow` and the Edit form make — `sched/update-schedule!` —
+          ;; so the advice and the form cannot format a date differently.
+          (when finish
+            (dom/button
+              (dom/props {:class "btn"})
+              (dom/text (str "Move target to " finish))
+              (let [[t ?error] (e/Token (dom/On "click" identity nil))]
+                (when t
+                  ;; BOTH outcomes spend the token, for the reason
+                  ;; `ScheduleHeader` records: spending on success alone leaves
+                  ;; the button dead on a failure with nothing saying why.
+                  (let [res (e/server (e/Offload #(sched/update-schedule!
+                                                    user-id schedule-id
+                                                    {:target_date finish})))]
+                    (if (e/server (:ok res))
+                      (t)
+                      (t (e/server (:error res))))))
+                (when ?error
+                  (dom/span
+                    (dom/props {:class "sched-ended-error"})
+                    (dom/text (str " " ?error)))))))
+          ;; Archiving is the only thing in this feature that means finished,
+          ;; and it lived in the header alone — a user reading a box that says
+          ;; the target has passed had no reason to look up there for it. It
+          ;; navigates for the reason the header's copy does: the schedule
+          ;; leaves the list behind this pane.
+          (dom/button
+            (dom/props {:class "btn"})
+            (dom/text "Archive this schedule")
+            (let [[t ?error] (e/Token (dom/On "click" identity nil))]
+              (when t
+                (let [res (e/server (e/Offload #(sched/archive-schedule!
+                                                  user-id schedule-id)))]
+                  (if (e/server (:ok res))
+                    (case (navigate! :schedule) (t))
+                    (t (e/server (:error res))))))
+              (when ?error
+                (dom/span
+                  (dom/props {:class "sched-ended-error"})
+                  (dom/text (str " " ?error)))))))))))
+
+;; Pre:  `forecast`'s feasibility does NOT report `:past-target` — `PastTargetPanel`
+;;       owns that case, and this panel returns nothing for it. The two describe
+;;       the same arithmetic from opposite sides: a horizon too short to mature
+;;       a card, against a horizon that is over.
 (e/defn FeasibilityPanel [user-id schedule-id forecast]
   (e/client
     (let [feas (e/server (:feasibility forecast))
           ok? (e/server (:feasible? feas))
+          ;; Not folded into `ok?`. A passed target is not a feasible one, and a
+          ;; binding that said so would be a lie the next reader has to unpick.
+          ;; It is a case another panel owns, which is a different fact.
+          past? (e/server (:past-target? feas))
           reasons (e/server (vec (:reasons feas)))
           earliest (e/server (:earliest-date feas))
           reachable (e/server (:reachable feas))
@@ -221,7 +337,7 @@
           short? (e/server (boolean (some #{:short-of-target} (:reasons feas))))
           peak (e/server (:peak-load feas))
           cap (e/server (:capacity feas))]
-      (when-not ok?
+      (when-not (or ok? past?)
         (dom/div
           (dom/props {:style {:padding "12px 14px" :margin-bottom "14px"
                               :background "var(--color-warning-bg, #fff3cd)"
@@ -329,12 +445,15 @@
                    (mapv (fn [d] {:day d :n (double (get load d 0.0))}) (range 14))))
           maxn (e/server (max 1.0 (reduce max 0.0 (map :n days))))]
       (dom/div
-        (dom/props {:class "dash-card" :style {:margin-bottom "14px" :padding "12px 14px"}})
+        ;; Shorter than it was. Every pixel this strip spends is a pixel the
+        ;; table below cannot have, and the table is what decides whether the
+        ;; pane has to scroll at all — the fourteen bars read the same at 56px.
+        (dom/props {:class "dash-card" :style {:margin-bottom "12px" :padding "10px 14px"}})
         (dom/div (dom/props {:class "dash-cap"})
           (dom/text "Reviews due — next 14 days (derived, not estimated)"))
         (dom/div
           (dom/props {:style {:display "flex" :align-items "flex-end" :gap "4px"
-                              :height "72px" :margin-top "8px"}})
+                              :height "56px" :margin-top "6px"}})
           (e/for [d (e/diff-by :day days)]
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
@@ -343,7 +462,7 @@
               (tooltip/Tooltip! (str (approx (:n d)) " reviews on day " (:day d)))
               (dom/div
                 (dom/props {:style {:width "100%"
-                                    :height (str (max 2 (long (* 56 (/ (:n d) maxn)))) "px")
+                                    :height (str (max 2 (long (* 42 (/ (:n d) maxn)))) "px")
                                     :background (if (zero? (:day d))
                                                   "var(--color-success)"
                                                   "var(--color-primary-text)")
@@ -421,36 +540,49 @@
                  (let [p (vec (:plan forecast))]
                    (if covering-days-only? (filterv fc/covering-day? p) p)))
           rc (e/server (count rows))]
+      ;; The scroll box sits INSIDE a bordered card rather than being the card.
+      ;; A browser draws a scrollbar between the padding box and the border box,
+      ;; so padding on the scroller itself cannot move its bar inward (CLAUDE.md,
+      ;; 'Center a Text Column by Padding the Scroller'). Only a wrapper can, and
+      ;; the inset is what stops this bar from ending up flush against the
+      ;; pane's own — two bars at one edge read as a single control that half
+      ;; works.
       (dom/div
-        (dom/props {:class "tape-scroll sched-table sched-plan-table"
-                    :style {:position "relative" :max-height "440px" :overflow "auto"
-                            :scrollbar-gutter "stable"
-                            :--count rc
-                            :--row-height (str plan-row-height "px")}})
-        (dom/table
-          (dom/props {:class "tx-head" :style {:width "100%"}})
-          (dom/thead (dom/props {:style {:display "contents"}})
-            (dom/tr (dom/props {:style {:display "contents"}})
-              (dom/th (dom/props {:class "sched-th"}) (dom/text "Day"))
-              (dom/th (dom/props {:class "sched-th"}) (dom/text "Date"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Pages"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Total"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Reviews")))))
-        ;; §7.2 — the reset key is the FILTER, never the row count.
-        (let [[offset limit] (Scroll-window plan-row-height rc dom/node
-                               {:overquery-factor 2 :reset-key [covering-days-only?]})]
+        (dom/props {:class "sched-tablecard"})
+        (dom/div
+          (dom/props {:class "tape-scroll sched-table sched-plan-table"
+                      ;; No height here. `.sched-tables` gives the card the
+                      ;; pane's leftover height and the card gives it to this
+                      ;; scroller, so the window grows with the browser window
+                      ;; and the pane never has to scroll behind it.
+                      :style {:position "relative" :overflow "auto"
+                              :scrollbar-gutter "stable"
+                              :--count rc
+                              :--row-height (str plan-row-height "px")}})
           (dom/table
-            (dom/props {:style {:width "100%" :font-size "13px"}})
-            (e/for [i (Tape offset limit)]
-              (let [r (e/server (nth rows i nil))]
-                (when r (PlanRow r i))))))
-        (when (zero? rc)
-          (dom/div
-            (dom/props {:style {:position "absolute" :inset "0" :display "flex"
-                                :align-items "center" :justify-content "center"
-                                :pointer-events "none" :font-size "13px"
-                                :color "var(--color-text-secondary)"}})
-            (dom/text "Nothing scheduled — the target date has passed.")))))))
+            (dom/props {:class "tx-head" :style {:width "100%"}})
+            (dom/thead (dom/props {:style {:display "contents"}})
+              (dom/tr (dom/props {:style {:display "contents"}})
+                (dom/th (dom/props {:class "sched-th"}) (dom/text "Day"))
+                (dom/th (dom/props {:class "sched-th"}) (dom/text "Date"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Pages"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Total"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Reviews")))))
+          ;; §7.2 — the reset key is the FILTER, never the row count.
+          (let [[offset limit] (Scroll-window plan-row-height rc dom/node
+                                 {:overquery-factor 2 :reset-key [covering-days-only?]})]
+            (dom/table
+              (dom/props {:style {:width "100%" :font-size "13px"}})
+              (e/for [i (Tape offset limit)]
+                (let [r (e/server (nth rows i nil))]
+                  (when r (PlanRow r i))))))
+          (when (zero? rc)
+            (dom/div
+              (dom/props {:style {:position "absolute" :inset "0" :display "flex"
+                                  :align-items "center" :justify-content "center"
+                                  :pointer-events "none" :font-size "13px"
+                                  :color "var(--color-text-secondary)"}})
+              (dom/text "Nothing scheduled — the target date has passed."))))))))
 
 (e/defn PlanControls [forecast]
   (e/client
@@ -549,40 +681,42 @@
                      (vec (filter #(= (name (:reason %)) filter-reason) vs)))))
           rc (e/server (count rows))]
       (dom/div
-        (dom/props {:class "tape-scroll sched-table sched-pages-table"
-                    :style {:position "relative" :max-height "420px" :overflow "auto"
-                            :scrollbar-gutter "stable"
-                            :--count rc
-                            :--row-height (str row-height "px")}})
-        (dom/table
-          (dom/props {:class "tx-head" :style {:width "100%"}})
-          (dom/thead (dom/props {:style {:display "contents"}})
-            (dom/tr (dom/props {:style {:display "contents"}})
-              (dom/th (dom/props {:class "sched-th"}) (dom/text "Page"))
-              (dom/th (dom/props {:class "sched-th"}) (dom/text "Verdict"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Recall"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Interval"))
-              (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Cards")))))
-        ;; §7.2 — the reset key is the FILTER, never the record count. A
-        ;; background refresh that changes the row count must not snap a
-        ;; mid-scroll reader back to the top.
-        (let [[offset limit] (Scroll-window row-height rc dom/node
-                               {:overquery-factor 2 :reset-key [filter-reason]})]
+        (dom/props {:class "sched-tablecard"})
+        (dom/div
+          (dom/props {:class "tape-scroll sched-table sched-pages-table"
+                      :style {:position "relative" :overflow "auto"
+                              :scrollbar-gutter "stable"
+                              :--count rc
+                              :--row-height (str row-height "px")}})
           (dom/table
-            (dom/props {:style {:width "100%" :font-size "13px"}})
-            (e/for [i (Tape offset limit)]
-              (let [v (e/server (nth rows i nil))]
-                (when v (PageRow v i))))))
-        ;; The table stays mounted at count 0: tearing it down races the
-        ;; cancelled query's teardown and can crash the socket with
-        ;; :diff-corruption (CLAUDE.md, 'Never unmount a virtual-scroll table').
-        (when (zero? rc)
-          (dom/div
-            (dom/props {:style {:position "absolute" :inset "0" :display "flex"
-                                :align-items "center" :justify-content "center"
-                                :pointer-events "none" :font-size "13px"
-                                :color "var(--color-text-secondary)"}})
-            (dom/text "No pages match this filter.")))))))
+            (dom/props {:class "tx-head" :style {:width "100%"}})
+            (dom/thead (dom/props {:style {:display "contents"}})
+              (dom/tr (dom/props {:style {:display "contents"}})
+                (dom/th (dom/props {:class "sched-th"}) (dom/text "Page"))
+                (dom/th (dom/props {:class "sched-th"}) (dom/text "Verdict"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Recall"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Interval"))
+                (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Cards")))))
+          ;; §7.2 — the reset key is the FILTER, never the record count. A
+          ;; background refresh that changes the row count must not snap a
+          ;; mid-scroll reader back to the top.
+          (let [[offset limit] (Scroll-window row-height rc dom/node
+                                 {:overquery-factor 2 :reset-key [filter-reason]})]
+            (dom/table
+              (dom/props {:style {:width "100%" :font-size "13px"}})
+              (e/for [i (Tape offset limit)]
+                (let [v (e/server (nth rows i nil))]
+                  (when v (PageRow v i))))))
+          ;; The table stays mounted at count 0: tearing it down races the
+          ;; cancelled query's teardown and can crash the socket with
+          ;; :diff-corruption (CLAUDE.md, 'Never unmount a virtual-scroll table').
+          (when (zero? rc)
+            (dom/div
+              (dom/props {:style {:position "absolute" :inset "0" :display "flex"
+                                  :align-items "center" :justify-content "center"
+                                  :pointer-events "none" :font-size "13px"
+                                  :color "var(--color-text-secondary)"}})
+              (dom/text "No pages match this filter."))))))))
 
 (e/defn PagesFilter [forecast]
   (e/client
@@ -626,35 +760,109 @@
           (dom/On "change" (fn [e] (reset! !filter (-> e .-target .-value))) nil)))
       (PagesTable forecast filter-reason))))
 
-(e/defn PagesSection [forecast]
+;; `PagesSection` is gone. It was `PagesFilter` under a key, and `TablesSection`
+;; below now holds that key for both tables — two frames keying on the same
+;; schedule id, one inside the other, is one method against the 64KB prod cap
+;; for nothing.
+
+;; Pre:  `label` names the view, `active?` is whether it is the one showing, and
+;;       `pick!` is a PLAIN fn — the switch never leaves the browser, so it needs
+;;       no token (CLAUDE.md, 'Selection that invokes a side effect').
+;; Post: one segment of the plan/pages switch, carrying `aria-pressed` so the
+;;       state a screen reader gets is the state the colour shows.
+(e/defn TableTab [label count-text active? pick!]
   (e/client
-    ;; Keyed for the reason `PlanSection` states: an unkeyed frame survives a
-    ;; schedule change, so the chosen filter carried into the next schedule's
-    ;; table and narrowed it before the user asked.
+    (dom/button
+      (dom/props {:type "button"
+                  :class (str "sched-tab" (when active? " is-active"))
+                  :aria-pressed (str (boolean active?))})
+      (dom/text label)
+      (dom/span (dom/props {:class "sched-tab-count"}) (dom/text count-text))
+      (dom/On "click" pick! nil))))
+
+;; Pre:  `forecast` has `:status :ok`, so both tables have something to render.
+;; Post: the plan and the page verdicts share ONE region, one at a time.
+;;
+;; Two tall scroll boxes stacked made the pane about 1250px of content in a
+;; window that is rarely that tall, so the pane scrolled — and its bar landed
+;; beside whichever table's bar the reader was using. Prior art on inline scroll
+;; areas (Baymard) is that a scroll pane inside a scroll pane costs the reader
+;; real effort; the cheapest way to keep one is to stop needing two. With one
+;; table mounted the pane's own content fits an ordinary desktop window and its
+;; scrollbar does not appear at all.
+;;
+;; Plan is the default because it is the artefact the tab exists to produce.
+;; The page verdicts explain it, and that is a second question.
+;;
+;; Inv : keyed on the schedule, so opening another one starts at Plan rather
+;;       than inheriting a view the reader chose for a different document — the
+;;       same reason `PlanSection` keys its own. An unkeyed frame survives a
+;;       schedule change, and the filter inside `PagesFilter` carried over that
+;;       way before it was keyed: a fresh schedule arrived already narrowed,
+;;       with nothing on screen saying why.
+(e/defn TablesSection [forecast]
+  (e/client
     (e/for-by identity [_k [(e/server (get-in forecast [:schedule :study_schedules/id]))]]
-      (PagesFilter forecast))))
+      (let [!view (atom :plan)
+            view (e/watch !view)
+            plan? (= :plan view)
+            plan-days (e/server (count (:plan forecast)))
+            page-count (e/server (count (:verdicts forecast)))]
+        ;; ONE wrapper, and it is what makes the pane stop scrolling. The pane is
+        ;; a flex column whose other children size to their content; this element
+        ;; takes whatever height is left, and the table inside it is sized to
+        ;; that rather than to a fixed 440px. So the pane's own content always
+        ;; fits and only the table scrolls.
+        ;;
+        ;; The table growing with the window is the second half of the prior art
+        ;; here: an inline scroll area is easier to live with the more rows it
+        ;; shows before it needs a bar at all.
+        (dom/div
+          (dom/props {:class "sched-tables"})
+          ;; The counts sit on the tabs, not behind them. Hiding a table behind a
+          ;; switch is only safe if the switch says what it is hiding.
+          (dom/div
+            (dom/props {:class "sched-tabs" :role "group"
+                        :aria-label "Forecast tables"})
+            (TableTab "Study plan" (str plan-days " day"
+                                     (when (not= 1 plan-days) "s"))
+              plan? (fn [_] (reset! !view :plan)))
+            (TableTab "Pages" (str page-count) (not plan?)
+              (fn [_] (reset! !view :pages))))
+          (if plan?
+            (PlanControls forecast)
+            (PagesFilter forecast)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Entry point
 ;; ---------------------------------------------------------------------------
 
-(e/defn ScheduleForecast [user-id schedule-id forecast anki-status]
+(e/defn ScheduleForecast [user-id schedule-id forecast anki-status navigate!]
   (e/client
-    (let [status (e/server (:status forecast))]
+    (let [status (e/server (:status forecast))
+          ;; The two panels below are mutually exclusive, and the test lives
+          ;; HERE so a reader sees that at the call site rather than having to
+          ;; open both components to find out.
+          past? (e/server (boolean (get-in forecast [:feasibility :past-target?])))]
       (StaleBanner forecast anki-status)
       (case status
         :ok (e/amb
-              (FeasibilityPanel user-id schedule-id forecast)
+              (if past?
+                (PastTargetPanel user-id schedule-id forecast navigate!)
+                (FeasibilityPanel user-id schedule-id forecast))
               (ProgressRow forecast)
               ;; Between the tiles and the plan, because it explains the
               ;; `Projected at target` tile above it and points at the table
               ;; below it.
               (NotStartedNote forecast)
-              ;; The plan comes FIRST among the tables. It is what the user
-              ;; opened the tab for; the page verdicts explain it.
-              (PlanSection forecast)
+              ;; Above the tables rather than between them. It is a fortnight
+              ;; summary that belongs with the tiles, and it used to separate
+              ;; the two tall scroll boxes that are now one switched region.
               (DailyLoadStrip forecast)
-              (PagesSection forecast))
+              ;; Plan and Pages, one at a time. `PlanSection` survives for the
+              ;; degenerate branch below, which has a page plan and no verdicts
+              ;; at all and so has nothing to switch between.
+              (TablesSection forecast))
         ;; §8.3 — a document with no pushed cards still renders its done-page
         ;; count, with the whole known figure inside the untested one. It also
         ;; still gets a page plan: Anki governs the review column only, and a

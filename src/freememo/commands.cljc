@@ -227,7 +227,7 @@
      ;; reading-view pace badge, the Schedule tab's Today tile and plan row 0,
      ;; and the home-view `today:` segment. A document with no schedule pays one
      ;; indexed read, because `schedule/root-schedule-pace` returns nil straight
-     ;; after `db/active-study-schedule-for-root` and never projects.
+     ;; after `db/active-study-schedules-for-root` and never projects.
      :done           {:label "Mark done" :class :mutation :exec :ui-button
                       :bind "meta+d" :when #{:viewer}
                       :table #{:topics}

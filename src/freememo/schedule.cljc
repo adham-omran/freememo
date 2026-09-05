@@ -608,6 +608,11 @@
              reading-days (fc/coverage-window horizon lead)
              base {:schedule row
                    :horizon-days horizon
+                   ;; SIGNED, so the pane can say how long ago the target was.
+                   ;; `:horizon-days` cannot: it is `days-until`'s floored count
+                   ;; and reads 0 for today and for last March alike.
+                   :days-to-target (signed-days-to-target
+                                     (:study_schedules/target_date row))
                    ;; The date `:verdicts` describes, derived HERE for the
                    ;; reason `:earliest-date` is: one formatter, so the caption
                    ;; and the horizon cannot name different days. It is NOT the
@@ -671,6 +676,14 @@
                               :peak-load peak
                               :observed-capacity capacity
                               :horizon horizon
+                              ;; Read from the SIGNED count, never from
+                              ;; `horizon`. `days-until` floors at 0, so by the
+                              ;; time the horizon reaches `feasibility` a target
+                              ;; three weeks gone is indistinguishable from one
+                              ;; today — and telling those apart is the whole
+                              ;; job of this flag.
+                              :past-target? (neg? (signed-days-to-target
+                                                    (:study_schedules/target_date row)))
                               :maturation-lead lead})
                  ;; §6.6.1 — the date lever names a date, and ONLY when the
                  ;; date is what is blocking. The search costs nine more
@@ -763,7 +776,13 @@
                     :kind (:topics/doc_kind r)
                     :root-topic-id (:study_schedules/root_topic_id r)
                     :target-date (:study_schedules/target_date r)
-                    :days-left (days-until (:study_schedules/target_date r))
+                    ;; SIGNED, and there is no floored count beside it. The
+                    ;; sidebar card rendered `today` for every non-positive
+                    ;; value, so a schedule three weeks past its target read as
+                    ;; due today — on the one surface a user scans to find the
+                    ;; schedule that needs attention.
+                    :days-to-target (signed-days-to-target
+                                      (:study_schedules/target_date r))
                     :first-page (:study_schedules/first_page r)
                     :last-page (:study_schedules/last_page r)
                     :capacity (:study_schedules/daily_capacity r)
@@ -818,7 +837,12 @@
 
    Pre : nothing — a nil or unscheduled `root-topic-id` is the ordinary case,
          not a caller bug. Ownership is checked in
-         `db/active-study-schedule-for-root`.
+         `db/active-study-schedules-for-root`.
+   Pre : `page` is the page the reader is on, or nil for a non-PDF document and
+         for the PDF root's own screen. It DECIDES which schedule this badge
+         speaks for when the document carries more than one — see
+         `schedule-forecast/pick-for-page`. A caller that drops it gets the
+         live-then-soonest fallback, which is a worse answer, not a wrong one.
    Post: nil when no ACTIVE schedule covers the root, so the caller renders
          nothing rather than an empty badge.
    Post: otherwise {:days-to-target :pages-today :tooltip}, all plain data.
@@ -852,18 +876,43 @@
    Inv : the load passed to `today-of` is EMPTY, so `:reviews-today` is 0 and
          goes unread. Projecting one would cost the 339 ms this fn refuses,
          which is the whole reason it does not call `forecast`."
-  [_refresh user-id root-topic-id]
+  [_refresh user-id root-topic-id page]
   #?(:clj
      (when root-topic-id
-       (when-let [row (db/active-study-schedule-for-root user-id root-topic-id)]
-         (let [inputs (schedule-inputs user-id row)
-               progress (current-progress inputs)
-               p (pace-of row inputs progress)
-               state (fc/pace-state (:delta p))]
-           {:days-to-target (signed-days-to-target (:study_schedules/target_date row))
-            :pages-today (:pages-today (today-of inputs progress {}))
-            :tooltip (str (fc/pace-phrase state (:delta p))
-                       " · target " (:study_schedules/target_date row))})))
+       ;; The ranking runs over a projection of the rows, not over the rows
+       ;; themselves: `pick-for-page` is pure and lives in a namespace that
+       ;; knows nothing about `study_schedules` column names. The projection
+       ;; carries the row along so the winner is the row, not a copy of it.
+       (let [rows (db/active-study-schedules-for-root user-id root-topic-id)
+             ranked (mapv (fn [r]
+                            {:id (:study_schedules/id r)
+                             :first-page (:study_schedules/first_page r)
+                             :last-page (:study_schedules/last_page r)
+                             :days-to-target (signed-days-to-target
+                                               (:study_schedules/target_date r))
+                             :row r})
+                      rows)]
+         (when-let [pick (fc/pick-for-page ranked page)]
+           (let [row (:row pick)
+                 inputs (schedule-inputs user-id row)
+                 progress (current-progress inputs)
+                 p (pace-of row inputs progress)
+                 state (fc/pace-state (:delta p))
+                 days (:days-to-target pick)]
+             {:days-to-target days
+              :pages-today (:pages-today (today-of inputs progress {}))
+              ;; The range is named in the tooltip whenever this document has
+              ;; more than one schedule. With two badges impossible — the
+              ;; toolbar shows one — the reader otherwise has no way to tell
+              ;; WHICH schedule the face is about, and the wrong-schedule
+              ;; defect this selection fixes was invisible for that reason.
+              :tooltip (str (fc/pace-phrase state (:delta p))
+                         " · target " (:study_schedules/target_date row)
+                         (when (< 1 (count rows))
+                           (str " · covers pages "
+                             (or (:study_schedules/first_page row) 1) "–"
+                             (or (:study_schedules/last_page row) "end")
+                             " · " (count rows) " schedules on this document")))}))))
      :cljs nil))
 
 (defn schedule-summaries
