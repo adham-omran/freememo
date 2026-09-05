@@ -3825,6 +3825,10 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .assistant-msg--assistant ol { padding-left: 1.4em; }
 .assistant-msg--assistant li { margin: 0.15em 0; }
 .assistant-msg--assistant pre { white-space: pre-wrap; overflow-x: auto; }
+.assistant-markdown-math--display {
+    margin: 0.5em 0;
+    overflow-x: auto;
+}
 
 /* Assistant reply + its per-reply ✦ card-gen button, left-aligned as a group. */
 .assistant-msg-group {

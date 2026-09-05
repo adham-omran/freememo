@@ -3,9 +3,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [clojure.string :as str]
+   [freememo.assistant-render-tree :as render-tree]
    [freememo.assistant-modes :as modes]
    #?(:clj [freememo.assistant :as assistant])
-   #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.user-state :as us])))
 
 (defn mention-query
@@ -50,13 +50,11 @@
             (mapv
               (fn [message]
                 (if (= "assistant" (:assistant_messages/role message))
-                  (assoc message :assistant_messages/content-html
-                    (-> (assistant/render-evidence-citations
-                          (:assistant_messages/content message)
-                          (:assistant_run/evidence message))
-                      markdown/unwrap-non-math-dollars
-                      markdown/parse-markdown
-                      markdown/dollar-math->tex))
+                  (assoc message :assistant_messages/render-tree
+                    (render-tree/markdown->render-tree
+                      (assistant/render-evidence-citations
+                        (:assistant_messages/content message)
+                        (:assistant_run/evidence message))))
                   message))
               (or (assistant/messages* assistant-rev user-id active) [])))
           active-run

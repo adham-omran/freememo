@@ -421,6 +421,57 @@
 ;; Display
 ;; ---------------------------------------------------------------------------
 
+#?(:cljs
+   (defonce ^:private tex-leaf-revision-key
+     (js/Symbol.for "freememo.math.tex-leaf-revision")))
+
+#?(:cljs
+   (defn- next-tex-leaf-revision! [node]
+     (let [revision (inc (or (aget node tex-leaf-revision-key) 0))]
+       (aset node tex-leaf-revision-key revision)
+       revision)))
+
+(defn render-tex-leaf!
+  "Render one TeX expression inside an unmanaged leaf.
+
+   Pre: `node` has no Electric-managed children. A false precondition is a
+   caller bug. `tex` is a string or nil.
+   Post: the leaf shows KaTeX, or readable TeX if KaTeX is unavailable.
+   Invariant: an old asynchronous render never replaces a newer expression."
+  [node tex display?]
+  #?(:cljs
+     (let [tex (str (or tex ""))
+           source (if display? (str "\\[" tex "\\]") (wrap-tex tex))
+           revision (next-tex-leaf-revision! node)]
+       (set! (.-textContent node) source)
+       (-> (vendor/ensure! :katex)
+         (.then
+           (fn [_]
+             (when (and (= revision (aget node tex-leaf-revision-key))
+                        (.-isConnected node))
+               (let [^js katex (.-katex js/window)]
+                 (.render katex tex node
+                   #js {:displayMode (boolean display?)
+                        :throwOnError false
+                        :errorColor "#f00"})))))
+         (.catch
+           (fn [_]
+             (when (= revision (aget node tex-leaf-revision-key))
+               (set! (.-textContent node) source)))))
+       nil)
+     :clj nil))
+
+(defn invalidate-tex-leaf!
+  "Cancel pending renders for one TeX leaf.
+
+   Pre: `node` is the leaf passed to `render-tex-leaf!`.
+   Post: callbacks from earlier revisions cannot write to the leaf.
+   Invariant: this function does not change visible content."
+  [node]
+  #?(:cljs (when node (next-tex-leaf-revision! node))
+     :clj nil)
+  nil)
+
 (defn render-math!
   "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
    CLJ no-op. Call AFTER node's innerHTML is set.

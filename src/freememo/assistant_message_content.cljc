@@ -5,7 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.assistant-evidence :as evidence]
-   [freememo.math :as math]))
+   [freememo.assistant-render-tree :as render-tree]))
 
 (e/defn AssistantAnswerContent [message !evidence]
   (e/client
@@ -26,10 +26,8 @@
             (dom/span
               (dom/props {:class "assistant-msg-status"})
               (dom/text "Thinking…")))
-          (do
-            (set! (.-innerHTML dom/node)
-              (or (:assistant_messages/content-html message) ""))
-            (math/render-math! dom/node)))
+          (render-tree/RenderTree
+            (:assistant_messages/render-tree message)))
         (when (= "stopped" status)
           (dom/div
             (dom/props {:class "assistant-msg-status"})
