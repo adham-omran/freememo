@@ -6,8 +6,8 @@
    #?(:clj [freememo.assistant :as assistant])))
 
 (e/defn SubmitEffect
-  [{:keys [token submit refs !draft !refs !echo user-id root-topic-id
-           page-topic-id !active !error]}]
+  [{:keys [submit refs user-id root-topic-id page-topic-id]}
+   token !draft !refs !echo !active !error]
   (e/client
     (when token
       (let [{:keys [id text chat mode] ref-ids :refs} submit

@@ -15,10 +15,10 @@
        :refs (mapv :id @refs-atom) :mode mode-id})))
 
 (e/defn AssistantComposer
-  [{:keys [at-open? mention-options active-mention-index !picked refs !refs
-           !mention-index mention-count !at-open? sending? !draft !active
-           mode-entry !submit draft user-id active !pending-mode root-topic-id
-           !error]}]
+  [{:keys [at-open? mention-options active-mention-index refs mention-count
+           sending? mode-entry draft user-id active root-topic-id]}
+   !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
+   !error]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})

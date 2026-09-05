@@ -82,9 +82,9 @@
           mode-entry (:mode-entry data)]
 
       (submit-effect/SubmitEffect
-        {:token t :submit submit :refs refs :!draft !draft :!refs !refs
-         :!echo !echo :user-id user-id :root-topic-id root-topic-id
-         :page-topic-id page-topic-id :!active !active :!error !error})
+        {:submit submit :refs refs :user-id user-id
+         :root-topic-id root-topic-id :page-topic-id page-topic-id}
+        t !draft !refs !echo !active !error)
 
       ;; Add the selected document as a chip. Remove the mention query from the
       ;; message and close the menu.
@@ -115,10 +115,9 @@
           !active !draft !error)
         (transcript/AssistantTranscript
           {:messages messages :sending? sending? :echo echo
-           :mode-entry mode-entry :!submit !submit :!active !active
-           :!refs !refs :active-run active-run :user-id user-id
-           :page-topic-id page-topic-id :root-topic-id root-topic-id
-           :!details-run !details-run :!evidence !evidence :!error !error})
+           :mode-entry mode-entry :active-run active-run :user-id user-id
+           :page-topic-id page-topic-id :root-topic-id root-topic-id}
+          !submit !active !refs !details-run !evidence !error)
 
         (run-details/RunDetailsModal !details-run details)
         (evidence/EvidenceModal !evidence root-topic-id)
@@ -132,20 +131,13 @@
           {:at-open? at-open?
            :mention-options mention-options
            :active-mention-index active-mention-index
-           :!picked !picked
            :refs refs
-           :!refs !refs
-           :!mention-index !mention-index
            :mention-count mention-count
-           :!at-open? !at-open?
            :sending? sending?
-           :!draft !draft
-           :!active !active
            :mode-entry mode-entry
-           :!submit !submit
            :draft draft
            :user-id user-id
            :active active
-           :!pending-mode !pending-mode
-           :root-topic-id root-topic-id
-           :!error !error})))))
+           :root-topic-id root-topic-id}
+          !picked !refs !mention-index !at-open? !draft !active !submit
+          !pending-mode !error)))))

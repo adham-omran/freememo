@@ -11,8 +11,9 @@
      :clj nil))
 
 (e/defn AssistantTranscript
-  [{:keys [messages sending? echo mode-entry !submit !active !refs active-run
-           user-id page-topic-id root-topic-id !details-run !evidence !error]}]
+  [{:keys [messages sending? echo mode-entry active-run user-id page-topic-id
+           root-topic-id]}
+   !submit !active !refs !details-run !evidence !error]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__transcript"})
