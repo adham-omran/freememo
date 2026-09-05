@@ -226,7 +226,7 @@
                                (fn [{:keys [ids] :as ex}]
                                  (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id))))))]
       (dom/tr
-        (dom/props {:class (when (even? i) "row-alt")
+        (dom/props {:class (str "library-document-row" (when (even? i) " row-alt"))
                     :role "row"
                     :style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
@@ -244,7 +244,7 @@
         ;; to indent-6 — 31-6=25 keeps the two targets from overlapping
         ;; (see tree_dnd / index.css .drag-grip).
         (dom/td
-          (dom/props {:role "cell"
+          (dom/props {:role "cell" :class "library-document-main"
                       :style {:display "flex" :align-items "center" :gap "6px"
                               :--row-indent (str (+ 31 (* depth 20)) "px")
                               :padding-left "var(--row-indent)"
@@ -323,7 +323,8 @@
                           (case (e/client (reset! !editing-id nil))
                             (t)))))))))
             (dom/span
-              (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+              (dom/props {:class "library-document-title"
+                          :style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                   :font-size (if is-root "13px" "12px")
                                   :font-weight (if is-root "500" "400")
                                   :color "var(--color-text-primary)"}})
@@ -339,7 +340,8 @@
               (dom/text "Dismissed"))))
         ;; Column 2: Done
         (dom/td
-          (dom/props {:role "cell"
+          (dom/props {:role "cell" :class "library-document-stat library-document-done"
+                      :data-label "Done"
                       :style {:padding "4px 6px" :text-align "center"
                               :display "flex" :align-items "center" :justify-content "center"}})
           (when is-root
@@ -351,7 +353,8 @@
               (dom/text (str done-items " / " total-items)))))
         ;; Column 3: Synced
         (dom/td
-          (dom/props {:role "cell"
+          (dom/props {:role "cell" :class "library-document-stat library-document-synced"
+                      :data-label "Synced"
                       :style {:padding "4px 6px" :text-align "center"
                               :display "flex" :align-items "center" :justify-content "center"
                               :color "var(--color-text-secondary)"}})
@@ -362,7 +365,8 @@
                           "–")))))
         ;; Column 4: Added
         (dom/td
-          (dom/props {:role "cell"
+          (dom/props {:role "cell" :class "library-document-stat library-document-added"
+                      :data-label "Added"
                       :style {:padding "4px 6px" :text-align "right"
                               :display "flex" :align-items "center" :justify-content "flex-end"
                               :color "var(--color-text-secondary)"}})
@@ -371,7 +375,8 @@
               (dom/text (or formatted-date "")))))
         ;; Column 5: Actions — all row actions collapsed behind one ⋯ menu.
         (dom/td
-          (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
+          (dom/props {:class "library-document-actions"
+                      :style {:padding "4px 6px" :display "flex" :align-items "center"
                               :justify-content "flex-end"}})
           (RowActionsMenu user-id id title is-root has-children kind dismissed?
             navigate! !editing-id !drop-cmd !show-confirm !scroll-node !dismiss-cmd))))))
@@ -478,7 +483,7 @@
           !editing-id (atom nil)
           editing-id (e/watch !editing-id)
           phone? (e/watch viewport/!phone?)
-          row-height (if phone? 80 36)
+          row-height (if phone? 88 36)
           grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
           !scroll-node (atom nil)
           ;; Drag-and-drop nesting state. forbidden = the dragged node's subtree

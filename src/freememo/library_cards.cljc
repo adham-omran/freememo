@@ -606,7 +606,7 @@
 (e/defn LibraryViewToggle [navigate! cards-view?]
   (e/client
     (dom/div
-      (dom/props {:class "segmented" :style {:flex-shrink "0"}})
+      (dom/props {:class "segmented library-view-toggle" :style {:flex-shrink "0"}})
       (dom/button
         (dom/props {:class (str "segmented-option" (when-not cards-view? " segmented-option--selected"))
                     :aria-current (if cards-view? "false" "page")})

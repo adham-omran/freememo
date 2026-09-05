@@ -57,19 +57,22 @@
 
             ;; Header row: view toggle + search + filters + expand toggle
             (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+              (dom/props {:class "library-controls"
+                          :style {:display "flex" :align-items "center" :gap "12px"
                                   :margin-bottom "12px" :flex-wrap "wrap"}})
 
               (LibraryViewToggle navigate! false)
 
               (dom/input
                 (dom/props {:type "text" :placeholder "Filter documents..."
-                            :class "input" :style {:flex "1" :min-width "140px"}})
+                            :class "input library-document-search"
+                            :aria-label "Filter documents"
+                            :style {:flex "1" :min-width "140px"}})
                 (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
 
               (dom/select
-                (dom/props {:class "input" :aria-label "Filter by document kind"})
-                (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
+                (dom/props {:class "input library-document-filter" :aria-label "Filter by document type"})
+                (dom/option (dom/props {:value "all"}) (dom/text "All types"))
                 (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
                 (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
                 (dom/option (dom/props {:value "web"}) (dom/text "Web"))
@@ -78,18 +81,19 @@
                 (dom/On "change" (fn [e] (reset! !kind-filter (-> e .-target .-value))) nil))
 
               (dom/select
-                (dom/props {:class "input" :aria-label "Filter by reading status"})
-                (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
-                (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
-                (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))
+                (dom/props {:class "input library-document-filter" :aria-label "Filter by reading status"})
+                (dom/option (dom/props {:value "all"}) (dom/text "Any status"))
+                (dom/option (dom/props {:value "not-started"}) (dom/text "Not started"))
+                (dom/option (dom/props {:value "in-progress"}) (dom/text "In progress"))
                 (dom/option (dom/props {:value "complete"}) (dom/text "Complete"))
                 (dom/option (dom/props {:value "unsynced"}) (dom/text "Unsynced"))
                 (dom/On "change" (fn [e] (reset! !status-filter (-> e .-target .-value))) nil))
 
               (dom/button
-                (dom/props {:class "input"
+                (dom/props {:class "input library-expand-toggle"
+                            :aria-pressed (if tree-expanded "true" "false")
                             :style {:flex-shrink "0" :cursor "pointer"}})
-                (dom/text (if tree-expanded "Collapse All" "Expand All"))
+                (dom/text (if tree-expanded "Collapse all" "Expand all"))
                 (dom/On "click" (fn [_] (swap! !tree-expanded not)) nil)))
 
             ;; Tree view
