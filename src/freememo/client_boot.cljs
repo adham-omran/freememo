@@ -34,9 +34,78 @@
   ;; The alias is compile-checked where the literal
   ;; `:hyperfiddle.electric-client3/stale-client` would not be, and the namespace
   ;; is already loaded by every caller.
-  (:require [hyperfiddle.electric-client3 :as electric-client]))
+  (:require [hyperfiddle.electric-client3 :as electric-client]
+            [clojure.string :as str]
+            [freememo.assistant-diagnostics :as assistant-diagnostics]
+            [freememo.interaction-trail :as interaction-trail]))
 
 (def ^:private banner-class "connection-lost-banner")
+
+(defn- bounded-string [value max-length]
+  (let [text (str (or value ""))]
+    (subs text 0 (min max-length (count text)))))
+
+(defn- error-message [error]
+  (let [message (str (or (some-> error .-message) error ""))]
+    (bounded-string
+      (if (str/starts-with? message "[unserializable]")
+        (str/replace message #"(?s)Value:.*$" "Value: [redacted]")
+        message)
+      2000)))
+
+(defn- error-stack [error]
+  (bounded-string (some-> error .-stack) 8000))
+
+(defn- error-data [error]
+  (try
+    (bounded-string (pr-str (keys (ex-data error))) 2000)
+    (catch :default _ "")))
+
+(defn- interaction-json []
+  (try
+    (bounded-string
+      (.stringify js/JSON (clj->js (interaction-trail/recent))) 6000)
+    (catch :default _ "[]")))
+
+(defn- failure-form [termination error]
+  (let [{:keys [session-id topic-id page-topic-id chat-id run-uuid run-kind
+                run-status render-phase]}
+        (assistant-diagnostics/snapshot)
+        form (js/URLSearchParams.)]
+    (doseq [[key value]
+            {:termination termination
+             :message (error-message error)
+             :stack (error-stack error)
+             :error-data (error-data error)
+             :route (bounded-string (str (.-pathname js/location)
+                                      (.-search js/location)) 1000)
+             :client-version electric-client/ELECTRIC_USER_VERSION
+             :session-id session-id
+             :topic-id topic-id
+             :page-topic-id page-topic-id
+             :chat-id chat-id
+             :run-uuid run-uuid
+             :run-kind run-kind
+             :run-status run-status
+             :render-phase render-phase
+             :interactions (interaction-json)}]
+      (when (some? value)
+        (.append form (name key) (str value))))
+    form))
+
+(defn- send-failure! [termination error]
+  (try
+    (let [form (failure-form termination error)
+          sent? (and (.-sendBeacon js/navigator)
+                  (.sendBeacon js/navigator "/api/client-reactor-failure" form))]
+      (when-not sent?
+        (-> (js/fetch "/api/client-reactor-failure"
+              #js {:method "POST" :body form :credentials "same-origin"
+                   :keepalive true})
+          (.catch (fn [_] nil)))))
+    (catch :default report-error
+      (js/console.error "Client failure report failed" report-error)))
+  nil)
 
 (defn- raise-banner!
   "Tell the user the app stopped, and offer the one action left.
@@ -97,14 +166,18 @@
                  (fn [_]
                    ;; Success is not a healthy state here — only a deliberate
                    ;; stop is.
-                   (when-not @!deliberate-stop? (raise-banner!)))
+                   (when-not @!deliberate-stop?
+                     (send-failure! "unexpected-success" nil)
+                     (raise-banner!)))
                  (fn [error]
                    (when-not (stale-client? error)
                      ;; The error OBJECT, not its message: `socket-emit` enriches
                      ;; an unserializable transfer with the let-bound values it
                      ;; could be, and stringifying it loses them.
                      (js/console.error "Electric client process failed" error)
-                     (when-not @!deliberate-stop? (raise-banner!)))))]
+                     (when-not @!deliberate-stop?
+                       (send-failure! "failure" error)
+                       (raise-banner!)))))]
     (fn stop-electric-process! []
       (reset! !deliberate-stop? true)
       (cancel))))

@@ -51,7 +51,8 @@
 (def invalidation-channels
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
-    :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations
+    :queue-mutations :pin-mutations :assistant-mutations :assistant-stream
+    :undo-mutations :kg-mutations
     :schedule-mutations :curriculum-mutations :activity-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────

@@ -16,8 +16,10 @@
    [freememo.card-models :as card-models]
    [freememo.cards :as cards]
    [freememo.cards-from-facts :as cff]
+   [freememo.config :as config]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
+   [freememo.markdown :as markdown]
    [freememo.toasts :as toasts]
    [freememo.db :as db]
    [missionary.core :as m]
@@ -48,6 +50,9 @@
 
 (defn- bump! [user-id]
   (commands/bump-channels! user-id #{:assistant-mutations}))
+
+(defn- bump-stream! [user-id]
+  (commands/bump-channels! user-id #{:assistant-stream}))
 
 (declare start-compact-run!)
 
@@ -460,8 +465,10 @@
    This worker never writes late response text after Stop."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request
    compact-range]
-  (let [metadata* (volatile! {})
+  (let [started-ns (System/nanoTime)
+        metadata* (volatile! {})
         charged?* (volatile! false)
+        publish-count* (volatile! 0)
         charge-known! (fn [metadata]
                         (when (and (some? (:cost-usd metadata))
                                 (not @charged?*))
@@ -473,9 +480,10 @@
         last-publish-ns* (volatile! 0)
         publish! (fn []
                    (let [now (System/nanoTime)]
-                     (when (> (- now (long @last-publish-ns*)) 50000000)
+                     (when (> (- now (long @last-publish-ns*)) 100000000)
                        (vreset! last-publish-ns* now)
-                       (bump! user-id))))]
+                       (vswap! publish-count* inc)
+                       (bump-stream! user-id))))]
     (try
       (let [result (openrouter/chat-completion-stream!
                      api-key provider-request
@@ -506,6 +514,17 @@
             (db/complete-assistant-answer-run! run-uuid)))
         (charge-known! metadata)
         (bump! user-id)
+        (let [run (db/get-assistant-run user-id run-uuid)]
+          (tel/log! {:level :info :id ::assistant-run-terminal
+                     :data {:user-id user-id :chat-id chat-id
+                            :run-uuid run-uuid :kind run-kind
+                            :model-id model-id :status (:status run)
+                            :outcome :ok
+                            :duration-ms (quot (- (System/nanoTime) started-ns)
+                                           1000000)
+                            :response-chars (count (or (:response_text run) ""))
+                            :publish-count @publish-count*}}
+            "Assistant run reached a terminal state"))
         {:success true})
       (catch Throwable error
         (let [known @metadata*
@@ -518,7 +537,16 @@
             (or (ex-message error) "Assistant request failed."))
           (tel/error! {:id ::assistant-run
                        :data {:user-id user-id :chat-id chat-id
-                              :run-uuid run-uuid :kind run-kind}} error)
+                              :run-uuid run-uuid :kind run-kind
+                              :model-id model-id :status "failed"
+                              :outcome :error
+                              :duration-ms (quot (- (System/nanoTime) started-ns)
+                                             1000000)
+                              :response-chars
+                              (count (or (:response_text
+                                           (db/get-assistant-run user-id run-uuid))
+                                       ""))
+                              :publish-count @publish-count*}} error)
           (bump! user-id)
           {:success false :error (ex-message error)})))))
 
@@ -526,6 +554,10 @@
   "Submit one accepted run to the bounded assistant executor.
    Post: returns immediately. The worker owns every terminal transition."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range]
+  (tel/log! {:level :info :id ::assistant-run-started
+             :data {:user-id user-id :chat-id chat-id :run-uuid run-uuid
+                    :kind run-kind :model-id model-id}}
+    "Assistant run started")
   ((m/via assistant-run-executor
      (execute-provider-run! user-id chat-id run-uuid run-kind api-key model-id
        provider-request compact-range))
@@ -533,6 +565,10 @@
    (fn [error]
      (db/fail-assistant-run! run-uuid
        (or (ex-message error) "Assistant request failed."))
+     (tel/error! {:id ::assistant-run-executor
+                  :data {:user-id user-id :chat-id chat-id
+                         :run-uuid run-uuid :kind run-kind
+                         :model-id model-id}} error)
      (bump! user-id)))
   nil)
 
@@ -789,7 +825,90 @@
       (map (fn [t] {:id (:topics/id t) :title (or (:topics/title t) "Untitled")})))
     (db/get-root-topics user-id)))
 
-;; ── Reactive read wrappers (first arg = watched :assistant-mutations rev) ────
+;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
+
+(def ^:private active-run-statuses
+  #{"queued" "streaming" "stop-requested"})
+
+(def max-rich-answer-chars
+  "Maximum answer size for the formatted terminal renderer."
+  100000)
+
+(def ^:private transcript-wire-keys
+  [:assistant_messages/id :assistant_messages/role
+   :assistant_messages/content :assistant_messages/client_id
+   :assistant_run/uuid :assistant_run/status :assistant_run/error
+   :assistant_run/retry_of :assistant_run/evidence
+   :assistant_event/type :assistant_event/covered_from
+   :assistant_event/covered_through])
+
+(def ^:private evidence-wire-keys
+  [:citation_key :document_topic_id :page_topic_id :page_number :anchor
+   :quoted_text :document_title :display_label])
+
+(defn- plain-evidence-citations [answer evidence-rows]
+  (let [by-key (into {} (map (juxt :citation_key identity)) evidence-rows)]
+    (str/replace (or answer "") evidence-token-pattern
+      (fn [[_ citation-key]]
+        (or (:display_label (get by-key citation-key)) "")))))
+
+(defn transcript-message-view
+  "Prepare one transcript row for the browser.
+
+   Pre: message comes from messages*. The answer content is trusted Markdown,
+   but its HTML is not trusted.
+   Post: returns a wire-safe row with one render mode. Rich HTML is sanitized.
+   Invariant: active answers remain plain text. Rich HTML exists only after the
+   run reaches a terminal state."
+  [message]
+  (let [wire-message (select-keys message transcript-wire-keys)
+        wire-message (if (contains? wire-message :assistant_run/evidence)
+                       (update wire-message :assistant_run/evidence
+                         (fn [rows]
+                           (mapv #(select-keys % evidence-wire-keys) rows)))
+                       wire-message)
+        assistant? (= "assistant" (:assistant_messages/role message))]
+    (if-not assistant?
+      wire-message
+      (let [content (or (:assistant_messages/content message) "")
+            status (:assistant_run/status message)
+            active? (contains? active-run-statuses status)
+            rich? (and (not active?)
+                    (not (str/blank? content))
+                    (<= (count content) max-rich-answer-chars)
+                    (config/assistant-rich-render?))]
+        (cond
+          (str/blank? content)
+          (assoc wire-message :assistant_messages/render-mode "empty")
+
+          active?
+          (assoc wire-message :assistant_messages/render-mode "streaming-text")
+
+          rich?
+          (try
+            (assoc wire-message
+              :assistant_messages/render-mode "rich-html"
+              :assistant_messages/safe-html
+              (markdown/markdown-with-math->html
+                (render-evidence-citations content
+                  (:assistant_run/evidence message))))
+            (catch Throwable error
+              (tel/error! {:id ::assistant-rich-render
+                           :data {:message-id (:assistant_messages/id message)
+                                  :run-uuid (:assistant_run/uuid message)
+                                  :response-chars (count content)}} error)
+              (assoc wire-message
+                :assistant_messages/render-mode "plain-text"
+                :assistant_messages/content
+                (plain-evidence-citations content
+                  (:assistant_run/evidence message)))))
+
+          :else
+          (assoc wire-message
+            :assistant_messages/render-mode "plain-text"
+            :assistant_messages/content
+            (plain-evidence-citations content
+              (:assistant_run/evidence message))))))))
 
 (defn chats*
   "Chat list for the panel. `_rev` forces re-query on bump."
@@ -836,6 +955,18 @@
              checkpoint-events)
         (sort-by :timeline/order)
         (mapv #(dissoc % :timeline/order))))))
+
+(defn message-client-id-persisted?
+  "Return true when an owned chat contains the optimistic user message.
+
+   Pre: client-id is a string or nil. A nil ID returns false.
+   Post: true only for a row in the selected owned chat."
+  [_rev user-id chat-id client-id]
+  (boolean
+    (and client-id chat-id
+      (db/get-assistant-chat user-id chat-id)
+      (some #(= client-id (:assistant_messages/client_id %))
+        (db/get-assistant-messages chat-id)))))
 
 (defn active-run*
   "Active run summary for an owned chat. `_rev` forces re-query."

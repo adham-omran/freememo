@@ -16,6 +16,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.assistant-modes :as modes]
+   [freememo.interaction-trail :as trail]
    [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.settings :as settings])))
@@ -48,10 +49,12 @@
           (let [ev (dom/On "click" identity nil)
                 [nt _] (e/Token ev)]
             (when nt
-              (let [cid (e/server (e/Offload
-                                    #(assistant/start-chat! user-id root-topic-id pending-mode)))]
-                (case cid
-                  (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt)))))))
+              (case (trail/record! :assistant
+                      {:action :new-chat :topic-id root-topic-id})
+                (let [cid (e/server (e/Offload
+                                      #(assistant/start-chat! user-id root-topic-id pending-mode)))]
+                  (case cid
+                    (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt))))))))
         (dom/div
           (dom/props {:class "assistant-panel__chats"})
           (Typeahead !active chat-options "Search chats…" !picked false))
@@ -60,8 +63,11 @@
         ;; fires once per deliberate pick.
         (let [[pt _] (e/Token picked)]
           (when pt
-            (reset! !error nil)
-            (pt)))))))
+            (case (trail/record! :assistant
+                    {:action :select-chat :chat-id picked
+                     :topic-id root-topic-id})
+              (case (reset! !error nil)
+                (pt)))))))))
 
 (e/defn ModeRow
   "Select the mode for the open chat or the next new chat."

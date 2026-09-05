@@ -5,12 +5,20 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.assistant-evidence :as evidence]
-   [freememo.assistant-render-tree :as render-tree]))
+   [freememo.math :as math]))
+
+(e/defn AssistantRichTextLeaf [safe-html]
+  (e/client
+    (dom/div
+      (dom/props {:class "assistant-msg__rich-text"})
+      ;; Contract: Electric owns this div. math/set-html! owns every descendant.
+      (math/set-html! dom/node safe-html))))
 
 (e/defn AssistantAnswerContent [message !evidence]
   (e/client
     (let [status (:assistant_run/status message)
-          content (:assistant_messages/content message)]
+          content (:assistant_messages/content message)
+          render-mode (:assistant_messages/render-mode message)]
       (dom/div
         (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
         (dom/On "click"
@@ -26,8 +34,11 @@
             (dom/span
               (dom/props {:class "assistant-msg-status"})
               (dom/text "Thinking…")))
-          (render-tree/RenderTree
-            (:assistant_messages/render-tree message)))
+          (if (= "rich-html" render-mode)
+            (AssistantRichTextLeaf (:assistant_messages/safe-html message))
+            (dom/span
+              (dom/props {:class "assistant-msg__plain-text"})
+              (dom/text content))))
         (when (= "stopped" status)
           (dom/div
             (dom/props {:class "assistant-msg-status"})

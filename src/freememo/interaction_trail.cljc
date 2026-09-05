@@ -38,11 +38,23 @@
    heap at a few tens of KB."
   500)
 
+(def recent-cap
+  "Maximum recent interactions retained for one fatal client report."
+  20)
+
 ;; Defined on both peers so InteractionForwarder resolves under the JVM Electric
 ;; compiler; only ever written/read on the client (e/client scope).
 (defonce ^{:doc "Client-side queue of pending trail entries:
                  [{:id uuid :kind kw :detail map} …]."}
   !queue (atom []))
+
+(defonce ^{:doc "The last content-free interactions for a fatal HTTP report."}
+  !recent (atom []))
+
+(defn recent
+  "Return the bounded browser-local interaction trail."
+  []
+  #?(:cljs @!recent :clj []))
 
 (defn record!
   "Enqueue one client interaction for server-side logging. Safe to call from any
@@ -52,18 +64,26 @@
           crosses the Electric wire) carrying no user content — a search's text,
           a topic title and a card's fields are all forbidden, an id, a count and
           an enum are all fine.
-   Post : the queue ends with this entry and holds at most queue-cap entries."
+   Post : the queue ends with this entry and holds at most queue-cap entries.
+          The recent trail also ends with it and holds at most recent-cap."
   [kind detail]
   #?(:cljs
-     (swap! !queue
-       (fn [q]
-         (let [q' (conj q {:id (random-uuid) :kind kind :detail detail})
-               n  (count q')]
-           (if (> n queue-cap)
-             ;; vec, not a bare subvec: a subvec retains its parent, so a chain
-             ;; of them at the cap would pin every dropped entry.
-             (vec (subvec q' (- n queue-cap)))
-             q')))))
+     (let [entry {:id (random-uuid) :kind kind :detail detail}]
+       (swap! !queue
+         (fn [q]
+           (let [q' (conj q entry)
+                 n  (count q')]
+             (if (> n queue-cap)
+               ;; A vector does not retain the entries before its first index.
+               (vec (subvec q' (- n queue-cap)))
+               q'))))
+       (swap! !recent
+         (fn [entries]
+           (let [entries' (conj entries (dissoc entry :id))
+                 n (count entries')]
+             (if (> n recent-cap)
+               (vec (subvec entries' (- n recent-cap)))
+               entries'))))))
   nil)
 
 (defn log-interaction!

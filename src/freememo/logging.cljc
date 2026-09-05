@@ -65,7 +65,7 @@
 
 (def interaction-kinds
   "Valid :kind values for `interaction!`."
-  #{:command :nav :pdf-page :search})
+  #{:command :nav :pdf-page :search :assistant})
 
 (defn interaction!
   "Log one user interaction that mutates nothing, so no `audit!` signal exists.

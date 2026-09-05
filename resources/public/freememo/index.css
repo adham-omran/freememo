@@ -3816,6 +3816,9 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
    lines on top of each block's margins. */
 .assistant-msg--assistant > :first-child { margin-top: 0; }
 .assistant-msg--assistant > :last-child { margin-bottom: 0; }
+.assistant-msg__rich-text > :first-child { margin-top: 0; }
+.assistant-msg__rich-text > :last-child { margin-bottom: 0; }
+.assistant-msg__plain-text { white-space: pre-wrap; }
 .assistant-msg--assistant p,
 .assistant-msg--assistant ul,
 .assistant-msg--assistant ol,

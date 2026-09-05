@@ -3,7 +3,6 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [clojure.string :as str]
-   [freememo.assistant-render-tree :as render-tree]
    [freememo.assistant-modes :as modes]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.user-state :as us])))
@@ -24,10 +23,12 @@
       options)))
 
 (e/defn AssistantPanelData
-  [user-id root-topic-id active details-run draft mention-index pending-mode]
+  [user-id root-topic-id active details-run draft mention-index pending-mode echo-id]
   (e/client
     (let [assistant-rev
           (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
+          stream-rev
+          (e/server (e/watch (us/get-atom user-id :assistant-stream)))
           chat-options
           (e/server
             (mapv
@@ -45,20 +46,13 @@
           mention-options
           (reference-options doc-options (mention-query draft))
           mention-count (count mention-options)
-          messages
-          (e/server
-            (mapv
-              (fn [message]
-                (if (= "assistant" (:assistant_messages/role message))
-                  (assoc message :assistant_messages/render-tree
-                    (render-tree/markdown->render-tree
-                      (assistant/render-evidence-citations
-                        (:assistant_messages/content message)
-                        (:assistant_run/evidence message))))
-                  message))
-              (or (assistant/messages* assistant-rev user-id active) [])))
           active-run
-          (e/server (assistant/active-run* assistant-rev user-id active))
+          (e/server
+            (assistant/active-run* [assistant-rev stream-rev] user-id active))
+          echo-persisted?
+          (e/server
+            (assistant/message-client-id-persisted?
+              assistant-rev user-id active echo-id))
           details
           (e/server
             (assistant/run-details* assistant-rev user-id details-run))
@@ -75,8 +69,8 @@
        :mention-count mention-count
        :active-mention-index
        (if (pos? mention-count) (mod mention-index mention-count) 0)
-       :messages messages
        :active-run active-run
        :details details
+       :echo-persisted? echo-persisted?
        :sending? (some? active-run)
        :mode-entry mode-entry})))

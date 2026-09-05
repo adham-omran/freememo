@@ -5,8 +5,8 @@
    submitted turn creates a durable streamed run. Reading sources stay outside
    the transcript and remain available in the answer details.
 
-   Reactivity: subscribes to :assistant-mutations. Stream workers publish at a
-   bounded rate so the transcript can show durable partial text.
+   Chat controls subscribe to :assistant-mutations. The transcript also watches
+   :assistant-stream for bounded durable partial text.
 
    Each chat carries its own mode. The mode select shows the open chat's mode.
    It stages the next chat's mode when no chat is open."
@@ -15,6 +15,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.assistant-composer :as composer]
+   [freememo.assistant-diagnostics :as diagnostics]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-data :as panel-data]
    [freememo.assistant-panel-rows :as rows]
@@ -69,13 +70,12 @@
           pending-mode (e/watch !pending-mode)
           data (panel-data/AssistantPanelData
                  user-id root-topic-id active details-run draft mention-index
-                 pending-mode)
+                 pending-mode (:id echo))
           chat-options (:chat-options data)
           by-id (:documents-by-id data)
           mention-options (:mention-options data)
           mention-count (:mention-count data)
           active-mention-index (:active-mention-index data)
-          messages (:messages data)
           active-run (:active-run data)
           details (:details data)
           sending? (:sending? data)
@@ -103,18 +103,28 @@
 
       ;; Retire the optimistic echo after its durable user row arrives. This
       ;; also prevents a completed echo from appearing after a chat switch.
-      (when (and echo
-              (some #(= (:id echo) (:assistant_messages/client_id %)) messages))
+      (when (and echo (:echo-persisted? data))
         (reset! !echo nil))
 
-      (dom/div
+      (case
+        (diagnostics/replace-state!
+          {:topic-id root-topic-id
+           :page-topic-id page-topic-id
+           :chat-id active
+           :run-uuid (:run_uuid active-run)
+           :run-kind (:kind active-run)
+           :run-status (:status active-run)
+           :render-phase (if sending? "streaming" "terminal")})
+        (do
+          (e/on-unmount #(diagnostics/replace-state! {}))
+          (dom/div
         (dom/props {:class "assistant-panel"})
 
         ;; Row 2: ＋ New + the chat picker.
         (rows/ChatRow user-id root-topic-id chat-options pending-mode
           !active !draft !error)
         (transcript/AssistantTranscript
-          {:messages messages :sending? sending? :echo echo
+          {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
            :page-topic-id page-topic-id :root-topic-id root-topic-id}
           !submit !active !refs !details-run !evidence !error)
@@ -140,4 +150,4 @@
            :active active
            :root-topic-id root-topic-id}
           !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !error)))))
+          !pending-mode !error)))))))

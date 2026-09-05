@@ -85,6 +85,17 @@
     (not (or (false? v)
              (= "false" (some-> v str str/lower-case str/trim))))))
 
+(defn assistant-rich-render?
+  "Enable formatted terminal assistant answers.
+
+   ASSISTANT_RICH_RENDER or :deployment :assistant-rich-render? can disable the
+   renderer without a code rollback. The default is true."
+  []
+  (let [v (env-or-config "ASSISTANT_RICH_RENDER"
+            [:deployment :assistant-rich-render?])]
+    (not (or (false? v)
+             (= "false" (some-> v str str/lower-case str/trim))))))
+
 ;; Values a deployment MAY add on top of the app itself are not read here — they
 ;; belong to `freememo.deployment-hook` and its optional implementation, which
 ;; resolves them through `env-or-config` above. Keeping their patterns out of

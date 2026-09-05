@@ -36,3 +36,30 @@
           (is (= 1 (count calls)))
           (is (map? config))
           (is (empty? (filter opaque-map-entry? config))))))))
+
+(deftest transcript-diffs-at-the-server-source
+  (let [source (slurp "src/freememo/assistant_transcript.cljc")]
+    (is (str/includes? source
+          "(e/server\n              (e/diff-by :assistant_messages/id"))
+    (is (str/includes? source
+          "(e/server (assistant/transcript-message-view message))"))))
+
+(deftest rich-answer-is-an-unmanaged-leaf
+  (let [source (slurp "src/freememo/assistant_message_content.cljc")]
+    (is (str/includes? source "(math/set-html! dom/node safe-html)"))
+    (is (not (str/includes? source "assistant-render-tree")))
+    (is (not (str/includes? source "render-tree/RenderTree")))))
+
+(deftest fatal-client-report-does-not-use-electric
+  (let [source (slurp "src/freememo/client_boot.cljs")]
+    (is (str/includes? source ".sendBeacon"))
+    (is (str/includes? source ":keepalive true"))
+    (is (str/includes? source "/api/client-reactor-failure"))))
+
+(deftest stream-publication-uses-its-own-bounded-channel
+  (let [assistant-source (slurp "src/freememo/assistant.clj")
+        commands-source (slurp "src/freememo/commands.cljc")]
+    (is (str/includes? assistant-source
+          "(commands/bump-channels! user-id #{:assistant-stream})"))
+    (is (str/includes? assistant-source "100000000"))
+    (is (str/includes? commands-source ":assistant-stream"))))

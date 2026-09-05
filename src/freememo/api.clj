@@ -30,6 +30,7 @@
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
    [freememo.config :as config]
+   [freememo.client-failure-http :as client-failure-http]
    [freememo.account-export :as account-export]
    [freememo.archive-http :as archive-http]
    [freememo.epub-http :as epub-http]
@@ -1157,6 +1158,8 @@
    byte ceiling, `api-routes` resolves `:handler`. Adding an upload route here
    body-caps it automatically — the middleware carries no separate route list."
   [{:method :post :path "/api/logout"           :handler #'logout-handler           :body :small}
+   {:method :post :path "/api/client-reactor-failure"
+    :handler #'client-failure-http/handler :body :small}
    {:method :post :path "/api/upload-file"      :handler #'upload-file-handler      :body :upload}
    {:method :post :path "/api/upload-paste"     :handler #'upload-paste-handler     :body :small}
    {:method :post :path "/api/upload-staged"    :handler #'upload-staged-handler    :body :small}
