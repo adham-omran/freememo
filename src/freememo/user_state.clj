@@ -36,6 +36,7 @@
           :queue-mutations  (atom 0)
           :pin-mutations    (atom 0)
           :assistant-mutations (atom 0)
+          :assistant-stream (atom 0)
           :undo-mutations   (atom 0)
           :kg-mutations     (atom 0)
           :schedule-mutations (atom 0)

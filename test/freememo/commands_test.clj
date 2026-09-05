@@ -7,11 +7,17 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [freememo.commands :as commands]))
+            [freememo.commands :as commands]
+            [freememo.user-state :as user-state]))
 
 (deftest registry-is-valid
   (is (empty? (commands/validate-registry))
     (str "registry violations: " (vec (commands/validate-registry)))))
+
+(deftest every-invalidation-channel-has-a-counter
+  (doseq [channel commands/invalidation-channels]
+    (testing (str channel)
+      (is (instance? clojure.lang.Atom (user-state/get-atom -1 channel))))))
 
 (deftest every-entry-has-label-and-class
   (doseq [[id entry] commands/registry]
