@@ -10046,13 +10046,14 @@
    provenance and entity ids — input for synthesis generation AND the concept
    popover (whose rows link onward through the ids).
    Post: rows {:id :subject_label :predicate_label :object_label
-   :object_literal :page_number :doc_title :subject_entity_id
+   :object_literal :page_number :doc_title :graph_topic_id :subject_entity_id
    :object_entity_id}."
   [user-id entity-id]
   (jdbc/execute! ds
     ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
              o.label AS object_label, f.object_literal, f.page_number,
-             t.title AS doc_title, f.subject_entity_id, f.object_entity_id
+             t.title AS doc_title, f.graph_topic_id,
+             f.subject_entity_id, f.object_entity_id
       FROM kg_facts f
       JOIN kg_entities s ON s.id = f.subject_entity_id
       JOIN kg_predicates p ON p.id = f.predicate_id

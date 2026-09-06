@@ -13,6 +13,13 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]))
 
 (def ^:private row-height 30)
+(def ^:private described-row-height 46)
+
+(defn- option-label [option]
+  (str (if (map? option) (:label option) option)))
+
+(defn- option-description [option]
+  (when (map? option) (:description option)))
 
 (defn scroll-row-into-view!
   "Imperatively scroll `node` so the row at `idx` (each `rh` px) is visible —
@@ -56,17 +63,18 @@
    positioned under the input, one row per label, `active-idx` highlighted,
    `on-pick!` invoked with the row index on mousedown.
 
-   labels     — vec of display strings
+   options    — vec of strings or {:label :description} maps
    active-idx — index of the keyboard-active row, or -1 for none
    on-pick!   — client-side fn of the row index; mousedown is preventDefault'd
                 first so the input keeps focus
 
-   Pre:  labels is non-empty; every element is a string.
+   Pre:  options is non-empty; every option has a display label.
    Post: only the visible window of rows is mounted (Scroll-window/Tape), so
          cost is bounded regardless of option count."
-  [labels active-idx on-pick!]
+  [options active-idx on-pick!]
   (e/client
-    (let [n (count labels)]
+    (let [n (count options)
+          rh (if (some option-description options) described-row-height row-height)]
       (dom/div
         (dom/props {:class "tape-scroll"
                     :style {:position "absolute" :top "100%" :left "0" :right "0"
@@ -74,25 +82,30 @@
                             :border-radius "var(--radius-sm)" :z-index "100"
                             :max-height "240px" :overflow-y "auto"
                             :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
-                            :--row-height (str row-height "px")}})
-        (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})]
+                            :--row-height (str rh "px")}})
+        (let [[offset limit] (Scroll-window rh n dom/node {:overquery-factor 2})]
           (dom/props {:style {:--count n :--grid-cols "1fr"}})
           ;; Keep the keyboard-active row on screen (case forces the call —
           ;; a bare unused-value statement would be work-skipped).
-          (case (scroll-row-into-view! dom/node active-idx row-height) nil)
+          (case (scroll-row-into-view! dom/node active-idx rh) nil)
           (dom/table
             (dom/props {:style {:width "100%"}})
             (e/for [i (Tape offset limit)]
-              (let [label (nth labels i nil)]
-                (when label
+              (let [option (nth options i nil)
+                    label (option-label option)
+                    description (option-description option)]
+                (when option
                   (dom/tr
                     (dom/props {:style {:--order i}})
                     (dom/td
-                      (dom/props {:title label
+                      (dom/props {:data-tooltip label
                                   :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                           :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                           :background (when (= i active-idx) "var(--color-highlight)")}})
-                      (dom/text label)
+                      (dom/div (dom/props {:class "typeahead-option-label"}) (dom/text label))
+                      (when description
+                        (dom/div (dom/props {:class "typeahead-option-description"})
+                          (dom/text (str description))))
                       (dom/On "mousedown"
                         (fn [e]
                           (.preventDefault e)
@@ -107,9 +120,10 @@
    resolve its selection by string-matching titles back to rows, which silently
    picked the wrong row whenever two rows shared a label.
 
-   options      — seq of {:id :label}; :label is filtered and displayed, :id is
-                  what gets written. When the domain has no id distinct from the
-                  label (Anki deck names), pass the label as the id.
+   options      — seq of {:id :label} maps. An optional :description appears on
+                  a second line. :label is filtered and displayed. :id is what
+                  gets written. When the domain has no separate id, such as an
+                  Anki deck name, pass the label as the id.
    placeholder  — input placeholder text
    ?!committed  — optional atom; reset to the selected :id only on definitive
                   selection (mousedown or Enter), not per keystroke. nil to disable.
@@ -211,7 +225,7 @@
         ;; Mouse hover highlight is CSS (.tape-scroll table tr:hover td); the
         ;; keyboard-active row gets an inline background (OptionRows).
         (when (seq filtered)
-          (OptionRows (mapv #(str (:label %)) filtered) active-idx
+          (OptionRows filtered active-idx
             (fn [i]
               (let [id (:id (nth filtered i))]
                 (reset! !atom id)

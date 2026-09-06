@@ -7,50 +7,104 @@
    labeled by predicate. Literal-object facts are attributes, surfaced only in
    the side panel (db/kg-entity-card) — never graph edges.
 
-   Layout: sfdp with overlap removal OFF (-Goverlap=true). The edges-only graph
-   has no isolated nodes, so overlap removal — sfdp's one expensive step — is
-   unneeded; a 5k-node graph then lays out in <1s (measured), vs ~90s with the
-   default overlap pass. Positions are raw graphviz points; the client camera
-   fits them, so the server does no normalization."
+   Layout: sfdp uses Prism scaling without iterative overlap removal. Graphviz
+   receives each node's rendered size and reserves space for large hubs. It also
+   packs components and distributes leaf fans. Positions are raw Graphviz points.
+   The client camera fits them, so the server does no normalization."
   (:require [freememo.db :as db]
             [clojure.string :as str]
             [taoensso.telemere :as tel]))
 
 (def ^:private sfdp-bin "sfdp")
+(def ^:private layout-revision 2)
+
+;; prism0 runs only Prism's scaling phase. It does not run the costly iterative
+;; overlap pass that took about 90 seconds on a 5,000-node graph. The pack margin
+;; keeps disconnected components distinct. sep adds space around collision boxes.
+(def ^:private sfdp-args
+  ["-Goverlap=prism0"
+   "-Gsep=+24"
+   "-Gpack=24"
+   "-Gpackmode=node"
+   "-Gbeautify=true"
+   "-Gstart=42"
+   "-Tplain"])
+
+(def ^:private graphviz-dpi 72.0)
+
+(defn- degree-by-node [edge-pairs]
+  (reduce (fn [m [s t]]
+            (-> m
+              (update s (fnil inc 0))
+              (update t (fnil inc 0))))
+    {} edge-pairs))
+
+(defn- rendered-node-radius
+  "Return the Sigma node radius in pixels for a degree. Keep this formula equal
+   to graph-render/build-graphology."
+  [degree]
+  (+ 3.0 (* 1.4 (Math/sqrt (double (max 1 (or degree 1)))))))
+
+(defn- graphviz-node-width
+  "Return a circle diameter in Graphviz inches for the rendered Sigma radius."
+  [degree]
+  (/ (* 2.0 (rendered-node-radius degree)) graphviz-dpi))
 
 (defn ->dot
   "DOT for an undirected graph over integer node-ids and [s t] edge pairs.
    Every node is emitted explicitly so a node whose edges are later all
-   filtered client-side still exists in the model.
+   filtered client-side still exists in the model. Node collision boxes match
+   the degree-scaled circles that Sigma renders.
    Pre: ids are integers (DOT-safe as bare numerals). Post: a `graph{…}` string."
   [node-ids edge-pairs]
-  (let [sb (StringBuilder. "graph G {\n")]
-    (doseq [id node-ids] (.append sb id) (.append sb ";\n"))
+  (let [degree (degree-by-node edge-pairs)
+        sb (StringBuilder. "graph G {\nnode [shape=circle,fixedsize=true,label=\"\",margin=0];\n")]
+    (doseq [id node-ids]
+      (let [width (Double/toString (graphviz-node-width (get degree id 0)))]
+        (.append sb id)
+        (.append sb "[width=")
+        (.append sb width)
+        (.append sb ",height=")
+        (.append sb width)
+        (.append sb "];\n")))
     (doseq [[s t] edge-pairs]
       (.append sb s) (.append sb "--") (.append sb t) (.append sb ";\n"))
     (.append sb "}\n")
     (.toString sb)))
 
+(defn- parse-sfdp-positions [text]
+  (into {}
+    (keep (fn [line]
+            (when (str/starts-with? line "node ")
+              ;; A plain node row starts with: node name x y width height.
+              (let [parts (str/split line #"\s+" 5)]
+                [(parse-long (nth parts 1))
+                 [(parse-double (nth parts 2)) (parse-double (nth parts 3))]]))))
+    (str/split-lines text)))
+
+(defn- current-cache? [cached version]
+  (boolean
+    (and cached
+         (= (long (:version cached)) (long version))
+         (= layout-revision (get-in cached [:payload :layout-revision])))))
+
 (defn- run-sfdp
-  "Pipe `dot` through `sfdp -Goverlap=true -Tplain`; parse node positions.
+  "Pipe `dot` through sfdp with bounded Prism scaling. Parse node positions.
    Pre: the `sfdp` binary is on PATH (provisioned in the runtime image).
    Post: {node-id [x y]} for every `node` line. Throws if sfdp is absent or
-   exits non-zero — blame there is a deployment (image) bug, not a caller bug.
-   Every start/finish/failure is logged so a prod hang or crash is locatable."
+   exits non-zero. This indicates a deployment image fault. Logs identify each
+   start, finish, and failure."
   [^String dot]
   (let [t0 (System/currentTimeMillis)
         payload-bytes (.getBytes dot "UTF-8")]
     (tel/log! {:level :info :id ::sfdp.start :data {:dot-bytes (alength payload-bytes)}}
       "kg-graph sfdp: starting layout")
-    (let [proc (.start (ProcessBuilder. [sfdp-bin "-Goverlap=true" "-Tplain"]))
+    (let [proc (.start (ProcessBuilder. (into [sfdp-bin] sfdp-args)))
           ;; Drain stdout on another thread while we write stdin, so neither pipe
           ;; buffer can fill and deadlock the subprocess.
           out (future (slurp (.getInputStream proc)))
-          ;; Capture — never discard — stderr. When sfdp aborts at startup (e.g.
-          ;; a missing neato/sfdp layout plugin) it prints the reason here and
-          ;; closes stdin, so our write fails with a bare "Broken pipe"; stderr
-          ;; is the only place the true cause is visible. Bound outside the try
-          ;; so the catch can read it on the broken-pipe path.
+          ;; Capture stderr. It contains the cause when sfdp closes stdin during
+          ;; startup. Bind it outside the try so the catch can read it.
           err (future (slurp (.getErrorStream proc)))]
       (try
         (with-open [w (.getOutputStream proc)]
@@ -59,15 +113,7 @@
               code (.waitFor proc)]
           (when-not (zero? code)
             (throw (ex-info (str "sfdp exited " code ": " (str/trim @err)) {:code code})))
-          (let [pos (into {}
-                      (keep (fn [line]
-                              (when (str/starts-with? line "node ")
-                                ;; `node <name> <x> <y> <w> <h> <label> …` — names
-                                ;; are our integer ids (no spaces), plain split safe.
-                                (let [parts (str/split line #"\s+" 5)]
-                                  [(parse-long (nth parts 1))
-                                   [(parse-double (nth parts 2)) (parse-double (nth parts 3))]]))))
-                      (str/split-lines text))]
+          (let [pos (parse-sfdp-positions text)]
             (tel/log! {:level :info :id ::sfdp.done
                        :data {:exit code :positions (count pos)
                               :out-bytes (count text)
@@ -80,7 +126,7 @@
                             :error (.getMessage t)
                             :class (.getName (class t))
                             :stderr (try (str/trim @err) (catch Throwable _ nil))}}
-            "kg-graph sfdp: FAILED — see :stderr for the real cause (missing layout plugin, etc.)")
+            "kg-graph sfdp: failed. See :stderr for the cause")
           (throw t))))))
 
 (defn compute-payload
@@ -89,7 +135,8 @@
      {:nodes      [[id label degree x y] …]
       :edges      [[s t pred-idx topic-id] …]
       :predicates [[pred-id label] …]     ; index = pred-idx above
-      :docs       [[topic-id title] …]}
+      :docs       [[topic-id title] …]
+      :layout-revision <integer>}
    Isolated nodes cannot occur (edges-only). Empty graph → empty vectors."
   [user-id]
   (let [t0 (System/currentTimeMillis)
@@ -103,9 +150,7 @@
         pos (if (seq node-ids)
               (run-sfdp (->dot node-ids (mapv (juxt :s :t) edges)))
               {})
-        degree (reduce (fn [m {:keys [s t]}]
-                         (-> m (update s (fnil inc 0)) (update t (fnil inc 0))))
-                 {} edges)
+        degree (degree-by-node (map (juxt :s :t) edges))
         pred-idx (into {} (map-indexed (fn [i {:keys [id]}] [id i]) predicates))
         payload {:nodes (mapv (fn [{:keys [id label]}]
                                 (let [[x y] (get pos id [0.0 0.0])]
@@ -113,7 +158,8 @@
                           nodes)
                  :edges (mapv (fn [{:keys [s t p topic]}] [s t (get pred-idx p) topic]) edges)
                  :predicates (mapv (fn [{:keys [id label]}] [id label]) predicates)
-                 :docs (mapv (fn [{:keys [id title]}] [id title]) docs)}]
+                 :docs (mapv (fn [{:keys [id title]}] [id title]) docs)
+                 :layout-revision layout-revision}]
     (tel/log! {:level :info :id ::compute.done
                :data {:user-id user-id :nodes (count (:nodes payload))
                       :edges (count (:edges payload)) :positioned (count pos)
@@ -122,16 +168,17 @@
     payload))
 
 (defn get-or-compute
-  "Serve the cached payload for (user, scope) when its version matches the
-   current :kg-mutations counter; else recompute, cache, and return it.
+  "Serve the cached payload when its data version and layout revision match.
+   Otherwise, recompute the payload and replace the cache.
    `version` is that counter, threaded from the client's reactive watch, so any
-   KG mutation invalidates on the next open.
+   KG mutation invalidates the cache on the next open. A layout revision also
+   invalidates positions after a layout algorithm change.
    Pre: called inside e/server (JDBC + subprocess). Post: a render payload map;
    a cold or stale cache triggers exactly one sfdp run. Inv: on return the
    cached row's version = `version`."
   [user-id scope version]
   (let [cached (db/read-graph-layout user-id scope)]
-    (if (and cached (= (long (:version cached)) (long version)))
+    (if (current-cache? cached version)
       (do (tel/log! {:level :info :id ::cache.hit
                      :data {:user-id user-id :scope scope :version version
                             :nodes (count (:nodes (:payload cached)))}}
