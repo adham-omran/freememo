@@ -8,9 +8,9 @@
    together and the masks stay aligned.
 
    Naming scheme (fm- prefix avoids collisions with add-on media):
-     fm-<anki-key>-<ordinal>-Q.svg   question mask, per note
-     fm-<anki-key>-<ordinal>-A.svg   answer mask, per note
-     fm-<anki-key>-O.svg             original mask (all rects), per group
+     fm-<anki-key>-<ordinal>-q.svg   question mask, per note
+     fm-<anki-key>-<ordinal>-a.svg   answer mask, per note
+     fm-<anki-key>-o.svg             original mask (all rects), per group
      fm-<anki-key>-<ordinal>         note's 'ID (hidden)' field
 
    Mask groups: an ordinal identifies a mask GROUP, so several rects may carry
@@ -99,9 +99,9 @@
 (defn media-filenames
   "Anki media filenames for one mask: {:q .. :a ..} plus the group's :o."
   [anki-key ordinal]
-  {:q (str "fm-" anki-key "-" ordinal "-Q.svg")
-   :a (str "fm-" anki-key "-" ordinal "-A.svg")
-   :o (str "fm-" anki-key "-O.svg")})
+  {:q (str "fm-" anki-key "-" ordinal "-q.svg")
+   :a (str "fm-" anki-key "-" ordinal "-a.svg")
+   :o (str "fm-" anki-key "-o.svg")})
 
 (defn- xml-escape
   "Escape label text for XML character data. `&` first, or the escapes of the

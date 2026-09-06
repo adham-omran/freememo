@@ -16,7 +16,8 @@
          text, the way account_transfer_format_test reads db.clj.
    post: needs no database. freememo.anki-sync-helpers reaches no namespace that
          builds a connection pool at load."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [freememo.anki-sync-helpers :as helpers]))
 
 ;; ── merge-note-tags ─────────────────────────────────────────────────────────
@@ -151,3 +152,15 @@
   (testing "a field in the model with no value here is blanked by updateNote"
     (is (= (set helpers/io-field-names)
           (set (keys (helpers/build-io-fields io-card io-settings {})))))))
+
+(deftest t17-mask-media-names-survive-anki-case-folding
+  (testing "Anki can lowercase storeMediaFile names, so mask names must already
+            be lowercase and the note fields must use those exact names"
+    (let [upload-names (into #{} (map :filename)
+                         (helpers/io-mask-upload-plan [io-card]))
+          fields (helpers/build-io-fields io-card io-settings {})
+          field-names (into #{}
+                        (map #(second (re-find #"src=\"([^\"]+)\"" (get fields %))))
+                        ["Question Mask" "Answer Mask" "Original Mask"])]
+      (is (every? #(= % (str/lower-case %)) upload-names))
+      (is (= upload-names field-names)))))
