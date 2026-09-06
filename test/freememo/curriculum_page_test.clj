@@ -1,5 +1,5 @@
 (ns freememo.curriculum-page-test
-  "Source contracts for Curriculum's Electric collection and Forms5 boundaries."
+  "Source contracts for Curriculum UI collection and Forms5 boundaries."
   (:require
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]]
@@ -32,10 +32,13 @@
 (def exam-source-forms
   (read-source-forms "src/freememo/curriculum_exam_page.cljc"))
 
-;; Both files carry the same Electric and Forms5 obligations. The exam route
-;; moved nine components out of the curriculum page, so a contract checked over
-;; one file only would stop covering them.
-(def source-forms (into page-source-forms exam-source-forms))
+(def schedule-source-forms
+  (read-source-forms "src/freememo/schedule_page.cljc"))
+
+;; These files render Curriculum collections through the same Electric rules.
+;; Keep one contract over every UI that owns those collections.
+(def source-forms
+  (into [] cat [page-source-forms exam-source-forms schedule-source-forms]))
 
 (defn- definition
   ([name] (definition source-forms name))

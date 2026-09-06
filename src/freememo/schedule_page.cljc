@@ -710,7 +710,7 @@
           (dom/section
             (dom/props {:class "schedule-curriculum-section"})
             (dom/h2 (dom/text "Curriculum schedules"))
-            (e/for [plan curriculum-summaries]
+            (e/for [plan (e/diff-by :id curriculum-summaries)]
               (dom/button
                 (dom/props {:type "button" :class "schedule-curriculum-card"})
                 (dom/On "click" (fn [_]
