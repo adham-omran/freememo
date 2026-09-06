@@ -36,6 +36,7 @@
 (declare run-grandfather-migration!)
 (declare normalize-inline-card-images!)
 (declare start-purge-scheduler!)
+(declare unsynced-sql)
 (declare ->jsonb)
 (declare pgobject->clj)
 ;; Defined in the Incremental Video section; called from complete-credit-order!,
@@ -223,6 +224,11 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_repetitions_topic_time
                       ON topic_repetitions(topic_id, event_at DESC)"])
+  ;; The Learn streak query walks backward one calendar day at a time. This
+  ;; expression index makes each day-presence check bounded by the streak
+  ;; length instead of reading the user's complete repetition history.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_repetitions_user_event_day
+                      ON topic_repetitions(user_id, event_type, (DATE(event_at)))"])
   ;; Widen event_type for Dismiss/Undismiss on installs created before them
   ;; (the inline CHECK above only applies to a freshly-created table).
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions DROP CONSTRAINT IF EXISTS topic_repetitions_event_type_check"])
@@ -2081,6 +2087,300 @@
                       ON activities(outcome, terminated_at)
                       WHERE terminated_at IS NOT NULL"]))
 
+(defn- setup-schema-document-summaries!
+  "Install the maintained root-document progress read model.
+
+   Preconditions: topics and flashcards exist with their final columns.
+   Postconditions: each current root has one summary row, and statement triggers
+   refresh every root affected by later topic or flashcard writes.
+   Invariant: summary counts use the same item and sync definitions as
+   get-document-status. A trigger defect is an implementation bug."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS document_summaries (
+      root_topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      total_items BIGINT NOT NULL DEFAULT 0,
+      done_items BIGINT NOT NULL DEFAULT 0,
+      total_cards BIGINT NOT NULL DEFAULT 0,
+      synced_cards BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (done_items <= total_items),
+      CHECK (synced_cards <= total_cards)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_document_summaries_user
+                      ON document_summaries(user_id)"])
+
+  ;; Resolve a topic to its current root. Deletes pass the nearest surviving
+  ;; parent, so this function never needs deleted rows to reconstruct ancestry.
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_root_topic_id(p_topic_id INTEGER)
+    RETURNS INTEGER
+    LANGUAGE SQL
+    STABLE
+    AS $$
+      WITH RECURSIVE ancestors AS (
+        SELECT id, parent_id
+        FROM topics
+        WHERE id = p_topic_id
+        UNION ALL
+        SELECT parent.id, parent.parent_id
+        FROM topics parent
+        JOIN ancestors child ON parent.id = child.parent_id
+      )
+      SELECT id
+      FROM ancestors
+      WHERE parent_id IS NULL
+      LIMIT 1
+    $$"])
+
+  ;; Recompute only the named roots. This is deliberately a recomputation, not
+  ;; delta arithmetic: moves, cascades and sync-state changes then share one
+  ;; correctness path. Statement triggers keep bulk imports at one refresh per
+  ;; affected root rather than one refresh per inserted row.
+  (jdbc/execute! ds [(str "
+    CREATE OR REPLACE FUNCTION freememo_refresh_document_summaries(p_root_ids INTEGER[])
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF p_root_ids IS NULL OR cardinality(p_root_ids) = 0 THEN
+        RETURN;
+      END IF;
+
+      DELETE FROM document_summaries summary
+      WHERE summary.root_topic_id = ANY(p_root_ids)
+        AND NOT EXISTS (
+          SELECT 1 FROM topics root
+          WHERE root.id = summary.root_topic_id
+            AND root.parent_id IS NULL
+            AND root.user_id IS NOT NULL
+        );
+
+      INSERT INTO document_summaries
+        (root_topic_id, user_id, total_items, done_items,
+         total_cards, synced_cards, updated_at)
+      SELECT root.id,
+             root.user_id,
+             CASE WHEN root.kind = 'pdf'
+                  THEN COALESCE(page_stats.total_items, 0)
+                  ELSE COALESCE(descendant_stats.total_items, 0)
+             END,
+             CASE WHEN root.kind = 'pdf'
+                  THEN COALESCE(page_stats.done_items, 0)
+                  ELSE COALESCE(descendant_stats.done_items, 0)
+             END,
+             COALESCE(card_stats.total_cards, 0),
+             COALESCE(card_stats.synced_cards, 0),
+             NOW()
+      FROM topics root
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS total_items,
+               COUNT(*) FILTER (WHERE page.status = 'done') AS done_items
+        FROM topics page
+        WHERE page.parent_id = root.id AND page.kind = 'page'
+      ) page_stats ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS total_items,
+               COUNT(*) FILTER (WHERE descendant.status = 'done') AS done_items
+        FROM (
+          WITH RECURSIVE descendants AS (
+            SELECT root.id, root.status
+            UNION ALL
+            SELECT child.id, child.status
+            FROM topics child
+            JOIN descendants parent ON child.parent_id = parent.id
+          )
+          SELECT id, status FROM descendants
+        ) descendant
+      ) descendant_stats ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS total_cards,
+               COUNT(*) FILTER (WHERE NOT " (unsynced-sql "card.") ") AS synced_cards
+        FROM flashcards card
+        WHERE card.root_topic_id = root.id
+      ) card_stats ON TRUE
+      WHERE root.id = ANY(p_root_ids)
+        AND root.parent_id IS NULL
+        AND root.user_id IS NOT NULL
+      ON CONFLICT (root_topic_id) DO UPDATE
+      SET user_id = EXCLUDED.user_id,
+          total_items = EXCLUDED.total_items,
+          done_items = EXCLUDED.done_items,
+          total_cards = EXCLUDED.total_cards,
+          synced_cards = EXCLUDED.synced_cards,
+          updated_at = EXCLUDED.updated_at;
+    END
+    $$")])
+
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_insert()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE affected INTEGER[];
+    BEGIN
+      SELECT array_agg(DISTINCT freememo_root_topic_id(inserted.id))
+      INTO affected
+      FROM inserted;
+      PERFORM freememo_refresh_document_summaries(affected);
+      RETURN NULL;
+    END
+    $$"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_update()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE affected INTEGER[];
+    BEGIN
+      WITH RECURSIVE changed AS (
+        SELECT old_rows.id, old_rows.parent_id
+        FROM old_rows
+        JOIN new_rows USING (id)
+        WHERE new_rows.parent_id IS DISTINCT FROM old_rows.parent_id
+           OR new_rows.kind IS DISTINCT FROM old_rows.kind
+           OR new_rows.status IS DISTINCT FROM old_rows.status
+           OR new_rows.user_id IS DISTINCT FROM old_rows.user_id
+      ),
+      old_ancestors(changed_id, id, parent_id) AS (
+        SELECT id, id, parent_id
+        FROM changed
+        UNION ALL
+        SELECT ancestor.changed_id,
+               parent.id,
+               CASE WHEN old_parent.id IS NOT NULL
+                    THEN old_parent.parent_id
+                    ELSE parent.parent_id
+               END
+        FROM old_ancestors ancestor
+        JOIN topics parent ON parent.id = ancestor.parent_id
+        LEFT JOIN old_rows old_parent ON old_parent.id = parent.id
+      ),
+      old_roots AS (
+        SELECT DISTINCT id AS root_id
+        FROM old_ancestors
+        WHERE parent_id IS NULL
+      ),
+      new_roots AS (
+        SELECT DISTINCT freememo_root_topic_id(new_rows.id) AS root_id
+        FROM new_rows
+        JOIN changed USING (id)
+      )
+      SELECT array_agg(DISTINCT root_id)
+      INTO affected
+      FROM (
+        SELECT root_id FROM new_roots
+        UNION
+        SELECT root_id FROM old_roots
+      ) roots
+      WHERE root_id IS NOT NULL;
+      PERFORM freememo_refresh_document_summaries(affected);
+      RETURN NULL;
+    END
+    $$"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_delete()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE affected INTEGER[];
+    BEGIN
+      SELECT array_agg(DISTINCT root_id)
+      INTO affected
+      FROM (
+        SELECT freememo_root_topic_id(deleted.parent_id) AS root_id
+        FROM deleted
+        WHERE deleted.parent_id IS NOT NULL
+        UNION
+        SELECT deleted.id
+        FROM deleted
+        WHERE deleted.parent_id IS NULL
+      ) roots
+      WHERE root_id IS NOT NULL;
+      PERFORM freememo_refresh_document_summaries(affected);
+      RETURN NULL;
+    END
+    $$"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_card_write()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE affected INTEGER[];
+    BEGIN
+      IF TG_OP = 'INSERT' THEN
+        SELECT array_agg(DISTINCT root_topic_id) INTO affected FROM inserted;
+      ELSIF TG_OP = 'DELETE' THEN
+        SELECT array_agg(DISTINCT root_topic_id) INTO affected FROM deleted;
+      ELSE
+        SELECT array_agg(DISTINCT root_topic_id)
+        INTO affected
+        FROM (
+          SELECT root_topic_id FROM inserted
+          UNION
+          SELECT root_topic_id FROM deleted
+        ) roots;
+      END IF;
+      PERFORM freememo_refresh_document_summaries(affected);
+      RETURN NULL;
+    END
+    $$"])
+
+  (doseq [trigger ["freememo_document_summary_topic_insert"
+                   "freememo_document_summary_topic_update"
+                   "freememo_document_summary_topic_delete"]]
+    (jdbc/execute! ds [(str "DROP TRIGGER IF EXISTS " trigger " ON topics")]))
+  (doseq [trigger ["freememo_document_summary_card_insert"
+                   "freememo_document_summary_card_update"
+                   "freememo_document_summary_card_delete"]]
+    (jdbc/execute! ds [(str "DROP TRIGGER IF EXISTS " trigger " ON flashcards")]))
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_topic_insert
+    AFTER INSERT ON topics
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_topic_insert()"])
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_topic_update
+    AFTER UPDATE ON topics
+    REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_topic_update()"])
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_topic_delete
+    AFTER DELETE ON topics
+    REFERENCING OLD TABLE AS deleted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_topic_delete()"])
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_card_insert
+    AFTER INSERT ON flashcards
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_card_write()"])
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_card_update
+    AFTER UPDATE ON flashcards
+    REFERENCING OLD TABLE AS deleted NEW TABLE AS inserted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_card_write()"])
+  (jdbc/execute! ds ["
+    CREATE TRIGGER freememo_document_summary_card_delete
+    AFTER DELETE ON flashcards
+    REFERENCING OLD TABLE AS deleted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION freememo_refresh_summaries_after_card_write()"])
+
+  ;; Rebuild once at boot. This repairs an interrupted install and applies a
+  ;; changed summary definition to rows that an older trigger maintained.
+  ;; Navigation reads remain constant-time because this work is not on them.
+  (jdbc/execute! ds ["
+    SELECT freememo_refresh_document_summaries(array_agg(root.id))
+    FROM topics root
+    WHERE root.parent_id IS NULL
+      AND root.user_id IS NOT NULL"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -2101,6 +2401,7 @@
   (setup-schema-study-scheduler!)
   (setup-schema-curriculum!)
   (setup-schema-activity-monitor!)
+  (setup-schema-document-summaries!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -6218,8 +6519,8 @@
    for a never-pushed card both digests can be NULL, and `NULL IS DISTINCT FROM
    NULL` is FALSE — so without it a new card would read as synced.
 
-   One definition, four readers: the two counts below, `synced_cards` in
-   `get-document-tree-rows`, and `card-components/sync-state` (the Clojure
+   One definition, four readers: the two counts below, `synced_cards` in the
+   document summary refresh, and `card-components/sync-state` (the Clojure
    restatement, which reads the same two columns off the row).
 
    It replaced `updated_at > anki_synced_at`. That test moved on writes the digest
@@ -6259,59 +6560,30 @@
 ;; ---------------------------------------------------------------------------
 
 (defn get-document-status
-  "Get progress stats for all root documents owned by user-id.
+  "Get maintained progress stats for all root documents owned by user-id.
    For PDFs: counts kind='page' direct children.
-   For non-PDFs: counts root itself + all descendants (recursive).
+   For non-PDFs: counts root itself + all descendants.
    Returns a vector of maps with :id, :title, :kind, :created_at,
    :total_items, :done_items, :total_cards, :synced_cards, plus
    bibliography fields from sources (:sources/title etc.).
 
-   `synced_cards` is `NOT (unsynced-sql)` rather than its own condition, so this
-   count and every unsynced count answer one question. The Status tab's
-   `unsynced?` derives from total minus synced, so a second condition here would
-   have shown a document as fully synced while its own card table said otherwise."
+   Preconditions: setup-schema-document-summaries! installed and backfilled the
+   read model. Postconditions: one row per visible root, ordered newest first.
+   Invariant: database triggers update the summary inside the source write's
+   transaction. A missing summary row is an implementation bug."
   [user-id]
   (jdbc/execute! ds
-    [(str "SELECT t.id, t.title, t.kind, t.created_at,
+    ["SELECT t.id, t.title, t.kind, t.created_at,
              s.title, s.csl_type, s.container_title,
-             CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.total_pages, 0)
-                  ELSE COALESCE(ds.total_items, 0)
-             END AS total_items,
-             CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.done_pages, 0)
-                  ELSE COALESCE(ds.done_items, 0)
-             END AS done_items,
-             COALESCE(cs.total_cards, 0)  AS total_cards,
-             COALESCE(cs.synced_cards, 0) AS synced_cards
+             summary.total_items AS total_items,
+             summary.done_items AS done_items,
+             summary.total_cards AS total_cards,
+             summary.synced_cards AS synced_cards
       FROM topics t
       LEFT JOIN sources s ON s.id = t.source_id
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*)                                  AS total_pages,
-               COUNT(*) FILTER (WHERE p.status = 'done') AS done_pages
-        FROM topics p
-        WHERE p.parent_id = t.id AND p.kind = 'page'
-      ) ps ON true
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*)                                  AS total_items,
-               COUNT(*) FILTER (WHERE d.status = 'done') AS done_items
-        FROM (
-          WITH RECURSIVE descendants AS (
-            SELECT t.id, t.status
-            UNION ALL
-            SELECT c.id, c.status
-            FROM topics c
-            JOIN descendants d ON c.parent_id = d.id
-          )
-          SELECT id, status FROM descendants
-        ) d
-      ) ds ON true
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*) AS total_cards,
-               COUNT(*) FILTER (WHERE NOT " (unsynced-sql "f.") ") AS synced_cards
-        FROM flashcards f
-        WHERE f.root_topic_id = t.id
-      ) cs ON true
+      JOIN document_summaries summary ON summary.root_topic_id = t.id
       WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
-      ORDER BY t.created_at DESC")
+      ORDER BY t.created_at DESC"
      user-id]))
 
 ;; ---------------------------------------------------------------------------
@@ -6679,25 +6951,42 @@
 (defn get-study-streak
   "Consecutive calendar days with >=1 advance, Anki-style.
    Anchor = today if studied today, else yesterday; counts backward from anchor.
-   A zero-advance today does not break the streak until the day fully passes."
+   A zero-advance today does not break the streak until the day fully passes.
+
+   Pre : topic_repetitions has idx_topic_repetitions_user_event_day.
+   Post: returns one non-negative count.
+   Invariant: work is proportional to the current streak, not all-time history."
   [user-id]
   (try
-    (let [rows (jdbc/execute! ds
-                 ["SELECT DISTINCT DATE(event_at) AS d
-                   FROM topic_repetitions
-                   WHERE user_id = ? AND event_type = 'advance'" user-id])
-          dayset (set (map #(java.time.LocalDate/parse (str (:d %))) rows))
-          today (java.time.LocalDate/now)
-          yday (.minusDays today 1)
-          anchor (cond (contains? dayset today) today
-                       (contains? dayset yday) yday
-                       :else nil)]
-      (if (nil? anchor)
-        0
-        (loop [d anchor n 0]
-          (if (contains? dayset d)
-            (recur (.minusDays d 1) (inc n))
-            n))))
+    (let [row (jdbc/execute-one! ds
+                ["WITH RECURSIVE streak(day, length) AS (
+                    SELECT CASE
+                             WHEN EXISTS (
+                               SELECT 1 FROM topic_repetitions
+                               WHERE user_id = ? AND event_type = 'advance'
+                                 AND DATE(event_at) = CURRENT_DATE
+                             ) THEN CURRENT_DATE
+                             WHEN EXISTS (
+                               SELECT 1 FROM topic_repetitions
+                               WHERE user_id = ? AND event_type = 'advance'
+                                 AND DATE(event_at) = CURRENT_DATE - 1
+                             ) THEN CURRENT_DATE - 1
+                           END,
+                           1
+                    UNION ALL
+                    SELECT day - 1, length + 1
+                    FROM streak
+                    WHERE day IS NOT NULL
+                      AND EXISTS (
+                        SELECT 1 FROM topic_repetitions
+                        WHERE user_id = ? AND event_type = 'advance'
+                          AND DATE(event_at) = streak.day - 1
+                      )
+                  )
+                  SELECT COALESCE(MAX(length) FILTER (WHERE day IS NOT NULL), 0) AS streak
+                  FROM streak"
+                 user-id user-id user-id])]
+      (long (or (:streak row) 0)))
     (catch Exception e
       (tel/error! {:id ::get-study-streak} e)
       0)))
@@ -6776,6 +7065,49 @@
                              [:sources :s] [:= :t.source_id :s.id]]
                  :where [:and [:= :t.user_id user-id] [:is :t.staged_delete_id nil]]
                  :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
+
+(defn get-library-tree-items
+  "Fetch roots plus the children of expanded Library rows.
+
+   PDF-like roots also fetch page children and their direct extracts, because
+   the Library flattens page stubs out of the visible tree.
+
+   Pre : expansion is {:mode :set|:all :ids #{integer ...}}.
+   Post: roots are always present. Set mode adds only requested branches.
+         All mode returns the complete tree.
+   Invariant: :has_children reports undisclosed children without fetching them."
+  [user-id {:keys [mode ids]}]
+  (let [expanded-ids (int-array (map int ids))]
+    (jdbc/execute! ds
+      ["SELECT t.id, t.parent_id, t.title, t.kind, t.status, t.created_at,
+               t.dismissed, t.page_number, t.last_review_at,
+               s.title, s.csl_type, s.container_title,
+               TO_CHAR(t.created_at, 'Mon DD') AS formatted_date,
+               EXISTS (
+                 SELECT 1 FROM topics child
+                 WHERE child.parent_id = t.id
+                   AND child.staged_delete_id IS NULL
+               ) AS has_children
+         FROM topics t
+         LEFT JOIN sources s ON s.id = t.source_id
+         WHERE t.user_id = ?
+           AND t.staged_delete_id IS NULL
+           AND (
+             t.parent_id IS NULL
+             OR ? = 'all'
+             OR t.parent_id = ANY(?)
+             OR EXISTS (
+               SELECT 1
+               FROM topics page
+               WHERE page.id = t.parent_id
+                 AND page.kind = 'page'
+                 AND page.parent_id = ANY(?)
+             )
+           )
+         ORDER BY t.parent_id ASC NULLS FIRST,
+                  t.page_number ASC NULLS FIRST,
+                  t.created_at ASC"
+       user-id (name mode) expanded-ids expanded-ids])))
 
 (defn get-extract-source-page
   "For an extract whose immediate parent is a PDF page, return

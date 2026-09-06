@@ -8,9 +8,10 @@
    [hyperfiddle.router5 :as r]
    [freememo.knowledge-tree :refer [DocumentTreeView]]
    [freememo.library-cards :refer [LibraryCardsView LibraryViewToggle]]
-   [freememo.math :as math]))
+   [freememo.math :as math]
+   #?(:clj [freememo.user-state :as us])))
 
-(e/defn LibraryPage [user-id navigate! refresh]
+(e/defn LibraryPage [user-id navigate!]
   (e/client
     (let [[sub] r/route
           cards-view? (= 'cards sub)]
@@ -26,7 +27,8 @@
         ;; re-runs it for free — `ensure!` memoizes per group.
         (when cards-view? (e/snapshot (math/prefetch-katex!)))
         (if cards-view?
-          (LibraryCardsView user-id navigate! refresh)
+          (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+            (LibraryCardsView user-id navigate! refresh))
           (let [!filter-text (atom "")
                 filter-text (e/watch !filter-text)
                 !kind-filter (atom "all")
@@ -97,5 +99,5 @@
                 (dom/On "click" (fn [_] (swap! !tree-expanded not)) nil)))
 
             ;; Tree view
-            (DocumentTreeView user-id navigate! refresh filter-text
+            (DocumentTreeView user-id navigate! filter-text
               sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd)))))))

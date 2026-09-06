@@ -8,6 +8,9 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
+   [freememo.loading :as loading]
+   [freememo.read-region :as read-region]
+   [freememo.route-timing :as route-timing]
    [freememo.a11y :as a11y]
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
@@ -50,6 +53,12 @@
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
      :cljs nil))
+
+(defn get-tree-items-result* [_refresh user-id expansion]
+  #?(:clj
+     (read-region/measured-result :library-tree
+       #(vec (db/get-library-tree-items user-id expansion)))
+     :cljs (loading/region-success [])))
 
 ;; Atomic rename + refresh — single e/server target so Electric can't drop
 ;; the side effect when the binding is "unused" in the client body.
@@ -96,6 +105,12 @@
                      :synced-cards (or (:synced_cards row) 0)}]))
             (db/get-document-status user-id))
      :cljs {}))
+
+(defn get-root-stats-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :library-progress
+       #(get-root-stats* _refresh user-id))
+     :cljs (loading/region-success {})))
 
 #?(:clj
    (defn attach-stats [roots stats-map]
@@ -145,7 +160,7 @@
                                         [c]))
                               raw-children))
                        raw-children)
-            has-children (boolean (seq children))
+            has-children (boolean (or (:has_children topic) (seq children)))
             is-expanded (boolean (expanded? id))
             new-stack (if (and is-expanded has-children)
                         (into rest-stack
@@ -163,11 +178,15 @@
 ;; `expansion` is client state {:mode :all|:set :ids #{id}} — in :all mode
 ;; ids are collapsed exceptions, in :set mode ids are the expanded nodes —
 ;; so Expand All never enumerates ids client-side (bounded payload at scale).
-(defn build-tree-rows* [_rev user-id filter-text kind-filter status-filter sort-col sort-dir expansion]
+(defn build-tree-rows
+  "Combine the Library structure and maintained root summaries.
+
+   Pre : all-items and stats-map belong to the same user and request key.
+   Post: returns filtered, exactly sorted, flattened rows.
+   Invariant: progress filters and sorts use the maintained summary values."
+  [all-items stats-map filter-text kind-filter status-filter sort-col sort-dir expansion]
   #?(:clj
-     (let [all-items (vec (db/get-knowledge-tree user-id))
-           stats-map (get-root-stats* 0 user-id)
-           roots (-> (extract-roots all-items)
+     (let [roots (-> (extract-roots all-items)
                    (attach-stats stats-map)
                    (filter-root-topics filter-text)
                    (filter-by-kind kind-filter)
@@ -177,7 +196,28 @@
            ids (set (:ids expansion))
            expanded? (if (= :all (:mode expansion)) (complement ids) ids)]
        (flatten-tree roots children-map expanded?))
-     :cljs nil))
+     :cljs []))
+
+(defn tree-row-dto
+  "Project one flattened Library row to the fields that its DOM row uses."
+  [row]
+  (when row
+    (let [topic (:topic row)]
+      {:depth (:depth row)
+       :has-children (:has-children row)
+       :is-root (:is-root row)
+       :expanded? (:expanded? row)
+       :id (:topics/id topic)
+       :title (:topics/title topic)
+       :kind (:topics/kind topic)
+       :source-container (:sources/container_title topic)
+       :status (:topics/status topic)
+       :dismissed? (:topics/dismissed topic)
+       :total-items (:total-items topic)
+       :done-items (:done-items topic)
+       :total-cards (:total-cards topic)
+       :synced-cards (:synced-cards topic)
+       :formatted-date (:formatted_date topic)})))
 
 ;; Badge helper — delegated to bibliography-form/topic-badge so wiki sources
 ;; render as "Wikipedia" via container-title even when topic.kind='web'.
@@ -188,31 +228,21 @@
 ;; per CLAUDE.md "Never Put Atoms in Maps Passed to e/defn".
 ;; ---------------------------------------------------------------------------
 
-(e/defn DocumentRow [user-id navigate! row i row-height
+(e/defn DocumentRow [user-id navigate! row-dto i row-height
                      editing-id
                      !expansion !editing-id !show-confirm !scroll-node
                      !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
   (e/client
-    ;; `row` is a server-sited value (bound via e/server at the call site) —
-    ;; pull each field through its own e/server so only the fields this row
-    ;; actually renders cross the wire, not the whole row+topic map (mirrors
-    ;; LibraryCardRow, library_cards.cljc).
-    (let [depth (e/server (:depth row))
-          has-children (e/server (:has-children row))
-          is-root (e/server (:is-root row))
-          expanded? (e/server (:expanded? row))
-          id (e/server (get-in row [:topic :topics/id]))
-          title (or (e/server (get-in row [:topic :topics/title])) "(empty)")
-          kind (or (e/server (get-in row [:topic :topics/kind])) "basic")
+    ;; The caller projects one bounded DTO on the server. Reading it here makes
+    ;; one row payload cross instead of one reactive transfer per field.
+    (let [{:keys [depth has-children is-root expanded? id title kind
+                  source-container status dismissed? total-items done-items
+                  total-cards synced-cards formatted-date]} row-dto
+          title (or title "(empty)")
+          kind (or kind "basic")
           is-page (= kind "page")
-          source-container (e/server (get-in row [:topic :sources/container_title]))
-          topic-status (or (e/server (get-in row [:topic :topics/status])) "active")
-          dismissed? (boolean (e/server (get-in row [:topic :topics/dismissed])))
-          total-items (e/server (get-in row [:topic :total-items]))
-          done-items (e/server (get-in row [:topic :done-items]))
-          total-cards (e/server (get-in row [:topic :total-cards]))
-          synced-cards (e/server (get-in row [:topic :synced-cards]))
-          formatted-date (e/server (get-in row [:topic :formatted_date]))
+          topic-status (or status "active")
+          dismissed? (boolean dismissed?)
           [badge-text badge-color] (bibform/topic-badge kind source-container)
           open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
           toggle-children! (fn [e]
@@ -454,30 +484,103 @@
                               (case (e/client (reset! !show-confirm nil))
                                 (t)))))))))))))))))
 
+(e/defn LibraryTableBody
+  [request-key user-id navigate! row-height grid-cols
+   editing-id !expansion !editing-id !show-confirm !scroll-node
+   !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
+  (e/client
+    (loading/WithLatestServerRegion request-key
+      ;; Electric let bindings run concurrently. The tree shape and maintained
+      ;; progress summary therefore start as separate database reads.
+      (e/fn []
+        (e/server
+          (let [[requested-revision _user-id filter-text kind-filter status-filter
+                 sort-col sort-dir expansion]
+                request-key
+                _rev (+ (e/watch (us/get-atom _user-id :refresh))
+                       (e/watch (us/get-atom _user-id :tree-mutations)))
+                result-key [_rev _user-id filter-text kind-filter status-filter
+                            sort-col sort-dir expansion]
+                items-result (e/Offload #(assoc
+                                          (get-tree-items-result* _rev _user-id expansion)
+                                          :source-key [_rev _user-id expansion]))
+                stats-result (e/Offload #(assoc
+                                          (get-root-stats-result* _rev _user-id)
+                                          :source-key [_rev _user-id]))]
+            (cond
+              (or (not= requested-revision _rev)
+                  (not= [_rev _user-id expansion] (:source-key items-result))
+                  (not= [_rev _user-id] (:source-key stats-result)))
+              {:pending? true}
+
+              (and (:ok? items-result) (:ok? stats-result))
+              (loading/region-success result-key
+                (build-tree-rows (:value items-result) (:value stats-result)
+                  filter-text kind-filter status-filter sort-col sort-dir expansion))
+
+              :else
+              (loading/region-failure result-key
+                (or (:error items-result) (:error stats-result) "Unknown error"))))))
+      (e/fn [flat-rows phase error]
+        (let [row-count (e/server (count flat-rows))]
+          (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
+            (dom/div
+              (dom/props {:role "rowgroup"
+                          :class (str "library-document-scroll"
+                                   (when (= phase :refreshing)
+                                     " progressive-region-refreshing"))
+                          :style {:flex "1 1 auto" :overflow-y "auto"
+                                  :min-height (if (zero? row-count) "72px" "0")
+                                  :max-height (str (* 10 row-height) "px")
+                                  :position "relative" :scrollbar-gutter "stable"}})
+              (reset! !scroll-node dom/node)
+              (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                     {:overquery-factor 1.5
+                                      :reset-key (subvec (vec request-key) 2 7)})]
+                (dom/props {:class "tape-scroll"
+                            :style {:--count row-count
+                                    :--row-height (str row-height "px")
+                                    :--grid-cols grid-cols}})
+                (dom/table
+                  (dom/props {:class "library-table library-table-body"
+                              :role "presentation"
+                              :style {:width "100%" :font-size "13px"}})
+                  (e/for [i (Tape offset limit)]
+                    (when-let [row-dto (e/server
+                                         (tree-row-dto (nth flat-rows i nil)))]
+                      (DocumentRow user-id navigate! row-dto i row-height
+                        editing-id
+                        !expansion !editing-id !show-confirm !scroll-node
+                        !drag-src drag-src forbidden !drop-cmd !dismiss-cmd)))))
+              (when (zero? row-count)
+                (dom/div
+                  (dom/props {:class "library-document-empty" :role "status"})
+                  (dom/text "No content yet. Import content from the Import tab.")))
+              (loading/RegionNotice phase error)))))
+      (e/fn [_phase]
+        (dom/div (dom/props {:class "library-document-loading" :role "rowgroup"})
+          (loading/SkeletonRows (if (> row-height 40) 3 6) (str row-height "px"))))
+      (e/fn [error]
+        (dom/div
+          (dom/props {:class "library-document-failed" :role "status"})
+          (dom/text (str "The document list could not load. " error)))))))
+
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-;; `refresh` (caller-provided) covers content-level mutations; combined with
-;; the per-user :tree-mutations atom (tree-shape mutations: extract create,
-;; rename, delete, document import) so the library tree refreshes on either.
-(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd]
+;; :refresh covers content mutations. :tree-mutations covers tree-shape changes.
+(e/defn DocumentTreeView [user-id navigate! filter-text sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd]
   (e/client
     (let [!expansion (atom {:mode :set :ids #{}})
+          !revision (atom ::pending)
+          revision (e/watch !revision)
           ;; Expand All / Collapse All from the parent toggle — switches the
           ;; mode; per-row arrows then toggle ids (exceptions in :all mode).
           expand-cmd (if tree-expanded
                        (reset! !expansion {:mode :all :ids #{}})
                        (reset! !expansion {:mode :set :ids #{}}))
           expansion (do expand-cmd (e/watch !expansion))
-          ;; Flattening is sited server-side: only row-count and the window
-          ;; rows cross the wire (see build-tree-rows*). Previously the whole
-          ;; slimmed topic list (~2x doc count items) shipped to the client
-          ;; on every mount and tree mutation.
-          flat-rows (e/server
-                      (let [tree-mutations (e/watch (us/get-atom user-id :tree-mutations))
-                            rev (+ refresh tree-mutations)]
-                        (build-tree-rows* rev user-id filter-text kind-filter
-                          status-filter sort-col sort-dir expansion)))
-          row-count (e/server (count flat-rows))
+          request-key [revision user-id filter-text kind-filter status-filter
+                       sort-col sort-dir expansion]
           !show-confirm (atom nil)
           show-confirm (e/watch !show-confirm)
           !editing-id (atom nil)
@@ -490,7 +593,8 @@
           ;; ids, fetched once per drag start; rows in it are invalid targets.
           !drag-src (atom nil)
           drag-src (e/watch !drag-src)
-          forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
+          !forbidden (atom #{})
+          forbidden (e/watch !forbidden)
           !drop-cmd (atom nil)
           drop-cmd (e/watch !drop-cmd)
           ;; Row-menu Dismiss/Undismiss. Handled here (not in the transient
@@ -499,6 +603,21 @@
           ;; :tree-mutations so this tree re-queries and the row re-greys.
           !dismiss-cmd (atom nil)
           dismiss-cmd (e/watch !dismiss-cmd)]
+            ;; These server values update client atoms as sibling statements.
+            ;; Pending reads cannot suppress the table shell or its controls.
+            (let [server-revision
+                  (e/server (+ (e/watch (us/get-atom user-id :refresh))
+                             (e/watch (us/get-atom user-id :tree-mutations))))]
+              (when (not= server-revision revision)
+                (case server-revision (reset! !revision server-revision))))
+            (let [next-forbidden
+                  (e/server
+                    (if drag-src
+                      (e/Offload #(set (db/get-subtree-ids drag-src)))
+                      #{}))]
+              (when (not= next-forbidden forbidden)
+                (case next-forbidden (reset! !forbidden next-forbidden))))
+
             ;; Commit a drop / promote-to-root via the standard mutation idiom.
             (let [[t _] (e/Token drop-cmd)]
               (when t
@@ -587,60 +706,9 @@
                                     :style (merge th-style {:text-align "right" :padding "8px 6px" :cursor "default"})})
                         (dom/text "Actions"))))))
 
-              ;; Scrollable body
-              (dom/div
-                ;; max-height caps the table at 10 rows, and the window follows it:
-                ;; 10 × overquery 1.5 = 15 mounted rows, fixed, whatever the viewport
-                ;; height. Uncapped it grew with the viewport and every filter change
-                ;; re-mounted the lot. Cap the CONTAINER, never the window — a window
-                ;; cap mounts fewer rows than the container shows and paints a blank
-                ;; band under the last row. max-height, not height: a viewport shorter
-                ;; than 10 rows still shrinks the table normally, which is what the
-                ;; phone layout (80 px rows) relies on.
-                ;; See plans/library-scroll-window-cap.md.
-                ;; `flex: 1 1 auto`, NOT `flex: 1`. `flex: 1` carries
-                ;; `flex-basis: 0%`, which needs free space to grow into — and the
-                ;; frame above is content-sized now, so there is none and the body
-                ;; would collapse to zero height. `auto` bases it on content, which
-                ;; max-height then caps at 10 rows.
-                (dom/props {:role "rowgroup"
-                            :style {:flex "1 1 auto" :overflow-y "auto" :min-height "0"
-                                    :max-height (str (* 10 row-height) "px")
-                                    :scrollbar-gutter "stable"}})
-                (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node
-                                       {:overquery-factor 1.5
-                                        ;; Reset to top on filter/sort change only.
-                                        ;; Excludes expansion + tree mutations so
-                                        ;; expand/collapse/delete hold scroll position.
-                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})]
-                  (dom/props {:class "tape-scroll"
-                              ;; C1c per-row transform positioning (see .tape-scroll in index.css):
-                              ;; --count → table height (scroll range), --grid-cols → the row grid.
-                              :style {:--count row-count :--row-height (str row-height "px")
-                                      :--grid-cols grid-cols}})
-                  (dom/table
-                    (dom/props {:class "library-table library-table-body"
-                                :role "presentation"
-                                ;; display:block + column template live in index.css (C1c).
-                                :style {:width "100%" :font-size "13px"}})
-                    (if (pos? row-count)
-                      (e/for [i (Tape offset limit)]
-                        (let [row (e/server (nth flat-rows i nil))]
-                          (when row
-                            (DocumentRow user-id navigate! row i row-height
-                              editing-id
-                              !expansion !editing-id !show-confirm !scroll-node
-                              !drag-src drag-src forbidden !drop-cmd !dismiss-cmd))))
-                      (dom/tr
-                        ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
-                        (dom/props {:role "row" :style {:height "auto"}})
-                        (dom/td
-                          (dom/props {:role "cell"
-                                      :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                              :color "var(--color-text-secondary)" :font-size "13px"}})
-                          (dom/text "No content yet. Import content from the Import tab.")))))
-                  ))
+              (LibraryTableBody request-key user-id navigate! row-height grid-cols
+                editing-id !expansion !editing-id !show-confirm !scroll-node
+                !drag-src drag-src forbidden !drop-cmd !dismiss-cmd)
 
               (DeleteConfirmModal user-id show-confirm !show-confirm !scroll-node)))))
 

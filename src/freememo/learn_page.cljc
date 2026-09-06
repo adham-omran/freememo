@@ -8,6 +8,9 @@
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
    [freememo.bibliography-form :as bibform]
+   [freememo.loading :as loading]
+   [freememo.read-region :as read-region]
+   [freememo.route-timing :as route-timing]
    #?(:clj [freememo.user-state :as us])
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])))
@@ -107,24 +110,64 @@
                   :date iso}))
          (range n)))))
 
-(defn dashboard-data* [_refresh user-id]
+(defn queue-result* [_refresh user-id]
   #?(:clj
-     (let [studied-map (into {} (map (juxt :d :c) (db/get-study-calendar user-id)))
-           due-map (into {} (map (fn [r] [(str (:review_date r)) (:count r)])
-                              (db/get-review-calendar user-id 30)))
-           today-iso (.toString (java.time.LocalDate/now))]
-       ;; Studied = 14 days ending yesterday (today excluded → "studied today" KPI).
-       ;; Future Due (Anki-style) = backlog (overdue) + today (day 0) + next 30 days.
-       {:studied (fill-series -14 14 studied-map)
-        :future-due {:backlog (db/get-overdue-count user-id)
-                     :days (fill-series 0 31 due-map)}
-        :studied-today (long (get studied-map today-iso 0))
-        :streak (db/get-study-streak user-id)
-        :reviews (db/get-review-counts user-id)
-        :status (db/get-status-breakdown user-id)})
-     :cljs {:studied [] :future-due {:backlog 0 :days []} :studied-today 0 :streak 0
-            :reviews {:all-time 0 :this-week 0}
-            :status {:active 0 :done 0 :dismissed 0}}))
+     (read-region/measured-result :learn-queue
+       (fn []
+       (let [{:keys [rows error] :as queue} (prepare-queue-rows _refresh user-id)]
+         (if error
+           (throw (ex-info error {:region :learn-queue}))
+           (assoc queue :rows (vec rows))))))
+     :cljs (loading/region-success {:rows [] :error nil})))
+
+(defn queue-summary-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :learn-summary
+       #(get-queue-summary* _refresh user-id))
+     :cljs (loading/region-success {:total 0 :inactive 0 :due-today 0 :due-week 0})))
+
+(defn studied-series-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :learn-studied-series
+       (fn []
+       (let [studied-map (into {} (map (juxt :d :c) (db/get-study-calendar user-id)))]
+         ;; The chart ends yesterday. Today has its own KPI.
+         (fill-series -14 14 studied-map))))
+     :cljs (loading/region-success [])))
+
+(defn future-due-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :learn-future-due
+       (fn []
+       (let [due-map (into {} (map (fn [row] [(str (:review_date row)) (:count row)])
+                                (db/get-review-calendar user-id 30)))]
+         {:backlog (db/get-overdue-count user-id)
+          :days (fill-series 0 31 due-map)})))
+     :cljs (loading/region-success {:backlog 0 :days []})))
+
+(defn learn-kpis-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :learn-kpis
+       (fn []
+       (let [summary (db/get-queue-summary user-id)
+             today (.toString (java.time.LocalDate/now))
+             studied-today (->> (db/get-study-calendar user-id)
+                             (some #(when (= today (:d %)) (:c %)))
+                             (or 0))]
+         {:due-today (:due-today summary)
+          :studied-today studied-today
+          :due-week (:due-week summary)
+          :streak (db/get-study-streak user-id)
+          :reviews (db/get-review-counts user-id)})))
+     :cljs (loading/region-success
+             {:due-today 0 :studied-today 0 :due-week 0 :streak 0
+              :reviews {:all-time 0 :this-week 0}})))
+
+(defn status-breakdown-result* [_refresh user-id]
+  #?(:clj
+     (read-region/measured-result :learn-status
+       #(db/get-status-breakdown user-id))
+     :cljs (loading/region-success {:active 0 :done 0 :dismissed 0})))
 
 ;; Dashboard UI
 
@@ -277,169 +320,241 @@
         (dom/span (dom/props {:class "soon-badge"}) (dom/text "Soon")))
       (dom/div (dom/props {:class "teaser-promise"}) (dom/text promise)))))
 
-(e/defn Dashboard [dash due-today due-week]
+(e/defn KpiStrip [kpis]
+  (e/client
+    (dom/div (dom/props {:class "kpi-strip"})
+      (Kpi-tile nil (str (:due-today kpis)) "due today")
+      (Kpi-tile nil (str (:studied-today kpis)) "studied today")
+      (Kpi-tile nil (str (:due-week kpis)) "due over 7 days")
+      (Kpi-tile nil (str (:streak kpis)) "day streak")
+      (Kpi-tile nil (str (:this-week (:reviews kpis))) "reviews this week")
+      (Kpi-tile nil (str (:all-time (:reviews kpis))) "reviews all-time"))))
+
+(e/defn DashboardRegionFailure [error height]
+  (e/client
+    (dom/div
+      (dom/props {:class "dash-card progressive-region-failed"
+                  :style {:min-height height}
+                  :role "status"})
+      (dom/text (str "Could not load this section. " error)))))
+
+(e/defn LearnDashboard [revision user-id]
   (e/client
     (dom/div (dom/props {:class "learn-dashboard"})
-      (dom/div (dom/props {:class "kpi-strip"})
-        (Kpi-tile nil (str due-today) "due today")
-        (Kpi-tile nil (str (:studied-today dash)) "studied today")
-        (Kpi-tile nil (str due-week) "due over 7 days")
-        (Kpi-tile nil (str (:streak dash)) "day streak")
-        (Kpi-tile nil (str (:this-week (:reviews dash))) "reviews this week")
-        (Kpi-tile nil (str (:all-time (:reviews dash))) "reviews all-time"))
+      (loading/WithLatestRegion [revision user-id :kpis]
+        (e/fn []
+          (e/server
+            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                            (e/watch (us/get-atom user-id :queue-mutations)))]
+              (e/Offload #(assoc (learn-kpis-result* refresh user-id)
+                            :request-key [refresh user-id :kpis])))))
+        (e/fn [kpis phase error]
+          (dom/div
+            (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
+            (KpiStrip kpis)
+            (loading/RegionNotice phase error)))
+        (e/fn [_phase] (loading/SkeletonBlock "77px"))
+        (e/fn [error] (DashboardRegionFailure error "77px")))
+
       (dom/div (dom/props {:class "dash-charts"})
-        (Chart-card "Studied · last 14 days" (:studied dash))
-        (dom/div (dom/props {:class "dash-card"})
-          (dom/div (dom/props {:class "dash-cap"}) (dom/text "Future due · backlog + 30 days"))
-          (Future-due-chart (:future-due dash))))
-      (Status-bar (:status dash))
+        (loading/WithLatestRegion [revision user-id :studied]
+          (e/fn []
+            (e/server
+              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                              (e/watch (us/get-atom user-id :queue-mutations)))]
+                (e/Offload #(assoc (studied-series-result* refresh user-id)
+                              :request-key [refresh user-id :studied])))))
+          (e/fn [studied phase error]
+            (dom/div
+              (dom/props {:class (str "learn-chart-region"
+                                  (when (= phase :refreshing)
+                                    " progressive-region-refreshing"))})
+              (Chart-card "Studied · last 14 days" studied)
+              (loading/RegionNotice phase error)))
+          (e/fn [_phase] (loading/SkeletonBlock "184px"))
+          (e/fn [error] (DashboardRegionFailure error "184px")))
+        (loading/WithLatestRegion [revision user-id :future-due]
+          (e/fn []
+            (e/server
+              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                              (e/watch (us/get-atom user-id :queue-mutations)))]
+                (e/Offload #(assoc (future-due-result* refresh user-id)
+                              :request-key [refresh user-id :future-due])))))
+          (e/fn [future-due phase error]
+            (dom/div
+              (dom/props {:class (str "learn-chart-region"
+                                  (when (= phase :refreshing)
+                                    " progressive-region-refreshing"))})
+              (dom/div (dom/props {:class "dash-card"})
+                (dom/div (dom/props {:class "dash-cap"})
+                  (dom/text "Future due · backlog + 30 days"))
+                (Future-due-chart future-due))
+              (loading/RegionNotice phase error)))
+          (e/fn [_phase] (loading/SkeletonBlock "184px"))
+          (e/fn [error] (DashboardRegionFailure error "184px"))))
+
+      (loading/WithLatestRegion [revision user-id :status]
+        (e/fn []
+          (e/server
+            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                            (e/watch (us/get-atom user-id :queue-mutations)))]
+              (e/Offload #(assoc (status-breakdown-result* refresh user-id)
+                            :request-key [refresh user-id :status])))))
+        (e/fn [status phase error]
+          (dom/div
+            (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
+            (Status-bar status)
+            (loading/RegionNotice phase error)))
+        (e/fn [_phase] (loading/SkeletonBlock "94px"))
+        (e/fn [error] (DashboardRegionFailure error "94px")))
+
       (dom/div (dom/props {:class "dash-teasers"})
         (Teaser-card "Total study time" "See how long you actually study.")
         (Teaser-card "Expected study time" "Know how long your queue will take.")))))
 
+(e/defn StartLearningRegion [revision user-id navigate! viewer-nav]
+  (e/client
+    (dom/div (dom/props {:class "learn-start-region"})
+      (loading/WithLatestRegion [revision user-id :queue-summary]
+        (e/fn []
+          (e/server
+            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                            (e/watch (us/get-atom user-id :queue-mutations)))]
+              (e/Offload #(assoc (queue-summary-result* refresh user-id)
+                            :request-key [refresh user-id :queue-summary])))))
+        (e/fn [summary phase error]
+          (let [due-today (:due-today summary)
+                session-active? (= :learn-session (:type viewer-nav))]
+            (when (pos? due-today)
+              (dom/button
+                (dom/props {:class "btn btn-primary learn-start-button"})
+                (dom/text (if session-active? "Resume Learning" "Start Learning"))
+                (dom/On "click"
+                  (fn [_]
+                    (if session-active?
+                      (navigate! :viewer)
+                      (navigate! :viewer (nav/nav-learn-session))))
+                  nil)))
+            (loading/RegionNotice phase error)))
+        (e/fn [_phase] (loading/SkeletonBlock "44px"))
+        (e/fn [error]
+          (dom/div
+            (dom/props {:class "progressive-region-failed" :role "status"})
+            (dom/text (str "Could not load the learning summary. " error))))))))
+
+(e/defn QueueRow [item i navigate!]
+  (e/client
+    (let [item-status (or (:status item) "active")
+          inactive? (not= item-status "active")
+          kind (:kind item)
+          due-label (:due-label item)
+          due-date (:due-date item)
+          display-title (or (:display-title item) "")
+          id (:id item)
+          source-container (:source-container item)
+          [badge-text badge-color] (bibform/topic-badge kind source-container)]
+      (dom/tr
+        (dom/props {:class (when (even? i) "row-alt")
+                    :role "row"
+                    :style {:opacity (if inactive? "0.6" "1")
+                            :--order i}})
+        (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-topic id :learn))) nil)
+        (dom/td
+          (dom/props {:role "cell" :class "learn-queue-document"})
+          (dom/span
+            (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
+            (dom/text badge-text))
+          (dom/span (dom/props {:class "learn-queue-title"}) (dom/text display-title)))
+        (dom/td
+          (dom/props {:role "cell"
+                      :class "learn-queue-due"
+                      :style {:color (case due-label
+                                       "done" "var(--color-success-dark)"
+                                       "var(--color-text-secondary)")}})
+          (dom/text due-label))
+        (dom/td
+          (dom/props {:role "cell" :class "learn-queue-date"})
+          (dom/text (or due-date "—")))))))
+
+(e/defn QueueTable [revision user-id navigate!]
+  (e/client
+    (let [grid-cols "1fr 90px 120px"
+          row-height 36
+          visible-rows 12]
+      (dom/div
+        (dom/props {:class "table-frame"
+                    :role "table" :aria-label "Due topics"})
+        (dom/table
+          (dom/props {:role "presentation" :class "learn-queue-header"
+                      :style {:--grid-cols grid-cols}})
+          (dom/thead
+            (dom/props {:role "rowgroup"})
+            (dom/tr (dom/props {:role "row"})
+              (dom/th (dom/props {:role "columnheader"}) (dom/text "Document"))
+              (dom/th (dom/props {:role "columnheader"}) (dom/text "Due"))
+              (dom/th (dom/props {:role "columnheader"}) (dom/text "Date")))))
+        (loading/WithLatestServerRegion [revision user-id :queue]
+          (e/fn []
+            (e/server
+              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
+                              (e/watch (us/get-atom user-id :queue-mutations)))]
+                (e/Offload #(assoc (queue-result* refresh user-id)
+                              :request-key [refresh user-id :queue])))))
+          (e/fn [queue phase error]
+            (let [items-vec (e/server (:rows queue))
+                  item-count (e/server (count items-vec))]
+              (case (e/snapshot (route-timing/mark-first-useful! :learn :queue))
+                (dom/div
+                  (dom/props {:role "rowgroup"
+                              :class (str "learn-queue-scroll"
+                                       (when (= phase :refreshing)
+                                         " progressive-region-refreshing"))
+                              :style {:max-height (str (* row-height visible-rows) "px")
+                                      :overflow-y "auto"
+                                      :min-height (if (zero? item-count) "72px" "0")
+                                      :position "relative" :scrollbar-gutter "stable"}})
+                  (let [[offset limit] (Scroll-window row-height item-count dom/node
+                                         {:overquery-factor 2})]
+                    (dom/props {:class "tape-scroll"
+                                :style {:--count item-count
+                                        :--grid-cols grid-cols
+                                        :--row-height (str row-height "px")}})
+                    (dom/table
+                      (dom/props {:role "presentation"})
+                      (e/for [i (Tape offset limit)]
+                        (when-let [item (e/server (nth items-vec i nil))]
+                          (QueueRow item i navigate!)))))
+                  (when (zero? item-count)
+                    (dom/div
+                      (dom/props {:class "learn-queue-empty" :role "status"})
+                      (dom/text "Nothing is due.")))
+                  (loading/RegionNotice phase error)))))
+          (e/fn [_phase]
+            (dom/div (dom/props {:class "learn-queue-loading"})
+              (loading/SkeletonRows 6 "36px")))
+          (e/fn [error]
+            (dom/div
+              (dom/props {:class "learn-queue-failed" :role "status"})
+              (dom/text (str "The queue could not load. This does not mean that you are caught up. "
+                          error)))))))))
+
 (e/defn LearnOverview [user-id navigate! viewer-nav]
   (e/client
-    (dom/div
-      (dom/props {:class "page-container"
-                  :style {:height "100%" :display "flex" :flex-direction "column"}})
-
-      (let [refresh (e/server (+ (e/watch (us/get-atom user-id :refresh))
-                                (e/watch (us/get-atom user-id :queue-mutations))))
-            summary (e/server (e/Offload #(get-queue-summary* refresh user-id)))
-            ;; Server-form binding: the whole result stays server-side and each
-            ;; use pulls only what it needs. :rows reads below are windowed.
-            queue (e/server (e/Offload #(prepare-queue-rows refresh user-id)))
-            items-vec (e/server (:rows queue))
-            item-count (e/server (count (:rows queue)))
-            queue-error (e/server (:error queue))
-            dash (e/server (e/Offload #(dashboard-data* refresh user-id)))
-            due-today (:due-today summary)]
-
-        ;; Header: full-width Start Learning (only when something is due;
-        ;; stats now live in the dashboard's KPI tiles below).
-        (when (pos? due-today)
-          (let [session-active? (= :learn-session (:type viewer-nav))]
-            (dom/button
-              (dom/props {:class "btn btn-primary"
-                          :style {:width "100%" :padding "12px 24px" :font-size "16px"
-                                  :font-weight "600" :margin-bottom "16px" :flex-shrink "0"}})
-              (dom/text (if session-active? "Resume Learning" "Start Learning"))
-              (dom/On "click"
-                (fn [_]
-                  (if session-active?
-                    (navigate! :viewer)
-                    (navigate! :viewer (nav/nav-learn-session))))
-                nil))))
-
-        (let [grid-cols "1fr 90px 120px"
-              row-height 36
-              visible-rows 12]
-          ;; ONE ARIA table spans the two native tables (header + virtual-
-          ;; scrolled body). A physical merge would put the thead inside the
-          ;; tape-scroll table, whose absolutely-positioned rows break sticky
-          ;; headers — so the natives become role=presentation and explicit
-          ;; row/columnheader/cell roles restore the header-cell association
-          ;; (WCAG 1.3.1) under this wrapper's role=table.
-          (dom/div
-            (dom/props {:class "table-frame"
-                        :role "table" :aria-label "Due topics"
-                        :style {:display "flex" :flex-direction "column" :min-height "0"}})
-
-            ;; Fixed header
-            (dom/table
-              (dom/props {:role "presentation"
-                          :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
-              (dom/thead
-                (dom/props {:role "rowgroup" :style {:display "contents"}})
-                (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
-                  (dom/tr
-                    (dom/props {:role "row" :style {:display "contents"}})
-                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
-                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "center"})}) (dom/text "Due"))
-                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "right" :padding "8px 10px"})}) (dom/text "Date"))))))
-
-            ;; Scrollable body
-            (dom/div
-              (dom/props {:role "rowgroup"
-                          :style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})]
-                (dom/props {:class "tape-scroll"
-                            :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
-                (dom/table
-                  (dom/props {:role "presentation"
-                              :style {:width "100%" :font-size "13px"}})
-                  (if (pos? item-count)
-                    (e/for [i (Tape offset limit)]
-                      (let [item (e/server (nth items-vec i nil))]
-                        (when item
-                          (let [item-status (or (:status item) "active")
-                                inactive? (not= item-status "active")
-                                kind (:kind item)
-                                due-label (:due-label item)
-                                due-date (:due-date item)
-                                display-title (or (:display-title item) "")
-                                id (:id item)
-                                source-container (:source-container item)
-                                [badge-text badge-color] (bibform/topic-badge kind source-container)]
-                            (let [open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))]
-                              (dom/tr
-                                (dom/props {:class (when (even? i) "row-alt")
-                                            :role "row"
-                                            :style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
-                                                    :opacity (if inactive? "0.6" "1")
-                                                    :cursor "pointer" :--order i}})
-                                (dom/On "click" open-topic! nil)
-                              ;; Document (badge + title). Row opens via the tr's
-                              ;; click handler; rows are not keyboard-focusable.
-                              (dom/td
-                                (dom/props {:role "cell"
-                                            :style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
-                                                    :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
-                                (dom/span
-                                  (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
-                                  (dom/text badge-text))
-                                (dom/span
-                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                                  (dom/text display-title)))
-                              ;; Due (relative label)
-                              (dom/td
-                                (dom/props {:role "cell"
-                                            :style {:padding "4px 6px" :text-align "center" :font-size "12px"
-                                                    :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
-                                (dom/text due-label))
-                              ;; Date (absolute next-review date; em dash when unscheduled)
-                              (dom/td
-                                (dom/props {:role "cell"
-                                            :style {:padding "4px 10px" :text-align "right" :font-size "12px"
-                                                    :color "var(--color-text-secondary)"}})
-                                (dom/text (or due-date "—")))))))))
-                    ;; Empty OR failed. A failed query must never read as
-                    ;; "caught up" — that told three users they were done while
-                    ;; 2512 topics waited. The message carries the database
-                    ;; error verbatim, because the only way this fails is a
-                    ;; query defect and the text is what names it.
-                    (dom/tr
-                      (dom/props {:role "row" :style {:height "auto"}})
-                      (dom/td
-                        (dom/props {:role "cell"
-                                    :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                            :color (if queue-error
-                                                     "var(--color-danger-text)"
-                                                     "var(--color-text-secondary)")
-                                            :font-size "13px" :white-space "pre-wrap"}})
-                        (dom/text (cond
-                                    queue-error
-                                    (str "The queue could not load, so this list is empty — "
-                                      "it does NOT mean you are caught up.\n" queue-error)
-
-                                    (pos? (:total summary))
-                                    "Nothing due — you're all caught up."
-
-                                    :else
-                                    "No topics yet. Import a document from the Import tab to start learning."))))))
-                ))))
-
-        (Dashboard dash due-today (:due-week summary))))))
+    (let [!revision (atom ::pending)
+          revision (e/watch !revision)]
+      ;; The client sentinel mounts the shell. The server revision arrives as a
+      ;; sibling update and changes only each data region's request key.
+      (let [server-revision
+            (e/server (+ (e/watch (us/get-atom user-id :refresh))
+                       (e/watch (us/get-atom user-id :queue-mutations))))]
+        (when (not= server-revision revision)
+          (case server-revision (reset! !revision server-revision))))
+      (dom/div
+        (dom/props {:class "page-container"
+                    :style {:height "100%" :display "flex" :flex-direction "column"}})
+        (StartLearningRegion revision user-id navigate! viewer-nav)
+        (QueueTable revision user-id navigate!)
+        (LearnDashboard revision user-id)))))
 
 (e/defn LearnPage [user-id navigate! viewer-nav]
   (LearnOverview user-id navigate! viewer-nav))

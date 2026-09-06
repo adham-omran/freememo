@@ -4,6 +4,7 @@
             [hyperfiddle.router5 :as r]
             [freememo.logging :as log]
             [freememo.navigation :as nav]
+            [freememo.route-timing :as route-timing]
             [freememo.home-page :refer [HomePage]]
             [freememo.settings-page :refer [SettingsPage]]
             [freememo.library-page :refer [LibraryPage]]
@@ -346,11 +347,13 @@
                     navigate! (fn
                                 ([tab]
                                  (trail/record! :nav {:tab tab :from active-tab})
+                                 (route-timing/start-navigation! tab)
                                  (reset! !nav-cmd {:route (nav->route tab) :id (random-uuid)}))
                                 ([tab nav]
                                  (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
                                  (trail/record! :nav {:tab tab :from active-tab
                                                       :nav-type (:type nav)})
+                                 (route-timing/start-navigation! tab)
                                  (reset! !nav-cmd {:route (nav->route tab nav) :id (random-uuid)})))]
 
                 ;; Execute pending navigation via router
@@ -509,35 +512,35 @@
                         (dom/On "click" (fn [_] (navigate! :library)) nil)))))
 
                 ;; Tab content
-                (dom/main
-                  (dom/props {:id "main-content"
-                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
-                  (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                  (when (= active-tab :library)
-                    (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
-                      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
-                        (LibraryPage user-id navigate! refresh))))
-                  (when (= active-tab :search)
-                    (r/pop ; consume 'search from route; SearchPage reads remaining segments
-                      (SearchPage user-id navigate!)))
-                  (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                  (when (= active-tab :knowledge)
-                    (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
-                      (KnowledgePage user-id navigate!)))
-                  (when (= active-tab :graph) (GraphPage user-id navigate!))
-                  (when (= active-tab :quiz) (QuizPage user-id navigate!))
-                  (when (= active-tab :help) (HelpPage))
-                  (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
-                  (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
-                  (when (= active-tab :learn) (LearnPage user-id navigate! nil))
-                  (when (= active-tab :schedule)
-                    (r/pop ; consume 'schedule; SchedulePage reads the id segment
-                      (SchedulePage user-id navigate!)))
-                  (when (= active-tab :curriculum)
-                    (r/pop
-                      (CurriculumPage user-id navigate!)))
-                  (when (= active-tab :viewer)
-                    (ViewerContent user-id enc-key navigate! llm-enabled?)))
+                (case (route-timing/mark-shell! active-tab)
+                  (dom/main
+                    (dom/props {:id "main-content"
+                                :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
+                    (when (= active-tab :home) (HomePage navigate! user-id enc-key))
+                    (when (= active-tab :library)
+                      (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
+                        (LibraryPage user-id navigate!)))
+                    (when (= active-tab :search)
+                      (r/pop ; consume 'search from route; SearchPage reads remaining segments
+                        (SearchPage user-id navigate!)))
+                    (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
+                    (when (= active-tab :knowledge)
+                      (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
+                        (KnowledgePage user-id navigate!)))
+                    (when (= active-tab :graph) (GraphPage user-id navigate!))
+                    (when (= active-tab :quiz) (QuizPage user-id navigate!))
+                    (when (= active-tab :help) (HelpPage))
+                    (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
+                    (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
+                    (when (= active-tab :learn) (LearnPage user-id navigate! nil))
+                    (when (= active-tab :schedule)
+                      (r/pop ; consume 'schedule; SchedulePage reads the id segment
+                        (SchedulePage user-id navigate!)))
+                    (when (= active-tab :curriculum)
+                      (r/pop
+                        (CurriculumPage user-id navigate!)))
+                    (when (= active-tab :viewer)
+                      (ViewerContent user-id enc-key navigate! llm-enabled?))))
 
                 ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
                 (ToastStack user-id navigate!)

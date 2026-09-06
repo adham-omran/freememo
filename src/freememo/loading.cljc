@@ -15,6 +15,48 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
 
+(def ^:private no-region-value ::no-region-value)
+
+(defn region-success
+  "Create a successful result for WithLatestRegion.
+
+   Pre : value is bounded, or the caller keeps it server-sited with
+         WithLatestServerRegion.
+   Post: the result has one successful value."
+  ([value]
+   {:ok? true :value value})
+  ([request-key value]
+   {:ok? true :request-key request-key :value value}))
+
+(defn region-failure
+  "Create a failed result for WithLatestRegion.
+
+   Pre : error is safe to show to the user.
+   Post: the result has no successful value."
+  ([error]
+   {:ok? false :error error})
+  ([request-key error]
+   {:ok? false :request-key request-key :error error}))
+
+(defn region-phase
+  "Return the visible phase for one progressive region.
+
+   Pre : state came from WithLatestRegion.
+   Post: returns cold, ready, refreshing, failed, or stale-error.
+   Invariant: a failure never changes a successful value into an empty state."
+  [state request-key]
+  (let [{:keys [value settled-key error]} state
+        has-value? (if (contains? state :has-value?)
+                     (:has-value? state)
+                     (not= no-region-value value))
+        current-settled? (= settled-key request-key)]
+    (cond
+      (and current-settled? error has-value?) :stale-error
+      (and current-settled? error) :failed
+      (and has-value? (not current-settled?)) :refreshing
+      has-value? :ready
+      :else :cold)))
+
 (e/defn Spinner
   "The app's CSS spinner (index.css `.spinner`), centered, with an optional label.
    Pre: `label` is a string or nil. Post: an inline spinner; label text when given."
@@ -26,6 +68,132 @@
                            :gap "8px" :padding "24px 8px" :color "var(--color-text-secondary)"}})
        (dom/span (dom/props {:class "spinner"}))
        (when label (dom/text label))))))
+
+(e/defn SkeletonBlock
+  "Render one stable placeholder block.
+
+   Pre : height is a CSS length.
+   Post: layout reserves that height while content is cold."
+  [height]
+  (e/client
+    (dom/div
+      (dom/props {:class "skeleton progressive-skeleton"
+                  :aria-hidden "true"
+                  :style {:height height}}))))
+
+(e/defn SkeletonRows
+  "Render fixed-height placeholders for a bounded table region."
+  [row-count row-height]
+  (e/client
+    (dom/div (dom/props {:class "progressive-skeleton-rows" :aria-hidden "true"})
+      (e/for [i (range row-count)]
+        (dom/div
+          (dom/props {:class "skeleton progressive-skeleton-row"
+                      :style {:height row-height}
+                      :key i}))))))
+
+(e/defn RegionNotice
+  "Render a local region failure without replacing successful content."
+  [phase error]
+  (e/client
+    (when (#{:failed :stale-error} phase)
+      (dom/div
+        (dom/props {:class (str "progressive-region-notice "
+                            (if (= phase :stale-error)
+                              "progressive-region-notice-stale"
+                              "progressive-region-notice-failed"))
+                    :role "status"})
+        (dom/text (if (= phase :stale-error)
+                    (str "Could not refresh. Showing the last result. " error)
+                    (str "Could not load this section. " error)))))))
+
+(e/defn WithLatestRegion
+  "Render one bounded data region with stable stale-while-refresh behavior.
+
+   `Thunk` must return region-success or region-failure.
+
+   Pre : request-key contains every input that changes the result.
+         The successful value is bounded and can cross to the client.
+   Post: Loading receives cold while no value exists.
+         Loaded receives the last successful value, phase, and local error.
+         Failed receives a cold-load error.
+   Invariant: a refresh or refresh failure keeps the last successful value."
+  [request-key Thunk Loaded Loading Failed]
+  (e/client
+    (let [!state (atom {:value no-region-value
+                        :settled-key ::not-settled
+                        :error nil})
+          state (e/watch !state)]
+      ;; A pending e/Offload result is empty e/amb. This statement then stops,
+      ;; while the sibling render path continues from the saved client state.
+      (let [outcome (Thunk)]
+        (when (and (not (:pending? outcome))
+                (or (not= (or (:request-key outcome) request-key)
+                      (:settled-key state))
+                    (not= (:error outcome) (:error state))
+                    (and (:ok? outcome)
+                         (not= (:value outcome) (:value state)))))
+          (case outcome
+            (if (:ok? outcome)
+              (reset! !state {:value (:value outcome)
+                              :settled-key (or (:request-key outcome) request-key)
+                              :error nil})
+              (swap! !state assoc
+                :settled-key (or (:request-key outcome) request-key)
+                :error (or (:error outcome) "Unknown error"))))))
+      (let [phase (region-phase state request-key)]
+        (case phase
+          :cold (Loading phase)
+          :failed (Failed (:error state))
+          (Loaded (:value state) phase (:error state)))))))
+
+(e/defn WithLatestServerRegion
+  "Render one collection region without moving the collection to the client.
+
+   `Thunk` must return region-success or region-failure.
+
+   Pre : request-key contains every input that changes the result.
+         Loaded sites all collection reads on the server.
+   Post: Loading receives cold while no collection exists.
+         Loaded receives the last successful server value, phase, and error.
+         Failed receives a cold-load error.
+   Invariant: only readiness metadata crosses before Loaded requests a row."
+  [request-key Thunk Loaded Loading Failed]
+  (e/client
+    (let [!metadata (atom {:has-value? false
+                           :settled-key ::not-settled
+                           :error nil})
+          metadata (e/watch !metadata)
+          region-state
+          (e/server
+            (e/with-cycle [previous {:value no-region-value
+                                     :settled-key ::not-settled
+                                     :error nil}]
+              (let [outcome (Thunk)]
+                (cond
+                  (:pending? outcome) previous
+                  (:ok? outcome)
+                  {:value (:value outcome)
+                   :settled-key (or (:request-key outcome) request-key)
+                   :error nil}
+                  :else
+                  (assoc previous
+                    :settled-key (or (:request-key outcome) request-key)
+                    :error (or (:error outcome) "Unknown error"))))))]
+      ;; Transfer three scalar fields. The collection stays in region-state on
+      ;; the server and crosses only through Loaded's explicit row reads.
+      (let [next-metadata
+            (e/server
+              {:has-value? (not= no-region-value (:value region-state))
+               :settled-key (:settled-key region-state)
+               :error (:error region-state)})]
+        (when (not= next-metadata metadata)
+          (case next-metadata (reset! !metadata next-metadata))))
+      (let [phase (region-phase metadata request-key)]
+        (case phase
+          :cold (Loading phase)
+          :failed (Failed (:error metadata))
+          (Loaded (e/server (:value region-state)) phase (:error metadata)))))))
 
 (e/defn WithLoading
   "Render `Loading` while the server value from `Thunk` is pending, then `(Loaded value)`.
