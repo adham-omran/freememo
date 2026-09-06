@@ -383,9 +383,12 @@
 (defn- start-hop-rings!
   "Draw hop guides on a Sigma-owned canvas below the graph edges."
   [^js renderer ^js graph !ui]
-  (let [^js ctx2d (.createCanvasContext renderer "hopRings"
-                     #js {:beforeLayer "edges"})
+  (let [_ (.createCanvasContext renderer "hopRings"
+            #js {:beforeLayer "edges"})
         ^js canvas (aget (.getCanvases renderer) "hopRings")
+        ;; Sigma returns the renderer from createCanvasContext. Read the real
+        ;; context from the canvas that Sigma registered.
+        ^js ctx2d (.getContext canvas "2d")
         draw!
         (fn []
           (let [^js dims (.getDimensions renderer)
