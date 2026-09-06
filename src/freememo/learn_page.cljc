@@ -330,6 +330,57 @@
       (Kpi-tile nil (str (:this-week (:reviews kpis))) "reviews this week")
       (Kpi-tile nil (str (:all-time (:reviews kpis))) "reviews all-time"))))
 
+(e/defn LearnKpiSkeleton []
+  (e/client
+    (dom/div (dom/props {:class "kpi-strip" :aria-hidden "true"})
+      (e/for [i (e/diff-by identity (range 6))]
+        (dom/div (dom/props {:class "kpi-tile learn-kpi-skeleton" :key i})
+          (dom/div (dom/props {:class "skeleton learn-kpi-skeleton-value"}))
+          (dom/div (dom/props {:class "skeleton learn-kpi-skeleton-label"})))))))
+
+(e/defn LearnChartSkeleton []
+  (e/client
+    (dom/div
+      (dom/props {:class "dash-card learn-chart-skeleton" :aria-hidden "true"})
+      (dom/div (dom/props {:class "skeleton learn-chart-skeleton-title"}))
+      (dom/div (dom/props {:class "learn-chart-skeleton-plot"})
+        (dom/div (dom/props {:class "learn-chart-skeleton-bars"})
+          (e/for [[i height]
+                  (e/diff-by first
+                    (map-indexed vector ["18%" "55%" "30%" "72%" "42%" "64%" "24%" "48%"]))]
+            (dom/span
+              (dom/props {:class "skeleton learn-chart-skeleton-bar"
+                          :style {:height height}
+                          :key i}))))))))
+
+(e/defn LearnStatusSkeleton []
+  (e/client
+    (dom/div
+      (dom/props {:class "dash-card learn-status-skeleton" :aria-hidden "true"})
+      (dom/div (dom/props {:class "skeleton learn-status-skeleton-title"}))
+      (dom/div (dom/props {:class "skeleton learn-status-skeleton-bar"}))
+      (dom/div (dom/props {:class "learn-status-skeleton-legend"})
+        (e/for [i (e/diff-by identity (range 2))]
+          (dom/div (dom/props {:class "learn-status-skeleton-item" :key i})
+            (dom/span (dom/props {:class "skeleton learn-status-skeleton-dot"}))
+            (dom/span (dom/props {:class "skeleton learn-status-skeleton-label"}))))))))
+
+(e/defn LearnQueueSkeleton []
+  (e/client
+    (dom/div
+      (dom/props {:class "learn-queue-loading" :aria-hidden "true"})
+      (e/for [i (e/diff-by identity (range 6))]
+        (dom/div
+          (dom/props {:class "learn-queue-skeleton-row"
+                      :style {:--skeleton-title-width
+                              (nth ["58%" "72%" "46%" "64%" "52%" "69%"] i)}
+                      :key i})
+          (dom/div (dom/props {:class "learn-queue-skeleton-document"})
+            (dom/span (dom/props {:class "skeleton learn-queue-skeleton-badge"}))
+            (dom/span (dom/props {:class "skeleton learn-queue-skeleton-title"})))
+          (dom/span (dom/props {:class "skeleton learn-queue-skeleton-due"}))
+          (dom/span (dom/props {:class "skeleton learn-queue-skeleton-date"})))))))
+
 (e/defn DashboardRegionFailure [error height]
   (e/client
     (dom/div
@@ -353,7 +404,7 @@
             (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
             (KpiStrip kpis)
             (loading/RegionNotice phase error)))
-        (e/fn [_phase] (loading/SkeletonBlock "77px"))
+        (e/fn [_phase] (LearnKpiSkeleton))
         (e/fn [error] (DashboardRegionFailure error "77px")))
 
       (dom/div (dom/props {:class "dash-charts"})
@@ -371,7 +422,7 @@
                                     " progressive-region-refreshing"))})
               (Chart-card "Studied · last 14 days" studied)
               (loading/RegionNotice phase error)))
-          (e/fn [_phase] (loading/SkeletonBlock "184px"))
+          (e/fn [_phase] (LearnChartSkeleton))
           (e/fn [error] (DashboardRegionFailure error "184px")))
         (loading/WithLatestRegion [revision user-id :future-due]
           (e/fn []
@@ -390,7 +441,7 @@
                   (dom/text "Future due · backlog + 30 days"))
                 (Future-due-chart future-due))
               (loading/RegionNotice phase error)))
-          (e/fn [_phase] (loading/SkeletonBlock "184px"))
+          (e/fn [_phase] (LearnChartSkeleton))
           (e/fn [error] (DashboardRegionFailure error "184px"))))
 
       (loading/WithLatestRegion [revision user-id :status]
@@ -405,7 +456,7 @@
             (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
             (Status-bar status)
             (loading/RegionNotice phase error)))
-        (e/fn [_phase] (loading/SkeletonBlock "94px"))
+        (e/fn [_phase] (LearnStatusSkeleton))
         (e/fn [error] (DashboardRegionFailure error "94px")))
 
       (dom/div (dom/props {:class "dash-teasers"})
@@ -529,9 +580,7 @@
                       (dom/props {:class "learn-queue-empty" :role "status"})
                       (dom/text "Nothing is due.")))
                   (loading/RegionNotice phase error)))))
-          (e/fn [_phase]
-            (dom/div (dom/props {:class "learn-queue-loading"})
-              (loading/SkeletonRows 6 "36px")))
+          (e/fn [_phase] (LearnQueueSkeleton))
           (e/fn [error]
             (dom/div
               (dom/props {:class "learn-queue-failed" :role "status"})

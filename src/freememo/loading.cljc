@@ -86,7 +86,7 @@
   [row-count row-height]
   (e/client
     (dom/div (dom/props {:class "progressive-skeleton-rows" :aria-hidden "true"})
-      (e/for [i (range row-count)]
+      (e/for [i (e/diff-by identity (range row-count))]
         (dom/div
           (dom/props {:class "skeleton progressive-skeleton-row"
                       :style {:height row-height}
