@@ -24,8 +24,8 @@
 
 (def workflows
   "Comprehensive tour of FreeMemo, section by section: importing, reading,
-   card-making (basic, score, image-occlusion), Anki sync, review, the
-   knowledge graph, quizzing, finding/organizing, and shortcuts.
+   assistant chat, schedules, curricula, exams, card-making, Anki sync,
+   review, the knowledge graph, quizzing, finding/organizing, and shortcuts.
    Each step's label names the real control (with its shortcut where one exists)."
   [{:title "Importing content"
     :intro "Get PDFs, EPUBs, articles, and photos in. Everything starts on the Import tab."
@@ -52,9 +52,37 @@
    {:title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
     :steps [["Open it" "Open the Assistant panel on the right. New Chat starts a saved conversation about the current document."]
-            ["Pick a mode" "General answers directly and names the page it came from. Tutor guides you with questions. Socratic does the same in a fixed \"Where you are / Consider next\" shape. Each chat keeps its own mode."]
+            ["Set the panel height" "Settings → AI Features → Assistant panel height. Content area stops above the card table. Full workspace extends beside it."]
+            ["Pick a mode" "Use the Mode dropdown below the composer. General answers directly. Tutor asks guiding questions. Socratic uses a fixed learning structure. Each chat keeps its mode."]
             ["Ask about the page" "Type a question about what you're reading. Every mode is grounded in the page in front of you. Markdown and math render inline."]
-            ["Pick its model" "Use the model dropdown to set the assistant model for this document. Leave it on your default otherwise."]]}
+            ["Reference another document" "Type @ in the composer and pick a document. The menu stays above the composer, and the selected document becomes a removable chip."]
+            ["Check source evidence" "Select an evidence link to read its retained excerpt. Evidence from another document includes Open document in new tab."]
+            ["Pick its model" "Use the Model dropdown below the composer to set the model for this document. Leave it on your default otherwise."]
+            ["Manage an answer" "Answers stream into the saved chat. Stop an active answer. Answer details shows its request, timing, provider, and sources. Failed answers offer Retry."]]}
+   {:title "Planning a reading schedule"
+    :intro "Plan a document page range to a target date, with reading and Anki review work in one forecast."
+    :steps [["Create a document schedule" "Schedule → New schedule. Pick a document, target date, page range, and daily review capacity. A blank last page means the document end."]
+            ["Read the dashboard" "Curriculum schedules and document schedules appear separately. A curriculum card shows its remaining study minutes. Select a document schedule to open its forecast."]
+            ["Follow the reading pill" "The Viewer toolbar shows today's page quota and deadline for the schedule that covers the current page. Hover to see your pace."]
+            ["Inspect the plan" "Study plan is the default view. It lists daily pages and reviews through card maturation. Switch to Pages for each page's state."]
+            ["Handle a past target" "After the target passes, the report shows the overdue time, page coverage, and expected card maturation date. You can move the target."]
+            ["Archive or restore" "Archive removes a schedule from active work and its daily load. Open Archived in the schedule list to restore it."]]}
+   {:title "Building a curriculum"
+    :intro "Arrange imported material into an ordered study path with blocks, schedule controls, and progress gates."
+    :steps [["Create it" "Curriculum → New curriculum. Name it and set a target date, daily study minutes, study days, or a useful combination."]
+            ["Add blocks and materials" "Add blocks in study order. In an unlocked block, Add material searches all imported sources. Use the type filters to narrow the list."]
+            ["Order the work" "Use the arrow controls to move blocks and materials. Edit a material's minute estimate when the default is wrong."]
+            ["Set the focus" "Make one available block the focus. Later blocks unlock after you pass the prior block exam. The override can skip that exam."]
+            ["Track readiness" "Mark a material studied, build its Anki cards, and pass its exam. The curriculum schedule shows the next tasks and estimated finish."]
+            ["Edit or delete" "Edit schedule controls from the curriculum header. Use the pencil to rename a block. Delete curriculum removes its blocks and exams, but keeps imported documents."]]}
+   {:title "Taking curriculum exams"
+    :intro "Generate evidence-bound material and block exams, save answer drafts, and keep a reviewable grade history."
+    :steps [["Generate an exam" "Select Generate exam on a material or block. Generation shows progress and survives page changes. Use Activity to monitor or cancel it."]
+            ["Review and approve" "The exam route shows the blueprint, evidence, and questions. Use Edit to change a draft. Approve freezes the version used by later sittings."]
+            ["Take or resume it" "Take exam opens five answer fields. Draft answers save when you leave a field. Reloading the sitting route restores the same exam and elapsed time."]
+            ["Grade it" "Submit freezes the answers and requests an AI grade. Use Regrade with AI when needed. A failed result can create a targeted retry exam."]
+            ["Cancel or archive" "Cancel this sitting closes an unsubmitted attempt without a grade. Archive removes a cancelled sitting from the list. Submitted sittings remain in history."]
+            ["Understand credits" "Paid actions show a credit notice before use. Completed forms and grades show their recorded charge. AI Costs lists every returned model charge."]]}
    {:title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [["Generate ({generate})" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
@@ -110,7 +138,8 @@
     :intro "Search, browse, reshape, and review your growing library."
     :steps [["Search" "The Search tab finds topics by their text, Fuzzy or Exact. Card text is filtered separately in Library → Cards."]
             ["Browse the Library" "Library toggles between Documents (the knowledge tree) and Cards; Expand All / Collapse All opens the tree. Each document's Done and Synced columns show its progress."]
-            ["Re-nest topics" "Use the Hierarchy tab in the left panel. Drag a row by its ⠿ grip to a new parent. You can also select the grip, then select the destination. Press Esc to cancel."]
+            ["Use the Library on a phone" "Filters stack above the list, document progress uses a compact row, and the row menu provides a large action target."]
+            ["Re-nest topics" "Use Hierarchy, the default left-panel tab. Drag a row by its ⠿ grip to a new parent. Switch to Pins for saved images. Press Esc to cancel a move."]
             ["Review a subset" "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."]]}
    {:title "Keyboard & command palette"
     :intro "Reach any action without hunting for its button."
