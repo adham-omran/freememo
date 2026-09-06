@@ -3,9 +3,10 @@
    owns the Electric lifecycle and calls init!/destroy!/apply-filters! and the
    view and camera functions here.
 
-   Positions are server-computed (sfdp) and FIXED — no client layout runs.
-   Visibility filters and hover/click highlight are pure sigma reducers reading
-   one mutable ui-atom; mutate it, then (.refresh renderer) to repaint.
+   The overview uses server-computed sfdp positions. A selected neighborhood
+   uses a deterministic radial layout so its hop structure stays legible.
+   Visibility filters and hover/click highlight are sigma reducers that read one
+   mutable ui-atom; mutate it, then call (.refresh renderer) to repaint.
 
    sigma + graphology are vendored UMD globals (window.Sigma / window.graphology)
    with NO <script> tag: freememo.vendor-libs injects them the first time the
@@ -57,6 +58,7 @@
       (.addNode g (str id)
         #js {:label (str label)
              :x x :y y
+             :overviewX x :overviewY y
              :size (+ 3 (* 1.4 (js/Math.sqrt (max 1 (or degree 1)))))}))
     (doseq [[i [s t pidx topic]] (map-indexed vector (:edges payload))]
       (let [sk (str s) tk (str t)]
@@ -90,14 +92,84 @@
   (when-let [on-counts (:on-counts @!ui)]
     (on-counts counts)))
 
+(def ^:private neighborhood-label-limit 16)
+
+(defn- visible-edges
+  [model ^js vedges]
+  (filterv #(.has vedges (:id %)) model))
+
+(defn- evenly-spaced
+  [node-ids positions limit]
+  (let [ordered (vec (sort-by (fn [node]
+                                (let [{:keys [x y]} (get positions node)]
+                                  (js/Math.atan2 (- y 0.5) (- x 0.5))))
+                       node-ids))
+        n (count ordered)
+        take-count (min n limit)]
+    (mapv #(nth ordered (int (* % (/ n take-count))))
+      (range take-count))))
+
+(defn- neighborhood-labels
+  "Label a small, evenly spaced sample from both hop rings."
+  [selected {:keys [positions node-ids-by-hop]}]
+  (let [first-labels (evenly-spaced (get node-ids-by-hop 1) positions 10)
+        second-labels (evenly-spaced (get node-ids-by-hop 2) positions
+                        (- neighborhood-label-limit 1 (count first-labels)))
+        label-ids (js/Set.)]
+    (.add label-ids selected)
+    (doseq [node (concat first-labels second-labels)]
+      (.add label-ids node))
+    label-ids))
+
+(defn- restore-overview-layout!
+  [^js graph]
+  (.forEachNode graph
+    (fn [node _]
+      (.setNodeAttribute graph node "x" (.getNodeAttribute graph node "overviewX"))
+      (.setNodeAttribute graph node "y" (.getNodeAttribute graph node "overviewY")))))
+
+(defn- apply-current-layout!
+  "Apply the overview or radial positions once for each distinct view state."
+  [ctx]
+  (let [!ui (:ui ctx)
+        {:keys [view-mode selected depth source pred-set min-degree model vedges]} @!ui
+        layout-key [view-mode selected depth source pred-set min-degree]
+        ^js graph (:graph ctx)
+        ^js renderer (:renderer ctx)]
+    (when (not= layout-key (:layout-key @!ui))
+      (if (= view-mode :neighborhood)
+        (let [edges (visible-edges model vedges)
+              layout (graph-state/neighborhood-layout edges selected)]
+          (doseq [[node {:keys [x y]}] (:positions layout)]
+            (.setNodeAttribute graph node "x" x)
+            (.setNodeAttribute graph node "y" y))
+          (.setCustomBBox renderer #js {:x #js [0 1] :y #js [0 1]})
+          (swap! !ui assoc
+            :layout-key layout-key
+            :hop-by-id (:hop-by-id layout)
+            :hop-radii (:radii layout)
+            :label-node-ids (neighborhood-labels selected layout)))
+        (do
+          (restore-overview-layout! graph)
+          (.setCustomBBox renderer nil)
+          (swap! !ui assoc
+            :layout-key layout-key
+            :hop-by-id nil
+            :hop-radii nil
+            :label-node-ids nil)))
+      true)))
+
 (defn- refresh-visibility!
   [ctx]
   (let [!ui (:ui ctx)
         counts (recompute-visibility! !ui)
-        ^js renderer (:renderer ctx)]
-    (.setSetting renderer "renderEdgeLabels"
-      (= :neighborhood (:view-mode @!ui)))
+        ^js renderer (:renderer ctx)
+        layout-changed? (apply-current-layout! ctx)]
     (.refresh renderer)
+    (when layout-changed?
+      (js/requestAnimationFrame
+        (fn []
+          (.animatedReset (.getCamera renderer) #js {:duration 350}))))
     (when-let [draw! (:draw-minimap! ctx)] (draw!))
     (notify-counts! !ui counts)
     counts))
@@ -118,16 +190,26 @@
 
 (defn- node-reducer [^js g !ui]
   (fn [node data]
-    (let [{:keys [hover selected vnodes colours]} @!ui]
+    (let [{:keys [hover selected vnodes colours view-mode hop-by-id
+                  label-node-ids]} @!ui
+          hop (get hop-by-id node)]
       (cond
         (and vnodes (not (.has vnodes node)))
         (merge-js data {:hidden true})
         (and hover (not= node hover) (not (.areNeighbors g hover node)))
         (merge-js data {:color (:dim colours) :label "" :zIndex 0})
+        (= node hover)
+        (merge-js data {:forceLabel true :zIndex 3})
         (= node selected)
-        (merge-js data {:highlighted true :forceLabel true :zIndex 2})
-        (and selected (.areNeighbors g selected node))
-        (merge-js data {:forceLabel true :zIndex 1})
+        (merge-js data {:highlighted true :forceLabel true :size 13 :zIndex 2})
+        (= view-mode :neighborhood)
+        (merge-js data {:label (if (and label-node-ids (.has label-node-ids node))
+                                 (.-label data) "")
+                        :forceLabel (boolean (and label-node-ids
+                                              (.has label-node-ids node)))
+                        :size (if (= hop 1) (min 6 (.-size data))
+                                (min 4 (.-size data)))
+                        :zIndex (if (= hop 1) 1 0)})
         :else data))))
 
 (defn- edge-reducer
@@ -139,12 +221,14 @@
    every refresh, so this one tracks."
   [^js g !ui]
   (fn [edge data]
-    (let [{:keys [hover vedges colours]} @!ui]
+    (let [{:keys [hover vedges colours view-mode]} @!ui]
       (cond
         (and vedges (not (.has vedges edge)))
         (merge-js data {:hidden true})
         (and hover (not (.hasExtremity g edge hover)))
         (merge-js data {:hidden true})
+        (= view-mode :neighborhood)
+        (merge-js data {:color (:edge colours) :label ""})
         :else (merge-js data {:color (:edge colours)})))))
 
 (defn- inherited-text-colour
@@ -296,6 +380,45 @@
     (.addEventListener mq "change" sync!)
     (fn [] (.disconnect obs) (.removeEventListener mq "change" sync!))))
 
+(defn- start-hop-rings!
+  "Draw hop guides on a Sigma-owned canvas below the graph edges."
+  [^js renderer ^js graph !ui]
+  (let [^js ctx2d (.createCanvasContext renderer "hopRings"
+                     #js {:beforeLayer "edges"})
+        ^js canvas (aget (.getCanvases renderer) "hopRings")
+        draw!
+        (fn []
+          (let [^js dims (.getDimensions renderer)
+                width (.-width dims)
+                height (.-height dims)
+                {:keys [view-mode selected depth hop-radii colours]} @!ui]
+            (.clearRect ctx2d 0 0 width height)
+            (when (and (= view-mode :neighborhood) selected hop-radii)
+              (let [x (.getNodeAttribute graph selected "x")
+                    y (.getNodeAttribute graph selected "y")
+                    ^js center (.graphToViewport renderer #js {:x x :y y})]
+                (.save ctx2d)
+                (set! (.-strokeStyle ctx2d) (:edge colours))
+                (set! (.-lineWidth ctx2d) 1.25)
+                (set! (.-lineCap ctx2d) "round")
+                (.setLineDash ctx2d #js [2 7])
+                (doseq [hop (range 1 (inc depth))]
+                  (when-let [radius (get hop-radii hop)]
+                    (let [^js rim (.graphToViewport renderer
+                                    #js {:x (+ x radius) :y y})
+                          screen-radius (js/Math.abs (- (.-x rim) (.-x center)))]
+                      (.beginPath ctx2d)
+                      (.arc ctx2d (.-x center) (.-y center) screen-radius
+                        0 (* 2 js/Math.PI))
+                      (.stroke ctx2d))))
+                (.restore ctx2d)))))]
+    (.setAttribute canvas "aria-hidden" "true")
+    (set! (.. canvas -style -pointerEvents) "none")
+    (.resize renderer true)
+    (.on renderer "afterRender" draw!)
+    {:draw! draw!
+     :stop! (fn [] (.off renderer "afterRender" draw!))}))
+
 (defn- start-minimap!
   "Draw a non-interactive graph overview and the current camera viewport."
   [ctx container]
@@ -315,8 +438,8 @@
                 (let [xs (array) ys (array)]
                   (.forEachNode graph
                     (fn [node _]
-                      (.push xs (.getNodeAttribute graph node "x"))
-                      (.push ys (.getNodeAttribute graph node "y"))))
+                      (.push xs (.getNodeAttribute graph node "overviewX"))
+                      (.push ys (.getNodeAttribute graph node "overviewY"))))
                   (let [b {:min-x (apply min (array-seq xs))
                            :max-x (apply max (array-seq xs))
                            :min-y (apply min (array-seq ys))
@@ -351,8 +474,8 @@
                     (if (and vnodes (.has vnodes node)) "#5b8def" (:dim colours)))
                   (.beginPath ctx2d)
                   (.arc ctx2d
-                    (->x (.getNodeAttribute graph node "x"))
-                    (->y (.getNodeAttribute graph node "y"))
+                    (->x (.getNodeAttribute graph node "overviewX"))
+                    (->y (.getNodeAttribute graph node "overviewY"))
                     1.25 0 (* 2 js/Math.PI))
                   (.fill ctx2d)))
               (let [dims (.getDimensions renderer)
@@ -423,9 +546,12 @@
             stop-theme-colours! (track-theme-colours! renderer container !ui)
             base-ctx {:renderer renderer :graph g :ui !ui
                       :stop-theme-colours! stop-theme-colours!}
+            hop-rings (start-hop-rings! renderer g !ui)
             minimap (when-let [minimap-container (:minimap-container opts)]
                       (start-minimap! base-ctx minimap-container))
-            ctx (cond-> base-ctx
+            ctx (cond-> (assoc base-ctx
+                          :draw-hop-rings! (:draw! hop-rings)
+                          :stop-hop-rings! (:stop! hop-rings))
                   minimap (assoc :draw-minimap! (:draw! minimap)
                                  :stop-minimap! (:stop! minimap)))]
         (refresh-visibility! ctx)
@@ -446,8 +572,8 @@
 
 (defn apply-filters!
   "Set the filter state. Source is a topic ID or :all. Pred-set is the allowed
-   predicate index set or nil. Min-degree is the k-core threshold. Recompute and
-   repaint. Node positions never move."
+   predicate index set or nil. Min-degree is the k-core threshold. Recompute,
+   lay out the visible view, and repaint."
   [ctx source pred-set min-degree]
   (when ctx
     (swap! (:ui ctx) assoc :source source :pred-set pred-set :min-degree min-degree)
@@ -496,29 +622,31 @@
   "Fit the current visible nodes in the camera with a small margin."
   [ctx]
   (when ctx
-    (let [^js renderer (:renderer ctx)
-          nodes (array)]
-      (.forEach (:vnodes @(:ui ctx))
-        (fn [node]
-          (when-let [data (.getNodeDisplayData renderer node)]
-            (.push nodes data))))
-      (if (zero? (alength nodes))
+    (let [^js renderer (:renderer ctx)]
+      (if (= :neighborhood (:view-mode @(:ui ctx)))
         (reset-camera! ctx)
-        (let [data (array-seq nodes)
-              xs (map #(.-x ^js %) data)
-              ys (map #(.-y ^js %) data)
-              min-x (apply min xs) max-x (apply max xs)
-              min-y (apply min ys) max-y (apply max ys)
-              ^js dims (.getDimensions renderer)
-              aspect (/ (max 1 (.-width dims)) (max 1 (.-height dims)))
-              ratio (max 0.08 (* 1.2 (max (- max-x min-x)
-                                           (* aspect (- max-y min-y)))))
-              ^js camera (.getCamera renderer)]
-          (.animate camera
-            #js {:x (/ (+ min-x max-x) 2)
-                 :y (/ (+ min-y max-y) 2)
-                 :ratio ratio}
-            #js {:duration 350}))))))
+        (let [nodes (array)]
+          (.forEach (:vnodes @(:ui ctx))
+            (fn [node]
+              (when-let [data (.getNodeDisplayData renderer node)]
+                (.push nodes data))))
+          (if (zero? (alength nodes))
+            (reset-camera! ctx)
+            (let [data (array-seq nodes)
+                  xs (map #(.-x ^js %) data)
+                  ys (map #(.-y ^js %) data)
+                  min-x (apply min xs) max-x (apply max xs)
+                  min-y (apply min ys) max-y (apply max ys)
+                  ^js dims (.getDimensions renderer)
+                  aspect (/ (max 1 (.-width dims)) (max 1 (.-height dims)))
+                  ratio (max 0.08 (* 1.2 (max (- max-x min-x)
+                                               (* aspect (- max-y min-y)))))
+                  ^js camera (.getCamera renderer)]
+              (.animate camera
+                #js {:x (/ (+ min-x max-x) 2)
+                     :y (/ (+ min-y max-y) 2)
+                     :ratio ratio}
+                #js {:duration 350}))))))))
 
 (defn find-node-id-by-label
   "First node id whose label contains `q` (case-insensitive), or nil."
@@ -529,23 +657,10 @@
               (when (str/includes? (str/lower-case (str label)) ql) id))
         (:nodes payload)))))
 
-(defn focus-node!
-  "Animate the camera to `entity-id`. Selection is controlled by set-view!."
-  [ctx entity-id]
-  (when (and ctx entity-id)
-    (let [^js renderer (:renderer ctx)
-          ^js graph (:graph ctx)
-          n (str entity-id)]
-      (when (.hasNode graph n)
-        (when-let [^js disp (.getNodeDisplayData renderer n)]
-          (let [^js cam (.getCamera renderer)]
-            (.animate cam
-              #js {:x (.-x disp) :y (.-y disp) :ratio 0.35}
-              #js {:duration 500})))))))
-
 (defn destroy!
-  "Stop the minimap and theme listeners, then kill the renderer."
+  "Stop custom drawing and theme listeners, then kill the renderer."
   [ctx]
   (when-let [stop! (:stop-minimap! ctx)] (stop!))
+  (when-let [stop! (:stop-hop-rings! ctx)] (stop!))
   (when-let [stop! (:stop-theme-colours! ctx)] (stop!))
   (when-let [^js r (:renderer ctx)] (.kill r)))

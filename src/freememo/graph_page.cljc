@@ -151,9 +151,6 @@
 (defn set-view! [ctx mode selected-id depth]
   #?(:cljs (render/set-view! ctx mode selected-id depth) :clj nil))
 
-(defn focus-node! [ctx entity-id]
-  #?(:cljs (render/focus-node! ctx entity-id) :clj nil))
-
 (defn zoom-in! [ctx]
   #?(:cljs (render/zoom-in! ctx) :clj nil))
 
@@ -415,7 +412,6 @@
                   (reset! !ctx nil))))))
         (case (apply-filters! ctx source preds connectedness) nil)
         (case (set-view! ctx view-mode selected-id depth) nil)
-        (case (focus-node! ctx selected-id) nil)
         (GraphToolbar ctx stats view-mode depth (source-title payload source)
           (selected-predicate-count preds n-preds) n-preds
           connectedness filters-open? !filters-open?
