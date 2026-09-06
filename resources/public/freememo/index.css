@@ -6162,14 +6162,24 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     cursor: pointer;
 }
 .graph-text-action:hover { text-decoration: underline; }
-.graph-relation-list { display: grid; gap: 1px; }
+.graph-relation-list {
+    position: relative;
+    display: block;
+    min-height: 36px;
+    max-height: min(360px, 45vh);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+.graph-relation-list table td { padding: 0; }
 .graph-relation-row {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
-    min-height: 32px;
+    width: 100%;
+    height: 36px;
     padding: 4px 3px;
+    box-sizing: border-box;
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 12px;
@@ -6186,6 +6196,15 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     margin: 12px 0;
     color: var(--color-text-secondary);
     font-size: 12px;
+}
+.graph-virtual-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    pointer-events: none;
 }
 
 .typeahead-option-label {
@@ -6331,10 +6350,12 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 .graph-inspector {
+    display: flex;
+    flex-direction: column;
     width: 342px;
     min-width: 0;
     height: 100%;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 20px;
     border-left: 1px solid var(--color-border);
     background: var(--color-bg-card);
@@ -6375,17 +6396,21 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 .graph-inspector-section-heading span { color: var(--color-text-secondary); }
 .graph-inspector-facts {
-    display: grid;
-    gap: 8px;
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
     margin: 10px 0 0;
     padding: 0;
-    list-style: none;
 }
-.graph-inspector-facts > li {
-    padding: 9px 0 !important;
+.graph-inspector-facts table td {
+    padding: 10px 0;
     border-bottom: 1px solid var(--color-bg-subtle);
+    font-size: 13px;
     line-height: 1.55;
 }
+.graph-inspector-fact-row td { cursor: default; }
 
 .graph-empty-state {
     display: flex;

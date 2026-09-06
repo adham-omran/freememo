@@ -7,12 +7,14 @@
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
    [freememo.quiz-feedback :as fb]
+   [freememo.scroll :refer [Scroll-window]]
    [freememo.segmented :as seg]
    [freememo.typeahead :as typeahead]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-graph :as kgg])
    #?(:clj [freememo.user-state :as us])
@@ -95,6 +97,9 @@
     "All documents"
     (or (some (fn [[id title]] (when (= id source) title)) (:docs payload))
       "Document")))
+
+(def ^:private relation-row-height 36)
+(def ^:private fact-row-height 108)
 
 ;; ---------------------------------------------------------------------------
 ;; Server queries
@@ -249,35 +254,51 @@
             (dom/text (str (selected-predicate-count preds n-preds) " of " n-preds))))
         (let [query (forms/Input* "" :type "search" :class "input"
                       :placeholder "Filter relations…" :aria-label "Filter relations")
-              rows (relation-rows payload source query)]
-        (dom/div
-          (dom/props {:class "graph-relation-actions"})
-          (dom/button
-            (dom/props {:type "button" :class "graph-text-action"})
-            (dom/text "Select all")
-            (dom/On "click" (fn [_] (reset! !preds nil)) nil))
-          (dom/button
-            (dom/props {:type "button" :class "graph-text-action"})
-            (dom/text "Select none")
-            (dom/On "click" (fn [_] (reset! !preds #{})) nil)))
-        (dom/div
-          (dom/props {:class "graph-relation-list"})
-          (if (empty? rows)
-            (dom/p (dom/props {:class "graph-filter-empty"})
-              (dom/text "No matching relations"))
-            (e/for [{:keys [idx label count]} (e/diff-by :idx rows)]
-              (let [checked? (pred-checked? preds idx)]
-                (dom/label
-                  (dom/props {:class "graph-relation-row"})
-                  (let [next-checked? (forms/Checkbox checked?
-                                        :aria-label (str "Show " label))]
-                    (when (not= checked? next-checked?)
-                      (reset! !preds
-                        (set-pred-checked @!preds idx n-preds next-checked?))))
-                  (dom/span (dom/props {:class "graph-relation-label" :dir "auto"})
-                    (dom/text label))
-                  (dom/span (dom/props {:class "graph-filter-meta"})
-                    (dom/text count))))))))))))
+              rows (relation-rows payload source query)
+              row-count (count rows)]
+          (dom/div
+            (dom/props {:class "graph-relation-actions"})
+            (dom/button
+              (dom/props {:type "button" :class "graph-text-action"})
+              (dom/text "Select all")
+              (dom/On "click" (fn [_] (reset! !preds nil)) nil))
+            (dom/button
+              (dom/props {:type "button" :class "graph-text-action"})
+              (dom/text "Select none")
+              (dom/On "click" (fn [_] (reset! !preds #{})) nil)))
+          (dom/div
+            (dom/props {:class "graph-relation-list tape-scroll"
+                        :style {:--row-height (str relation-row-height "px")
+                                :--grid-cols "1fr"}})
+            (let [[offset limit] (Scroll-window relation-row-height row-count dom/node
+                                   {:overquery-factor 1.5
+                                    :reset-key [source query]})]
+              (dom/props {:style {:--count row-count}})
+              (dom/table
+                (dom/props {:style {:width "100%"}})
+                (e/for [i (Tape offset limit)]
+                  (let [{:keys [idx label count] :as row} (nth rows i nil)]
+                    (when row
+                      (let [checked? (pred-checked? preds idx)]
+                        (dom/tr
+                          (dom/props {:style {:--order i}})
+                          (dom/td
+                            (dom/label
+                              (dom/props {:class "graph-relation-row"})
+                              (let [next-checked? (forms/Checkbox checked?
+                                                    :aria-label (str "Show " label))]
+                                (when (not= checked? next-checked?)
+                                  (reset! !preds
+                                    (set-pred-checked @!preds idx n-preds
+                                      next-checked?))))
+                              (dom/span
+                                (dom/props {:class "graph-relation-label" :dir "auto"})
+                                (dom/text label))
+                              (dom/span (dom/props {:class "graph-filter-meta"})
+                                (dom/text count))))))))))
+              (when (zero? row-count)
+                (dom/p (dom/props {:class "graph-filter-empty graph-virtual-empty"})
+                  (dom/text "No matching relations"))))))))))
 
 (e/defn FiltersPanel
   [payload !selected-id selected-id !source !preds preds
@@ -422,6 +443,36 @@
           (dom/props {:class "graph-scene-hint"})
           (dom/text "Drag to pan · Scroll to zoom · Select a concept to inspect it"))))))
 
+(e/defn ConnectedFacts [facts selected-id !linked-entity navigate!]
+  (e/client
+    (let [row-count (count facts)]
+      (dom/div
+        (dom/props {:class "graph-inspector-facts tape-scroll"
+                    :style {:--row-height (str fact-row-height "px")
+                            :--grid-cols "1fr"}})
+        (let [[offset limit] (Scroll-window fact-row-height row-count dom/node
+                               {:overquery-factor 1.5
+                                :reset-key selected-id})]
+          (dom/props {:style {:--count row-count}})
+          (dom/table
+            (dom/props {:aria-label "Connected facts" :style {:width "100%"}})
+            (e/for [i (Tape offset limit)]
+              (let [fact (nth facts i nil)]
+                (when fact
+                  (dom/tr
+                    (dom/props {:class "graph-inspector-fact-row"
+                                :style {:--order i}})
+                    (dom/td
+                      (dom/props {:dir "auto"})
+                      (fb/FactLineContent fact !linked-entity
+                        (fn [topic-id page]
+                          (navigate! :viewer
+                            (nav/nav-topic topic-id :graph page))))))))))
+          (when (zero? row-count)
+            (dom/p
+              (dom/props {:class "graph-filter-empty graph-virtual-empty"})
+              (dom/text "No facts reference this concept"))))))))
+
 (e/defn GraphInspector
   [kg-bump user-id navigate! !selected-id selected-id !view-mode]
   (e/client
@@ -468,15 +519,7 @@
             (dom/props {:class "graph-inspector-section-heading"})
             (dom/strong (dom/text "Connected facts"))
             (dom/span (dom/text (count facts))))
-          (if (empty? facts)
-            (dom/p (dom/props {:class "graph-filter-empty"})
-              (dom/text "No facts reference this concept"))
-            (dom/ul
-              (dom/props {:class "graph-inspector-facts"})
-              (e/for [fact (e/diff-by :id facts)]
-                (fb/FactLine fact !linked-entity
-                  (fn [topic-id page]
-                    (navigate! :viewer (nav/nav-topic topic-id :graph page))))))))))))
+          (ConnectedFacts facts selected-id !linked-entity navigate!))))))
 
 (e/defn GraphEmptyState [navigate!]
   (e/client

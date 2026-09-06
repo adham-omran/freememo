@@ -135,33 +135,38 @@
         (dom/On "click" (fn [_] (reset! !entity-card {:id entity-id :label label})) nil))
       (dom/text label))))
 
-(e/defn FactLine
-  "One fact as `s — p → o (Doc, p.N)` with linkable entities. The provenance tail
-   navigates to that document page when `navigate-source!` is supplied — otherwise
-   it renders as inert text."
+(e/defn FactLineContent
+  "Render fact text with entity and source links inside a caller-owned row."
   [{:keys [subject_label predicate_label object_label object_literal
            doc_title page_number subject_entity_id object_entity_id graph_topic_id]}
    !entity-card navigate-source!]
   (e/client
+    (EntityMention subject_label subject_entity_id !entity-card)
+    (dom/text (str " — " predicate_label " → "))
+    (if object_label
+      (EntityMention object_label object_entity_id !entity-card)
+      (dom/text object_literal))
+    (let [linkable? (and navigate-source! graph_topic_id)]
+      (dom/span
+        (dom/props (cond-> {:style (cond-> {:color "var(--color-text-secondary)"
+                                            :font-size "12px" :margin-left "6px"}
+                                     linkable? (assoc :cursor "pointer"
+                                                 :text-decoration "underline dotted"))}
+                     linkable? (assoc :role "button"
+                                 :aria-label (str "Open " doc_title
+                                               (when page_number (str " page " page_number))))))
+        (dom/text (str "(" doc_title (when page_number (str ", p." page_number)) ")"))
+        (when linkable?
+          (dom/On "click" (fn [_] (navigate-source! graph_topic_id page_number)) nil))))))
+
+(e/defn FactLine
+  "One fact as `s — p → o (Doc, p.N)` with linkable entities. The provenance tail
+   navigates to that document page when `navigate-source!` is supplied."
+  [fact !entity-card navigate-source!]
+  (e/client
     (dom/li
       (dom/props {:dir "auto" :style {:font-size "13px" :padding "2px 0"}})
-      (EntityMention subject_label subject_entity_id !entity-card)
-      (dom/text (str " — " predicate_label " → "))
-      (if object_label
-        (EntityMention object_label object_entity_id !entity-card)
-        (dom/text object_literal))
-      (let [linkable? (and navigate-source! graph_topic_id)]
-        (dom/span
-          (dom/props (cond-> {:style (cond-> {:color "var(--color-text-secondary)"
-                                              :font-size "12px" :margin-left "6px"}
-                                       linkable? (assoc :cursor "pointer"
-                                                   :text-decoration "underline dotted"))}
-                       linkable? (assoc :role "button"
-                                   :aria-label (str "Open " doc_title
-                                                 (when page_number (str " page " page_number))))))
-          (dom/text (str "(" doc_title (when page_number (str ", p." page_number)) ")"))
-          (when linkable?
-            (dom/On "click" (fn [_] (navigate-source! graph_topic_id page_number)) nil)))))))
+      (FactLineContent fact !entity-card navigate-source!))))
 
 (e/defn EntityCardPopover
   "Concept card: the clicked entity's label, aliases, and fact neighborhood.
