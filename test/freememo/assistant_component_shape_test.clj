@@ -44,6 +44,22 @@
     (is (str/includes? source
           "(e/server (assistant/transcript-message-view message))"))))
 
+(deftest document-mention-list-is-windowed-at-the-server-source
+  (let [panel-source (slurp "src/freememo/assistant_panel.cljc")
+        composer-source (slurp "src/freememo/assistant_composer.cljc")
+        row-source (slurp "src/freememo/assistant_panel_rows.cljc")
+        data-source (slurp "src/freememo/assistant_panel_data.cljc")]
+    (is (str/includes? panel-source
+          "(e/server (assistant/referenceable-docs\n                      user-id root-topic-id mention-query))"))
+    (is (str/includes? panel-source "(e/server (count reference-documents))"))
+    (is (str/includes? composer-source
+          "(rows/ReferenceMenu reference-documents reference-document-count"))
+    (is (str/includes? row-source "[hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]"))
+    (is (str/includes? row-source "(e/server (nth reference-documents i nil))"))
+    (is (str/includes? row-source ":reset-key mention-query"))
+    (is (not (str/includes? row-source "(if (pos? reference-document-count)")))
+    (is (not (str/includes? data-source "referenceable-docs")))))
+
 (deftest rich-answer-is-an-unmanaged-leaf
   (let [source (slurp "src/freememo/assistant_message_content.cljc")]
     (is (str/includes? source "(math/set-html! dom/node safe-html)"))

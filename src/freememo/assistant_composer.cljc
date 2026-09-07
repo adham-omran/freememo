@@ -15,15 +15,16 @@
        :refs (mapv :id @refs-atom) :mode mode-id})))
 
 (e/defn AssistantComposer
-  [{:keys [at-open? mention-options active-mention-index refs mention-count
+  [{:keys [at-open? mention-query active-reference-index reference-document-count refs
            sending? mode-entry draft user-id active root-topic-id]}
-   !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
+   reference-documents !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
    !error]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
       (when at-open?
-        (rows/ReferenceMenu mention-options active-mention-index !picked))
+        (rows/ReferenceMenu reference-documents reference-document-count
+          mention-query active-reference-index !picked))
       (when (seq refs)
         (dom/div
           (dom/props {:class "assistant-panel__refs"})
@@ -50,23 +51,22 @@
           (fn [event]
             (cond
               (and at-open? (= (.-key event) "ArrowDown")
-                (pos? mention-count))
+                (pos? reference-document-count))
               (do
                 (.preventDefault event)
-                (swap! !mention-index #(mod (inc %) mention-count)))
+                (swap! !mention-index #(mod (inc %) reference-document-count)))
 
               (and at-open? (= (.-key event) "ArrowUp")
-                (pos? mention-count))
+                (pos? reference-document-count))
               (do
                 (.preventDefault event)
-                (swap! !mention-index #(mod (dec %) mention-count)))
+                (swap! !mention-index #(mod (dec %) reference-document-count)))
 
-              (and at-open? (= (.-key event) "Enter"))
+              (and at-open? (= (.-key event) "Enter")
+                (pos? reference-document-count))
               (do
                 (.preventDefault event)
-                (when-let [option
-                           (nth mention-options active-mention-index nil)]
-                  (reset! !picked (:id option))))
+                (reset! !picked active-reference-index))
 
               (and at-open? (= (.-key event) "Escape"))
               (do (.preventDefault event) (reset! !at-open? false))

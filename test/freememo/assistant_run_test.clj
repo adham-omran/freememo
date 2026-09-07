@@ -120,11 +120,20 @@
   (is (= "front" (panel/mention-query "Compare this with @front")))
   (is (= "" (panel/mention-query "@")))
   (is (nil? (panel/mention-query "Use @front next")))
-  (is (= [{:id 2 :label "Frontend Design"}]
-        (panel/reference-options
-          [{:id 1 :label "Backend Notes"}
-           {:id 2 :label "Frontend Design"}]
-          "FRONT"))))
+  (is (panel/active-document-mention? "Compare this with @front"))
+  (is (not (panel/active-document-mention? "Compare this with front"))))
+
+(deftest document-mentions-filter-on-the-server
+  (with-redefs [db/get-root-topics
+                (fn [_]
+                  [{:topics/id 9 :topics/title "Open document"}
+                   {:topics/id 2 :topics/title "Frontend Design"}
+                   {:topics/id 1 :topics/title "Backend Notes"}])]
+    (is (= [{:id 2 :title "Frontend Design"}]
+          (assistant/referenceable-docs "learner" 9 "FRONT")))
+    (is (= [{:id 2 :title "Frontend Design"}
+            {:id 1 :title "Backend Notes"}]
+          (assistant/referenceable-docs "learner" 9 "")))))
 
 (deftest citation-target-resolves-retained-evidence
   (let [source {:citation_key "E1" :document_topic_id 7 :page_number 3

@@ -816,14 +816,23 @@
     result))
 
 (defn referenceable-docs
-  "Root topics the learner can @-reference from a chat, excluding the current
-   document. Returns [{:id t :title s}] in get-root-topics order (newest first).
-   Post: current-root-topic-id never appears."
-  [user-id current-root-topic-id]
-  (into []
-    (comp (remove #(= current-root-topic-id (:topics/id %)))
-      (map (fn [t] {:id (:topics/id t) :title (or (:topics/title t) "Untitled")})))
-    (db/get-root-topics user-id)))
+  "Return root documents that a learner can reference from a chat.
+
+   Pre: `query` is the unfinished text after `@`, or an empty string.
+   Post: the result excludes the open document and keeps newest-first order.
+   Invariant: every result has an `:id` and a displayable `:title`."
+  ([user-id current-root-topic-id]
+   (referenceable-docs user-id current-root-topic-id ""))
+  ([user-id current-root-topic-id query]
+   (let [needle (str/lower-case (or query ""))]
+     (into []
+       (comp
+         (remove #(= current-root-topic-id (:topics/id %)))
+         (map (fn [topic]
+                {:id (:topics/id topic)
+                 :title (or (:topics/title topic) "Untitled")}))
+         (filter #(str/includes? (str/lower-case (:title %)) needle)))
+       (db/get-root-topics user-id)))))
 
 ;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
 

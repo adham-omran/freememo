@@ -18,6 +18,7 @@
    [freememo.assistant-modes :as modes]
    [freememo.interaction-trail :as trail]
    [freememo.typeahead :refer [Typeahead]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.settings :as settings])))
 
@@ -151,29 +152,52 @@
             ))))))
 
 (e/defn ReferenceMenu
-  "Show document matches above the composer. The message box keeps focus and
-   remains visible."
-  [options selected-index !picked]
+  "Show a windowed document-reference list above the composer.
+
+   Pre: `reference-documents` stays on the server and `mention-query` is current.
+   Post: only visible document rows cross to the client.
+   Invariant: changing the query resets the list, and deleting `@` unmounts it."
+  [reference-documents reference-document-count mention-query selected-index !picked]
   (e/client
-    (dom/div
-      (dom/props {:class "assistant-panel__mention-menu" :role "listbox"
-                  :aria-label "Reference a document"})
-      (if (seq options)
-        (e/for [option (e/diff-by :id
-                         (mapv (fn [index entry]
-                                 (assoc entry :menu-index index))
-                           (range) options))]
-          (let [selected? (= selected-index (:menu-index option))]
-            (dom/button
-              (dom/props {:class (str "assistant-panel__mention-option"
-                                   (when selected? " assistant-panel__mention-option--selected"))
-                          :type "button" :role "option"
-                          :aria-selected (str selected?)})
-              (dom/text (:label option))
-              (dom/On "click" (fn [_] (reset! !picked (:id option))) nil))))
-        (dom/div
-          (dom/props {:class "assistant-panel__mention-empty"})
-          (dom/text "No matching documents."))))))
+    (let [row-height 40]
+      (dom/div
+        (dom/props {:class "assistant-panel__mention-menu tape-scroll" :role "listbox"
+                    :aria-label "Reference a document"
+                    :style {:--count reference-document-count
+                            :--grid-cols "1fr"
+                            :--row-height (str row-height "px")}})
+        (let [[offset limit]
+              (Scroll-window row-height reference-document-count dom/node
+                {:overquery-factor 2 :reset-key mention-query})]
+          (dom/table
+            (dom/props {:style {:width "100%"}})
+            (e/for [i (Tape offset limit)]
+              (let [document (e/server (nth reference-documents i nil))]
+                (when document
+                  (let [selected? (= selected-index i)]
+                    (dom/tr
+                      (dom/props {:style {:--order i}})
+                      (dom/td
+                        (dom/button
+                          (dom/props
+                            {:class (str "assistant-panel__mention-option"
+                                      (when selected?
+                                        " assistant-panel__mention-option--selected"))
+                             :type "button" :role "option"
+                             :aria-selected (str selected?)
+                             :data-tooltip (:title document)})
+                          (dom/text (:title document))
+                          (dom/On "mousedown"
+                            (fn [event]
+                              (.preventDefault event)
+                              (reset! !picked i))
+                            nil))))))))))
+        ;; Keep the virtual list mounted at zero rows. A query can only change
+        ;; its row count, never tear down its Scroll-window frame.
+        (when (zero? reference-document-count)
+          (dom/div
+            (dom/props {:class "assistant-panel__mention-empty"})
+            (dom/text "No matching documents.")))))))
 
 (e/defn EmptyChatStarters
   "Empty-chat hint plus this persona's four first-message starters.

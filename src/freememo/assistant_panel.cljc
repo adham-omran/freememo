@@ -22,17 +22,18 @@
    [freememo.assistant-evidence :as evidence]
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
-   [freememo.assistant-run-details :as run-details]))
+   [freememo.assistant-run-details :as run-details]
+   #?(:clj [freememo.assistant :as assistant])))
 
 (defn mention-query
   "Return the unfinished document mention at the end of a draft."
   [draft]
   (panel-data/mention-query draft))
 
-(defn reference-options
-  "Filter and cap document options for the current mention."
-  [options query]
-  (panel-data/reference-options options query))
+(defn active-document-mention?
+  "Return true while the draft has an unfinished document mention."
+  [draft]
+  (panel-data/active-document-mention? draft))
 
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
@@ -69,13 +70,19 @@
           !pending-mode (atom modes/default-id)
           pending-mode (e/watch !pending-mode)
           data (panel-data/AssistantPanelData
-                 user-id root-topic-id active details-run draft mention-index
-                 pending-mode (:id echo))
+                 user-id root-topic-id active details-run pending-mode (:id echo))
           chat-options (:chat-options data)
-          by-id (:documents-by-id data)
-          mention-options (:mention-options data)
-          mention-count (:mention-count data)
-          active-mention-index (:active-mention-index data)
+          mention-query (panel-data/mention-query draft)
+          reference-documents
+          (e/server (assistant/referenceable-docs
+                      user-id root-topic-id mention-query))
+          reference-document-count (e/server (count reference-documents))
+          active-reference-index
+          (if (pos? reference-document-count)
+            (mod mention-index reference-document-count)
+            0)
+          mention-open?
+          (and at-open? (panel-data/active-document-mention? draft))
           active-run (:active-run data)
           details (:details data)
           sending? (:sending? data)
@@ -86,20 +93,29 @@
          :root-topic-id root-topic-id :page-topic-id page-topic-id}
         t !draft !refs !echo !active !error)
 
-      ;; Add the selected document as a chip. Remove the mention query from the
-      ;; message and close the menu.
+      ;; Add one selected document as a chip. The server list stays server-sited;
+      ;; indexed lookup transfers only the selected document.
       (let [[pt _] (e/Token picked)]
         (when pt
-          (when-let [doc (get by-id picked)]
-            (swap! !refs (fn [rs]
-                           (if (some #(= (:id doc) (:id %)) rs)
-                             rs
-                             (conj rs {:id (:id doc) :title (:title doc)})))))
-          (reset! !draft (str/replace draft #"@\S*$" ""))
-          (reset! !mention-index 0)
-          (reset! !at-open? false)
-          (reset! !picked nil)
-          (pt)))
+          (let [document (e/server
+                           (when (pos? reference-document-count)
+                             (nth reference-documents
+                               (mod picked reference-document-count) nil)))]
+            (case document
+              (if document
+                (case (swap! !refs
+                        (fn [references]
+                          (if (some #(= (:id document) (:id %)) references)
+                            references
+                            (conj references {:id (:id document)
+                                              :title (:title document)}))))
+                  (case (reset! !draft (str/replace draft #"@\S*$" ""))
+                    (case (reset! !mention-index 0)
+                      (case (reset! !at-open? false)
+                        (case (reset! !picked nil)
+                          (pt))))))
+                (case (reset! !picked nil)
+                  (pt)))))))
 
       ;; Retire the optimistic echo after its durable user row arrives. This
       ;; also prevents a completed echo from appearing after a chat switch.
@@ -138,16 +154,16 @@
             (dom/text error)))
 
         (composer/AssistantComposer
-          {:at-open? at-open?
-           :mention-options mention-options
-           :active-mention-index active-mention-index
+          {:at-open? mention-open?
+           :mention-query mention-query
+           :active-reference-index active-reference-index
+           :reference-document-count reference-document-count
            :refs refs
-           :mention-count mention-count
            :sending? sending?
            :mode-entry mode-entry
            :draft draft
            :user-id user-id
            :active active
            :root-topic-id root-topic-id}
-          !picked !refs !mention-index !at-open? !draft !active !submit
+          reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
           !pending-mode !error)))))))
