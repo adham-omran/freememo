@@ -2,6 +2,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.loading :as loading]
    [freememo.navigation :as nav]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])
@@ -11,53 +12,86 @@
   #?(:clj (settings/get-openrouter-key-status user-id)
      :cljs nil))
 
-(defn get-queue-count* [user-id]
-  #?(:clj (db/get-learning-queue-count user-id)
-     :cljs 0))
-
-(defn get-total-count* [user-id]
-  #?(:clj (db/get-total-topic-count user-id)
-     :cljs 0))
-
-(defn next-review-label* [user-id]
+(defn home-summary-result* [_refresh user-id enc-key]
   #?(:clj
-     (let [cal (db/get-review-calendar user-id 30)
-           first-future (first (filter #(pos? (:count %)) cal))]
-       (when first-future
-         (let [review-date (:review_date first-future)
-               today (java.time.LocalDate/now)
-               days (.until today (if (instance? java.time.LocalDate review-date)
-                                    review-date
-                                    (.toLocalDate review-date))
-                      java.time.temporal.ChronoUnit/DAYS)]
-           (cond
-             (<= days 0) "today"
-             (= days 1) "tomorrow"
-             :else (str "in " days " days")))))
-     :cljs nil))
+     (try
+       (let [cal (db/get-review-calendar user-id 30)
+             first-future (first (filter #(pos? (:count %)) cal))
+             next-review
+             (when first-future
+               (let [review-date (:review_date first-future)
+                     today (java.time.LocalDate/now)
+                     days (.until today (if (instance? java.time.LocalDate review-date)
+                                          review-date
+                                          (.toLocalDate review-date))
+                            java.time.temporal.ChronoUnit/DAYS)]
+                 (cond
+                   (<= days 0) "today"
+                   (= days 1) "tomorrow"
+                   :else (str "in " days " days"))))]
+         (loading/region-success
+           {:configured? (:configured? (get-api-key-status* _refresh user-id enc-key))
+            :queue-count (db/get-learning-queue-count user-id)
+            :total-count (db/get-total-topic-count user-id)
+            :next-review next-review}))
+       (catch Exception error
+         (loading/region-failure (or (ex-message error) "Unknown error"))))
+     :cljs (loading/region-success
+             {:configured? false :queue-count 0 :total-count 0 :next-review nil})))
 
-(e/defn HomePage [navigate! user-id enc-key]
+(e/defn QuickLinks [navigate!]
   (e/client
-    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          api-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
-          configured? (:configured? api-status)
-          queue-count (e/server (get-queue-count* user-id))
-          total-count (e/server (get-total-count* user-id))
-          next-review (e/server (next-review-label* user-id))
+    (dom/div
+      (dom/props {:style {:display "flex" :gap "12px" :margin-bottom "40px"}})
+      (e/for-by first [row [["Import" :import] ["Library" :library] ["Learn" :learn]]]
+        (let [[label target] row]
+          (dom/button
+            (dom/props {:class "btn btn-secondary"
+                        :style {:flex "1" :padding "10px 0" :font-size "13px"}})
+            (dom/text label)
+            (dom/On "click" (fn [_] (navigate! target)) nil)))))))
+
+(e/defn HomeSummaryLoading [navigate!]
+  (e/client
+    (dom/div
+      (dom/p
+        (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}
+                    :role "status"})
+        (dom/span (dom/props {:class "spinner" :aria-hidden "true"}))
+        (dom/text "Loading your study summary…"))
+      (dom/button
+        (dom/props {:class "btn btn-primary"
+                    :disabled true
+                    :aria-busy "true"
+                    :style {:width "100%" :padding "14px 0" :font-size "16px" :font-weight "600"
+                            :border-radius "var(--radius-md)" :margin-bottom "8px"}})
+        (dom/span (dom/props {:class "spinner" :aria-hidden "true"}))
+        (dom/text "Loading…"))
+      (dom/div (dom/props {:style {:height "61px"}}))
+      (QuickLinks navigate!))))
+
+(e/defn HomeSummaryFailure [navigate! error]
+  (e/client
+    (dom/div
+      (dom/p
+        (dom/props {:style {:font-size "14px" :color "var(--color-danger-text)" :margin "0 0 32px 0"}
+                    :role "status"})
+        (dom/text (str "Could not load your study summary. " error)))
+      (dom/button
+        (dom/props {:class "btn btn-primary"
+                    :style {:width "100%" :padding "14px 0" :font-size "16px" :font-weight "600"
+                            :border-radius "var(--radius-md)" :margin-bottom "8px"}})
+        (dom/text "Import Content")
+        (dom/On "click" (fn [_] (navigate! :import)) nil))
+      (dom/div (dom/props {:style {:height "61px"}}))
+      (QuickLinks navigate!))))
+
+(e/defn HomeSummary [navigate! summary]
+  (e/client
+    (let [{:keys [configured? queue-count total-count next-review]} summary
           new-user? (zero? total-count)
           has-due? (pos? queue-count)]
       (dom/div
-        (dom/props {:class "page-container" :style {:padding-top "48px"}})
-
-        ;; Section 1: Hero + Adaptive Status Line
-        (dom/h1
-          (dom/props {:style {:font-size "2rem" :margin "0 0 6px 0" :font-weight "700"}})
-          (dom/text "FreeMemo"))
-
-        (dom/p
-          (dom/props {:style {:font-size "1rem" :color "var(--color-text-secondary)" :margin "0 0 16px 0"}})
-          (dom/text "Incremental reading with AI flashcards."))
-
         (dom/p
           (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
           (dom/text
@@ -71,7 +105,6 @@
               :else
               (str "All caught up." (when next-review (str " Next review " next-review "."))))))
 
-        ;; Inline clickable "N topics due" for active users
         (when (and (not new-user?) has-due?)
           (dom/p
             (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "-28px 0 32px 0"}})
@@ -82,7 +115,6 @@
               (dom/On "click" (fn [_] (navigate! :learn)) nil))
             (dom/text (str " across " total-count " total"))))
 
-        ;; Section 2: Primary Action Button
         (dom/button
           (dom/props {:class "btn btn-primary"
                       :style {:width "100%" :padding "14px 0" :font-size "16px" :font-weight "600"
@@ -102,28 +134,17 @@
                 :else (navigate! :library)))
             nil))
 
-        ;; Secondary action link
         (dom/div
           (dom/props {:style {:text-align "center" :margin-bottom "40px"}})
           (when-not new-user?
             (dom/a
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :cursor "pointer"
                                   :text-decoration "underline"}})
-              (dom/text (if has-due? "or import more content" "or import more content"))
+              (dom/text "or import more content")
               (dom/On "click" (fn [_] (navigate! :import)) nil))))
 
-        ;; Section 3: Quick links (compact)
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "12px" :margin-bottom "40px"}})
-          (e/for-by first [row [["Import" :import] ["Library" :library] ["Learn" :learn]]]
-            (let [[label target] row]
-              (dom/button
-                (dom/props {:class "btn btn-secondary"
-                            :style {:flex "1" :padding "10px 0" :font-size "13px"}})
-                (dom/text label)
-                (dom/On "click" (fn [_] (navigate! target)) nil)))))
+        (QuickLinks navigate!)
 
-        ;; Section 4: API Key Notice (only when not configured)
         (when-not configured?
           (dom/div
             (dom/props {:style {:background "var(--color-warning-bg)" :border "1px solid var(--color-warning-light)" :border-radius "var(--radius-md)"
@@ -137,3 +158,24 @@
                                   :text-decoration "underline"}})
               (dom/text "Configure in Settings")
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :settings)) nil))))))))
+
+(e/defn HomePage [navigate! user-id enc-key]
+  (e/client
+    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          request-key [settings-refresh user-id]]
+      (dom/div
+        (dom/props {:class "page-container" :style {:padding-top "48px"}})
+        (dom/h1
+          (dom/props {:style {:font-size "2rem" :margin "0 0 6px 0" :font-weight "700"}})
+          (dom/text "FreeMemo"))
+        (dom/p
+          (dom/props {:style {:font-size "1rem" :color "var(--color-text-secondary)" :margin "0 0 16px 0"}})
+          (dom/text "Incremental reading with AI flashcards."))
+        (loading/WithLatestRegion request-key
+          (e/fn []
+            (e/server
+              (e/Offload #(assoc (home-summary-result* settings-refresh user-id enc-key)
+                             :request-key request-key))))
+          (e/fn [summary _phase _error] (HomeSummary navigate! summary))
+          (e/fn [_phase] (HomeSummaryLoading navigate!))
+          (e/fn [error] (HomeSummaryFailure navigate! error)))))))
