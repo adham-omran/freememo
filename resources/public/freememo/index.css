@@ -4135,6 +4135,8 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
 }
 
+.assistant-panel__mention-menu--closed { display: none; }
+
 .assistant-panel__mention-option {
     display: block;
     width: 100%;

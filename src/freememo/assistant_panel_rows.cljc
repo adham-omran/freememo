@@ -18,7 +18,8 @@
    [freememo.assistant-modes :as modes]
    [freememo.interaction-trail :as trail]
    [freememo.typeahead :refer [Typeahead]]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
+   [freememo.scroll :refer [Scroll-window]]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.settings :as settings])))
 
@@ -156,13 +157,16 @@
 
    Pre: `reference-documents` stays on the server and `mention-query` is current.
    Post: only visible document rows cross to the client.
-   Invariant: changing the query resets the list, and deleting `@` unmounts it."
-  [reference-documents reference-document-count mention-query selected-index !picked]
+   Invariant: changing the query resets the list, and deleting `@` hides it."
+  [open? reference-documents reference-document-count mention-query selected-index !picked]
   (e/client
     (let [row-height 40]
       (dom/div
-        (dom/props {:class "assistant-panel__mention-menu tape-scroll" :role "listbox"
-                    :aria-label "Reference a document"
+        (dom/props {:class (str "assistant-panel__mention-menu tape-scroll"
+                             (when-not open?
+                               " assistant-panel__mention-menu--closed"))
+                    :role "listbox" :aria-label "Reference a document"
+                    :aria-hidden (str (not open?))
                     :style {:--count reference-document-count
                             :--grid-cols "1fr"
                             :--row-height (str row-height "px")}})

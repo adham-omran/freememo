@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.assistant-panel-data :as panel-data]
    [freememo.assistant-panel-rows :as rows]
    #?(:clj [freememo.assistant :as assistant])))
 
@@ -14,6 +15,16 @@
       {:id (str (random-uuid)) :text text :chat @active-atom
        :refs (mapv :id @refs-atom) :mode mode-id})))
 
+(defn close-reference-menu-after-input!
+  "Close the menu after Forms5 finishes the current input transaction."
+  [value !at-open?]
+  #?(:cljs
+     (js/setTimeout
+       #(when-not (panel-data/active-document-mention? value)
+          (reset! !at-open? false))
+       0)
+     :clj nil))
+
 (e/defn AssistantComposer
   [{:keys [at-open? mention-query active-reference-index reference-document-count refs
            sending? mode-entry draft user-id active root-topic-id]}
@@ -22,9 +33,10 @@
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
-      (when at-open?
-        (rows/ReferenceMenu reference-documents reference-document-count
-          mention-query active-reference-index !picked))
+      ;; Keep the virtual-scroll frame stable while the form processes an input
+      ;; event. Conditional mounting in the same frame strips Forms5 input props.
+      (rows/ReferenceMenu at-open? reference-documents reference-document-count
+        mention-query active-reference-index !picked)
       (when (seq refs)
         (dom/div
           (dom/props {:class "assistant-panel__refs"})
@@ -47,6 +59,11 @@
                     (remove-token))))))))
       (dom/div
         (dom/props {:class "assistant-panel__composer"})
+        (dom/On "input"
+          (fn [event]
+            (close-reference-menu-after-input!
+              (.. event -target -value) !at-open?))
+          nil)
         (dom/On "keydown"
           (fn [event]
             (cond

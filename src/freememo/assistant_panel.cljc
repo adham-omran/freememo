@@ -35,6 +35,14 @@
   [draft]
   (panel-data/active-document-mention? draft))
 
+(defn sync-composer-draft-value!
+  "Set the visible composer value after a programmatic draft edit."
+  [value]
+  #?(:cljs
+     (when-let [input (.querySelector js/document ".assistant-panel__input")]
+       (set! (.-value input) value))
+     :clj nil))
+
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
     (let [!active (atom nil)
@@ -81,8 +89,6 @@
           (if (pos? reference-document-count)
             (mod mention-index reference-document-count)
             0)
-          mention-open?
-          (and at-open? (panel-data/active-document-mention? draft))
           active-run (:active-run data)
           details (:details data)
           sending? (:sending? data)
@@ -103,17 +109,19 @@
                                (mod picked reference-document-count) nil)))]
             (case document
               (if document
-                (case (swap! !refs
-                        (fn [references]
-                          (if (some #(= (:id document) (:id %)) references)
-                            references
-                            (conj references {:id (:id document)
-                                              :title (:title document)}))))
-                  (case (reset! !draft (str/replace draft #"@\S*$" ""))
-                    (case (reset! !mention-index 0)
-                      (case (reset! !at-open? false)
-                        (case (reset! !picked nil)
-                          (pt))))))
+                (let [next-draft (str/replace draft #"@\S*$" "")]
+                  (case (swap! !refs
+                          (fn [references]
+                            (if (some #(= (:id document) (:id %)) references)
+                              references
+                              (conj references {:id (:id document)
+                                                :title (:title document)}))))
+                    (case (e/client (sync-composer-draft-value! next-draft))
+                      (case (reset! !draft next-draft)
+                        (case (reset! !mention-index 0)
+                          (case (reset! !at-open? false)
+                            (case (reset! !picked nil)
+                              (pt))))))))
                 (case (reset! !picked nil)
                   (pt)))))))
 
@@ -154,7 +162,7 @@
             (dom/text error)))
 
         (composer/AssistantComposer
-          {:at-open? mention-open?
+          {:at-open? at-open?
            :mention-query mention-query
            :active-reference-index active-reference-index
            :reference-document-count reference-document-count

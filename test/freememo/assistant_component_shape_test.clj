@@ -53,8 +53,14 @@
           "(e/server (assistant/referenceable-docs\n                      user-id root-topic-id mention-query))"))
     (is (str/includes? panel-source "(e/server (count reference-documents))"))
     (is (str/includes? composer-source
-          "(rows/ReferenceMenu reference-documents reference-document-count"))
-    (is (str/includes? row-source "[hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]"))
+          "(rows/ReferenceMenu at-open? reference-documents reference-document-count"))
+    (is (not (str/includes? composer-source
+               "(when at-open?\n        (rows/ReferenceMenu"))
+        "the virtual list stays mounted while Forms5 handles the input event")
+    (is (str/includes? composer-source "close-reference-menu-after-input!"))
+    (is (str/includes? panel-source ":at-open? at-open?"))
+    (is (str/includes? row-source "[freememo.scroll :refer [Scroll-window]]"))
+    (is (str/includes? row-source "assistant-panel__mention-menu--closed"))
     (is (str/includes? row-source "(e/server (nth reference-documents i nil))"))
     (is (str/includes? row-source ":reset-key mention-query"))
     (is (not (str/includes? row-source "(if (pos? reference-document-count)")))
