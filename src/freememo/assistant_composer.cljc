@@ -120,49 +120,92 @@
               (and at-open? (= (.-key event) " "))
               (reset! !at-open? false)))
           nil)
-        (e/for [[command-token command]
-                (e/amb
+        ;; The DOM-bearing `e/amb` is BOUND, and the loop iterates a re-diffed
+        ;; vector of it. Iterating the amb directly puts the widgets' own DOM
+        ;; inside the collection `e/for` mounts frames over, and Input! returns
+        ;; `(e/When waiting? …)` — cardinality 1 while an edit is pending, 0
+        ;; once the token is spent. Committing a send therefore reshaped the
+        ;; iterated collection and tore down the textarea's `dom/props` frame:
+        ;; measured at the send frame, class, id, name, type, rows, dir,
+        ;; placeholder and aria-label were all removed. The element itself is
+        ;; created in an outer frame and survives, so nothing puts the props
+        ;; back — the composer stayed unstyled for the rest of the session.
+        ;;
+        ;; `e/as-vec` + `e/diff-by first` is the shape every other Forms5 site
+        ;; here uses (bibliography_form, anki_sync_form): the amb is consumed
+        ;; once as a value, and the loop iterates a separate collection.
+        (let [commands
+              (e/amb
+                (dom/div
+                  (dom/props {:class "assistant-panel__input-row"})
+                  ;; NO :disabled here, and that is not an oversight. Every
+                  ;; entry of a props map is one element of an `e/for` carrying
+                  ;; `(e/on-unmount #(set-property! node attr nil))`
+                  ;; (electric_dom3_props/Properties), so a props map that goes
+                  ;; ABSENT nulls every prop on the node at once. `sending?` is
+                  ;; derived from a server read and is absent for the round trip
+                  ;; a send takes, so `:disabled sending?` tore down the whole
+                  ;; map: measured at the send frame, class, id, name, type,
+                  ;; rows, dir, placeholder and aria-label all went to null. The
+                  ;; textarea's element is created in an outer frame, so nothing
+                  ;; put them back and the composer stayed unstyled.
+                  ;;
+                  ;; The prop was self-defeating anyway: setting it is what
+                  ;; destroyed it, and the same trace shows `disabled=false`
+                  ;; while the button read `Stop`. It never disabled anything.
+                  ;; Typing during a run is still harmless — the keydown `cond`
+                  ;; below only submits `(not sending?)`, and the button offers
+                  ;; Stop rather than Send.
+                  (forms/Input! :assistant/draft draft :as :textarea
+                    :class "assistant-panel__input" :dir "auto" :rows 2
+                    :placeholder
+                    "Ask about this page… (@ for another document)"
+                    :aria-label "Assistant message"))
+                (dom/div
+                  (dom/props {:class "assistant-panel__composer-footer"})
                   (dom/div
-                    (dom/props {:class "assistant-panel__input-row"})
-                    (forms/Input! :assistant/draft draft :as :textarea
-                      :class "assistant-panel__input" :dir "auto" :rows 2
-                      :placeholder
-                      "Ask about this page… (@ for another document)"
-                      :aria-label "Assistant message" :disabled sending?))
-                  (dom/div
-                    (dom/props {:class "assistant-panel__composer-footer"})
-                    (dom/div
-                      (dom/props {:class "assistant-panel__composer-controls"})
-                      (rows/ModeRow
-                        user-id active mode-entry !pending-mode)
-                      (rows/ModelRow user-id root-topic-id))
-                    (if sending?
-                      (forms/Button! [::stop]
-                        :class "btn btn-secondary assistant-panel__send"
-                        :label "Stop" :aria-label "Stop response")
-                      (forms/Button! [::submit]
-                        :class "btn btn-primary assistant-panel__send"
-                        :label "↑" :aria-label "Send"
-                        :disabled (str/blank? draft)))))]
-          (cond
-            (map? command)
-            (case (reset! !draft (:assistant/draft command))
-              (command-token))
+                    (dom/props {:class "assistant-panel__composer-controls"})
+                    (rows/ModeRow user-id active mode-entry !pending-mode)
+                    (rows/ModelRow user-id root-topic-id))
+                  ;; ONE always-mounted button whose command and look depend on
+                  ;; `sending?`, never two behind an `if`. Mounting one branch
+                  ;; and unmounting the other re-evaluates this `e/amb`, and
+                  ;; that tears down the sibling Input!'s prop frame: measured
+                  ;; at the send frame, the textarea lost class, placeholder,
+                  ;; rows, dir, name and aria-label, and — because its element
+                  ;; is NOT recreated, only its props torn down — never got
+                  ;; them back. The button recovered only because the swap
+                  ;; built it a new node. It looked self-healing until the
+                  ;; panel stopped remounting on every run transition.
+                  ;;
+                  ;; Same rule as the ReferenceMenu above, which stays mounted
+                  ;; for exactly this reason.
+                  (forms/Button! (if sending? [::stop] [::submit])
+                    :class (str "btn assistant-panel__send "
+                             (if sending? "btn-secondary" "btn-primary"))
+                    :label (if sending? "Stop" "↑")
+                    :aria-label (if sending? "Stop response" "Send")
+                    :disabled (and (not sending?) (str/blank? draft)))))]
+          (e/for [[command-token command] (e/diff-by first (e/as-vec commands))]
+            (cond
+              (map? command)
+              (case (reset! !draft (:assistant/draft command))
+                (command-token))
 
-            (= [::submit] command)
-            (case
-              (when-let [edit
-                         (submit-edit !draft !active !refs (:id mode-entry))]
-                (reset! !submit edit))
-              (command-token))
+              (= [::submit] command)
+              (case
+                (when-let [edit
+                           (submit-edit !draft !active !refs (:id mode-entry))]
+                  (reset! !submit edit))
+                (command-token))
 
-            (= [::stop] command)
-            (let [result
-                  (e/server
-                    (e/Offload #(assistant/stop-active-run! user-id active)))]
-              (case result
-                (case
-                  (reset! !error
-                    (when-not (:stopped result)
-                      "No active response to stop."))
-                  (command-token))))))))))
+              (= [::stop] command)
+              (let [result
+                    (e/server
+                      (e/Offload #(assistant/stop-active-run! user-id active)))]
+                (case result
+                  (case
+                    (reset! !error
+                      (when-not (:stopped result)
+                        "No active response to stop."))
+                    (command-token)))))))))))

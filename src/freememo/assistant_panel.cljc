@@ -117,18 +117,7 @@
                 (case (reset! !picked nil)
                   (pt)))))))
 
-      (case
-        (diagnostics/replace-state!
-          {:topic-id root-topic-id
-           :page-topic-id page-topic-id
-           :chat-id active
-           :run-uuid (:run_uuid active-run)
-           :run-kind (:kind active-run)
-           :run-status (:status active-run)
-           :render-phase (if sending? "streaming" "terminal")})
-        (do
-          (e/on-unmount #(diagnostics/replace-state! {}))
-          (dom/div
+      (dom/div
         (dom/props {:class "assistant-panel"})
 
         ;; Row 2: ＋ New + the chat picker.
@@ -161,4 +150,29 @@
            :active active
            :root-topic-id root-topic-id}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !error)))))))
+          !pending-mode !error)
+
+        ;; Diagnostics LAST, and wrapping nothing. This used to be
+        ;; `(case (replace-state! …) (do … (dom/div …)))`, which put the whole
+        ;; panel inside a case branch keyed on a map that changes at exactly the
+        ;; two moments a run starts and settles. Re-selecting the branch remounts
+        ;; it, so both transitions tore down and rebuilt the panel: every
+        ;; (e/server …) read went cold at once — the transcript to zero rows and
+        ;; its empty-chat starters, the model select to zero options — while the
+        ;; atoms in this `let` survived and put the same chat back a round trip
+        ;; later. That was the blank on send and the blank on settle.
+        ;;
+        ;; A `case` is the right tool for SEQUENCING an effect before a token
+        ;; spend. It is the wrong tool for merely keeping one alive: this is a
+        ;; fire-and-forget write whose value nothing needs. As the last form of
+        ;; the body its value IS the body's value, so it cannot be skipped, and
+        ;; it gates no frame.
+        (e/on-unmount #(diagnostics/replace-state! {}))
+        (diagnostics/replace-state!
+          {:topic-id root-topic-id
+           :page-topic-id page-topic-id
+           :chat-id active
+           :run-uuid (:run_uuid active-run)
+           :run-kind (:kind active-run)
+           :run-status (:status active-run)
+           :render-phase (if sending? "streaming" "terminal")})))))
