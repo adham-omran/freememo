@@ -38,14 +38,14 @@
     :label "Google · Gemini 3 Flash"
     :shape :chat
     :openrouter-model "google/gemini-3-flash-preview"}
-   {:id "gemini-3.5-flash"
-    :label "Google · Gemini 3.5 Flash"
-    :shape :chat
-    :openrouter-model "google/gemini-3.5-flash"}
    {:id "gemini-3.6-flash"
     :label "Google · Gemini 3.6 Flash"
     :shape :chat
     :openrouter-model "google/gemini-3.6-flash"}
+   {:id "gemini-3.8-flash"
+    :label "Google · Gemini 3.8 Flash"
+    :shape :chat
+    :openrouter-model "google/gemini-3.8-flash"}
    {:id "gemini-3.5-flash-lite"
     :label "Google · Gemini 3.5 Flash-Lite"
     :shape :chat
@@ -64,6 +64,26 @@
     :shape :plugin
     :plugin-engine "mistral-ocr"}])
 
+(def retired
+  "OCR ids withdrawn from the picker. Same contract as
+   freememo.card-models/retired, and the same reason it is a redirect rather
+   than a deletion — read that docstring. The two registries stay independent
+   (design decision D1-B), so an id retired in one is not retired in the other
+   by implication; this one happens to share both id and successor with the
+   card lane."
+  [{:id "gemini-3.5-flash"
+    :label "Google · Gemini 3.5 Flash"
+    :superseded-by "gemini-3.6-flash"}])
+
+(def ^:private supersessions
+  (into {} (map (juxt :id :superseded-by)) retired))
+
+(defn effective-id
+  "The id a stored selection names today; see card-models/effective-id.
+   Pre: id is a string or nil. Post: a string or nil."
+  [id]
+  (get supersessions id id))
+
 (def default-id
   "System-wide default OCR model — used when a user has set neither a per-document
    nor a global selection. Gemini 3 Flash: best Arabic accuracy at the lowest cost
@@ -74,8 +94,10 @@
   (into {} (map (juxt :id identity)) registry))
 
 (defn resolve-model
-  "Registry entry for `id`, or nil when `id` is unknown/unset.
+  "Registry entry to CALL for `id`, or nil when `id` is unknown/unset. A retired
+   id resolves to its successor's entry, so `(:id (resolve-model id))` may
+   differ from `id`.
    Pre: id is a string or nil. Post: a registry map or nil — callers MUST
    handle nil (treat as: fall back to the global default)."
   [id]
-  (get by-id id))
+  (get by-id (effective-id id)))

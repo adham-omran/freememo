@@ -184,11 +184,24 @@
   "Build model and supported optional fields for one chat completion.
    Pre:  entry is a resolved model registry entry. `requested-parameters` is a
          map of optional OpenRouter fields.
-   Post: model-fields plus only keys declared in entry :supported-parameters.
-         This function never adds structured-output routing fields."
+   Post: model-fields plus only keys declared in entry :supported-parameters,
+         minus reasoning_effort \"none\" for an entry that declares
+         :reasoning-mandatory?. This function never adds structured-output
+         routing fields.
+
+   The Settings dropdown offers None, and four registry models refuse it:
+   OpenRouter answers HTTP 400 `Reasoning is mandatory for this endpoint and
+   cannot be disabled` (measured 2026-09-08 against Gemini 3.6/3.8 Flash,
+   Gemini 3.5 Flash-Lite and GLM 5.3 Flash). Dropping the field sends the
+   provider default instead of a request nothing can serve. Only \"none\" is
+   dropped: every other effort value an entry does not list is clamped by
+   OpenRouter rather than refused, so there is nothing to repair."
   [entry requested-parameters]
   (merge (model-fields entry)
-    (select-keys requested-parameters (:supported-parameters entry))))
+    (cond-> (select-keys requested-parameters (:supported-parameters entry))
+      (and (:reasoning-mandatory? entry)
+           (= "none" (:reasoning_effort requested-parameters)))
+      (dissoc :reasoning_effort))))
 
 (defn structured-chat-completion-fields
   "Build model fields for a strict JSON-object chat completion.

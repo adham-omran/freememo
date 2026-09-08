@@ -176,6 +176,60 @@
              :supported-parameters #{:reasoning_effort}}
             {})))))
 
+(deftest reasoning-none-is-dropped-only-where-the-provider-refuses-it
+  (testing "a mandatory-reasoning entry loses the field"
+    ;; Measured 2026-09-08: OpenRouter answers reasoning_effort "none" on these
+    ;; with HTTP 400 `Reasoning is mandatory for this endpoint and cannot be
+    ;; disabled`. The Settings dropdown offers None, so before this every card
+    ;; generation, KG step and assistant turn by such a user failed.
+    (doseq [id ["gemini-3.6-flash" "gemini-3.8-flash" "gemini-3.5-flash-lite"
+                "glm-5.3-flash"]]
+      (let [fields (openrouter/chat-completion-fields
+                     (card-models/resolve-model id) {:reasoning_effort "none"})]
+        (is (not (contains? fields :reasoning_effort)) id))))
+  (testing "the same entry keeps every other effort value"
+    (is (= "low" (:reasoning_effort
+                   (openrouter/chat-completion-fields
+                     (card-models/resolve-model "gemini-3.8-flash")
+                     {:reasoning_effort "low"})))))
+  (testing "an entry that permits none keeps it"
+    (doseq [id ["gpt-5.1" "gemini-3-flash" "claude-sonnet-5"]]
+      (is (= "none" (:reasoning_effort
+                      (openrouter/chat-completion-fields
+                        (card-models/resolve-model id)
+                        {:reasoning_effort "none"})))
+        id)))
+  (testing "the flagged set is the one measured against OpenRouter"
+    (is (= #{"gemini-3.6-flash" "gemini-3.8-flash" "gemini-3.5-flash-lite"
+             "glm-5.3-flash"}
+          (into #{} (comp (filter :reasoning-mandatory?) (map :id))
+            card-models/registry))))
+  (testing "the OCR registry carries no reasoning flag, because its lane sends
+            no reasoning_effort — ocr.clj builds its body from model-fields
+            alone. A flag there would be metadata no code reads."
+    (is (empty? (filter :reasoning-mandatory? ocr-models/registry)))))
+
+(deftest a-retired-id-resolves-to-its-successor-in-both-registries
+  (testing "the retired id is gone from the picker"
+    (doseq [registry [card-models/registry ocr-models/registry]]
+      (is (not (some #{"gemini-3.5-flash"} (map :id registry))))))
+  (testing "a stored selection runs the successor, not a fallback default"
+    (doseq [[resolve effective] [[card-models/resolve-model card-models/effective-id]
+                                 [ocr-models/resolve-model ocr-models/effective-id]]]
+      (is (= "gemini-3.6-flash" (effective "gemini-3.5-flash")))
+      (is (= "google/gemini-3.6-flash"
+            (:openrouter-model (resolve "gemini-3.5-flash"))))))
+  (testing "an unknown id still resolves to nil, for the caller to reject"
+    (is (nil? (card-models/resolve-model "no-such-model")))
+    (is (= "no-such-model" (card-models/effective-id "no-such-model"))))
+  (testing "a retired entry names no OpenRouter model"
+    ;; The redirect is the only way to call one. An entry that kept its slug
+    ;; could still be reached by a path that reads the registry directly.
+    (doseq [entry (concat card-models/retired ocr-models/retired)]
+      (is (nil? (:openrouter-model entry)) (:id entry))
+      (is (some? (:label entry)) (:id entry))
+      (is (some? (:superseded-by entry)) (:id entry)))))
+
 (deftest every-card-model-supports-json-object-output
   (doseq [entry card-models/registry]
     (is (contains? (:supported-parameters entry) :response_format)

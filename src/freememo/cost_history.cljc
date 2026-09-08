@@ -44,8 +44,12 @@
 
 (def ^:private model-labels
   "model id → label, unioned across the card + OCR registries (ledger `model`
-   ids are drawn from these)."
-  (into {} (map (juxt :id :label)) (concat card-models/registry ocr-models/registry)))
+   ids are drawn from these). Retired entries are included because the ledger is
+   history: a row charged to a model withdrawn since would otherwise render its
+   raw id in a column every other row labels."
+  (into {} (map (juxt :id :label))
+    (concat card-models/registry card-models/retired
+            ocr-models/registry ocr-models/retired)))
 
 (defn endpoint-label [ep] (get endpoint-labels ep (or ep "—")))
 (defn model-label [m] (get model-labels m (or m "—")))

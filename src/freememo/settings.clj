@@ -170,7 +170,7 @@
    Post: an :id present in (card-model-ids)."
   [user-id]
   (let [allowed (card-model-ids)
-        saved (db/get-setting user-id MODEL)
+        saved (card-models/effective-id (db/get-setting user-id MODEL))
         default (if (config/credits-enabled?)
                   (or @config/!prod-model card-models/default-id)
                   card-models/default-id)]
@@ -190,7 +190,7 @@
    Post: an :id present in (card-model-ids)."
   [user-id]
   (let [allowed (card-model-ids)
-        saved (db/get-setting user-id ASSISTANT_MODEL)]
+        saved (card-models/effective-id (db/get-setting user-id ASSISTANT_MODEL))]
     (cond
       (some #{saved} allowed) saved
       (some #{assistant-default-model-id} allowed) assistant-default-model-id
@@ -213,7 +213,7 @@
   (let [setting (or (kg-step->setting step)
                     (throw (ex-info (str "Unknown KG model step: " step) {:step step})))
         allowed (card-model-ids)
-        saved (db/get-setting user-id setting)]
+        saved (card-models/effective-id (db/get-setting user-id setting))]
     (cond
       (some #{saved} allowed) saved
       (some #{kg-default-model-id} allowed) kg-default-model-id
@@ -601,7 +601,7 @@
    per-document selection when set and still allowed, else the user's global
    default. Post: an :id present in (card-model-ids)."
   [user-id root-topic-id]
-  (let [per-doc (get-card-model user-id root-topic-id)]
+  (let [per-doc (card-models/effective-id (get-card-model user-id root-topic-id))]
     (if (some #{per-doc} (card-model-ids))
       per-doc
       (get-model user-id))))
@@ -632,7 +632,7 @@
    selection when set and still allowed, else the user's global assistant model.
    Post: an :id present in (card-model-ids)."
   [user-id root-topic-id]
-  (let [per-doc (get-assistant-model-for user-id root-topic-id)]
+  (let [per-doc (card-models/effective-id (get-assistant-model-for user-id root-topic-id))]
     (if (some #{per-doc} (card-model-ids))
       per-doc
       (get-assistant-model user-id))))

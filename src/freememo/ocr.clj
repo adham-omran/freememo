@@ -95,8 +95,9 @@
    Pre:  user-id; topic-id may be nil (→ no per-doc lookup).
    Post: a non-nil registry entry (design invariant: allowed list is non-empty)."
   [user-id topic-id]
-  (let [picked (or (when topic-id (settings/get-ocr-model user-id topic-id))
-                   (settings/get-ocr-model-default user-id))
+  (let [picked (models/effective-id
+                 (or (when topic-id (settings/get-ocr-model user-id topic-id))
+                     (settings/get-ocr-model-default user-id)))
         allowed (allowed-ocr-model-ids)
         id (cond
              (some #{picked} allowed) picked
