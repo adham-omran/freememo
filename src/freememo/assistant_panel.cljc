@@ -13,7 +13,6 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [clojure.string :as str]
    [freememo.assistant-composer :as composer]
    [freememo.assistant-diagnostics :as diagnostics]
    [freememo.assistant-modes :as modes]
@@ -34,14 +33,6 @@
   "Return true while the draft has an unfinished document mention."
   [draft]
   (panel-data/active-document-mention? draft))
-
-(defn sync-composer-draft-value!
-  "Set the visible composer value after a programmatic draft edit."
-  [value]
-  #?(:cljs
-     (when-let [input (.querySelector js/document ".assistant-panel__input")]
-       (set! (.-value input) value))
-     :clj nil))
 
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
@@ -78,7 +69,7 @@
           !pending-mode (atom modes/default-id)
           pending-mode (e/watch !pending-mode)
           data (panel-data/AssistantPanelData
-                 user-id root-topic-id active details-run pending-mode (:id echo))
+                 user-id root-topic-id active details-run pending-mode)
           chat-options (:chat-options data)
           mention-query (panel-data/mention-query draft)
           reference-documents
@@ -109,14 +100,15 @@
                                (mod picked reference-document-count) nil)))]
             (case document
               (if document
-                (let [next-draft (str/replace draft #"@\S*$" "")]
+                (let [next-draft (panel-data/draft-with-reference
+                                   draft (:title document))]
                   (case (swap! !refs
                           (fn [references]
                             (if (some #(= (:id document) (:id %)) references)
                               references
                               (conj references {:id (:id document)
                                                 :title (:title document)}))))
-                    (case (e/client (sync-composer-draft-value! next-draft))
+                    (case (e/client (composer/sync-composer-draft-value! next-draft))
                       (case (reset! !draft next-draft)
                         (case (reset! !mention-index 0)
                           (case (reset! !at-open? false)
@@ -124,11 +116,6 @@
                               (pt))))))))
                 (case (reset! !picked nil)
                   (pt)))))))
-
-      ;; Retire the optimistic echo after its durable user row arrives. This
-      ;; also prevents a completed echo from appearing after a chat switch.
-      (when (and echo (:echo-persisted? data))
-        (reset! !echo nil))
 
       (case
         (diagnostics/replace-state!
@@ -151,7 +138,7 @@
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
            :page-topic-id page-topic-id :root-topic-id root-topic-id}
-          !submit !active !refs !details-run !evidence !error)
+          !submit !active !refs !details-run !evidence !error !echo)
 
         (run-details/RunDetailsModal !details-run details)
         (evidence/EvidenceModal !evidence root-topic-id)

@@ -4,6 +4,7 @@
             [freememo.assistant :as assistant]
             [freememo.assistant-evidence :as evidence]
             [freememo.assistant-panel :as panel]
+            [freememo.assistant-panel-data :as panel-data]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
@@ -122,6 +123,29 @@
   (is (nil? (panel/mention-query "Use @front next")))
   (is (panel/active-document-mention? "Compare this with @front"))
   (is (not (panel/active-document-mention? "Compare this with front"))))
+
+(deftest a-picked-reference-stays-in-the-message-text
+  (testing "the mention the learner typed is completed, not deleted"
+    (is (= "Compare this with @Frontend Design "
+          (panel-data/draft-with-reference "Compare this with @front"
+            "Frontend Design")))
+    (is (= "@Frontend Design "
+          (panel-data/draft-with-reference "@" "Frontend Design")))
+    (is (= "No mention yet @Frontend Design "
+          (panel-data/draft-with-reference "No mention yet " "Frontend Design"))))
+  (testing "a title carrying regex replacement syntax is inserted verbatim"
+    (is (= "read @Cost $1 \\ notes "
+          (panel-data/draft-with-reference "read @c" "Cost $1 \\ notes"))))
+  (testing "removing the chip removes the text that named it"
+    (is (= "Compare this with "
+          (panel-data/draft-without-reference
+            "Compare this with @Frontend Design " "Frontend Design")))
+    (is (= "@Zigzag is enough"
+          (panel-data/draft-without-reference "@Zigzag is enough" "Zig"))
+      "a mention must end at a word boundary before it is removed")
+    (is (= "nothing to remove"
+          (panel-data/draft-without-reference "nothing to remove" "Zig")))
+    (is (= "" (panel-data/draft-without-reference "@Zig" "Zig")))))
 
 (deftest document-mentions-filter-on-the-server
   (with-redefs [db/get-root-topics

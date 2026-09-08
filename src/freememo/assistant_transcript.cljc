@@ -8,14 +8,34 @@
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.user-state :as us])))
 
-(defn scroll-to-bottom! [node _dependency]
-  #?(:cljs (set! (.-scrollTop node) (.-scrollHeight node))
+(defn scroll-to-bottom!
+  "Pin the transcript to its newest content, after the browser lays that content out.
+
+   The scroll runs in a requestAnimationFrame rather than inline. This fn is
+   called during the same reactive propagation that patches the rows, so an
+   inline `scrollHeight` read measures the transcript as it was BEFORE the new
+   text landed — which is why a finished answer left the panel parked mid-answer
+   while its last paragraphs sat below the fold. One frame later the layout is
+   the one the learner is about to see.
+
+   Pre:  `node` is the transcript's scroll container. `_dependency` is every
+         value whose change should re-pin it, including the mutation revision a
+         terminal answer bumps.
+   Post: the container is scrolled to its own bottom. A node unmounted before
+         the frame runs is written to harmlessly and never read again."
+  [node _dependency]
+  #?(:cljs (do (js/requestAnimationFrame
+                 (fn [] (set! (.-scrollTop node) (.-scrollHeight node))))
+               ;; The frame id is deliberately dropped: this call is the last
+               ;; form of the transcript body, and returning a fresh integer per
+               ;; scroll would feed the reactive graph a value that never settles.
+               nil)
      :clj nil))
 
 (e/defn AssistantTranscript
   [{:keys [sending? echo active mode-entry active-run user-id page-topic-id
            root-topic-id]}
-   !submit !active !refs !details-run !evidence !error]
+   !submit !active !refs !details-run !evidence !error !echo]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__transcript"})
@@ -23,16 +43,33 @@
             (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
             stream-rev
             (e/server (e/watch (us/get-atom user-id :assistant-stream)))
+            ;; One read of the transcript, used for both the rendered rows and
+            ;; the echo's retirement. Two server reads would land in two frames.
+            messages
+            (e/server
+              (or (assistant/messages* [assistant-rev stream-rev] user-id active)
+                []))
             message-rows
             (e/server
-              (e/diff-by :assistant_messages/id
-                (or (assistant/messages*
-                      [assistant-rev stream-rev] user-id active)
-                  [])))
-            message-count (e/Count message-rows)]
+              (e/diff-by :assistant_messages/id messages))
+            message-count (e/Count message-rows)
+            echo-arrived?
+            (e/server (assistant/message-client-id-present? messages (:id echo)))]
+        ;; Retire the optimistic echo once the durable row it stands for is in
+        ;; the rows above. Reading the rendered rows is what keeps the panel
+        ;; from painting empty between the echo leaving and the row arriving.
+        ;; It also stops a completed echo reappearing after a chat switch.
+        (when (and echo echo-arrived?)
+          (reset! !echo nil))
         (if (zero? message-count)
-          (when (and (not sending?) (nil? echo))
-            (rows/EmptyChatStarters mode-entry !submit !active !refs))
+          (if (and (not sending?) (nil? echo))
+            (rows/EmptyChatStarters mode-entry !submit !active !refs)
+            ;; A send whose first rows have not crossed yet. The transcript must
+            ;; render SOMETHING here: the starters are wrong mid-send, and
+            ;; rendering nothing is the blank white panel this branch produced.
+            (dom/div
+              (dom/props {:class "assistant-panel__thinking"})
+              (dom/text "Starting…")))
           (e/for [message message-rows]
             (let [display-message
                   (e/server (assistant/transcript-message-view message))]
@@ -47,5 +84,8 @@
           (dom/div
             (dom/props {:class "assistant-panel__thinking"})
             (dom/text "Compacting context…")))
+        ;; assistant-rev is in here because a run settles on that channel alone:
+        ;; the stream channel stops, the row count does not move, and only the
+        ;; mutation bump marks the last of the answer arriving.
         (scroll-to-bottom! dom/node
-          [message-count stream-rev sending? (:id echo)])))))
+          [message-count stream-rev assistant-rev sending? (:id echo)])))))

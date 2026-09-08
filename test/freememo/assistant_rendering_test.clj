@@ -25,16 +25,44 @@
      :page_number 3
      :display_label "document-level evidence"}]})
 
-(deftest active-answer-stays-a-stable-text-row
-  (let [view (assistant/transcript-message-view
-               (assistant-message "streaming" "**unfinished [evidence:E1]"))]
-    (is (= "streaming-text" (:assistant_messages/render-mode view)))
-    (is (= "**unfinished [evidence:E1]"
-          (:assistant_messages/content view)))
-    (is (not (contains? view :assistant_messages/safe-html)))
-    (is (not (contains? view :assistant_messages/created_at)))
-    (is (not (contains? (first (:assistant_run/evidence view)) :created_at)))
-    (is (not (contains? (first (:assistant_run/evidence view)) :id)))))
+(deftest a-streaming-answer-renders-through-its-terminal-mode
+  (testing "formatting arrives with the text, not on the last frame"
+    (with-redefs [config/assistant-rich-render? (constantly true)]
+      (let [streaming (assistant/transcript-message-view
+                        (assistant-message "streaming" "**Partly.** [evidence:E1]"))
+            terminal (assistant/transcript-message-view
+                       (assistant-message "completed" "**Partly.** [evidence:E1]"))]
+        (is (= "rich-html" (:assistant_messages/render-mode streaming)))
+        (is (= (:assistant_messages/render-mode terminal)
+              (:assistant_messages/render-mode streaming))
+          "the renderer must not swap when the run settles")
+        (is (= (:assistant_messages/safe-html terminal)
+              (:assistant_messages/safe-html streaming)))
+        (is (str/includes? (:assistant_messages/safe-html streaming)
+              "<strong>Partly.</strong>")))))
+  (testing "an unclosed construct still renders, and wire keys stay trimmed"
+    (with-redefs [config/assistant-rich-render? (constantly true)]
+      (let [view (assistant/transcript-message-view
+                   (assistant-message "streaming" "**unfinished [evidence:E1]"))]
+        (is (= "rich-html" (:assistant_messages/render-mode view)))
+        (is (not (contains? view :assistant_messages/created_at)))
+        (is (not (contains? (first (:assistant_run/evidence view)) :created_at)))
+        (is (not (contains? (first (:assistant_run/evidence view)) :id)))))))
+
+(deftest an-empty-answer-is-neither-formatted-nor-plain
+  (is (= "empty" (:assistant_messages/render-mode
+                   (assistant/transcript-message-view
+                     (assistant-message "queued" ""))))))
+
+(deftest the-echo-retires-against-the-rendered-rows
+  (let [rows [{:assistant_messages/id 1 :assistant_messages/client_id "c-1"}
+              {:assistant_messages/id 2 :assistant_messages/client_id nil}]]
+    (is (assistant/message-client-id-present? rows "c-1"))
+    (is (not (assistant/message-client-id-present? rows "c-2")))
+    (is (not (assistant/message-client-id-present? rows nil))
+      "a chat with no echo in flight never retires one")
+    (is (not (assistant/message-client-id-present? [] "c-1"))
+      "an empty transcript holds the echo until its row arrives")))
 
 (deftest terminal-answer-becomes-sanitized-html-once
   (with-redefs [config/assistant-rich-render? (constantly true)]

@@ -7,12 +7,29 @@
    [freememo.assistant-evidence :as evidence]
    [freememo.math :as math]))
 
+(defn pin-transcript!
+  "Scroll the transcript holding `node` to its bottom. CLJ no-op.
+
+   KaTeX typesets on a promise, so an answer carrying math grows AFTER the
+   transcript has re-pinned itself — which parked a finished answer with its
+   last lines below the fold. This runs on set-html!'s after-render, the one
+   moment the final height is known.
+
+   Pre:  `node` is inside a transcript, or inside nothing (a detached leaf).
+   Post: the enclosing transcript is at its bottom, or nothing happened."
+  [node]
+  #?(:cljs (when-let [transcript (.closest node ".assistant-panel__transcript")]
+             (set! (.-scrollTop transcript) (.-scrollHeight transcript))
+             nil)
+     :clj nil))
+
 (e/defn AssistantRichTextLeaf [safe-html]
   (e/client
     (dom/div
       (dom/props {:class "assistant-msg__rich-text"})
       ;; Contract: Electric owns this div. math/set-html! owns every descendant.
-      (math/set-html! dom/node safe-html))))
+      (let [node dom/node]
+        (math/set-html! node safe-html #(pin-transcript! node))))))
 
 (e/defn AssistantAnswerContent [message !evidence]
   (e/client

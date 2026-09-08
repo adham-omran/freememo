@@ -878,9 +878,6 @@
 
 ;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
 
-(def ^:private active-run-statuses
-  #{"queued" "streaming" "stop-requested"})
-
 (def max-rich-answer-chars
   "Maximum answer size for the formatted terminal renderer."
   100000)
@@ -924,8 +921,14 @@
    Pre: message comes from messages*. The answer content is trusted Markdown,
    but its HTML is not trusted.
    Post: returns a wire-safe row with one render mode. Rich HTML is sanitized.
-   Invariant: active answers remain plain text. Rich HTML exists only after the
-   run reaches a terminal state."
+
+   A streaming answer renders through the SAME mode as its terminal answer.
+   Formatting only at the end made the panel show unformatted Markdown source
+   for the whole run and then swap renderers on the last frame, and that swap
+   unmounts one node and mounts another — the answer blanked for a frame right
+   before it settled. One mode for both states removes the swap and formats the
+   text as it arrives. Partial Markdown is re-parsed on each publication, so an
+   unclosed fence formats itself once its closing fence lands."
   [message]
   (let [wire-message (select-keys message transcript-wire-keys)
         wire-message (if (contains? wire-message :assistant_run/evidence)
@@ -937,18 +940,12 @@
     (if-not assistant?
       wire-message
       (let [content (or (:assistant_messages/content message) "")
-            status (:assistant_run/status message)
-            active? (contains? active-run-statuses status)
-            rich? (and (not active?)
-                    (not (str/blank? content))
+            rich? (and (not (str/blank? content))
                     (<= (count content) max-rich-answer-chars)
                     (config/assistant-rich-render?))]
         (cond
           (str/blank? content)
           (assoc wire-message :assistant_messages/render-mode "empty")
-
-          active?
-          (assoc wire-message :assistant_messages/render-mode "streaming-text")
 
           rich?
           (try
@@ -1022,17 +1019,23 @@
         (sort-by :timeline/order)
         (mapv #(dissoc % :timeline/order))))))
 
-(defn message-client-id-persisted?
-  "Return true when an owned chat contains the optimistic user message.
+(defn message-client-id-present?
+  "Return true when `rows` already carry the optimistic user message.
 
-   Pre: client-id is a string or nil. A nil ID returns false.
-   Post: true only for a row in the selected owned chat."
-  [_rev user-id chat-id client-id]
+   The optimistic echo is retired against THE ROWS THE TRANSCRIPT RENDERS, never
+   against a query of its own. A second query is a second server value, and the
+   two land in different frames: the cheap boolean arrived first, the panel
+   dropped the echo, and the rows it was waiting for were still crossing the
+   wire — so the transcript painted empty white between the two. Reading one
+   result closes that window by construction.
+
+   Pre: `rows` is the messages* result for the open chat. `client-id` is a
+   string or nil, and a nil ID returns false.
+   Post: true only for a row already in `rows`."
+  [rows client-id]
   (boolean
-    (and client-id chat-id
-      (db/get-assistant-chat user-id chat-id)
-      (some #(= client-id (:assistant_messages/client_id %))
-        (db/get-assistant-messages chat-id)))))
+    (and client-id
+      (some #(= client-id (:assistant_messages/client_id %)) rows))))
 
 (defn active-run*
   "Active run summary for an owned chat. `_rev` forces re-query."

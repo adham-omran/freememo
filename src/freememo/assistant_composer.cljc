@@ -15,6 +15,18 @@
       {:id (str (random-uuid)) :text text :chat @active-atom
        :refs (mapv :id @refs-atom) :mode mode-id})))
 
+(defn sync-composer-draft-value!
+  "Set the visible composer value after a programmatic draft edit.
+
+   Forms5 owns the textarea's value, so a `reset!` on the draft atom alone does
+   not move what the learner sees. Picking a reference and removing one both
+   rewrite the draft from outside the input, and both go through here."
+  [value]
+  #?(:cljs
+     (when-let [input (.querySelector js/document ".assistant-panel__input")]
+       (set! (.-value input) value))
+     :clj nil))
+
 (defn close-reference-menu-after-input!
   "Close the menu after Forms5 finishes the current input transaction."
   [value !at-open?]
@@ -52,11 +64,16 @@
                 (let [event (dom/On "click" identity nil)
                       [remove-token _] (e/Token event)]
                   (when remove-token
-                    (swap! !refs
-                      (fn [current]
-                        (into []
-                          (remove #(= (:id reference) (:id %))) current)))
-                    (remove-token))))))))
+                    (let [next-draft (panel-data/draft-without-reference
+                                       draft (:title reference))]
+                      (case (swap! !refs
+                              (fn [current]
+                                (into []
+                                  (remove #(= (:id reference) (:id %)))
+                                  current)))
+                        (case (sync-composer-draft-value! next-draft)
+                          (case (reset! !draft next-draft)
+                            (remove-token))))))))))))
       (dom/div
         (dom/props {:class "assistant-panel__composer"})
         (dom/On "input"

@@ -68,7 +68,9 @@
 
 (deftest rich-answer-is-an-unmanaged-leaf
   (let [source (slurp "src/freememo/assistant_message_content.cljc")]
-    (is (str/includes? source "(math/set-html! dom/node safe-html)"))
+    (is (str/includes? source "(math/set-html! node safe-html"))
+    (is (str/includes? source "(let [node dom/node]")
+      "the after-render callback closes over the element, not over dom/node")
     (is (not (str/includes? source "assistant-render-tree")))
     (is (not (str/includes? source "render-tree/RenderTree")))))
 
