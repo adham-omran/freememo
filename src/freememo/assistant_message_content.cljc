@@ -23,9 +23,9 @@
         (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
         (dom/On "click"
           (fn [event]
-            (when-let [target (evidence/clicked-citation-target event)]
-              (when-let [source (evidence/source-for-target
-                                  (:assistant_run/evidence message) target)]
+            (when-let [citation (evidence/clicked-citation event)]
+              (when-let [source (evidence/source-for-citation
+                                  (:assistant_run/evidence message) citation)]
                 (.preventDefault event)
                 (reset! !evidence source))))
           nil)

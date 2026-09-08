@@ -12,6 +12,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.settings :as settings]
    [freememo.assistant-evidence :as evidence]
+   [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
    [freememo.card-models :as card-models]
    [freememo.cards :as cards]
@@ -19,7 +20,9 @@
    [freememo.config :as config]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
+   [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
+   [freememo.text :as text]
    [freememo.toasts :as toasts]
    [freememo.db :as db]
    [missionary.core :as m]
@@ -168,7 +171,10 @@
   #"\[evidence:([A-Za-z0-9_-]+)\]")
 
 (def ^:private evidence-system-instructions
-  "\n\n# Evidence citations\n\nCite supplied sources only with their exact token, such as [evidence:E1]. Do not invent evidence keys. Place each citation after the claim it supports.")
+  (str "\n\n# Evidence citations\n\n"
+    "Cite supplied sources only with their exact token, such as [evidence:E1]. "
+    "Do not invent evidence keys. Use the narrowest source block that contains the claim. "
+    "Place each citation after the claim it supports."))
 
 (defn- source-revision
   "Stable revision text for one retained source snapshot."
@@ -182,11 +188,48 @@
   (let [text (or text "")]
     (subs text 0 (min 1000 (count text)))))
 
+(defn- evidence-display-label [{:keys [section-title block-index]} page-number]
+  (let [excerpt (str "excerpt " block-index)]
+    (cond
+      (and page-number section-title) (str "Page " page-number " · " section-title " · " excerpt)
+      page-number (str "Page " page-number " · " excerpt)
+      section-title (str section-title " · " excerpt)
+      :else (str "Source " excerpt))))
+
+(defn- content-evidence
+  "Build block-level evidence for one retained HTML source."
+  [content {:keys [document-topic-id page-topic-id page-number document-title
+                   source-revision]} first-index]
+  (mapv
+    (fn [offset block]
+      {:citation-key (evidence-key (+ first-index offset))
+       :document-topic-id document-topic-id
+       :page-topic-id page-topic-id
+       :page-number page-number
+       :anchor (:anchor block)
+       :document-title document-title
+       :display-label (evidence-display-label block page-number)
+       :source-revision source-revision
+       :quoted-text (:text block)
+       :quoted-html (:html block)
+       :snapshot-content (or (:html block) (:text block))})
+    (range)
+    (evidence-excerpt/evidence-blocks content)))
+
+(defn- evidence-message-content [sources]
+  (->> sources
+    (map (fn [source]
+           (str "Source " (:citation-key source) " — " (:document-title source)
+             (when-let [page (:page-number source)] (str ", page " page))
+             " — " (:display-label source) "\n"
+             (:snapshot-content source))))
+    (str/join "\n\n")))
+
 (defn- pdf-context-packet
-  "Build page-level evidence and one rendered source turn for the current PDF.
+  "Build block-level evidence and one rendered source turn for the current PDF.
    Pre: ctx identifies a PDF page. Post: {:messages :evidence :next-index}.
-   Every included page has one evidence key and the character budget matches the
-   legacy reading window."
+   Every source block has one evidence key. The page budget matches the legacy
+   reading window."
   [ctx root-title first-index]
   (let [center (:center-page ctx)
         window (:window ctx)
@@ -208,70 +251,64 @@
                :pages
                (sort-by :page)
                vec)
-        evidence (mapv (fn [offset {:keys [topic page text]}]
-                         {:citation-key (evidence-key (+ first-index offset))
-                          :document-topic-id (:root-id ctx)
-                          :page-topic-id (:topics/id topic)
-                          :page-number page
-                          :document-title root-title
-                          :display-label "document-level evidence"
-                          :source-revision (source-revision topic)
-                          :quoted-text (evidence-excerpt text)
-                          :snapshot-content text})
-                   (range) kept)
-        content (->> (map vector evidence kept)
-                  (map (fn [[source page]]
-                         (str "Source " (:citation-key source) " — " root-title
-                           ", page " (:page page) "\n" (:text page))))
-                  (str/join "\n\n"))]
+        evidence (loop [[{:keys [topic page text]} & remaining] kept
+                        next-index first-index
+                        result []]
+                   (if-not topic
+                     result
+                     (let [sources (content-evidence text
+                                     {:document-topic-id (:root-id ctx)
+                                      :page-topic-id (:topics/id topic)
+                                      :page-number page
+                                      :document-title root-title
+                                      :source-revision (source-revision topic)}
+                                     next-index)]
+                       (recur remaining (+ next-index (count sources))
+                         (into result sources)))))
+        content (evidence-message-content evidence)]
     {:messages (if (str/blank? content) [] [{:role "user" :content content}])
      :evidence evidence
      :next-index (+ first-index (count evidence))}))
 
 (defn- topic-context-packet
-  "Build one document-level source for the current non-PDF topic."
+  "Build block-level sources for the current non-PDF topic."
   [ctx root-title first-index]
   (if-let [topic (some-> (:page-topic-id ctx) db/get-topic)]
     (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
-      (let [source {:citation-key (evidence-key first-index)
-                    :document-topic-id (:root-id ctx)
-                    :page-topic-id (:topics/id topic)
-                    :page-number (:topics/page_number topic)
-                    :document-title root-title
-                    :display-label "document-level evidence"
-                    :source-revision (source-revision topic)
-                    :quoted-text (evidence-excerpt content)
-                    :snapshot-content content}]
-        {:messages [{:role "user"
-                     :content (str "Source " (:citation-key source) " — " root-title
-                                "\n" content)}]
-         :evidence [source] :next-index (inc first-index)})
+      (let [sources (content-evidence content
+                      {:document-topic-id (:root-id ctx)
+                       :page-topic-id (:topics/id topic)
+                       :page-number (:topics/page_number topic)
+                       :document-title root-title
+                       :source-revision (source-revision topic)}
+                      first-index)
+            rendered (evidence-message-content sources)]
+        {:messages (if (str/blank? rendered) [] [{:role "user" :content rendered}])
+         :evidence sources :next-index (+ first-index (count sources))})
       {:messages [] :evidence [] :next-index first-index})
     {:messages [] :evidence [] :next-index first-index}))
 
 (defn- reference-context-packet
-  "Build retained document-level sources for owned @ references."
+  "Build retained block-level sources for owned @ references."
   [user-id ref-topic-ids first-index]
   (reduce
     (fn [{:keys [messages evidence next-index]} topic-id]
       (if-let [topic (db/get-topic-for-user user-id topic-id)]
         (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
           (let [title (or (:topics/title topic) "Untitled")
-                source {:citation-key (evidence-key next-index)
-                        :document-topic-id topic-id
-                        :page-topic-id topic-id
-                        :page-number (:topics/page_number topic)
-                        :document-title title
-                        :display-label "document-level evidence"
-                        :source-revision (source-revision topic)
-                        :quoted-text (evidence-excerpt content)
-                        :snapshot-content content}]
-            {:messages (conj messages
-                         {:role "user"
-                          :content (str "Source " (:citation-key source) " — " title
-                                     "\n" content)})
-             :evidence (conj evidence source)
-             :next-index (inc next-index)})
+                sources (content-evidence content
+                          {:document-topic-id topic-id
+                           :page-topic-id topic-id
+                           :page-number (:topics/page_number topic)
+                           :document-title title
+                           :source-revision (source-revision topic)}
+                          next-index)
+                rendered (evidence-message-content sources)]
+            (if (str/blank? rendered)
+              {:messages messages :evidence evidence :next-index next-index}
+              {:messages (conj messages {:role "user" :content rendered})
+               :evidence (into evidence sources)
+               :next-index (+ next-index (count sources))}))
           {:messages messages :evidence evidence :next-index next-index})
         {:messages messages :evidence evidence :next-index next-index}))
     {:messages [] :evidence [] :next-index first-index}
@@ -356,6 +393,12 @@
   [source]
   (evidence/citation-target source))
 
+(defn- markdown-link-label [label]
+  (-> (or label "document-level evidence")
+    (str/replace "\\" "\\\\")
+    (str/replace "[" "\\[")
+    (str/replace "]" "\\]")))
+
 (defn render-evidence-citations
   "Replace valid evidence tokens with Markdown links and remove invalid tokens.
    Pre: evidence belongs to the answer run. Post: every rendered citation has a
@@ -366,8 +409,7 @@
       (fn [[_ citation-key]]
         (if-let [source (get by-key citation-key)]
           (if-let [target (citation-target source)]
-            (str "[" (or (:display_label source) "document-level evidence")
-              "](" target ")")
+            (str "[" (markdown-link-label (:display_label source)) "](" target ")")
             "")
           "")))))
 
@@ -853,7 +895,22 @@
 
 (def ^:private evidence-wire-keys
   [:citation_key :document_topic_id :page_topic_id :page_number :anchor
-   :quoted_text :document_title :display_label])
+   :quoted_text :quoted_html :document_title :display_label])
+
+(def ^:private retained-html-pattern
+  #"(?is)<(?:blockquote|code|div|figure|h[1-6]|li|ol|p|pre|table|td|th|tr|ul)\b")
+
+(defn- evidence-wire-row [row]
+  (let [wire-row (select-keys row evidence-wire-keys)]
+    (cond
+      (:quoted_html row)
+      (assoc wire-row :quoted_html
+        (cleaner/clean-html-fragment (:quoted_html row)))
+
+      (and (:quoted_text row) (re-find retained-html-pattern (:quoted_text row)))
+      (assoc wire-row :quoted_text (text/strip-html (:quoted_text row)))
+
+      :else wire-row)))
 
 (defn- plain-evidence-citations [answer evidence-rows]
   (let [by-key (into {} (map (juxt :citation_key identity)) evidence-rows)]
@@ -874,7 +931,7 @@
         wire-message (if (contains? wire-message :assistant_run/evidence)
                        (update wire-message :assistant_run/evidence
                          (fn [rows]
-                           (mapv #(select-keys % evidence-wire-keys) rows)))
+                           (mapv evidence-wire-row rows)))
                        wire-message)
         assistant? (= "assistant" (:assistant_messages/role message))]
     (if-not assistant?

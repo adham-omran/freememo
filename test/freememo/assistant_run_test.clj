@@ -137,9 +137,16 @@
 
 (deftest citation-target-resolves-retained-evidence
   (let [source {:citation_key "E1" :document_topic_id 7 :page_number 3
-                :quoted_text "Retained text"}]
+                :display_label "Source excerpt 1"
+                :quoted_text "Retained text"}
+        same-target {:citation_key "E2" :document_topic_id 7 :page_number 3
+                     :display_label "Source excerpt 2"
+                     :quoted_text "Different retained text"}]
     (is (= "/viewer/topic/7/3" (evidence/citation-target source)))
     (is (= source (evidence/source-for-target [source] "/viewer/topic/7/3")))
+    (is (= same-target
+          (evidence/source-for-citation [source same-target]
+            {:label "Source excerpt 2" :target "/viewer/topic/7/3"})))
     (is (nil? (evidence/source-for-target [source] "/viewer/topic/8")))
     (is (false? (evidence/other-document? source "7")))
     (is (true? (evidence/other-document? source 8)))))

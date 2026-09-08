@@ -4230,6 +4230,82 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.6;
 }
 
+.assistant-evidence__view-tabs {
+    display: flex;
+    gap: 6px;
+    margin-top: 18px;
+}
+
+.assistant-evidence__view-tabs .btn {
+    min-height: 32px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.assistant-evidence__view-tabs .is-active {
+    border-color: var(--color-primary);
+    color: var(--color-primary-text);
+    background: var(--color-primary-subtle, color-mix(in srgb, var(--color-primary) 12%, transparent));
+}
+
+.assistant-evidence__formatted {
+    white-space: normal;
+}
+
+.assistant-evidence__formatted > :first-child { margin-top: 0; }
+.assistant-evidence__formatted > :last-child { margin-bottom: 0; }
+.assistant-evidence__formatted h1,
+.assistant-evidence__formatted h2,
+.assistant-evidence__formatted h3,
+.assistant-evidence__formatted h4,
+.assistant-evidence__formatted h5,
+.assistant-evidence__formatted h6 { line-height: 1.25; }
+.assistant-evidence__formatted p,
+.assistant-evidence__formatted ul,
+.assistant-evidence__formatted ol,
+.assistant-evidence__formatted pre,
+.assistant-evidence__formatted blockquote { margin: 0.65em 0; }
+.assistant-evidence__formatted ul,
+.assistant-evidence__formatted ol { padding-inline-start: 1.5em; }
+.assistant-evidence__formatted a { color: var(--color-primary-text); }
+.assistant-evidence__formatted table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.assistant-evidence__formatted th,
+.assistant-evidence__formatted td {
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    text-align: start;
+}
+.assistant-evidence__formatted pre {
+    overflow-x: auto;
+    white-space: pre;
+}
+.assistant-evidence__formatted :not(pre) > code {
+    padding: 0.1em 0.35em;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: var(--color-bg);
+}
+
+.assistant-evidence__source {
+    overflow: auto;
+    white-space: pre-wrap;
+    tab-size: 2;
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+}
+.assistant-evidence__source code { font-family: inherit; }
+.assistant-evidence__source .hljs-tag,
+.assistant-evidence__source .hljs-name { color: light-dark(#7e22ce, #c678dd); }
+.assistant-evidence__source .hljs-attr { color: light-dark(#be123c, #e06c75); }
+.assistant-evidence__source .hljs-string { color: light-dark(#3f6212, #98c379); }
+.assistant-evidence__source .hljs-comment {
+    color: light-dark(#6b7280, #9ca3af);
+    font-style: italic;
+}
+.assistant-evidence__source .hljs-meta { color: light-dark(#0369a1, #56b6c2); }
+
 .assistant-evidence__empty { color: var(--color-text-secondary); }
 .assistant-evidence__open { display: inline-flex; text-decoration: none; }
 

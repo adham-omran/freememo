@@ -7,6 +7,9 @@
    [freememo.config :as config]
    [freememo.markdown :as markdown]))
 
+(def ^:private content-evidence
+  #'assistant/content-evidence)
+
 (defn- assistant-message [status content]
   {:assistant_messages/id 7
    :assistant_messages/role "assistant"
@@ -43,6 +46,38 @@
       (is (str/includes? html "<strong>Done.</strong>"))
       (is (str/includes? html "href=\"/viewer/topic/12/3\""))
       (is (not (str/includes? html "<script"))))))
+
+(deftest formatted-evidence-is-sanitized-for-the-browser
+  (let [message (assoc-in (assistant-message "streaming" "Working")
+                  [:assistant_run/evidence 0 :quoted_html]
+                  "<p onclick=\"steal()\">Retained<script>steal()</script></p>")
+        [source] (:assistant_run/evidence (assistant/transcript-message-view message))]
+    (is (= "<p>Retained</p>" (:quoted_html source)))
+    (is (not (contains? source :created_at)))))
+
+(deftest old-html-in-the-text-field-becomes-safe-plain-text
+  (let [message (assoc-in (assistant-message "streaming" "Working")
+                  [:assistant_run/evidence 0 :quoted_text]
+                  "<h2>Introduction</h2><p>Retained <strong>evidence</strong>.</p><li>cut")
+        [source] (:assistant_run/evidence (assistant/transcript-message-view message))]
+    (is (= "Introduction Retained evidence. cut" (:quoted_text source)))
+    (is (nil? (:quoted_html source)))))
+
+(deftest each-source-block-gets-distinct-retained-evidence
+  (let [sources (content-evidence
+                  "<h2 id=\"memory\">Memory</h2><p>Stack values.</p><p>Heap values.</p>"
+                  {:document-topic-id 12
+                   :page-topic-id 12
+                   :document-title "Zig"
+                   :source-revision "rev-1"}
+                  4)]
+    (is (= ["E4" "E5" "E6"] (mapv :citation-key sources)))
+    (is (= ["Memory" "Stack values." "Heap values."]
+          (mapv :quoted-text sources)))
+    (is (= ["Memory · excerpt 1" "Memory · excerpt 2" "Memory · excerpt 3"]
+          (mapv :display-label sources)))
+    (is (= ["memory" "memory" "memory"] (mapv :anchor sources)))
+    (is (every? :quoted-html sources))))
 
 (deftest rich-render-switch-and-size-limit-fall-back-to-text
   (testing "the deployment switch disables formatted answers"

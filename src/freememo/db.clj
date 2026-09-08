@@ -743,12 +743,15 @@
       page_number INTEGER,
       anchor TEXT,
       quoted_text TEXT,
+      quoted_html TEXT,
       document_title TEXT NOT NULL,
       display_label TEXT NOT NULL,
       source_revision TEXT,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(run_id, citation_key)
     )"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_evidence
+                      ADD COLUMN IF NOT EXISTS quoted_html TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_evidence_run
                       ON assistant_evidence(run_id, citation_key)"])
   ;; No provider worker survives a JVM restart. Close runs that the previous
@@ -2820,7 +2823,7 @@
       (sql/format
         {:insert-into :assistant_evidence
          :values (mapv (fn [{:keys [citation-key document-topic-id page-topic-id
-                                    page-number anchor quoted-text document-title
+                                    page-number anchor quoted-text quoted-html document-title
                                     display-label source-revision]}]
                          {:run_id run-id
                           :citation_key citation-key
@@ -2829,6 +2832,7 @@
                           :page_number page-number
                           :anchor anchor
                           :quoted_text quoted-text
+                          :quoted_html quoted-html
                           :document_title document-title
                           :display_label display-label
                           :source_revision source-revision})
