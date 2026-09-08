@@ -88,6 +88,8 @@
        --color-primary-light) is 3.1:1 and fails 1.4.3 — hence new tokens. */
     --color-primary-tint: light-dark(#dbeafe, #1e3a8a);
     --color-primary-tint-text: light-dark(#1d4ed8, #93c5fd);
+    --color-remark-tint: light-dark(#f3e8ff, #3b0764);
+    --color-remark-tint-text: light-dark(#6b21a8, #e9d5ff);
 
     /* Interactive */
     --color-highlight: light-dark(#d0e8ff, #1e3a5f);
@@ -325,6 +327,71 @@ html, body {
 /* Card add/edit modal inner panel — viewport-relative.
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
+.card-anki-state-panel {
+    margin: 0 0 var(--sp-4);
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-subtle);
+}
+.card-anki-state-heading {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    min-height: 24px;
+}
+.card-anki-state-label,
+.card-anki-remark-label {
+    flex: none;
+    color: var(--color-text-hint);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.card-anki-state-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.card-anki-state-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    font-weight: 700;
+}
+.card-anki-state-badge-suspended {
+    color: var(--color-warning-dark);
+    background: var(--color-warning-bg);
+    box-shadow: inset 0 0 0 1px var(--color-warning-light);
+}
+.card-anki-state-badge-marked {
+    color: var(--color-primary-tint-text);
+    background: var(--color-primary-tint);
+}
+.card-anki-state-badge-remarked {
+    color: var(--color-remark-tint-text);
+    background: var(--color-remark-tint);
+}
+.card-anki-remark {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--sp-3);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+}
+.card-anki-remark-label { padding-top: 2px; }
+.card-anki-remark-text {
+    color: var(--color-text-label);
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
 
 /* ── Quiz item statistics (freememo.quiz-item-stats) ──────────────
    One item's lifetime record: the scheduling fields, its review history, and the
@@ -4449,8 +4516,37 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 /* Static glyph sizes in the diff cell; the colours remain inline because they
    are computed from sync direction. */
 .cards-table-body .card-cell-glyph { font-size: 9px; }
+.cards-table-body .card-cell-glyph-remarked { color: var(--color-primary-text); }
 .cards-table-body tr { cursor: pointer; }
 .cards-table-body input[type="checkbox"] { cursor: pointer; }
+
+/* The tint shows the most urgent state: suspended, then marked, then
+   remarked. Badges and glyphs preserve every state in a combination. */
+.cards-table-body tr.card-anki-remarked td,
+.card-table tr.card-anki-remarked td {
+    background: rgba(124, 58, 237, 0.10);
+}
+.cards-table-body tr.card-anki-marked td,
+.card-table tr.card-anki-marked td {
+    background: rgba(37, 99, 235, 0.12);
+}
+.cards-table-body tr.card-anki-suspended td,
+.card-table tr.card-anki-suspended td {
+    background: rgba(245, 158, 11, 0.13);
+}
+.card-table tr.card-review-target td {
+    box-shadow: inset 0 2px var(--color-primary), inset 0 -2px var(--color-primary);
+}
+.card-table tr.card-review-target td:first-child {
+    box-shadow: inset 3px 0 var(--color-primary), inset 0 2px var(--color-primary), inset 0 -2px var(--color-primary);
+}
+.card-table tr.card-review-target td:last-child {
+    box-shadow: inset -3px 0 var(--color-primary), inset 0 2px var(--color-primary), inset 0 -2px var(--color-primary);
+}
+.card-review-message {
+    color: var(--color-primary-text);
+    font-weight: 600;
+}
 /* Document cell's inner label — five static properties that were an inline map. */
 .card-cell-doc-label {
     overflow: hidden;

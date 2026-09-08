@@ -434,6 +434,13 @@
      :open-subset-review  {:label "Review subset" :class :nav :nav-tab :viewer
                            :data {:root-id :payload :root-name :payload}
                            :palette-hidden true}
+     ;; The mounted viewer consumes these and moves to the next matching row.
+     :find-next-marked-card    {:label "Find next marked card" :class :query
+                                :exec :electric :when #{:viewer}}
+     :find-next-suspended-card {:label "Find next suspended card" :class :query
+                                :exec :electric :when #{:viewer}}
+     :find-next-remarked-card  {:label "Find next remarked card" :class :query
+                                :exec :electric :when #{:viewer}}
 
      ;; — App shell —
      :toggle-palette    {:label "Command palette" :class :nav :bind "meta+k"}

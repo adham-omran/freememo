@@ -9,6 +9,9 @@
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow PendingCardRow rtl-text? unsynced?]]
    [freememo.card-rows :as rows]
+   [freememo.anki-review :as review]
+   [freememo.anki-review-overlay :as review-overlay]
+   [freememo.command-bus :as bus]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [freememo.score-toolbar :refer [ScoreEditLoader]]
@@ -16,6 +19,18 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [taoensso.telemere :as tel])
    [freememo.optimistic :as opt]))
+
+(def review-command-states
+  [[:find-next-marked-card :marked]
+   [:find-next-suspended-card :suspended]
+   [:find-next-remarked-card :remarked]])
+
+(def review-state-label
+  {:marked "Marked" :suspended "Suspended" :remarked "Remarked"})
+
+(defn scroll-to-card-row! [node top]
+  #?(:cljs (.scrollTo node #js {:top top :behavior "smooth"})
+     :clj nil))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
@@ -43,7 +58,13 @@
           refresh dctx/card-refresh
           cards-result (e/server (e/Offload #(get-cards-for-topic* refresh topic-id)))
           !editing-card (atom nil)
-          editing-card (e/watch !editing-card)]
+          editing-card (e/watch !editing-card)
+          !anki-status (atom :idle)
+          !anki-payload (atom nil)
+          !anki-check-tick (atom 0)
+          !review-cursors (atom {})
+          !review-target (atom nil)
+          !review-message (atom nil)]
 
       (when editing-card
         ;; :mode is checked before :kind because a copy request carries BOTH,
@@ -68,6 +89,12 @@
         (let [cards-vec (e/server (vec (:cards cards-result)))
               row-count (e/server (count cards-vec))
               card-count (e/server (rows/card-count cards-vec))
+              manifest (e/server (review/pushed-manifest cards-vec))
+              row-member-ids (e/server (mapv :member-ids cards-vec))
+              anki-overlay (review-overlay/AnkiOverlay
+                             user-id manifest !anki-status !anki-payload !anki-check-tick)
+              review-target (e/watch !review-target)
+              review-message (e/watch !review-message)
               ;; Counted over MEMBERS, not rows: this is an Anki-note count and
               ;; a group row holds one note per member.
               ;; `card-components/unsynced?` is the same rule `db/unsynced-sql`
@@ -105,15 +132,46 @@
                 (t))))
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+            (let [scroll-node dom/node
+                  find-next! (fn [state]
+                               (let [matches (review/matching-row-indexes
+                                               row-member-ids anki-overlay state)
+                                     target (review/next-row-index
+                                              matches (get @!review-cursors state -1))]
+                                 (if (some? target)
+                                   (let [position (inc (count (take-while #(not= % target) matches)))]
+                                     (swap! !review-cursors assoc state target)
+                                     (reset! !review-target target)
+                                     (reset! !review-message
+                                       (str (review-state-label state) " card " position
+                                         " of " (count matches)))
+                                     (scroll-to-card-row! scroll-node (* target row-height)))
+                                   (do
+                                     (reset! !review-target nil)
+                                     (reset! !review-message
+                                       (str "No " (review-state-label state)
+                                         " cards in this content."))))))]
+              (e/for [[command-id state] (e/diff-by first review-command-states)]
+                (e/for [request (bus/Requests command-id)]
+                  (let [[t _] (e/Token (:invocation-id request))]
+                    (when t
+                      (case (find-next! state)
+                        (case (bus/consume! (:invocation-id request))
+                          (t))))))))
             (when (pos? row-count)
               (dom/div
-                (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "var(--color-text-hint)"}})
+                (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "var(--color-text-hint)"}
+                            :aria-live "polite"})
                 ;; Rows and cards, stated separately whenever a group makes
                 ;; them differ — the same dual idiom /library/cards uses.
                 (dom/text (str row-count " row" (when (not= row-count 1) "s")
                             (when (not= row-count card-count)
                               (str " · " card-count " cards"))
-                            (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
+                            (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))
+                (when review-message
+                  (dom/span
+                    (dom/props {:class "card-review-message"})
+                    (dom/text " · " review-message)))))
             (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
@@ -140,7 +198,7 @@
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
-                        (CardRow card !editing-card user-id i))))
+                        (CardRow card !editing-card user-id i anki-overlay (= i review-target)))))
                   (when (empty? overlay-entries)
                     (dom/tr
                       ;; Opt out of the fixed row-height so the message isn't clipped (C1c).

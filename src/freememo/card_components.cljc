@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [freememo.logging :as log]
    [freememo.commands :as commands]
+   [freememo.anki-review :as review]
    [freememo.occlusion-ordinals :as ord]
    [freememo.math :as math]
    #?(:clj [freememo.cards :as cards])
@@ -240,7 +241,7 @@
   (let [states (into #{} (map sync-state) (:members c))]
     (if (= 1 (count states)) (first states) :mixed)))
 
-(e/defn CardRow [card !editing-card user-id order]
+(e/defn CardRow [card !editing-card user-id order anki-overlay review-target?]
   (e/client
     (let [id (e/server (:flashcards/id card))
           member-ids (e/server (:member-ids card))
@@ -261,7 +262,8 @@
           ;; Built server-side from the members: a group row's front cell
           ;; describes the whole group, and its dot folds every member's state.
           front-html (e/server (row-front-html card))
-          sync-st (e/server (row-sync-state card))]
+          sync-st (e/server (row-sync-state card))
+          anki-flags (review/row-flags member-ids anki-overlay)]
       (let [occ? (= kind "occlusion")
             score? (= kind "score")
             cloze? (= kind "cloze")
@@ -272,24 +274,30 @@
                                         occ?
                                         ;; Routes to OcclusionModal (edit mode)
                                         ;; — see ContentCardTable.
-                                        {:kind "occlusion" :mode :edit :group-id group-id}
+                                        {:kind "occlusion" :mode :edit :group-id group-id
+                                         :anki-flags anki-flags}
                                         score?
                                         ;; Routes to ScoreEditLoader — loads the
                                         ;; pair into the in-view score editor.
-                                        {:kind "score" :group-id score-group-id}
+                                        {:kind "score" :group-id score-group-id
+                                         :anki-flags anki-flags}
                                         overlapping?
                                         ;; Routes to EditCardModal (default case)
                                         ;; carrying the parsed list so the
                                         ;; overlapping pane can pre-fill.
                                         {:id id :kind kind :overlapping ol
+                                         :anki-flags anki-flags
                                          :topic-id topic-id :root-topic-id root-topic-id}
                                         :else
                                         {:id id :kind kind :question question :answer answer :cloze cloze
+                                         :anki-flags anki-flags
                                          :topic-id topic-id :root-topic-id root-topic-id})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                              (reset! !editing-card data)))]
         (dom/tr
-          (dom/props {:style {:--order order :cursor "pointer"}})
+          (dom/props {:class (str (review/row-class anki-flags)
+                               (when review-target? " card-review-target"))
+                      :style {:--order order :cursor "pointer"}})
           (dom/On "click" edit-card! nil)
           ;; Sync indicator
           (dom/td

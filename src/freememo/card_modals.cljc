@@ -533,6 +533,45 @@
          (cards/update-card user-id card-id updated)))
      :cljs nil))
 
+(e/defn AnkiStatePanel [flags]
+  (e/client
+    (let [suspended (get-in flags [:suspended :suspended] 0)
+          suspended-total (get-in flags [:suspended :total] 0)
+          remarks (:remarks flags)]
+      (when (or (:marked flags) (pos? suspended) (:remarked flags))
+        (dom/section
+          (dom/props {:class "card-anki-state-panel" :aria-label "Anki state"})
+          (dom/div
+            (dom/props {:class "card-anki-state-heading"})
+            (dom/span
+              (dom/props {:class "card-anki-state-label"})
+              (dom/text "Anki state"))
+            (dom/div
+              (dom/props {:class "card-anki-state-badges"})
+              (when (pos? suspended)
+                (dom/span
+                  (dom/props {:class "card-anki-state-badge card-anki-state-badge-suspended"})
+                  (dom/text (if (= suspended suspended-total)
+                              "Suspended"
+                              (str "Suspended " suspended "/" suspended-total)))))
+              (when (:marked flags)
+                (dom/span
+                  (dom/props {:class "card-anki-state-badge card-anki-state-badge-marked"})
+                  (dom/text "Marked")))
+              (when (:remarked flags)
+                (dom/span
+                  (dom/props {:class "card-anki-state-badge card-anki-state-badge-remarked"})
+                  (dom/text "Remarked")))))
+          (when (seq remarks)
+            (dom/div
+              (dom/props {:class "card-anki-remark"})
+              (dom/span
+                (dom/props {:class "card-anki-remark-label"})
+                (dom/text "Anki remark"))
+              (dom/div
+                (dom/props {:class "card-anki-remark-text"})
+                (dom/text (str/join "\n\n" remarks))))))))))
+
 (e/defn CopyCardButton
   "Create copy… — commit the card being edited, then hand its content to a
    fresh Copy Card modal.
@@ -625,6 +664,7 @@
           init-a (or (:answer editing-card) "")
           init-c (or (:cloze editing-card) "")
           init-ol (:overlapping editing-card)
+          anki-flags (:anki-flags editing-card)
           ;; Bound once and used three ways: to seed the atoms, to mount the
           ;; QuillFields, and to build init-shape below. All three MUST read
           ;; the same values, or the dirty test compares the editors against
@@ -702,6 +742,7 @@
                                       :border-bottom "1px solid var(--color-border)"}})
             (dom/text "Edit " (cond (= kind "overlapping") "Overlapping"
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
+          (AnkiStatePanel anki-flags)
           (cond
             (= kind "overlapping")
             (OverlappingPane !ol-question !ol-question-editor init-ol-question [:edit-ol-q card-id]
@@ -1138,4 +1179,3 @@
         !card-kind !prefill
         (:topic-id request) (:root-topic-id request)
         user-id (:source request)))))
-

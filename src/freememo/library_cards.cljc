@@ -10,10 +10,10 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.modal-shell :as modal]
-   [missionary.core :as m]
    [freememo.navigation :as nav]
-   [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
+   [freememo.anki-review :as review]
+   [freememo.anki-review-overlay :as review-overlay]
    [freememo.anki-reconcile-client :as rc]
    [freememo.card-components :as cc
     :refer [card-row-html set-inner-html! DeleteCardButton
@@ -22,11 +22,9 @@
    [freememo.card-rows :as rows]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
-   [freememo.math :as math]
    [freememo.quiz-item-stats :as stats]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
-   #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.anki-reconcile-server :as recon-server])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
@@ -103,17 +101,6 @@
   [dirs]
   (let [s (set dirs)]
     (if (= 1 (count s)) (first s) :mixed)))
-
-(defn row-anki-flags
-  "Overlay flags folded over a row's members: marked when ANY member is marked,
-   and the suspended tri-state summed across the group so it reads
-   'k of n cards suspended' for the whole row."
-  [member-ids anki-overlay]
-  (let [fs (keep #(get anki-overlay %) member-ids)
-        total (transduce (keep (comp :total :suspended)) + 0 fs)
-        susp (transduce (keep (comp :suspended :suspended)) + 0 fs)]
-    {:marked (boolean (some :marked fs))
-     :suspended (when (pos? total) {:total total :suspended susp})}))
 
 (defn direction-glyph [direction]
   (case direction
@@ -224,21 +211,8 @@
 
 ;; Multi-select facets combine OR within a group, AND across groups. Empty
 ;; group = no constraint. Kind + the DB-derived origins (unpushed/fm-changed/
-;; in-sync) filter server-side here; the Anki-derived facets (anki-changed,
-;; both, marked, suspended) filter against overlay-ids the client supplies —
-;; nil/empty whenever Anki is disconnected, so the disabled chips can't narrow.
-
-(defn overlay->filter-ids
-  "Split the client Anki overlay (per-card flag map) into the id-sets the
-   server filter consumes: :anki-changed (also the 'both' input), :marked,
-   :suspended. Client-side — the overlay materializes on the client."
-  [anki-overlay]
-  {:anki-changed (set (keep (fn [[cid f]] (when (:anki-modified f) cid)) anki-overlay))
-   :marked       (set (keep (fn [[cid f]] (when (:marked f) cid)) anki-overlay))
-   :suspended    (set (keep (fn [[cid f]]
-                              (when-let [s (:suspended f)]
-                                (when (pos? (:suspended s)) cid)))
-                        anki-overlay))})
+;; in-sync) filter on the server. The other facets use overlay IDs from the
+;; client. They cannot narrow the list when Anki is not connected.
 
 #?(:clj
    (defn- filter-cards-kinds [cards kinds]
@@ -284,7 +258,8 @@
      (if (empty? flags)
        cards
        (let [marked (or (:marked overlay-ids) #{})
-             suspended (or (:suspended overlay-ids) #{})]
+             suspended (or (:suspended overlay-ids) #{})
+             remarked (or (:remarked overlay-ids) #{})]
          (filterv
            (fn [c]
              (let [ids (:member-ids c)]
@@ -293,6 +268,7 @@
                          (case fl
                            "marked"    (boolean (some marked ids))
                            "suspended" (boolean (some suspended ids))
+                           "remarked"  (boolean (some remarked ids))
                            false))
                    flags))))
            cards)))))
@@ -465,86 +441,6 @@
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------
-;; Anki overlay fetch — client-side AnkiConnect batch.
-;; One notesInfo over all pushed note ids + one areSuspended over the anki
-;; card ids it returns. Generation-guarded: only the latest run applies.
-;; ---------------------------------------------------------------------------
-
-;; Both platforms, no reader conditional — referenced from e/defn bodies
-;; (CLAUDE.md frame-mismatch rule).
-(defonce !anki-fetch-gen (atom 0))
-
-(defn start-anki-overlay-fetch!
-  "Fire the AnkiConnect overlay batch for manifest [{:card-id :note-id} ...].
-   pre:  manifest non-empty; !status / !payload are client atoms.
-   post (async): !payload ← {:present [{:note-id :stripped-fields :tags
-                                        :suspended {:total :suspended}} ...]
-                             :absent [note-id ...]}
-                 and !status ← :ready — or !status ← :unavailable on any
-                 AnkiConnect failure (payload untouched).
-   _trigger is unused — callers pass [sync-rev check-tick] so Electric
-   re-runs this expression when either changes."
-  [manifest _trigger !status !payload]
-  #?(:cljs
-     (let [my-gen (swap! !anki-fetch-gen inc)
-           note-ids (mapv :note-id manifest)]
-       (reset! !status :checking)
-       (log/log-debug (str "[anki-overlay] fetch start gen=" my-gen
-                        " notes=" (count note-ids)))
-       ((m/sp
-          (let [notes (m/? (helpers/anki-call! "notesInfo" {:notes note-ids}))
-                notes-clj (js->clj notes :keywordize-keys true)
-                pairs (map vector note-ids notes-clj)
-                absent (into []
-                         (keep (fn [[nid note]]
-                                 (when (or (nil? note) (empty? note) (nil? (:noteId note)))
-                                   nid)))
-                         pairs)
-                present (into []
-                          (keep (fn [[nid note]]
-                                  (when (and (map? note) (:noteId note))
-                                    {:note-id nid
-                                     ;; Anki→stored form BEFORE stripping: strip-html
-                                     ;; erases <anki-mathjax> but keeps a stored
-                                     ;; `\(TeX\)`, so comparing the two raw would
-                                     ;; flag every math card as Anki-modified on
-                                     ;; every diff, forever.
-                                     :stripped-fields (mapv (comp helpers/strip-html
-                                                              math/anki->stored-html)
-                                                        (helpers/ordered-field-values (:fields note)))
-                                     :tags (vec (:tags note))
-                                     :card-ids (vec (:cards note))})))
-                          pairs)
-                all-card-ids (into [] (mapcat :card-ids) present)
-                suspended-flags (if (seq all-card-ids)
-                                  (vec (js->clj (m/? (helpers/anki-call! "areSuspended"
-                                                       {:cards all-card-ids}))))
-                                  [])
-                card-id->suspended (zipmap all-card-ids suspended-flags)]
-            {:present (mapv (fn [{:keys [card-ids] :as note}]
-                              (-> note
-                                (dissoc :card-ids)
-                                (assoc :suspended
-                                  {:total (count card-ids)
-                                   :suspended (count (filter #(true? (get card-id->suspended %))
-                                                       card-ids))})))
-                        present)
-             :absent absent}))
-        (fn [result]
-          (when (= my-gen @!anki-fetch-gen)
-            (log/log-debug (str "[anki-overlay] fetch done gen=" my-gen
-                             " present=" (count (:present result))
-                             " absent=" (count (:absent result))))
-            (reset! !payload result)
-            (reset! !status :ready)))
-        (fn [err]
-          (when (= my-gen @!anki-fetch-gen)
-            (log/log-debug (str "[anki-overlay] fetch failed gen=" my-gen
-                             " error=" (.-message err)))
-            (reset! !status :unavailable)))))
-     :clj nil))
-
-;; ---------------------------------------------------------------------------
 ;; Diff modal fetch — one notesInfo for the card under inspection.
 ;; ---------------------------------------------------------------------------
 
@@ -686,6 +582,11 @@
             (dom/props {:class "card-cell-glyph" :style {:color "var(--color-primary-text)"}})
             (tooltip/Tooltip! "Marked in Anki")
             (dom/text "★")))
+        (when (:remarked flags)
+          (dom/span
+            (dom/props {:class "card-cell-glyph card-cell-glyph-remarked"})
+            (tooltip/Tooltip! "Has remarks in Anki")
+            (dom/text "✎")))
         (when (and susp (pos? (:suspended susp)))
           (dom/span
             (dom/props {:class "card-cell-glyph"
@@ -811,6 +712,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           back-html (:back-html card)
           span2? (:span2? card)
           added (:formatted_date card)
+          anki-flags (review/row-flags member-ids anki-overlay)
           ;; "Root / Document", or just "Root" when the card is on the root topic.
           doc-label (if (= topic-id root-topic-id)
                       root-title
@@ -820,22 +722,30 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           ;; doc-context /cards lacks. Route the click to the card's document
           ;; instead. basic/cloze/overlapping seed the edit modal.
           edit-card! (fn [_]
-                       (case kind
-                         ("occlusion" "score") (navigate! :viewer (nav/nav-topic topic-id :library))
-                         "overlapping" (reset! !editing-card
-                                         {:id id :kind kind :overlapping ol
-                                          :topic-id topic-id :root-topic-id root-topic-id})
+                       (cond
+                         (contains? #{"occlusion" "score"} kind)
+                         (navigate! :viewer (nav/nav-topic topic-id :library))
+
+                         (= "overlapping" kind)
+                         (reset! !editing-card
+                           {:id id :kind kind :overlapping ol
+                            :anki-flags anki-flags
+                            :topic-id topic-id :root-topic-id root-topic-id})
+
+                         :else
                          (reset! !editing-card {:id id :kind kind :question question
                                                 :answer answer :cloze cloze
+                                                :anki-flags anki-flags
                                                 :topic-id topic-id :root-topic-id root-topic-id})))]
       (dom/tr
-        (dom/props {:class (when (even? i) "row-alt")
+        (dom/props {:class (str (when (even? i) "row-alt")
+                             (review/row-class anki-flags))
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
         (dom/On "click" edit-card! nil)
         (RowSelectCell row-key member-ids !selected selected)
         (RowDiffCell (member-directions member-ids member-states anki-overlay)
-          (row-anki-flags member-ids anki-overlay)
+          anki-flags
           (when-not group-row?
             {:id id :kind kind :question question :answer answer
              :cloze cloze :note-id note-id})
@@ -1229,7 +1139,8 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
    ["anki-changed" "Anki changed" true "anki"]
    ["conflict" "Conflict" false nil]
    ["in-sync" "In sync" false nil]])
-(def ^:private flag-facets [["marked" "Marked"] ["suspended" "Suspended"]])
+(def ^:private flag-facets
+  [["marked" "Marked"] ["suspended" "Suspended"] ["remarked" "Remarked"]])
 
 ;; ── URL filter state ────────────────────────────────────────────────
 ;; Query-string params, written with replaceState on every change (including
@@ -1539,24 +1450,6 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; Fetch trigger: view mount, :sync-mutations change (in-app push/pull/
 ;; deletion), manifest change, or Check Anki click. Work-skipping on equal
 ;; values prevents refetch when nothing relevant changed.
-(e/defn AnkiOverlay [user-id manifest !ov-status !ov-payload !check-tick]
-  (e/client
-    (let [sync-rev (e/server (e/watch (us/get-atom user-id :sync-mutations)))
-          card-rev (e/server (e/watch (us/get-atom user-id :card-mutations)))
-          ov-payload (e/watch !ov-payload)
-          check-tick (e/watch !check-tick)]
-      (when (seq manifest)
-        (start-anki-overlay-fetch! manifest [sync-rev check-tick] !ov-status !ov-payload))
-      (let [overlay-resp (when (some? ov-payload)
-                           (let [present (:present ov-payload)
-                                 absent (:absent ov-payload)
-                                 ;; local edits must recompute the diff even when
-                                 ;; the Anki payload is byte-identical
-                                 overlay-rev (+ sync-rev card-rev)]
-                             (e/server
-                               (e/Offload #(sync-server/apply-anki-overlay! overlay-rev user-id present absent)))))]
-        (or (:per-card overlay-resp) {})))))
-
 ;; Diff + bulk-delete modals, mounted on their state atoms.
 (e/defn CardsModals [user-id !diff-card !confirm-bulk-delete !selected !action-result !stats]
   (e/client
@@ -1674,8 +1567,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
    overlay changes trigger no re-query."
   [origins flags anki-overlay]
   (if (or (contains? origins "anki-changed") (seq flags))
-    (overlay->filter-ids anki-overlay)
-    {:anki-changed #{} :marked #{} :suspended #{}}))
+    (review/overlay->filter-ids anki-overlay)
+    {:anki-changed #{} :marked #{} :suspended #{} :remarked #{}}))
 
 (defn- build-query-opts [text kinds origins flags overlay-ids sort-col sort-dir]
   {:text text :kinds kinds :origins origins :flags flags
@@ -1716,7 +1609,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
                                  (e/watch (us/get-atom user-id :card-mutations))
                                  (e/watch (us/get-atom user-id :sync-mutations)))]
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
-          anki-overlay (AnkiOverlay user-id manifest !ov-status !ov-payload !check-tick)
+          anki-overlay (review-overlay/AnkiOverlay
+                         user-id manifest !ov-status !ov-payload !check-tick)
           overlay-ids (overlay-ids-for origins flags anki-overlay)
           opts (build-query-opts text-debounced kinds origins flags overlay-ids sort-col sort-dir)
           ;; URL sync — a side effect during binding evaluation, referenced by

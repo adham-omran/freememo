@@ -25,6 +25,15 @@
       (is (string? (:label entry)) "missing :label")
       (is (#{:mutation :query :nav} (:class entry)) "invalid :class"))))
 
+(deftest anki-review-commands-run-only-in-the-viewer
+  (doseq [id [:find-next-marked-card
+              :find-next-suspended-card
+              :find-next-remarked-card]]
+    (let [entry (commands/command id)]
+      (is (= :electric (:exec entry)))
+      (is (= #{:viewer} (:when entry)))
+      (is (not (:palette-hidden entry))))))
+
 ;; ── Single bump authority ───────────────────────────────────────────────────
 
 (def ^:private bump-pattern

@@ -6,6 +6,7 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.commands :as commands]
+   [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
    [freememo.html-cleaner :as cleaner]
@@ -315,11 +316,12 @@
    pre:  present-notes [{:note-id long
                          :stripped-fields [str ...]   ; strip-html'd, Anki field order
                          :tags [str ...]
+                         :remark string or nil
                          :suspended {:total n :suspended n}} ...]
          absent-note-ids [long ...] — accepted and IGNORED, see below.
          Both derive from ONE notesInfo batch on the client.
    post: {:success true
-          :per-card {card-id {:anki-modified bool, :marked bool,
+          :per-card {card-id {:anki-modified bool, :marked bool, :remarked bool,
                               :suspended {:total n :suspended n}}}  ; SPARSE — flagged cards only
           :deleted-count 0}
    invariants: reads only user-id's cards; deletes nothing.
@@ -348,7 +350,7 @@
                           (db/get-flashcards-by-anki-note-ids user-id note-ids))
           per-card
           (into {}
-            (keep (fn [{:keys [note-id stripped-fields tags suspended]}]
+            (keep (fn [{:keys [note-id stripped-fields tags remark suspended]}]
                     (when-let [card (get local-by-note note-id)]
                       (let [kind (:flashcards/kind card)
                             basic? (= "basic" kind)
@@ -363,12 +365,8 @@
                               basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card) kind))
                                        (not (stripped= (second stripped-fields) (:flashcards/answer card) kind)))
                               :else (not (stripped= (first stripped-fields) (:flashcards/cloze card) kind)))
-                            marked? (boolean (some #{"marked"} tags))
-                            suspended-n (or (:suspended suspended) 0)
-                            flags (cond-> {}
-                                    anki-modified? (assoc :anki-modified true)
-                                    marked? (assoc :marked true)
-                                    (pos? suspended-n) (assoc :suspended suspended))]
+                            flags (review/overlay-flags
+                                    anki-modified? tags remark suspended)]
                         (when (seq flags)
                           [(:flashcards/id card) flags])))))
             present-notes)]
