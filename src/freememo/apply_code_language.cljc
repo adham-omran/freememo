@@ -31,7 +31,13 @@
    Each rewritten card DOES keep its previous rendition, because the write goes
    through `db/update-flashcard-versioned!` and lands in the card history modal.
    That is a byproduct of using the writer built for user-initiated saves, not
-   an undo for this command."
+   an undo for this command.
+
+   A PICK IS A LONG OPERATION AND THE PICKER SAYS SO. The prose half cannot be
+   moved off the main thread — Quill is a DOM library — so the picker shows
+   which phase is running and stops answering Escape until it is done. See
+   `set-editor-code-language!` for the arithmetic that made the difference
+   between a second and a hung tab."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -68,40 +74,80 @@
    persist without entering Quill's undo history.
 
    Pre : `language` ∈ `langs/code-language-keys` (caller checks — the server
-         asserts it again before anything is stored).
+         asserts it again before anything is stored). The caller has already
+         painted a busy state and yielded a frame, because this BLOCKS the main
+         thread for its whole run.
    Post: every `div.ql-code-block` in the editor carries `language`; no other
          line is touched; `!dirty-html` holds the new stored-form body tagged
          with the editor's own topic id, so the auto-save writes it. Returns the
          number of code BLOCKS changed, which is what a reader counts. 0 when no
          editor is mounted, and then `!dirty-html` is left alone.
-   Inv : Quill's document LENGTH does not change, which is why the line indices
-         are collected before the first `formatLine` and stay valid through the
-         loop."
+   Inv : Quill's document LENGTH does not change, which is why the newline
+         indices are collected before the write and stay valid through it.
+
+   ONE `updateContents`, NEVER ONE `formatLine` PER LINE. `formatLine` ends in
+   `Editor.update`, which rebuilds the WHOLE document's Delta and composes it
+   against the previous one — O(document) per call, with no batching to share.
+   A production document with 707 code blocks made that O(707 × document) and
+   hung the tab for more than five minutes, until Chrome offered to kill the
+   page. The same edit as one delta of retains pays that cost once, inside
+   Quill's own `batchStart`/`batchEnd`.
+
+   A code line's `code-block` attribute lives on its trailing NEWLINE, so each
+   op retains up to that newline and then retains the newline itself with the
+   attribute. `Block.formatAt` applies a block format only when the range ends
+   exactly at the block's end, which is what makes the one-character retain the
+   right target and a whole-line retain the wrong one."
   [language]
   #?(:clj 0
      :cljs
      (let [^js ed (editor/current-editor)
-           Quill (.-Quill js/window)]
+           ^js Quill (.-Quill js/window)]
        (if (or (nil? ed) (nil? Quill))
          0
-         (let [root (.-root ed)
+         (let [^js root (.-root ed)
                blocks (.-length (.querySelectorAll root ".ql-code-block-container"))
-               indices (into []
-                         (keep (fn [node]
-                                 (when-let [blot (.find Quill node)]
-                                   (.getIndex ed blot))))
-                         (js/Array.from (.querySelectorAll root "div.ql-code-block")))]
-           (doseq [i indices]
+               Delta (.import Quill "delta")
+               newlines (->> (js/Array.from (.querySelectorAll root "div.ql-code-block"))
+                          (keep (fn [node]
+                                  (when-some [^js blot (.find Quill node)]
+                                    ;; `length` counts the newline the block
+                                    ;; format hangs on, so the last index of the
+                                    ;; line IS that newline.
+                                    (+ (.getIndex ed blot) (.length blot) -1))))
+                          sort)
+               ^js delta (loop [^js d (new Delta) pos 0 xs (seq newlines)]
+                           (if-some [nl (first xs)]
+                             (recur (-> d
+                                      (.retain (- nl pos))
+                                      (.retain 1 #js {"code-block" language}))
+                               (inc nl)
+                               (next xs))
+                             d))]
+           (when (seq newlines)
              ;; "api" keeps this out of Quill's history AND out of the
              ;; text-change listener, hence the explicit !dirty-html below.
-             (.formatLine ed i 1 "code-block" language "api"))
-           (when (seq indices)
+             (.updateContents ed delta "api")
              ;; Stored form via editor-html, never .root.innerHTML — a raw read
              ;; would persist Quill's rendered KaTeX subtree instead of the TeX.
              (reset! editor/!dirty-html
                {:html (quill-field/editor-html ed)
                 :topic-id (:topic-id @editor/!editor-state)}))
            blocks)))))
+
+(defn after-paint!
+  "Run `f` on a later task, once the browser has painted what the caller just
+   wrote to the DOM.
+
+   Pre : `f` is a plain 0-arg CLJS function. Post: `f` runs exactly once, off
+         the current task; nothing runs on CLJ.
+   Why : a `requestAnimationFrame` callback runs BEFORE that frame is painted,
+         so scheduling blocking work there hides the busy state it was supposed
+         to reveal. The timeout scheduled from inside the frame lands after the
+         frame is on screen."
+  [f]
+  #?(:clj nil
+     :cljs (js/requestAnimationFrame (fn [_] (js/setTimeout f 0)))))
 
 ;; ── Cards: stored HTML on the server ───────────────────────────────────────
 
@@ -209,12 +255,41 @@
       (dom/text label)
       (dom/On "click" (fn [_] (pick! key label)) nil))))
 
+(defn- busy-message
+  "The line the picker shows while a pick is running.
+
+   Pre : `stage` is nil or `{:phase :prose|:cards :label s :blocks n}`.
+   Post: nil when nothing is running, so one `some?` decides every busy prop."
+  [stage]
+  (when-some [{:keys [phase label blocks]} stage]
+    (cond
+      (not= phase :prose) "Updating cards…"
+      ;; A document with no prose code block still has cards to rewrite, and
+      ;; "Setting 0 code blocks" is not a thing to tell anyone.
+      (zero? blocks) (str "Applying " label "…")
+      :else (str "Setting " blocks " code block" (when (not= 1 blocks) "s")
+              " to " label "…"))))
+
 (e/defn ApplyCodeLanguageModal
   "The picker for one pending invocation. Unmounts when the invocation is
-   consumed, which is the only way it closes."
+   consumed, which is the only way it closes.
+
+   A PICK IS A LONG OPERATION AND THE PICKER SAYS SO. The prose half blocks the
+   main thread and the card half is a server round trip, so `!stage` carries
+   which of the two is running: the language grid hides, a spinner and a line
+   naming the phase take its place, and Escape and the backdrop stop closing —
+   `consume!` would unmount the frame holding the card write and cancel it
+   half-done."
   [invocation-id user-id topic-id]
   (e/client
     (let [close! (fn [] (bus/consume! invocation-id))
+          !stage (atom nil)
+          stage (e/watch !stage)
+          busy (busy-message stage)
+          busy? (some? busy)
+          ;; The success path closes through `close!` while a stage is still
+          ;; set, so the guard cannot live in `close!` itself.
+          dismiss! (fn [] (when (nil? @!stage) (close!)))
           !pick (atom nil)
           pick (e/watch !pick)
           [t ?error] (e/Token pick)
@@ -222,10 +297,11 @@
           card-count (e/server (e/Offload #(card-code-block-count* topic-id)))]
       (dom/div
         (dom/props {:class "modal-backdrop"})
-        (modal-shell/ModalEscape close! "Apply code language")
-        (dom/On "click" (fn [_] (close!)) nil)
+        (modal-shell/ModalEscape dismiss! "Apply code language")
+        (dom/On "click" (fn [_] (dismiss!)) nil)
         (dom/div
           (dom/props {:class "modal-content"
+                      :aria-busy (if busy? "true" "false")
                       :style {:width "min(420px, 92vw)" :display "flex"
                               :flex-direction "column" :gap "12px"}})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
@@ -257,19 +333,46 @@
                                 :color "var(--color-danger, #c00)"}})
             (dom/text (if (some? ?error) (str ?error) "")))
 
+          ;; The busy row and the grid swap by `display`, for the reason the
+          ;; error paragraph above states: a `when` here would make them
+          ;; position-shifting siblings and rebuild the whole grid on every
+          ;; phase change.
           (dom/div
-            (dom/props {:style {:display "grid" :gap "6px" :max-height "50vh"
+            (dom/props {:role "status"
+                        :style {:display (if busy? "flex" "none")
+                                :align-items "center" :gap "8px"
+                                :padding "18px 2px" :font-size "13px"
+                                :color "var(--color-text-secondary)"}})
+            (dom/span (dom/props {:class "spinner"}))
+            (dom/span (dom/text (or busy ""))))
+
+          (dom/div
+            (dom/props {:style {:display (if busy? "none" "grid")
+                                :gap "6px" :max-height "50vh"
                                 :overflow "auto"
                                 :grid-template-columns "repeat(2, minmax(0, 1fr))"}})
             (e/for [lang (e/diff-by :key langs/code-languages)]
               (LanguageButton lang
                 (fn [key label]
-                  ;; The prose write runs HERE, in a plain callback, so it
-                  ;; happens once per click rather than on every reactive
-                  ;; re-evaluation of this body. The token below carries only
-                  ;; the server half.
-                  (let [n (set-editor-code-language! key)]
-                    (reset! !pick {:language key :label label :prose n}))))))
+                  ;; One pick per modal. The grid is hidden while a stage is
+                  ;; set, but a second click can already be in the queue behind
+                  ;; the first, and the prose write is not idempotent about its
+                  ;; cost.
+                  (when (nil? @!stage)
+                    (reset! !stage {:phase :prose :label label
+                                    :blocks prose-blocks})
+                    ;; The prose write runs in a plain callback, so it happens
+                    ;; once per click rather than on every reactive
+                    ;; re-evaluation of this body — and it runs a frame LATER,
+                    ;; so the busy row above is on screen before the main
+                    ;; thread stops answering. The token below carries only the
+                    ;; server half.
+                    (after-paint!
+                      (fn []
+                        (let [n (set-editor-code-language! key)]
+                          (swap! !stage assoc :phase :cards)
+                          (reset! !pick {:language key :label label
+                                         :prose n})))))))))
 
           (when t
             (let [r (e/server (e/Offload #(apply-code-language!*
@@ -289,7 +392,12 @@
                   ;; sibling would race the effect it is meant to follow.
                   (do (e/on-unmount close!)
                       (case r (t)))
-                  (t (:error r)))))))))))
+                  ;; The failure branch clears the stage the same way, so the
+                  ;; grid comes back under the error and Escape closes again.
+                  ;; The prose half has already been written; only the cards
+                  ;; failed, and the toast is what says so.
+                  (do (e/on-unmount #(reset! !stage nil))
+                      (t (:error r))))))))))))
 
 (e/defn ApplyCodeLanguage
   "Mount point. Renders the picker while an invocation is pending."
