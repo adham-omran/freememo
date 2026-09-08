@@ -43,15 +43,22 @@
             (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
             stream-rev
             (e/server (e/watch (us/get-atom user-id :assistant-stream)))
-            ;; One read of the transcript, used for both the rendered rows and
+            ;; One read of the transcript, used for the rendered rows and for
             ;; the echo's retirement. Two server reads would land in two frames.
             messages
             (e/server
               (or (assistant/messages* [assistant-rev stream-rev] user-id active)
                 []))
+            ;; The VIEW is what gets diffed, so a row's shape and its content
+            ;; cross in one frame. Diffing the raw rows and reading each view
+            ;; through a nested (e/server …) made the content a second, demand
+            ;; driven transfer: e/Count gave the client the row count a round
+            ;; trip early, e/for mounted that many rows, and every one of them
+            ;; was empty until its view arrived. That is the blank on send.
             message-rows
             (e/server
-              (e/diff-by :assistant_messages/id messages))
+              (e/diff-by :assistant_messages/id
+                (mapv assistant/transcript-message-view messages)))
             message-count (e/Count message-rows)
             echo-arrived?
             (e/server (assistant/message-client-id-present? messages (:id echo)))]
@@ -70,12 +77,10 @@
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
               (dom/text "Starting…")))
-          (e/for [message message-rows]
-            (let [display-message
-                  (e/server (assistant/transcript-message-view message))]
-              (transcript-entry/AssistantTranscriptEntry
-                display-message user-id page-topic-id root-topic-id sending?
-                !details-run !evidence !error))))
+          (e/for [display-message message-rows]
+            (transcript-entry/AssistantTranscriptEntry
+              display-message user-id page-topic-id root-topic-id sending?
+              !details-run !evidence !error)))
         (when-let [echo-text (:text echo)]
           (dom/div
             (dom/props {:class "assistant-msg assistant-msg--user"})

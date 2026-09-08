@@ -42,7 +42,11 @@
     (is (str/includes? source
           "(e/server\n              (e/diff-by :assistant_messages/id"))
     (is (str/includes? source
-          "(e/server (assistant/transcript-message-view message))"))))
+          "(mapv assistant/transcript-message-view messages)")
+      "the view is diffed, so a row's shape and content cross in one frame")
+    (is (not (str/includes? source
+               "(e/server (assistant/transcript-message-view message))"))
+      "a per-row server read makes the content a second, demand-driven transfer")))
 
 (deftest document-mention-list-is-windowed-at-the-server-source
   (let [panel-source (slurp "src/freememo/assistant_panel.cljc")
