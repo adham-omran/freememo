@@ -60,20 +60,66 @@
       (> (count text) error-body-max) (str (subs text 0 error-body-max) "…")
       :else text)))
 
+(defn- header-value
+  "Value of `header-name` in a clj-http `headers` map, matched without regard to
+   case. Single owner of that lookup — clj-http lowercases header names, but a
+   `with-redefs`'d http/post in a test supplies whatever the test author wrote,
+   and both string and keyword keys appear.
+   Pre:  `header-name` is lowercase. Post: the value, or nil."
+  [headers header-name]
+  (some (fn [[k v]]
+          (when (and (or (string? k) (keyword? k))
+                  (= header-name (str/lower-case (name k))))
+            v))
+    headers))
+
+(def ^:private rate-limit-headers
+  "The throttling headers a non-200 carries, as fact key -> header name. Read
+   together because they answer the question one alone cannot: whether OUR key
+   hit a cap, or whether the upstream provider threw the 429. A 429 whose
+   :remaining is above zero came from the provider, not from OpenRouter."
+  {:retry-after "retry-after"
+   :limit       "x-ratelimit-limit"
+   :remaining   "x-ratelimit-remaining"
+   :reset       "x-ratelimit-reset"})
+
+(defn- retry-after-seconds
+  "Seconds to wait from a `Retry-After` value, or nil.
+   RFC 9110 permits a seconds count or an HTTP date. Only the count is read: a
+   date needs a clock comparison, and a wrong one here would schedule a retry.
+   The raw value stays in :rate-limit either way, so nothing is lost.
+   Pre:  `v` is a header value or nil. Post: a non-negative long, or nil."
+  [v]
+  (let [t (str/trim (str v))]
+    (when (re-matches #"\d+" t)
+      (parse-long t))))
+
 (defn api-error
   "The exception for a non-200 OpenRouter `resp`, carrying the provider's own
    message. Single owner of that mapping — `ok-body` and the OCR lane both raise
    through it, so a status-only message cannot come back at one call site and
    not the other.
-   Pre:  `resp` is a clj-http response whose :status is not 200.
+   Pre:  `resp` is a clj-http response whose :status is not 200. Its :headers are
+         the response's own — a caller that rebuilds the map to re-read a
+         streamed body must carry them over, or the throttling facts are lost.
    Post: an ExceptionInfo whose message is the provider's text when it sent any,
-         else \"OpenRouter HTTP <status>\"; ex-data {:type ::api-error :status}.
+         else \"OpenRouter HTTP <status>\"; ex-data {:type ::api-error :status},
+         plus :rate-limit and :retry-after-s when the response reported them.
          :status is the field to dispatch on — the message is prose and changes
-         with the provider."
+         with the provider. A 429 read as bare prose says \"Provider returned
+         error\", which names neither the status nor when a retry may work."
   [resp]
-  (ex-info (or (provider-message (:body resp))
-             (str "OpenRouter HTTP " (:status resp)))
-    {:type ::api-error :status (:status resp)}))
+  (let [headers (:headers resp)
+        facts (into {} (keep (fn [[fact header-name]]
+                               (when-let [v (header-value headers header-name)]
+                                 [fact v])))
+                rate-limit-headers)
+        retry-s (some-> (:retry-after facts) retry-after-seconds)]
+    (ex-info (or (provider-message (:body resp))
+               (str "OpenRouter HTTP " (:status resp)))
+      (cond-> {:type ::api-error :status (:status resp)}
+        (seq facts) (assoc :rate-limit facts)
+        retry-s (assoc :retry-after-s retry-s)))))
 
 (defn post!
   "POST `body` (a map, JSON-encoded) to `path` under the OpenRouter base URL with
@@ -203,9 +249,7 @@
         chunk))))
 
 (defn- generation-id-header [headers]
-  (or (get headers "x-generation-id")
-    (get headers "X-Generation-Id")
-    (get headers :x-generation-id)))
+  (header-value headers "x-generation-id"))
 
 (defn chat-completion-stream!
   "Stream one chat completion and drain it to its terminal SSE event.
@@ -277,9 +321,17 @@
                 (on-metadata facts)
                 {:text (str text) :metadata facts :headers (:headers response)})))))
       (catch Throwable error
-        (log/external! {:id ::stream-call :feature (or (:feature ctx) :assistant)
-                        :user-id (:user-id ctx) :outcome :error
-                        :duration-ms (elapsed-ms) :error (ex-message error)})
+        ;; :status and :retry-after-s, not the message alone. `post!` has logged
+        ;; its status since it was written; this lane did not, so a 429 reached
+        ;; the operator as Z.ai's prose "Provider returned error" and the status
+        ;; was reachable only by opening the caller's stacktrace.
+        (let [data (ex-data error)]
+          (log/external! (cond-> {:id ::stream-call :feature (or (:feature ctx) :assistant)
+                                  :user-id (:user-id ctx) :outcome :error
+                                  :duration-ms (elapsed-ms) :error (ex-message error)}
+                           (:status data) (assoc :status (:status data))
+                           (:retry-after-s data) (assoc :retry-after-s (:retry-after-s data))
+                           (:rate-limit data) (assoc :rate-limit (:rate-limit data)))))
         (throw error)))))
 
 (defn generation-metadata!

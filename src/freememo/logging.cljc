@@ -52,13 +52,22 @@
   "Log an outbound external call's outcome and latency.
    Pre:  m has :id, :feature (keyword), :outcome ∈ #{:ok :error}, :duration-ms (long).
    Post: one signal — :info when :ok, :warn when :error; :data carries
-         {:feature :outcome :duration-ms :user-id :status :error :provider}.
-         Returns nil."
+         {:feature :outcome :duration-ms :user-id :status :error :provider
+          :retry-after-s :rate-limit}. Returns nil.
+
+   The allow-list is what keeps this signal one fixed shape across every
+   outbound lane, so a key absent from it is dropped in silence — add the key
+   here, not only at the call site. :retry-after-s and :rate-limit earn their
+   place because a throttled call is the one outcome an operator must act on:
+   they say when a retry may work, and whether OUR key hit a cap or the upstream
+   provider threw the 429. Reading a 429 without them means opening the caller's
+   stacktrace, which is how four of them went undiagnosed on 2026-09-08."
   [{:keys [id outcome duration-ms feature] :as m}]
   (tel/log! {:level (if (= :error outcome) :warn :info)
              :id (or id ::external)
              :data (select-keys m [:feature :outcome :duration-ms :user-id
-                                   :status :error :provider])}
+                                   :status :error :provider
+                                   :retry-after-s :rate-limit])}
     (str (some-> feature name) " " (some-> outcome name)
       (when duration-ms (str " " duration-ms "ms"))))
   nil)

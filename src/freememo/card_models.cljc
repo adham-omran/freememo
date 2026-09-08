@@ -76,14 +76,44 @@
     :label "DeepSeek · V4 Flash"
     :openrouter-model "deepseek/deepseek-v4-flash-0731"
     :supported-parameters json-and-reasoning-parameters}
-   ;; Pinned to Z.ai: every other provider of this slug listed 2× the price on
-   ;; 2026-08-27, and the pin fails the call on a Z.ai outage rather than pay
-   ;; it. See plans/add-glm-5.3-flash-z-ai-pin.md.
+   ;; Routed cheapest-first under a price ceiling, NOT pinned to Z.ai. `:sort`
+   ;; is the mechanism and `:max_price` is only a backstop. Together they say
+   ;; what the pin they replace was standing in for — never overpay for this
+   ;; model — without naming a provider, which is how the pin went stale.
+   ;;
+   ;; The pin read {:only ["z-ai"]}, leaving one allowed provider, so
+   ;; `allow_fallbacks` had nowhere to route and a Z.ai throttle failed the call.
+   ;; That was deliberate while Z.ai was alone at its price. It stopped being
+   ;; true. On 2026-09-08 the stale pin shipped four HTTP 429s to one user in
+   ;; eight minutes while Z.ai served the same model between the bursts; the
+   ;; platform key was nowhere near a cap, so the throttle was Z.ai's own.
+   ;;
+   ;; Prices are USD per MILLION tokens. The ceiling is 0.15/0.50 because that is
+   ;; the undiscounted market rate, and the 0.075/0.25 that Z.ai, DeepInfra,
+   ;; Novita and GMICloud all showed on 2026-09-08 is a 50% DISCOUNT expiring
+   ;; 2026-09-09 16:00 UTC — OpenRouter reports it as `pricing.discount 0.5` per
+   ;; endpoint. A ceiling at the discounted price would therefore have left one
+   ;; qualifying provider the next day (Relace, the only one with no discount
+   ;; field), rebuilding the single point of failure this change removes.
+   ;; `:sort "price"` is what keeps the ceiling from becoming the price paid: the
+   ;; cheapest endpoint is tried first and the ceiling is reached only where a
+   ;; tighter cap would have failed the call outright.
+   ;;
+   ;; The key MUST be :max_price. `openrouter/model-fields` sends this map
+   ;; verbatim and cheshire writes the keyword name as-is, so :max-price reaches
+   ;; the wire as "max-price" and OpenRouter rejects the whole request: HTTP 400,
+   ;; `provider: Unrecognized key: "max-price"`. Loud rather than silent, but
+   ;; total — every call in both lanes, card generation and OCR. Measured live
+   ;; 2026-09-08, along with the ceiling itself: a ceiling under every provider's
+   ;; price returns HTTP 404 "No endpoints found that satisfy the max price", so
+   ;; it is enforced and not advisory. openrouter-test guards the encoded name.
+   ;; See plans/add-glm-5.3-flash-z-ai-pin.md.
    {:id "glm-5.3-flash"
     :label "Z.ai · GLM 5.3 Flash"
     :openrouter-model "z-ai/glm-5.3-flash"
     :supported-parameters json-and-reasoning-parameters
-    :provider {:only ["z-ai"]}}])
+    :provider {:sort "price"
+               :max_price {:prompt 0.15 :completion 0.50}}}])
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod

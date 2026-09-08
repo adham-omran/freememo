@@ -7,7 +7,9 @@
    choices[0].message.content was null, and the parser reported it as
    unreadable structured output. Each cause below must classify distinctly, and the terminal
    one (refusal) must not be retried."
-  (:require [clj-http.client :as http]
+  (:require [cheshire.core :as json]
+            [clj-http.client :as http]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.card-models :as card-models]
             [freememo.llm-json :as llm-json]
@@ -156,11 +158,13 @@
           (openrouter/structured-chat-completion-fields
             (card-models/resolve-model "gemini-3-flash")
             {:reasoning_effort "low" :verbosity "high"}))))
-  (testing "the GLM provider pin is merged, not replaced"
+  (testing "the GLM provider routing is merged, not replaced"
     (is (= {:model "z-ai/glm-5.3-flash"
             :reasoning_effort "low"
             :response_format {:type "json_object"}
-            :provider {:only ["z-ai"] :require_parameters true}}
+            :provider {:sort "price"
+                       :max_price {:prompt 0.15 :completion 0.50}
+                       :require_parameters true}}
           (openrouter/structured-chat-completion-fields
             (card-models/resolve-model "glm-5.3-flash")
             {:reasoning_effort "low" :verbosity "high"}))))
@@ -182,11 +186,14 @@
     (is (= {:model "google/gemini-3-flash-preview"}
           (openrouter/model-fields {:id "gemini-3-flash"
                                     :openrouter-model "google/gemini-3-flash-preview"}))))
-  (testing "a pinned entry passes its provider object verbatim"
-    (is (= {:model "z-ai/glm-5.3-flash" :provider {:only ["z-ai"]}}
-          (openrouter/model-fields {:id "glm-5.3-flash"
-                                    :openrouter-model "z-ai/glm-5.3-flash"
-                                    :provider {:only ["z-ai"]}})))))
+  (testing "a routed entry passes its provider object verbatim"
+    (is (= {:model "z-ai/glm-5.3-flash"
+            :provider {:sort "price" :max_price {:prompt 0.15 :completion 0.50}}}
+          (openrouter/model-fields
+            {:id "glm-5.3-flash"
+             :openrouter-model "z-ai/glm-5.3-flash"
+             :provider {:sort "price"
+                        :max_price {:prompt 0.15 :completion 0.50}}})))))
 
 (deftest every-chat-registry-entry-yields-a-slug
   (testing "both registries, every entry that names an OpenRouter model"
@@ -241,8 +248,46 @@
         (is (= 3 (:output-tokens (:metadata result))))
         (is (= 0.001 (:cost-usd (:metadata result))))))))
 
-(deftest glm-5-3-flash-is-pinned-to-z-ai-in-both-registries
-  (testing "the pin is the reason the entry exists at its price"
+(deftest glm-5-3-flash-is-price-capped-in-both-registries
+  (testing "the cap is the reason the entry exists at its price"
     (doseq [resolve [card-models/resolve-model ocr-models/resolve-model]]
-      (is (= {:model "z-ai/glm-5.3-flash" :provider {:only ["z-ai"]}}
-            (openrouter/model-fields (resolve "glm-5.3-flash")))))))
+      (is (= {:model "z-ai/glm-5.3-flash"
+              :provider {:sort "price"
+                         :max_price {:prompt 0.15 :completion 0.50}}}
+            (openrouter/model-fields (resolve "glm-5.3-flash"))))))
+  (testing "the cap reaches the wire as max_price, not max-price"
+    ;; A hyphen is not a silent overcharge — OpenRouter answers an unknown
+    ;; provider key with HTTP 400 `Unrecognized key: "max-price"` (measured
+    ;; 2026-09-08). It is loud, but it takes both lanes down at once, and no
+    ;; equality assertion above can see it: the map compares equal either way.
+    ;; Only the encoded name can.
+    (doseq [resolve [card-models/resolve-model ocr-models/resolve-model]]
+      (let [encoded (json/generate-string
+                      (openrouter/model-fields (resolve "glm-5.3-flash")))]
+        (is (str/includes? encoded "\"max_price\"") encoded)
+        (is (not (str/includes? encoded "max-price")) encoded)))))
+
+(deftest api-error-carries-the-throttling-facts
+  (testing "a 429 reports when a retry may work, not prose alone"
+    (let [data (ex-data (openrouter/api-error
+                          {:status 429
+                           :headers {"Retry-After" "30"
+                                     "x-ratelimit-remaining" "0"
+                                     "X-RateLimit-Reset" "1788856800"}
+                           :body "{\"error\":{\"message\":\"Provider returned error\"}}"}))]
+      (is (= 429 (:status data)))
+      (is (= 30 (:retry-after-s data)))
+      (is (= "0" (get-in data [:rate-limit :remaining])))
+      (is (= "1788856800" (get-in data [:rate-limit :reset])))))
+  (testing "an HTTP-date Retry-After keeps its raw value and reports no seconds"
+    (let [data (ex-data (openrouter/api-error
+                          {:status 429
+                           :headers {"retry-after" "Wed, 08 Sep 2026 08:41:00 GMT"}
+                           :body ""}))]
+      (is (nil? (:retry-after-s data)))
+      (is (= "Wed, 08 Sep 2026 08:41:00 GMT" (get-in data [:rate-limit :retry-after])))))
+  (testing "a response with no throttling headers carries no :rate-limit key"
+    (let [data (ex-data (openrouter/api-error {:status 401 :headers {} :body ""}))]
+      (is (= 401 (:status data)))
+      (is (not (contains? data :rate-limit)))
+      (is (not (contains? data :retry-after-s))))))
