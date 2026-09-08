@@ -13,6 +13,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.quill-table-ui :as table-ui]
    [freememo.a11y :as a11y]
+   [freememo.code-languages :refer [code-languages]]
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
    #?(:cljs [freememo.format-menu :as format-menu])
@@ -193,25 +194,10 @@
                 ;; through freememo.formula-ui's popover.
                 ;;
                 ;; Syntax module — requires window.hljs + the clojure and zig packs (loaded in
-                ;; index*.html). Same `:languages` list as the main editor for
-                ;; consistent picker UX across modals and the page editor.
-                :syntax {:languages [{:key "plain" :label "Plain"}
-                                     {:key "bash" :label "Bash"}
-                                     {:key "cpp" :label "C++"}
-                                     {:key "cs" :label "C#"}
-                                     {:key "clojure" :label "Clojure"}
-                                     {:key "css" :label "CSS"}
-                                     {:key "diff" :label "Diff"}
-                                     {:key "xml" :label "HTML/XML"}
-                                     {:key "java" :label "Java"}
-                                     {:key "javascript" :label "JavaScript"}
-                                     {:key "markdown" :label "Markdown"}
-                                     {:key "php" :label "PHP"}
-                                     {:key "python" :label "Python"}
-                                     {:key "ruby" :label "Ruby"}
-                                     {:key "rust" :label "Rust"}
-                                     {:key "sql" :label "SQL"}
-                                     {:key "zig" :label "Zig"}]}
+                ;; index*.html). `code-languages` is the shared vocabulary —
+                ;; the main editor builds from this same fn, so both editors and
+                ;; the Apply-language command offer one list.
+                :syntax {:languages code-languages}
                 :table true
                 ;; Drag-to-resize images. quill-resize-module 2.0.3+ is loaded
                 ;; from /freememo/vendor/ in index*.html and self-registers `modules/resize`

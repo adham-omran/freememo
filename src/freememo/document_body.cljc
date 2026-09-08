@@ -10,6 +10,7 @@
    [freememo.doc-context :as dctx]
    [freememo.document-view :refer [DocumentToolbars]]
    [freememo.document-workspace :refer [DocumentWorkspace]]
+   [freememo.apply-code-language :refer [ApplyCodeLanguage]]
    [freememo.live-doc-wizard :refer [LiveDocEmptyState]]
    #?(:clj [freememo.settings :as settings])))
 
@@ -129,4 +130,11 @@
               dctx/video-has-audio? (:video-has-audio? m)
               dctx/!video-el (:!video-el m) dctx/!video-region (:!video-region m)
               dctx/!video-playhead (:!video-playhead m)]
-      (DocumentBody))))
+      (DocumentBody)
+      ;; LAST, and outside DocumentBody, for two reasons. Last: the picker is a
+      ;; 0-or-1 sibling, and this file's `e/drain` comments record what a size
+      ;; change does to the siblings that follow one. Outside: DocumentBody
+      ;; splits a blob-less Live Document off into LiveDocEmptyState, and a
+      ;; branch with no consumer would leave the palette's invocation sitting in
+      ;; !invocations to open a modal on some later mount.
+      (ApplyCodeLanguage))))

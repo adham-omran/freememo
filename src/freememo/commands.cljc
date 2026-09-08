@@ -220,6 +220,25 @@
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}
      :copy-all       {:label "Copy all text" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}
+     ;; The only :exec :electric entry. The mechanism was documented and routed
+     ;; (dispatch! line ~251, Requests, consume!) with no user until this one.
+     ;; It is not :ui-button because there is no button: the palette is the
+     ;; whole surface, and an invisible publisher whose only job is to make the
+     ;; command look available would be a component pretending to be a control.
+     ;; :electric also gives the availability this command wants — always listed
+     ;; on the viewer tab, doing nothing on a document with no code block. That
+     ;; matches the rule :when states (a surface, never a moment); :scan is
+     ;; listed on every viewer topic and only its dispatch checks it can run.
+     ;; :views omits :refresh ON PURPOSE, and :table still names :topics. The
+     ;; prose half of this command writes through the editor's own dirty-html
+     ;; autosave, which owns that reactivity already. Bumping :refresh here
+     ;; would re-fetch the topic while the editor still holds content the
+     ;; autosave has not written, and `set-content!` would push the stale body
+     ;; back over it.
+     :apply-code-language {:label "Apply language to all code…" :class :mutation
+                           :exec :electric :when #{:viewer}
+                           :table #{:topics :flashcards}
+                           :views #{:card-mutations}}
      ;; :schedule-mutations is load-bearing on both. A page's done status IS the
      ;; study plan's coverage figure, so day 0 of the plan — a quota that counts
      ;; down — cannot move without it. Declaring it here rather than widening
