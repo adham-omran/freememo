@@ -32,6 +32,7 @@
    block's language is a legitimate thing to ask for."
   [{:key "plain" :label "Plain"}
    {:key "bash" :label "Bash"}
+   {:key "c" :label "C"}
    {:key "cpp" :label "C++"}
    {:key "cs" :label "C#"}
    {:key "clojure" :label "Clojure"}

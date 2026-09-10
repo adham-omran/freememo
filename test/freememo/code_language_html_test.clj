@@ -5,6 +5,7 @@
    own namespace instead of beside the flashcard writes."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
+            [freememo.code-languages :as languages]
             [freememo.code-language-html :as h]))
 
 (def ^:private two-line-block
@@ -80,3 +81,8 @@
   (testing "clearing every block's highlighting is a thing users ask for"
     (is (str/includes? (h/set-code-language two-line-block "plain")
           "data-language=\"plain\""))))
+
+(deftest c-is-a-supported-code-language
+  (is (contains? languages/code-language-keys "c"))
+  (is (str/includes? (h/set-code-language two-line-block "c")
+        "data-language=\"c\"")))
