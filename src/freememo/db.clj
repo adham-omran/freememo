@@ -4922,7 +4922,7 @@
   "Get content from page topics in a range, for card generation context."
   [parent-id start-page end-page]
   (jdbc/execute! ds
-    (sql/format {:select [:id :page_number :content :created_at :updated_at]
+    (sql/format {:select [:id :page_number :content :created_at]
                  :from [:topics]
                  :where [:and
                          [:= :parent_id parent-id]
