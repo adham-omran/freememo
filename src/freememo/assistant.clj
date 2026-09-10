@@ -360,7 +360,7 @@
   "Render the exact provider request for one new answer.
    Stable instructions and the latest checkpoint form the request prefix.
    Later transcript, current sources, and the new user turn follow it."
-  [user-id chat page-topic-id user-text ref-topic-ids model-fields]
+  [user-id chat page-topic-id user-text ref-topic-ids model-fields web-search-supported?]
   (let [chat-id (:assistant_chats/id chat)
         root-topic-id (:assistant_chats/root_topic_id chat)
         mode (modes/resolve-mode (:assistant_chats/mode chat))
@@ -381,10 +381,14 @@
                                 dynamic-grounding)
                          (:messages sources))
                    [{:role "user" :content user-text}])]
-    {:provider-request (assoc model-fields
-                         :stream true
-                         :session_id (:assistant_chats/provider_session_id chat)
-                         :messages messages)
+    {:provider-request (cond-> (assoc model-fields
+                                 :stream true
+                                 :session_id (:assistant_chats/provider_session_id chat)
+                                 :messages messages)
+                         (and (:assistant_chats/web_search chat)
+                           web-search-supported?)
+                         (assoc :tools [{:type "openrouter:web_search"
+                                         :parameters {:engine "native"}}]))
      :source-snapshot (:evidence sources)
      :evidence (:evidence sources)}))
 
@@ -398,6 +402,17 @@
     (str/replace "\\" "\\\\")
     (str/replace "[" "\\[")
     (str/replace "]" "\\]")))
+
+(defn- web-sources-markdown
+  "Render provider URL citations outside retained document evidence.
+   Post: blank means the provider returned no usable web citations."
+  [sources]
+  (when (seq sources)
+    (str "\n\n### Web sources\n\n"
+      (str/join "\n"
+        (map (fn [{:keys [title url]}]
+               (str "- [" (markdown-link-label title) "](" url ")"))
+          sources)))))
 
 (defn render-evidence-citations
   "Replace valid evidence tokens with Markdown links and remove invalid tokens.
@@ -421,15 +436,22 @@
    Pre: root-topic-id belongs to user-id. A violation throws because the caller
    supplied a foreign document. `mode-id` can be nil or unrecognized.
    Post: the row's mode is a canonical registry :id, never nil and never junk."
-  [user-id root-topic-id mode-id]
-  (when-not (db/get-topic-for-user user-id root-topic-id)
-    (throw (ex-info "Cannot create a chat for a document the user does not own."
-             {:type ::foreign-chat-document :user-id user-id
-              :root-topic-id root-topic-id})))
-  (let [chat-id (db/create-assistant-chat! user-id root-topic-id "New chat"
-                  (:id (modes/resolve-mode mode-id)))]
-    (bump! user-id)
-    chat-id))
+  ([user-id root-topic-id mode-id]
+   (start-chat! user-id root-topic-id mode-id false))
+  ([user-id root-topic-id mode-id web-search?]
+   (when-not (db/get-topic-for-user user-id root-topic-id)
+     (throw (ex-info "Cannot create a chat for a document the user does not own."
+              {:type ::foreign-chat-document :user-id user-id
+               :root-topic-id root-topic-id})))
+   (let [entry (or (card-models/resolve-model
+                     (settings/effective-assistant-model user-id root-topic-id))
+                   (card-models/resolve-model settings/assistant-default-model-id))
+         web-search? (and web-search?
+                          (card-models/native-web-search-supported? (:id entry)))
+         chat-id (db/create-assistant-chat! user-id root-topic-id "New chat"
+                   (:id (modes/resolve-mode mode-id)) web-search?)]
+     (bump! user-id)
+     chat-id)))
 
 (defn set-chat-mode!
   "Switch `chat-id`'s persona to `mode-id`.
@@ -456,6 +478,30 @@
         (tel/error! {:id ::set-chat-mode :data {:user-id user-id :chat-id chat-id
                                                 :mode mode-id}} e)
         {:success false :error "Failed to switch mode."}))))
+
+(defn set-chat-web-search!
+  "Set an owned chat's web-search preference.
+   Pre: `web-search?` is boolean. Post: enabled search always has a selected
+   model that accepts the native tool. Unsupported models leave the row intact."
+  [user-id chat-id web-search?]
+  (if-let [chat (db/get-assistant-chat user-id chat-id)]
+    (let [root-topic-id (:assistant_chats/root_topic_id chat)
+          entry (or (card-models/resolve-model
+                      (settings/effective-assistant-model user-id root-topic-id))
+                    (card-models/resolve-model settings/assistant-default-model-id))]
+      (if (and web-search?
+               (not (card-models/native-web-search-supported? (:id entry))))
+        {:success false :error "This model does not support web search."}
+        (try
+          (db/set-assistant-chat-web-search! user-id chat-id web-search?)
+          (bump! user-id)
+          {:success true}
+          (catch Exception error
+            (tel/error! {:id ::set-chat-web-search
+                         :data {:user-id user-id :chat-id chat-id
+                                :web-search? web-search?}} error)
+            {:success false :error "Failed to change web search."}))))
+    {:success false :error "Chat not found."}))
 
 (defonce ^:private assistant-run-executor
   (Executors/newFixedThreadPool 4))
@@ -546,14 +592,18 @@
                                api-key (:generation-id reported) user-id) {})
                          {})
             metadata (merge reported reconciled)
-            response (:text result)]
+            response (:text result)
+            sources-markdown (web-sources-markdown (:web-sources result))]
         (db/update-assistant-run-metadata! run-uuid metadata)
         (if (str/blank? response)
           (db/fail-assistant-run! run-uuid "The model returned an empty response.")
           (if (= "compact" run-kind)
             (db/complete-assistant-compact-run! run-uuid (str/trim response)
               (:from compact-range) (:through compact-range))
-            (db/complete-assistant-answer-run! run-uuid)))
+            (do
+              (when sources-markdown
+                (db/append-assistant-run-text! run-uuid sources-markdown))
+              (db/complete-assistant-answer-run! run-uuid))))
         (charge-known! metadata)
         (bump! user-id)
         (let [run (db/get-assistant-run user-id run-uuid)]
@@ -645,7 +695,9 @@
                              :source-snapshot exact-evidence
                              :evidence exact-evidence}
                             (answer-request user-id chat page-topic-id user-text
-                              ref-topic-ids model-fields))
+                              ref-topic-ids model-fields
+                              (card-models/native-web-search-supported?
+                                (:id entry))))
                  run-uuid (str (random-uuid))
                  created (db/create-assistant-answer-run!
                            chat-id user-text client-id
@@ -669,9 +721,9 @@
                  {:ok true :run-uuid run-uuid})))))))))
 
 (defn ensure-and-start-answer-run!
-  "Start an answer, creating the selected-mode chat when necessary."
-  [user-id root-topic-id page-topic-id chat-id mode-id user-text ref-topic-ids client-id]
-  (let [resolved-chat-id (or chat-id (start-chat! user-id root-topic-id mode-id))]
+  "Start an answer, creating the selected chat when necessary."
+  [user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text ref-topic-ids client-id]
+  (let [resolved-chat-id (or chat-id (start-chat! user-id root-topic-id mode-id web-search?))]
     (assoc (start-answer-run! user-id resolved-chat-id page-topic-id user-text
              ref-topic-ids client-id)
       :chat-id resolved-chat-id)))
@@ -679,13 +731,13 @@
 (defn submit-chat-input!
   "Dispatch composer input at the assistant boundary.
    `/compact` is an application command and never becomes a user message."
-  [user-id root-topic-id page-topic-id chat-id mode-id user-text ref-topic-ids client-id]
+  [user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text ref-topic-ids client-id]
   (if (= "/compact" (str/trim user-text))
     (if chat-id
       (assoc (start-compact-run! user-id chat-id) :chat-id chat-id :command :compact)
       {:error "Start a chat before compacting context." :chat-id nil :command :compact})
     (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
-             chat-id mode-id user-text ref-topic-ids client-id)
+             chat-id mode-id web-search? user-text ref-topic-ids client-id)
       :command :answer)))
 
 (defn start-compact-run!

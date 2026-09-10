@@ -195,16 +195,15 @@
    assistant panel. Split across ContentColumn/PdfSplitPane so no single e/defn
    exceeds Electric's 64KB-per-method cap. The columns are independent reactive
    siblings. Reads ambient doc-context."
-  [show-assistant?]
+  [show-assistant? card-table-open?]
   (e/client
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id
           root-topic-id dctx/root-topic-id navigate! dctx/navigate!
-          is-pdf? dctx/is-pdf? top-pct dctx/top-pct reading-mode? dctx/reading-mode?
+          is-pdf? dctx/is-pdf? top-pct dctx/top-pct
           target-page dctx/target-page !nav-target dctx/!nav-target]
       (dom/div
-        ;; reading-mode? hides the card table below, so the top region takes the
-        ;; full height instead of the split percentage.
-        (dom/props {:style {:height (if reading-mode? "100%" (str top-pct "%"))
+        ;; The content region fills the workspace when the card table is closed.
+        (dom/props {:style {:height (if card-table-open? (str top-pct "%") "100%")
                             :display "flex" :flex-direction "row"
                             :min-height "0" :overflow "hidden"}})
 
@@ -212,17 +211,16 @@
         ;; away manually without being snapped back.
         (when target-page (reset! !nav-target nil))
 
-        ;; LEFT: hierarchy side panel. reading-mode? (mobile learn) hides it —
-        ;; navigation is the linear queue (Next), not the tree.
-        (when-not reading-mode?
-          (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
-            (when is-pdf? !nav-target)))
+        ;; LEFT: hierarchy side panel. Viewer commands can reveal it at every
+        ;; viewport, including the mobile Learn reader.
+        (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
+          (when is-pdf? !nav-target))
 
         ;; MIDDLE: content column.
         (ContentColumn)
 
-        ;; RIGHT: collapsible assistant panel. Hidden in reading mode.
-        (when (and show-assistant? (not reading-mode?))
+        ;; RIGHT: collapsible assistant panel.
+        (when show-assistant?
           (RightSidePanel page-topic-id root-topic-id user-id))))))
 
 

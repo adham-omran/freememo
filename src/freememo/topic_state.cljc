@@ -242,6 +242,8 @@
                            (boolean (when is-pdf?
                                       (e/Offload #(settings/get-pdf-focus user-id pdf-root-id)))))
           initial-top-pct (e/server (e/Offload #(settings/get-card-split user-id)))
+          initial-card-table-open? (e/server
+                                     (e/Offload #(settings/get-card-table-open user-id)))
 
           ;; Bibliography target: PDF pages own no bibliography (resolve to the
           ;; document root); every other kind (extract/root/web/epub) is its own
@@ -271,7 +273,7 @@
        :extract-status (:status overview) :static-content static-content
        :static-content-topic-id static-content-topic-id
        :initial-page initial-page :initial-layout initial-layout :initial-focus? initial-focus?
-       :initial-top-pct initial-top-pct
+       :initial-top-pct initial-top-pct :initial-card-table-open? initial-card-table-open?
        :bib-topic-id bib-topic-id :pdf-root? pdf-root? :citation citation :pdf-status pdf-status
        ;; settings + server-watched PDF state
        :card-font-size card-font-size :scan-dpi scan-dpi
@@ -287,7 +289,8 @@
    Post: returns the layout/split prop slice for DocumentBody."
   [resolved]
   (e/client
-    (let [{:keys [user-id initial-layout initial-focus? initial-top-pct]} resolved
+    (let [{:keys [user-id initial-layout initial-focus? initial-top-pct
+                  initial-card-table-open?]} resolved
           ;; Content↕card-table split (global per-user, persisted). Seeded from
           ;; settings; nil → client default. Manual drag + double-click persist
           ;; via !top-pct-save; layout toggle resets live but does not persist.
@@ -300,6 +303,21 @@
                          (let [d (default-split-pct)]
                            (reset! !top-pct d)
                            (reset! !top-pct-save d)))
+
+          ;; Card-table visibility is a global Viewer preference, like the split.
+          ;; The setter is the only writer so every command and future visible
+          ;; control persist the same state transition.
+          !card-table-open? (atom (boolean initial-card-table-open?))
+          card-table-open? (e/watch !card-table-open?)
+          !card-table-open-save (atom nil)
+          card-table-open-save (e/watch !card-table-open-save)
+          [t-card-table-open _] (e/Token card-table-open-save)
+          set-card-table-open! (fn [open?]
+                                 (let [open? (boolean open?)]
+                                   (reset! !card-table-open? open?)
+                                   (reset! !card-table-open-save open?)))
+          toggle-card-table! (fn []
+                               (set-card-table-open! (not @!card-table-open?)))
 
           ;; PDF split layout (persisted per-doc)
           !layout (atom (or initial-layout "left-right"))
@@ -344,7 +362,16 @@
         (let [r (e/server (e/Offload #(settings/save-card-split user-id top-pct-save)))]
           (when (some? r)
             (if (:success r) (case r (t-top-pct)) (t-top-pct (:error r))))))
+      (when t-card-table-open
+        (let [r (e/server (e/Offload #(settings/save-card-table-open
+                                        user-id card-table-open-save)))]
+          (when (some? r)
+            (if (:success r)
+              (case r (t-card-table-open))
+              (t-card-table-open (:error r))))))
       {:top-pct top-pct :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!
+       :card-table-open? card-table-open? :set-card-table-open! set-card-table-open!
+       :toggle-card-table! toggle-card-table!
        :layout layout :layout-save layout-save :t-layout t-layout :toggle-layout! toggle-layout!
        :top-bottom? (= layout "top-bottom")
        :focus? focus? :focus-save focus-save :t-focus t-focus :set-focus! set-focus!

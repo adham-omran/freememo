@@ -305,6 +305,31 @@
   (fn [ctx _payload]
     (some-> (:activity-open-atom ctx) (reset! true))))
 
+(register-handler! :toggle-assistant-pane
+  (fn [ctx _payload]
+    (when-let [toggle! (:toggle-assistant-pane! ctx)]
+      (toggle!))))
+
+(register-handler! :toggle-left-pane
+  (fn [ctx _payload]
+    (when-let [toggle! (:toggle-left-pane! ctx)]
+      (toggle!))))
+
+(register-handler! :show-hierarchy
+  (fn [ctx _payload]
+    (when-let [show! (:show-left-pane! ctx)]
+      (show! "hierarchy"))))
+
+(register-handler! :show-pins
+  (fn [ctx _payload]
+    (when-let [show! (:show-left-pane! ctx)]
+      (show! "pins"))))
+
+(register-handler! :toggle-card-table-view
+  (fn [ctx _payload]
+    (when-let [toggle! (:toggle-card-table! ctx)]
+      (toggle!))))
+
 (register-handler! :search
   (fn [ctx payload]
     (when-let [navigate! (:navigate! ctx)]

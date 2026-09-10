@@ -277,6 +277,20 @@
                    :completion_tokens_details {:reasoning_tokens 9}}})))
   (is (= {} (openrouter/stream-chunk-metadata {:choices []}))))
 
+(deftest native-web-search-support-and-sources-are-explicit
+  (is (card-models/native-web-search-supported? "gpt-5.1"))
+  (is (not (card-models/native-web-search-supported? "glm-5.3-flash")))
+  (is (= [{:title "OpenRouter docs" :url "https://openrouter.ai/docs"}]
+        (openrouter/web-source-links
+          [{:type "url_citation"
+            :url_citation {:title "OpenRouter docs"
+                           :url "https://openrouter.ai/docs"}}
+           {:type "url_citation"
+            :url_citation {:title "Duplicate"
+                           :url "https://openrouter.ai/docs"}}
+           {:type "file_citation"
+            :file_citation {:file_id "ignored"}}]))))
+
 (deftest streaming-preserves-whitespace-and-publishes-early-metadata
   (let [sse (str "data: {\"id\":\"gen-1\",\"model\":\"provider/model\","
               "\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"

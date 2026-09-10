@@ -433,6 +433,10 @@
          ;; the html path matchBlot has already read the src into the delta
          ;; before an appended matcher runs. See install-image-rehost!.
          (editor-actions/install-image-rehost! ed)
+         ;; Cmd/Ctrl+\\ mirrors the custom format menu's Clear formatting
+         ;; action for a selected range. It is editor-local, so it never reaches
+         ;; another contenteditable surface through the global chord handler.
+         (editor-actions/install-clear-format-binding! ed)
          ;; Wire the table toolbar handler + contextual action bar.
          ;; The QuillField's toolbar config includes "table", so without
          ;; this the button is rendered but inert. Cleanup is paired in

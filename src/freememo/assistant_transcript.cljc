@@ -33,7 +33,7 @@
      :clj nil))
 
 (e/defn AssistantTranscript
-  [{:keys [sending? echo active mode-entry active-run user-id page-topic-id
+  [{:keys [sending? echo active mode-entry web-search? active-run user-id page-topic-id
            root-topic-id]}
    !submit !active !refs !details-run !evidence !error !echo]
   (e/client
@@ -70,7 +70,7 @@
           (reset! !echo nil))
         (if (zero? message-count)
           (if (and (not sending?) (nil? echo))
-            (rows/EmptyChatStarters mode-entry !submit !active !refs)
+            (rows/EmptyChatStarters mode-entry web-search? !submit !active !refs)
             ;; A send whose first rows have not crossed yet. The transcript must
             ;; render SOMETHING here: the starters are wrong mid-send, and
             ;; rendering nothing is the blank white panel this branch produced.

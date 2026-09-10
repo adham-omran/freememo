@@ -15,6 +15,7 @@
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.assistant-modes :as modes]
    [freememo.interaction-trail :as trail]
    [freememo.typeahead :refer [Typeahead]]
@@ -38,7 +39,8 @@
    Pre:  `chat-options` is a vec of {:id chat-id :label title}; `pending-mode` is
          a mode :id.
    Post: `!active` holds a chat id or nil, never a title."
-  [user-id root-topic-id chat-options pending-mode !active !draft !error]
+  [user-id root-topic-id chat-options pending-mode pending-web-search?
+   !active !draft !error]
   (e/client
     (let [!picked (atom nil)
           picked (e/watch !picked)]
@@ -54,7 +56,9 @@
               (case (trail/record! :assistant
                       {:action :new-chat :topic-id root-topic-id})
                 (let [cid (e/server (e/Offload
-                                      #(assistant/start-chat! user-id root-topic-id pending-mode)))]
+                                      #(assistant/start-chat!
+                                         user-id root-topic-id pending-mode
+                                         pending-web-search?)))]
                   (case cid
                     (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt))))))))
         (dom/div
@@ -109,7 +113,7 @@
 
 (e/defn ModelRow
   "Select the model for this document. An empty value uses the global default."
-  [user-id root-topic-id]
+  [user-id root-topic-id !model-revision]
   (e/client
     (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
           default-id (e/server (settings/get-assistant-model user-id))
@@ -148,9 +152,45 @@
                                          user-id root-topic-id change)))]
                 (case result
                   (if (:success result)
-                    (token)
+                    (case (reset! !model-revision (str (random-uuid)))
+                      (token))
                     (token (:error result))))))
             ))))))
+
+(e/defn WebSearchRow
+  "Toggle native web search for the open chat or the next chat.
+   Pre: `web-search-supported?` describes the document's effective model.
+   Post: a new chat uses the pending value; an open chat persists the value."
+  [user-id active web-search? web-search-supported?
+   !pending-web-search?]
+  (e/client
+    (dom/label
+      (dom/props {:class "assistant-panel__footer-field"
+                  :title (if web-search-supported?
+                           "Allow this chat to search the web"
+                           "The selected model does not support web search")})
+      (e/amb
+        (e/for [[token {requested? :web-search}]
+                (forms/Checkbox! :web-search web-search?
+                  :disabled (not web-search-supported?))]
+          (if (nil? active)
+            (case (reset! !pending-web-search? requested?)
+              (token))
+            (let [result
+                  (e/server
+                    (e/Offload #(assistant/set-chat-web-search!
+                                  user-id active requested?)))]
+              (case result
+                (if (:success result)
+                  (token)
+                  (token (:error result)))))))
+        (do
+          (dom/text "Web search")
+          (e/amb)))
+      (when-not web-search-supported?
+        (dom/span
+          (dom/props {:class "assistant-panel__web-search-note"})
+          (dom/text "Not supported"))))))
 
 (e/defn ReferenceMenu
   "Show a windowed document-reference list above the composer.
@@ -213,7 +253,7 @@
    Pre:  `mode-entry` is a registry entry carrying :hint and :starters.
    Post: writing !submit is the only effect; the send itself belongs to the
          parent's send token."
-  [mode-entry !submit !active !refs]
+  [mode-entry web-search? !submit !active !refs]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__hint"})
@@ -229,5 +269,6 @@
               (when st
                 (reset! !submit {:id (str (random-uuid)) :text p
                                  :chat @!active :refs (mapv :id @!refs)
-                                 :mode (:id mode-entry)})
+                                 :mode (:id mode-entry)
+                                 :web-search? web-search?})
                 (st)))))))))

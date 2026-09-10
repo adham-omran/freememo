@@ -250,6 +250,24 @@
       (assoc :cache-write-tokens (:cache_write_tokens prompt-details))
       (some? (:cost usage)) (assoc :cost-usd (:cost usage)))))
 
+(defn web-source-links
+  "Return unique URL citations from OpenRouter response annotations.
+   Pre: `annotations` is nil or the accumulated streaming annotations. Post:
+   each result has a non-blank URL, in provider order, with no duplicate URL."
+  [annotations]
+  (reduce
+    (fn [links annotation]
+      (let [citation (:url_citation annotation)
+            url (:url citation)]
+        (if (or (not= "url_citation" (:type annotation))
+                (str/blank? url)
+                (some #(= url (:url %)) links))
+          links
+          (conj links {:url url
+                       :title (or (:title citation) url)}))))
+    []
+    annotations))
+
 (defn- parse-sse-data
   "Parse one SSE data payload. [DONE] returns nil.
    A provider error becomes an ExceptionInfo so the run fails with its message."
@@ -299,13 +317,21 @@
                  metadata (cond-> {}
                             (generation-id-header (:headers response))
                             (assoc :generation-id
-                              (generation-id-header (:headers response))))]
+                              (generation-id-header (:headers response))))
+                 annotations []]
             (if-let [line (.readLine reader)]
               (if (str/starts-with? line "data:")
                 (let [payload (str/trim (subs line 5))]
                   (if-let [chunk (parse-sse-data payload)]
-                    (let [delta (-> chunk :choices first :delta :content)
-                          chunk-metadata (stream-chunk-metadata chunk)]
+                    (let [choice (-> chunk :choices first)
+                          delta (get-in choice [:delta :content])
+                          chunk-metadata (stream-chunk-metadata chunk)
+                          chunk-annotations
+                          (or (get-in choice [:delta :annotations])
+                            (get-in choice [:message :annotations])
+                            (:annotations choice)
+                            (:annotations chunk)
+                            [])]
                       (when (and (string? delta) (not (empty? delta)))
                         (when-not @first-token-ns
                           (vreset! first-token-ns (System/nanoTime)))
@@ -313,7 +339,8 @@
                         (on-delta delta))
                       (when (seq chunk-metadata)
                         (on-metadata chunk-metadata))
-                      (recur text (merge metadata chunk-metadata)))
+                      (recur text (merge metadata chunk-metadata)
+                        (into annotations chunk-annotations)))
                     (let [facts (cond-> metadata
                                   @first-token-ns
                                   (assoc :first-token-ms
@@ -324,15 +351,17 @@
                                       :user-id (:user-id ctx) :outcome :ok
                                       :duration-ms (elapsed-ms)
                                       :provider (:provider-name facts)})
-                      {:text (str text) :metadata facts :headers (:headers response)})))
-                (recur text metadata))
+                      {:text (str text) :metadata facts :headers (:headers response)
+                       :web-sources (web-source-links annotations)})))
+                (recur text metadata annotations))
               (let [facts (cond-> metadata
                             @first-token-ns
                             (assoc :first-token-ms
                               (long (/ (- (long @first-token-ns) started-ns) 1000000)))
                             true (assoc :provider-latency-ms (elapsed-ms)))]
                 (on-metadata facts)
-                {:text (str text) :metadata facts :headers (:headers response)})))))
+                {:text (str text) :metadata facts :headers (:headers response)
+                 :web-sources (web-source-links annotations)})))))
       (catch Throwable error
         ;; :status and :retry-after-s, not the message alone. `post!` has logged
         ;; its status since it was written; this lane did not, so a 429 reached

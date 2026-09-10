@@ -292,7 +292,7 @@
                         (str/replace #"<p>PlainBashC\+\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "")
                         str/trim)
            t0 (when js/goog.DEBUG (js/performance.now))
-           ^js editor (new Quill container
+           ^js editor (doto (new Quill container
                       ;; bubble theme (E1): floating-on-selection toolbar
                       ;; (Notion-style). Modules (toolbar/syntax/table) come
                       ;; from quill-field/quill-config — the SAME config
@@ -304,6 +304,8 @@
                       ;; pane edge and clipped by the PDF pane. QuillField
                       ;; has no such ancestor and omits :bounds.
                       (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
+                        ;; Cmd/Ctrl+\\ clears selected formatting in this editor.
+                        (editor-actions/install-clear-format-binding!))
            ^js clipboard (.-clipboard editor)
            ;; See quill-field/install-clipboard-matchers! for what each
            ;; matcher does and why (shared with QuillField's own editor).

@@ -145,6 +145,30 @@
    `{key: [\"z\", \"Z\"]}` because Shift changes `evt.key`'s case."
   67)
 
+(def ^:private clear-format-chord-key-code
+  "`\\`'s keyCode. The numeric form keeps the binding stable across keyboard
+   layouts, as with cloze-chord-key-code."
+  220)
+
+(defn install-clear-format-binding!
+  "Register mod+\\ on one Quill editor.
+
+   Pre: `ed` is a constructed Quill instance. Post: a non-empty selected range
+   loses its Quill formatting exactly once. A collapsed selection is a no-op.
+   The binding belongs to Quill rather than the global command registry because
+   formatting applies only to the focused editor."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js keyboard (.getModule ed "keyboard")]
+       (.addBinding keyboard
+         #js {:key clear-format-chord-key-code :shortKey true}
+         (fn [range _context _binding]
+           (when (and range (pos? (.-length range)))
+             (.removeFormat ed (.-index range) (.-length range) "user"))
+           nil)))
+     :clj nil))
+
 (defn install-cloze-bindings!
   "Register the two cloze-insert chords on `ed`'s keyboard module — the keyboard
    twins of the format-menu's {+} / {=} buttons.

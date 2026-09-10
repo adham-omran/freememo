@@ -105,6 +105,7 @@
 ;; parented to the page the selection came from.
 (e/declare editor-doc-id)
 (e/declare top-pct)
+(e/declare card-table-open?)
 (e/declare top-split-pct)
 (e/declare left-pct)
 (e/declare transcript-pct)
@@ -122,6 +123,8 @@
 (e/declare toggle-layout!)
 (e/declare set-focus!)
 (e/declare reset-split!)
+(e/declare set-card-table-open!)
+(e/declare toggle-card-table!)
 (e/declare on-page-change!)
 (e/declare on-layout-toggle!)
 (e/declare on-total!)

@@ -17,8 +17,8 @@
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
    [freememo.pin-side-panel :refer [PinsBody]]
+   [freememo.command-bus :as bus]
    [freememo.util :as util]
-   [freememo.viewport :as viewport]
    [freememo.tree-dnd :as tree-dnd]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
@@ -374,12 +374,9 @@
     ;; updates :current? reactively without remount, so !open? state and the
     ;; DOM subtree persist across page scrolls.
     (e/for-by identity [_k [root-topic-id]]
-      (let [phone?          (e/watch viewport/!phone?)
-            compact?        (e/watch viewport/!compact?)
-            persisted-open? (e/server (e/Offload #(settings/get-hierarchy-open user-id root-topic-id)))
-            ;; Phone and portrait-tablet (compact) default to collapsed regardless
-            ;; of the persisted desktop pref — the toggle still opens it manually.
-            initial-open?   (and (not phone?) (not compact?) persisted-open?)
+      (let [persisted-open? (e/server (e/Offload #(settings/get-hierarchy-open user-id root-topic-id)))
+            ;; A command-set state must restore at every Viewer viewport.
+            initial-open?   persisted-open?
             !open?          (atom initial-open?)
             open?           (e/watch !open?)
             !save           (atom nil)
@@ -396,7 +393,25 @@
             tab              (e/watch !tab)
             !tab-save        (atom nil)
             tab-save         (e/watch !tab-save)
-            [?tab-token _]   (e/Token tab-save)]
+            [?tab-token _]   (e/Token tab-save)
+            toggle-left-pane!
+            (e/snapshot
+              (fn []
+                (let [next-open? (not @!open?)]
+                  (reset! !open? next-open?)
+                  (reset! !save next-open?))))
+            show-left-pane!
+            (e/snapshot
+              (fn [tab]
+                (when (#{"hierarchy" "pins"} tab)
+                  (reset! !open? true)
+                  (reset! !save true)
+                  (reset! !tab tab)
+                  (reset! !tab-save tab))))]
+
+        (bus/publish-ctx! {:toggle-left-pane! toggle-left-pane!
+                           :show-left-pane! show-left-pane!})
+        (e/on-unmount #(bus/retract-ctx! [:toggle-left-pane! :show-left-pane!]))
 
         (when-some [token ?save-token]
           (let [r (e/server (e/Offload #(settings/save-hierarchy-open user-id root-topic-id save-val)))]

@@ -272,6 +272,16 @@
                       :when #{:viewer} :table #{:topic_repetitions} :views #{:queue-mutations}}
      :add-new        {:label "Add new card…" :class :nav :exec :ui-button
                       :bind "meta+shift+a" :when #{:viewer} :views #{}}
+     :toggle-assistant-pane {:label "Toggle Assistant pane" :class :query :exec :client
+                             :when #{:viewer} :views #{}}
+     :toggle-left-pane {:label "Toggle Left pane" :class :query :exec :client
+                        :when #{:viewer} :views #{}}
+     :show-hierarchy {:label "Show Hierarchy" :class :query :exec :client
+                      :when #{:viewer} :views #{}}
+     :show-pins      {:label "Show Pins" :class :query :exec :client
+                      :when #{:viewer} :views #{}}
+     :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
+                              :when #{:viewer} :views #{}}
      ;; Three components publish this invoker, and exactly one is ever mounted:
      ;; card-modals/EditCardModal, occlusion-modal (edit mode) and the score
      ;; toolbar. :when is tab-scoped and cannot say "a card editor is open", so

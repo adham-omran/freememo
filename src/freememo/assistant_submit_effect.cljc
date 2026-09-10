@@ -12,7 +12,7 @@
    token !draft !refs !echo !active !error]
   (e/client
     (when token
-      (let [{:keys [id text chat mode] ref-ids :refs} submit
+      (let [{:keys [id text chat mode web-search?] ref-ids :refs} submit
             refs-snapshot (e/snapshot refs)
             compact? (= "/compact" (str/trim text))]
         (if (str/blank? text)
@@ -30,7 +30,7 @@
                     (e/server
                       (e/Offload
                         #(assistant/submit-chat-input!
-                           user-id root-topic-id page-topic-id chat mode
+                           user-id root-topic-id page-topic-id chat mode web-search?
                            text ref-ids id)))]
                 (case result
                   (case

@@ -15,6 +15,7 @@
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.cloze :as cloze]
+   [freememo.icons :as icons]
    #?(:clj [freememo.toasts :as toasts])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.db :as db])
@@ -136,7 +137,7 @@
 (defn flush-editors!
   "Force-flush each [editor-atom target-atom] pair's Quill syntax-highlight
    spans into the DOM and reset! the resulting HTML into target-atom.
-   Shared by EditCardModal's and AddCardModal's Save click handlers — see
+   Shared by EditCardModal's and AddCardModal's submission handlers — see
    flush-syntax-tokens! (freememo.quill-field) for why this MUST run at
    click time rather than relying on QuillField's on-change."
   [pairs]
@@ -144,8 +145,86 @@
     (when-let [html (flush-syntax-tokens! @!editor)]
       (reset! !target html))))
 
+(defn add-card-command
+  "Build one validated Add-card command from the current add-modal fields.
+   Pre: field values have been flushed from their Quill editors. Post: a command
+   vector, or an ExceptionInfo that Forms5 can present without an enqueue."
+  [kind topic-id root-topic-id fields]
+  (case kind
+    "overlapping"
+    (let [items (quill-html->items (:ol-items-html fields))]
+      (if (empty? items)
+        (ex-info "Add at least one list item" {})
+        [`Add-card {:kind "overlapping" :topic-id topic-id :root-topic-id root-topic-id
+                    :ol {:question (:ol-question fields) :items items
+                         :settings {:before (ol-before-int (:ol-before fields))
+                                    :after 0
+                                    :reveal-all? (:ol-reveal fields)}}}]))
+    "basic"
+    (if (blank-html? (:question fields))
+      (ex-info "Question can't be empty" {})
+      [`Add-card {:kind "basic" :topic-id topic-id :root-topic-id root-topic-id
+                  :primary (:question fields) :answer (:answer fields)}])
+    (if-let [error (cloze/validate (:cloze fields))]
+      (ex-info error {})
+      [`Add-card {:kind "cloze" :topic-id topic-id :root-topic-id root-topic-id
+                  :primary (:cloze fields) :answer (:answer fields)}])))
+
+(defn switch-add-card-kind!
+  "Move one add-modal draft between card-kind layouts.
+   Pre: every argument atom belongs to the same modal. Post: Basic and
+   Overlapping exchange their raw front/back fields before the target mounts."
+  [!kind !primary !answer !ol-question !ol-items-html !draft-revision next-kind]
+  (let [current-kind @!kind]
+    (when (not= current-kind next-kind)
+      (when (or (= current-kind "overlapping") (= next-kind "overlapping"))
+        (if (= next-kind "overlapping")
+          (do
+            (reset! !ol-question @!primary)
+            (reset! !ol-items-html @!answer))
+          (do
+            (reset! !primary @!ol-question)
+            (reset! !answer @!ol-items-html))))
+      (reset! !kind next-kind)
+      (swap! !draft-revision inc))))
+
+(defn flip-basic-card-fields!
+  "Swap the Basic card's front and back, then remount its editors."
+  [!primary !answer !draft-revision]
+  (let [question @!primary]
+    (reset! !primary @!answer)
+    (reset! !answer question)
+    (swap! !draft-revision inc)))
+
+(defn clear-add-card-draft!
+  "Clear a successful Add & Keep draft according to its frozen side.
+   Post: :front retains the first editable field; :back retains the second;
+   :none clears both. Overlapping settings return to their authoring defaults."
+  [freeze-side kind !primary !answer !ol-question !ol-items-html !ol-before !ol-reveal]
+  (if (= kind "overlapping")
+    (case freeze-side
+      :front (reset! !ol-items-html "")
+      :back (reset! !ol-question "")
+      (do (reset! !ol-question "") (reset! !ol-items-html "")))
+    (case freeze-side
+      :front (reset! !answer "")
+      :back (reset! !primary "")
+      (do (reset! !primary "") (reset! !answer ""))))
+  (reset! !ol-before "1")
+  (reset! !ol-reveal true))
+
+(defn add-command-card-data
+  "Translate one parsed Add-card command into the optimistic card shape."
+  [[_ {:keys [kind primary answer ol]}]]
+  (case kind
+    "basic" [{:q primary :a answer}]
+    "overlapping" [ol]
+    [(cond-> {:c primary}
+       (and answer (not (str/blank? answer)))
+       (assoc :a answer))]))
+
 ;; ---------------------------------------------------------------------------
-;; Modal Tab navigation — Tab moves focus editor→editor→Save→Cancel instead of
+;; Modal Tab navigation — Tab moves focus editor→editor→Add→Cancel instead of
 ;; letting Quill insert a tab character. Toolbar buttons are excluded (they
 ;; carry ql-* classes, not .btn); the Basic/Cloze radios are not tab-stops.
 ;; ---------------------------------------------------------------------------
@@ -153,7 +232,7 @@
 #?(:cljs
    (defn modal-tab-stops
      "Ordered focus targets for `container` (the .card-modal-inner div): the
-      rendered Quill editors in DOM order, then the Save then Cancel button."
+      rendered Quill editors in DOM order, then the Add then Cancel button."
      [container]
      (let [editors (array-seq (.querySelectorAll container ".ql-editor"))
            save    (.querySelector container "button.btn-primary")
@@ -446,20 +525,20 @@
    like Basic/Cloze; the list's HTML is parsed into items on save via
    quill-html->items. question-key/items-key MUST each be unique per instance
    (QuillField frame isolation)."
-  [!question !question-editor init-question-html question-key
-   !items-html !items-editor init-items-html items-key !before !reveal modal-font]
+  [!question !question-editor question-html question-key
+   !items-html !items-editor items-html items-key !before !reveal modal-font]
   (e/client
     (let [before (e/watch !before)
           reveal (e/watch !reveal)]
       (dom/div
         (dom/label (dom/text "Question:"))
         (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-          (QuillField init-question-html
+          (QuillField question-html
             (fn [html] (reset! !question html))
             "e.g. What are the steps of X?" question-key !question-editor nil true))
         (dom/label (dom/text "List items (one per line):"))
         (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-          (QuillField init-items-html
+          (QuillField items-html
             (fn [html] (reset! !items-html html))
             "One item per line…" items-key !items-editor nil nil))
         (dom/div
@@ -748,8 +827,8 @@
           (AnkiNoteActions anki-note-id)
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-question-editor init-ol-question [:edit-ol-q card-id]
-              !ol-items-html !ol-items-editor init-ol-items-html [:edit-ol card-id]
+            (OverlappingPane !ol-question !ol-question-editor ol-question [:edit-ol-q card-id]
+              !ol-items-html !ol-items-editor ol-items-html [:edit-ol card-id]
               !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
@@ -922,6 +1001,18 @@
     (dom/On "click" (fn [_] (close!)) nil))
   (e/amb))
 
+(e/defn AddKeepButton
+  "Write one flushed add-modal snapshot without closing the modal.
+   The caller owns validation and enqueue because it owns the optimistic card
+   lifecycle. Post: each button event writes one fresh request id."
+  [snapshot! !request]
+  (e/amb
+    (e/for [[token _] (forms/Button! [::add-keep]
+                         :label "Add & Keep" :class "btn btn-secondary"
+                         :style {:border-radius "var(--radius-sm)"})]
+      (case (reset! !request (assoc (snapshot!) :id (str (random-uuid))))
+        (token)))))
+
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 ;;
 ;; Serves two acts, told apart by `copy-source` alone. nil = compose a card from
@@ -979,12 +1070,19 @@
           !ol-items-editor (atom nil)
           !ol-before (atom (str (or (:before ol-prefill) 1)))
           !ol-reveal (atom (if (some? ol-prefill) (boolean (:reveal? ol-prefill)) true))
+          !freeze-side (atom :none)
+          !draft-revision (atom 0)
+          !keep-request (atom nil)
           primary (e/watch !primary)
           answer (e/watch !answer)
           ol-question (e/watch !ol-question)
           ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
           ol-reveal (e/watch !ol-reveal)
+          freeze-side (e/watch !freeze-side)
+          draft-revision (e/watch !draft-revision)
+          keep-request (e/watch !keep-request)
+          [keep-token keep-error] (e/Token keep-request)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           modal-title (if copy? "Copy Card" "Add Card")
@@ -994,10 +1092,23 @@
           live-fields {:question primary :cloze primary :answer answer
                        :ol-question ol-question :ol-items-html ol-items-html
                        :ol-before ol-before :ol-reveal ol-reveal}
-          ;; One idempotency key per modal-open: a re-fired or double-submitted
-          ;; commit reuses it, so enqueue-add-card! collapses duplicates to a
-          ;; single save (freememo.optimistic/enqueue-pending-card!).
-          add-id (e/snapshot (random-uuid))]
+          ;; Each Add and Add & Keep request gets its own idempotency key. A
+          ;; repeated event reuses its request key; a later card gets a new one.
+          flush! (fn []
+                   (flush-editors! [[!primary-editor !primary] [!a-editor !answer]
+                                    [!ol-items-editor !ol-items-html]
+                                    [!ol-question-editor !ol-question]]))
+          keep-snapshot! (fn []
+                           (flush!)
+                           {:kind @!card-kind
+                            :topic-id topic-id
+                            :root-topic-id root-topic-id
+                            :freeze-side @!freeze-side
+                            :fields {:question @!primary :cloze @!primary :answer @!answer
+                                     :ol-question @!ol-question
+                                     :ol-items-html @!ol-items-html
+                                     :ol-before @!ol-before
+                                     :ol-reveal @!ol-reveal}})]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -1018,45 +1129,54 @@
             nil)
           (let [inner dom/node
                 tab-cleanup (attach-modal-tab-nav! inner)
-                flush-cleanup (attach-submit-flush! inner
-                                (fn [] (flush-editors! [[!primary-editor !primary] [!a-editor !answer]
-                                                        [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])))]
+                flush-cleanup (attach-submit-flush! inner flush!)]
             (e/on-unmount (fn [] (when tab-cleanup (tab-cleanup)) (when flush-cleanup (flush-cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
             (dom/text modal-title))
-          ;; A copy keeps its source's kind — changing it would strand the
-          ;; prefill, since the three kinds do not share fields. The radios are
-          ;; therefore absent rather than disabled: there is no choice to make.
+          ;; Copy keeps the source kind and retains its existing Save flow.
           (when-not copy?
-          (dom/div
-            (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-3)" :margin-bottom "var(--sp-4)"}})
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)" :font-size "14px" :cursor "pointer"}})
-              (dom/input
-                (dom/props {:type "radio" :name "add-card-kind" :value "basic"
-                            :checked (= kind "basic")})
-                (dom/On "change" (fn [_] (reset! !card-kind "basic")) nil))
-              (dom/text "Basic"))
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)" :font-size "14px" :cursor "pointer"}})
-              (dom/input
-                (dom/props {:type "radio" :name "add-card-kind" :value "cloze"
-                            :checked (= kind "cloze")})
-                (dom/On "change" (fn [_] (reset! !card-kind "cloze")) nil))
-              (dom/text "Cloze"))
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)" :font-size "14px" :cursor "pointer"}})
-              (dom/input
-                (dom/props {:type "radio" :name "add-card-kind" :value "overlapping"
-                            :checked (= kind "overlapping")})
-                (dom/On "change" (fn [_] (reset! !card-kind "overlapping")) nil))
-              (dom/text "Overlapping"))))
+            (dom/div
+              (dom/props {:style {:display "flex" :align-items "center"
+                                  :gap "var(--sp-2)" :margin-bottom "var(--sp-4)"}})
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center"
+                                    :gap "var(--sp-1)" :font-size "14px"}})
+                (dom/text "Type")
+                (dom/select
+                  (dom/props {:class "input" :value kind :aria-label "Card type"})
+                  (e/for [option (e/diff-by :value
+                                  [{:value "basic" :label "Basic"}
+                                   {:value "cloze" :label "Cloze"}
+                                   {:value "overlapping" :label "Overlapping"}])]
+                    (dom/option
+                      (dom/props {:value (:value option)
+                                  :selected (= kind (:value option))})
+                      (dom/text (:label option))))
+                  (dom/On "change"
+                    (fn [event]
+                      (flush!)
+                      (switch-add-card-kind! !card-kind !primary !answer
+                        !ol-question !ol-items-html !draft-revision
+                        (.. event -target -value)))
+                    nil)))
+              (when (= kind "basic")
+                (dom/button
+                  (dom/props {:class "btn btn-secondary" :type "button"
+                              :title "Flip question and answer"
+                              :aria-label "Flip question and answer"
+                              :style {:padding "4px" :border-radius "999px"}})
+                  (icons/Icon :refresh-cw :size 15)
+                  (dom/On "click"
+                    (fn [_]
+                      (flush!)
+                      (flip-basic-card-fields! !primary !answer !draft-revision))
+                    nil)))))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-question-editor init-ol-question [:add-ol-q]
-              !ol-items-html !ol-items-editor init-ol-items-html [:add-ol]
+            (OverlappingPane !ol-question !ol-question-editor ol-question [:add-ol-q draft-revision]
+              !ol-items-html !ol-items-editor ol-items-html [:add-ol draft-revision]
               !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
@@ -1065,13 +1185,13 @@
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
                 (QuillField primary
                   (fn [html] (reset! !primary html))
-                  "Question..." [:add-q] !primary-editor nil true))
+                  "Question..." [:add-q draft-revision] !primary-editor nil true))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField answer
                   (fn [html] (reset! !answer html))
-                  "Answer..." [:add-a] !a-editor nil nil)))
+                  "Answer..." [:add-a draft-revision] !a-editor nil nil)))
             :else
             (dom/div
               (dom/label (dom/text "Cloze:"))
@@ -1079,14 +1199,18 @@
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
                 (QuillField primary
                   (fn [html] (reset! !primary html))
-                  "Cloze text with {{c1::deletion}}..." [:add-c] !primary-editor true true))
+                  "Cloze text with {{c1::deletion}}..." [:add-c draft-revision] !primary-editor true true))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField answer
                   (fn [html] (reset! !answer html))
-                  "Optional back extra..." [:add-be] !a-editor nil nil))))
-          ;; Forms5 Save. The command becomes one identity-stable element in the
+                  "Optional back extra..." [:add-be draft-revision] !a-editor nil nil))))
+          (when keep-error
+            (dom/div
+              (dom/props {:class "form-error" :role "alert"})
+              (dom/text (ex-message keep-error))))
+          ;; Forms5 Add. The command becomes one identity-stable element in the
           ;; commits channel (keyed by its token), so the enqueue runs once per
           ;; submit — replacing the hand-rolled e/Token whose e/server enqueue
           ;; re-fired whenever the reactively-derived card-data changed, adding
@@ -1100,8 +1224,26 @@
                             (dom/div
                               (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
                               (e/amb
-                                (forms/SubmitButton! :label "Save" :class "btn btn-primary"
+                                (forms/SubmitButton! :label (if copy? "Save" "Add") :class "btn btn-primary"
                                   :style {:border-radius "var(--radius-sm)" :order "1"})
+                                (when-not copy?
+                                  (dom/label
+                                    (dom/props {:style {:display "flex" :align-items "center"
+                                                        :gap "var(--sp-1)" :font-size "12px"}})
+                                    (dom/text "Freeze")
+                                    (dom/select
+                                      (dom/props {:class "input" :value (name freeze-side)
+                                                  :aria-label "Freeze card field"})
+                                      (dom/option (dom/props {:value "none"}) (dom/text "None"))
+                                      (dom/option (dom/props {:value "front"}) (dom/text "Freeze Front"))
+                                      (dom/option (dom/props {:value "back"}) (dom/text "Freeze Back"))
+                                      (dom/On "change"
+                                        (fn [event]
+                                          (reset! !freeze-side
+                                            (keyword (.. event -target -value))))
+                                        nil))))
+                                (when-not copy?
+                                  (AddKeepButton keep-snapshot! !keep-request))
                                 (AddCancelButton close!))))
                           :Parse (e/fn [_ _]
                                    (if (and copy? (= copy-source (composed-card kind live-fields)))
@@ -1113,24 +1255,7 @@
                                      ;; opening pre-filled: it is a starting
                                      ;; point, not a finished card.
                                      (ex-info "Change something first — this is still identical to the card it was copied from" {})
-                                     (case kind
-                                     "overlapping"
-                                     (let [items (quill-html->items ol-items-html)]
-                                       (if (empty? items)
-                                         (ex-info "Add at least one list item" {})
-                                         [`Add-card {:kind "overlapping" :topic-id topic-id :root-topic-id root-topic-id
-                                                     :ol {:question ol-question :items items
-                                                          :settings {:before (ol-before-int ol-before)
-                                                                     :after 0 :reveal-all? ol-reveal}}}]))
-                                     "basic"
-                                     (if (blank-html? primary)
-                                       (ex-info "Question can't be empty" {})
-                                       [`Add-card {:kind "basic" :topic-id topic-id :root-topic-id root-topic-id
-                                                   :primary primary :answer answer}])
-                                     (if-let [err (cloze/validate primary)]
-                                       (ex-info err {})
-                                       [`Add-card {:kind "cloze" :topic-id topic-id :root-topic-id root-topic-id
-                                                   :primary primary :answer answer}]))))
+                                     (add-card-command kind topic-id root-topic-id live-fields)))
                           :type :command
                           :show-buttons false)]
             ;; Service: one branch per committed submit. e/snapshot freezes the
@@ -1140,24 +1265,37 @@
             ;; the frozen HTML server-side (basic/cloze only; overlapping is
             ;; stored verbatim, matching prior behavior), enqueue optimistically,
             ;; close on ack.
-            (e/for [[t cmd] (e/diff-by first (e/as-vec commits))]
-              (let [{:keys [kind topic-id root-topic-id primary answer ol]} (nth (e/snapshot cmd) 1)
-                    ;; Typed text only. Sanitation happens inside the :add-card
-                    ;; effect, which is where the save runs — a per-field
-                    ;; (e/server (sanitize-card-field …)) here sent each field to
-                    ;; the server and back before the payload made the same trip.
-                    ;; The overlay row therefore shows what the user typed, and
-                    ;; the sanitized form arrives with the server row.
-                    card-data (case kind
-                                "basic" [{:q primary :a answer}]
-                                "overlapping" [ol]
-                                [(cond-> {:c primary}
-                                   (and answer (not (str/blank? answer)))
-                                   (assoc :a answer))])]
-                (case (opt/enqueue-add-card! add-id
-                        {:topic-id topic-id :root-topic-id root-topic-id
-                         :kind kind :card-data card-data})
-                  (do (e/on-unmount (fn [] (close!))) (t)))))))))))
+            (e/amb
+              (e/for [[t cmd] (e/diff-by first (e/as-vec commits))]
+                (let [frozen-command (e/snapshot cmd)
+                      {:keys [kind topic-id root-topic-id]} (nth frozen-command 1)
+                      add-id (e/snapshot (str (random-uuid)))
+                      ;; Typed text only. Sanitation happens inside the :add-card
+                      ;; effect, which is where the save runs — a per-field
+                      ;; (e/server (sanitize-card-field …)) here sent each field to
+                      ;; the server and back before the payload made the same trip.
+                      ;; The overlay row therefore shows what the user typed, and
+                      ;; the sanitized form arrives with the server row.
+                      card-data (add-command-card-data frozen-command)]
+                  (case (opt/enqueue-add-card! add-id
+                          {:topic-id topic-id :root-topic-id root-topic-id
+                           :kind kind :card-data card-data})
+                    (do (e/on-unmount (fn [] (close!))) (t)))))
+              (when keep-token
+                (let [{:keys [id kind topic-id root-topic-id freeze-side fields]}
+                      keep-request
+                      command (add-card-command kind topic-id root-topic-id fields)]
+                  (if (vector? command)
+                    (let [card-data (add-command-card-data command)]
+                      (case (opt/enqueue-add-card! id
+                              {:topic-id topic-id :root-topic-id root-topic-id
+                               :kind kind :card-data card-data})
+                        (case (clear-add-card-draft! freeze-side kind
+                                !primary !answer !ol-question !ol-items-html
+                                !ol-before !ol-reveal)
+                          (case (swap! !draft-revision inc)
+                            (keep-token)))))
+                    (keep-token command)))))))))))
 
 (e/defn CopyCardModal
   "Mounts AddCardModal in copy mode from a {:mode :copy} !editing-card request.

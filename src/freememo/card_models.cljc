@@ -186,3 +186,25 @@
    nil (treat as: fall back to the default)."
   [id]
   (get by-id (effective-id id)))
+
+(def ^:private native-web-search-model-ids
+  "Assistant models that accept OpenRouter's native web-search tool.
+   This is an allow-list because OpenRouter rejects the tool for models that do
+   not support it. Keep it with the user-selectable model catalog."
+  #{"gpt-5.1"
+    "gpt-5.6-luna"
+    "gpt-5.6-terra"
+    "gpt-5.6-sol"
+    "gemini-3-flash"
+    "gemini-3.6-flash"
+    "gemini-3.8-flash"
+    "gemini-3.5-flash-lite"
+    "claude-haiku-4.5"
+    "claude-sonnet-5"})
+
+(defn native-web-search-supported?
+  "True when the effective model accepts the native web-search tool.
+   Pre: `id` is a stored model id or nil. Post: false for unknown and retired
+   models that do not resolve to an allow-listed current model."
+  [id]
+  (some-> id resolve-model :id native-web-search-model-ids boolean))

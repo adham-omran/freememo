@@ -58,6 +58,7 @@
 (def THEME "theme")
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
+(def CARD_TABLE_OPEN "card_table_open")
 (def ASSISTANT_MODEL "assistant_model")
 (def ASSISTANT_FULL_HEIGHT "assistant_full_height")
 (def FSRS_RETENTION "fsrs_retention")
@@ -855,6 +856,22 @@
     (catch Exception e
       (tel/error! {:id ::save-card-split} e)
       {:success false :error "Failed to save card split"})))
+
+(defn get-card-table-open
+  "Whether the Viewer card table is visible. Missing means true, which preserves
+   the layout users had before this preference existed."
+  [user-id]
+  (not= "false" (db/get-setting user-id CARD_TABLE_OPEN)))
+
+(defn save-card-table-open
+  "Persist the Viewer card-table visibility preference."
+  [user-id open?]
+  (try
+    (db/set-setting user-id CARD_TABLE_OPEN (str (boolean open?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-card-table-open} e)
+      {:success false :error "Failed to save card table visibility"})))
 
 ;; --- FSRS scheduling config (quiz Review flow) ---------------------------
 ;; Only retention / daily caps / fuzz are user-tunable; learning steps and

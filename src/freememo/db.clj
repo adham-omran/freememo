@@ -634,6 +634,7 @@
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       root_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
       title TEXT,
+      web_search BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT NULL
     )"])
@@ -659,6 +660,9 @@
   ;; that predates the column, which resolve-mode maps to the Socratic default —
   ;; correct, since Socratic was the only persona that ever existed before it.
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS mode TEXT"])
+  ;; Web search is a per-chat preference. Existing chats retain the safe default:
+  ;; no external lookup unless the learner turns it on.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS web_search BOOLEAN NOT NULL DEFAULT FALSE"])
   ;; An opaque chat identity gives OpenRouter a stable sticky-routing key. It is
   ;; not derived from a user id, chat id, or document id.
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS provider_session_id TEXT"])
@@ -2739,16 +2743,19 @@
    Pre:  `mode` is an assistant-modes :id — the caller validates, this fn does
          not (freememo.assistant/start-chat! resolves it first).
    Post: the row's mode = `mode`. Returns new id."
-  [user-id root-topic-id title mode]
-  (-> (jdbc/execute-one! ds
-        (sql/format {:insert-into :assistant_chats
-                     :values [{:user_id user-id
-                               :root_topic_id root-topic-id
-                               :title title
-                               :mode mode
-                               :provider_session_id (str (random-uuid))}]
-                     :returning [:id]}))
-    :assistant_chats/id))
+  ([user-id root-topic-id title mode]
+   (create-assistant-chat! user-id root-topic-id title mode false))
+  ([user-id root-topic-id title mode web-search?]
+   (-> (jdbc/execute-one! ds
+         (sql/format {:insert-into :assistant_chats
+                      :values [{:user_id user-id
+                                :root_topic_id root-topic-id
+                                :title title
+                                :mode mode
+                                :web_search (boolean web-search?)
+                                :provider_session_id (str (random-uuid))}]
+                      :returning [:id]}))
+     :assistant_chats/id)))
 
 (defn get-assistant-chat
   "Chat row for `chat-id` IFF owned by `user-id`, else nil (ownership gate).
@@ -2757,7 +2764,7 @@
    resolve it through assistant-modes/resolve-mode, never read it raw."
   [user-id chat-id]
   (jdbc/execute-one! ds
-    (sql/format {:select [:id :root_topic_id :title :mode :provider_session_id]
+    (sql/format {:select [:id :root_topic_id :title :mode :web_search :provider_session_id]
                  :from [:assistant_chats]
                  :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
@@ -2767,7 +2774,7 @@
    already-watched list instead of issuing a second query for it."
   [user-id root-topic-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :title :updated_at :mode]
+    (sql/format {:select [:id :title :updated_at :mode :web_search]
                  :from [:assistant_chats]
                  :where [:and [:= :user_id user-id] [:= :root_topic_id root-topic-id]]
                  :order-by [[[:coalesce :updated_at :created_at] :desc] [:id :desc]]})))
@@ -3157,6 +3164,16 @@
   (jdbc/execute! ds
     (sql/format {:update :assistant_chats
                  :set {:mode mode}
+                 :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
+
+(defn set-assistant-chat-web-search!
+  "Set the web-search preference for an owned chat.
+   Pre: `web-search?` is boolean. Post: only the owned chat changes. This does
+   not touch updated_at because changing a control is not chat activity."
+  [user-id chat-id web-search?]
+  (jdbc/execute! ds
+    (sql/format {:update :assistant_chats
+                 :set {:web_search (boolean web-search?)}
                  :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
 (defn delete-assistant-chat!

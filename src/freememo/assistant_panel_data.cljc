@@ -4,8 +4,10 @@
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [freememo.assistant-modes :as modes]
+   [freememo.card-models :as card-models]
    #?(:clj [freememo.assistant :as assistant])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.settings :as settings])))
 
 (defn mention-query
   "Return the unfinished document mention at the end of a draft."
@@ -80,7 +82,8 @@
         (str (subs text 0 at) (subs text end))))))
 
 (e/defn AssistantPanelData
-  [user-id root-topic-id active details-run pending-mode]
+  [user-id root-topic-id active details-run pending-mode pending-web-search?
+   model-revision]
   (e/client
     (let [assistant-rev
           (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
@@ -92,7 +95,8 @@
               (fn [chat]
                 {:id (:assistant_chats/id chat)
                  :label (or (:assistant_chats/title chat) "Untitled")
-                 :mode (:assistant_chats/mode chat)})
+                 :mode (:assistant_chats/mode chat)
+                 :web-search? (:assistant_chats/web_search chat)})
               (assistant/chats* assistant-rev user-id root-topic-id)))
           active-run
           (e/server
@@ -106,9 +110,24 @@
                   (fn [chat]
                     (when (= active (:id chat)) (:mode chat)))
                   chat-options)
-              pending-mode))]
+              pending-mode))
+          active-chat
+          (some #(when (= active (:id %)) %) chat-options)
+          web-search?
+          (if active-chat
+            (:web-search? active-chat)
+            pending-web-search?)
+          model-state
+          (e/server [(settings/effective-assistant-model user-id root-topic-id)
+                     model-revision])
+          model-id
+          (first model-state)
+          web-search-supported?
+          (card-models/native-web-search-supported? model-id)]
       {:chat-options chat-options
        :active-run active-run
        :details details
        :sending? (some? active-run)
-       :mode-entry mode-entry})))
+       :mode-entry mode-entry
+       :web-search? (boolean web-search?)
+       :web-search-supported? web-search-supported?})))

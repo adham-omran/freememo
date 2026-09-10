@@ -4139,6 +4139,11 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 .assistant-panel__footer-field--model { flex: 1; }
 
+.assistant-panel__web-search-note {
+    color: var(--color-text-tertiary);
+    font-size: 9px;
+}
+
 .assistant-panel__select {
     min-width: 0;
     max-width: 100%;

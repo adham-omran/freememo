@@ -68,8 +68,15 @@
           ;; consumes it. An open chat's persona comes off its own row instead.
           !pending-mode (atom modes/default-id)
           pending-mode (e/watch !pending-mode)
+          ;; Search starts off for a new chat. An open chat carries its own
+          ;; stored preference through AssistantPanelData.
+          !pending-web-search? (atom false)
+          pending-web-search? (e/watch !pending-web-search?)
+          !model-revision (atom nil)
+          model-revision (e/watch !model-revision)
           data (panel-data/AssistantPanelData
-                 user-id root-topic-id active details-run pending-mode)
+                 user-id root-topic-id active details-run pending-mode
+                 pending-web-search? model-revision)
           chat-options (:chat-options data)
           mention-query (panel-data/mention-query draft)
           reference-documents
@@ -83,7 +90,9 @@
           active-run (:active-run data)
           details (:details data)
           sending? (:sending? data)
-          mode-entry (:mode-entry data)]
+          mode-entry (:mode-entry data)
+          web-search? (:web-search? data)
+          web-search-supported? (:web-search-supported? data)]
 
       (submit-effect/SubmitEffect
         {:submit submit :refs refs :user-id user-id
@@ -121,12 +130,13 @@
         (dom/props {:class "assistant-panel"})
 
         ;; Row 2: ＋ New + the chat picker.
-        (rows/ChatRow user-id root-topic-id chat-options pending-mode
+        (rows/ChatRow user-id root-topic-id chat-options pending-mode pending-web-search?
           !active !draft !error)
         (transcript/AssistantTranscript
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
-           :page-topic-id page-topic-id :root-topic-id root-topic-id}
+           :page-topic-id page-topic-id :root-topic-id root-topic-id
+           :web-search? web-search?}
           !submit !active !refs !details-run !evidence !error !echo)
 
         (run-details/RunDetailsModal !details-run details)
@@ -145,12 +155,14 @@
            :refs refs
            :sending? sending?
            :mode-entry mode-entry
+           :web-search? web-search?
+           :web-search-supported? web-search-supported?
            :draft draft
            :user-id user-id
            :active active
            :root-topic-id root-topic-id}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !error)
+          !pending-mode !pending-web-search? !model-revision !error)
 
         ;; Diagnostics LAST, and wrapping nothing. This used to be
         ;; `(case (replace-state! …) (do … (dom/div …)))`, which put the whole

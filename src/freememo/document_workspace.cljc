@@ -7,6 +7,7 @@
    [freememo.document-view :refer [DocumentColumns]]
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.bottom-panel :refer [BottomPanel]]
+   [freememo.command-bus :as bus]
    [freememo.util :as util]))
 
 (e/defn DocumentSplitDivider []
@@ -35,17 +36,21 @@
 
 (e/defn DocumentMainColumn [assistant-inside?]
   (e/client
-    (dom/div
-      (dom/props {:class "document-workspace__main"})
-      (DocumentColumns assistant-inside?)
-      (when-not dctx/reading-mode?
+    (let [card-table-open? dctx/card-table-open?
+          toggle-card-table! dctx/toggle-card-table!]
+      (bus/publish-ctx! {:toggle-card-table! toggle-card-table!})
+      (e/on-unmount #(bus/retract-ctx! [:toggle-card-table!]))
+      (dom/div
+        (dom/props {:class "document-workspace__main"})
+        (DocumentColumns assistant-inside? card-table-open?)
+        (when card-table-open?
         (DocumentSplitDivider))
-      (when-not dctx/reading-mode?
-        (BottomPanel)))))
+        (when card-table-open?
+          (BottomPanel))))))
 
 (e/defn DocumentWorkspace [assistant-full-height?]
   (e/client
-    (if (and assistant-full-height? (not dctx/reading-mode?))
+    (if assistant-full-height?
       (dom/div
         (dom/props {:class "document-workspace document-workspace--assistant-full"})
         (DocumentMainColumn false)

@@ -5,6 +5,7 @@
             [freememo.assistant-evidence :as evidence]
             [freememo.assistant-panel :as panel]
             [freememo.assistant-panel-data :as panel-data]
+            [freememo.card-modals :as card-modals]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
@@ -49,6 +50,16 @@
                          (db/get-assistant-chat owner chat-id))
             run-uuid (str (random-uuid))
             created (answer-run chat-id run-uuid session-id topic-id)]
+        (testing "web search defaults off and stays chat-owned"
+          (is (false? (:assistant_chats/web_search
+                        (db/get-assistant-chat owner chat-id))))
+          (db/set-assistant-chat-web-search! owner chat-id true)
+          (is (true? (:assistant_chats/web_search
+                      (db/get-assistant-chat owner chat-id))))
+          (db/set-assistant-chat-web-search! stranger chat-id false)
+          (is (true? (:assistant_chats/web_search
+                      (db/get-assistant-chat owner chat-id)))))
+
         (testing "one chat accepts one active operation"
           (is (:created created))
           (is (= {:created false :active-run-uuid run-uuid}
@@ -116,6 +127,39 @@
           "Claim [evidence:E1]. Missing [evidence:E9]."
           [{:citation_key "E1" :document_topic_id 7 :page_number 3
             :display_label "document-level evidence"}]))))
+
+(deftest add-card-draft-transitions-keep-the-raw-fields
+  (let [!kind (atom "basic")
+        !primary (atom "Question")
+        !answer (atom "Answer")
+        !ol-question (atom "")
+        !ol-items (atom "")
+        !before (atom "3")
+        !reveal (atom false)
+        !revision (atom 0)]
+    (card-modals/switch-add-card-kind!
+      !kind !primary !answer !ol-question !ol-items !revision "overlapping")
+    (is (= "overlapping" @!kind))
+    (is (= "Question" @!ol-question))
+    (is (= "Answer" @!ol-items))
+
+    (reset! !ol-question "Changed question")
+    (reset! !ol-items "Changed answer")
+    (card-modals/switch-add-card-kind!
+      !kind !primary !answer !ol-question !ol-items !revision "basic")
+    (is (= "Changed question" @!primary))
+    (is (= "Changed answer" @!answer))
+
+    (card-modals/flip-basic-card-fields! !primary !answer !revision)
+    (is (= "Changed answer" @!primary))
+    (is (= "Changed question" @!answer))
+
+    (card-modals/clear-add-card-draft!
+      :front "basic" !primary !answer !ol-question !ol-items !before !reveal)
+    (is (= "Changed answer" @!primary))
+    (is (= "" @!answer))
+    (is (= "1" @!before))
+    (is (true? @!reveal))))
 
 (deftest document-mentions-use-the-message-draft
   (is (= "front" (panel/mention-query "Compare this with @front")))

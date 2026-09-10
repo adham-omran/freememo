@@ -11,18 +11,15 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.hierarchy-side-panel :refer [SidePanelShell]]
    [freememo.assistant-panel :refer [AssistantPanel]]
-   [freememo.viewport :as viewport]
+   [freememo.command-bus :as bus]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn RightSidePanel [page-topic-id root-topic-id user-id]
   (e/client
     (e/for-by identity [_k [root-topic-id]]
-      (let [phone?          (e/watch viewport/!phone?)
-            compact?        (e/watch viewport/!compact?)
-            persisted-open? (e/server (settings/get-assistant-open user-id root-topic-id))
-            ;; Phone and portrait-tablet (compact) default to collapsed regardless
-            ;; of the persisted desktop pref — the toggle still opens it manually.
-            initial-open?   (and (not phone?) (not compact?) persisted-open?)
+      (let [persisted-open? (e/server (settings/get-assistant-open user-id root-topic-id))
+            ;; A command-set state must restore at every Viewer viewport.
+            initial-open?   persisted-open?
             !open? (atom initial-open?)
             open? (e/watch !open?)
             !save (atom nil)
@@ -33,7 +30,16 @@
             width-px (e/watch !width-px)
             !width-save (atom nil)
             width-save (e/watch !width-save)
-            [tw _] (e/Token width-save)]
+            [tw _] (e/Token width-save)
+            toggle-assistant-pane!
+            (e/snapshot
+              (fn []
+                (let [next-open? (not @!open?)]
+                  (reset! !open? next-open?)
+                  (reset! !save next-open?))))]
+
+        (bus/publish-ctx! {:toggle-assistant-pane! toggle-assistant-pane!})
+        (e/on-unmount #(bus/retract-ctx! [:toggle-assistant-pane!]))
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]

@@ -9,11 +9,11 @@
    [freememo.assistant-panel-rows :as rows]
    #?(:clj [freememo.assistant :as assistant])))
 
-(defn- submit-edit [draft-atom active-atom refs-atom mode-id]
+(defn- submit-edit [draft-atom active-atom refs-atom mode-id web-search?]
   (let [text (str/trim @draft-atom)]
     (when-not (str/blank? text)
       {:id (str (random-uuid)) :text text :chat @active-atom
-       :refs (mapv :id @refs-atom) :mode mode-id})))
+       :refs (mapv :id @refs-atom) :mode mode-id :web-search? web-search?})))
 
 (defn sync-composer-draft-value!
   "Set the visible composer value after a programmatic draft edit.
@@ -39,9 +39,9 @@
 
 (e/defn AssistantComposer
   [{:keys [at-open? mention-query active-reference-index reference-document-count refs
-           sending? mode-entry draft user-id active root-topic-id]}
+           sending? mode-entry web-search? web-search-supported? draft user-id active root-topic-id]}
    reference-documents !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
-   !error]
+   !pending-web-search? !model-revision !error]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
@@ -111,7 +111,7 @@
               (do
                 (.preventDefault event)
                 (when-let [edit
-                           (submit-edit !draft !active !refs (:id mode-entry))]
+                           (submit-edit !draft !active !refs (:id mode-entry) web-search?)]
                   (reset! !submit edit)))
 
               (= (.-key event) "@")
@@ -166,7 +166,9 @@
                   (dom/div
                     (dom/props {:class "assistant-panel__composer-controls"})
                     (rows/ModeRow user-id active mode-entry !pending-mode)
-                    (rows/ModelRow user-id root-topic-id))
+                    (rows/ModelRow user-id root-topic-id !model-revision)
+                    (rows/WebSearchRow user-id active web-search?
+                      web-search-supported? !pending-web-search?))
                   ;; ONE always-mounted button whose command and look depend on
                   ;; `sending?`, never two behind an `if`. Mounting one branch
                   ;; and unmounting the other re-evaluates this `e/amb`, and
@@ -195,7 +197,7 @@
               (= [::submit] command)
               (case
                 (when-let [edit
-                           (submit-edit !draft !active !refs (:id mode-entry))]
+                           (submit-edit !draft !active !refs (:id mode-entry) web-search?)]
                   (reset! !submit edit))
                 (command-token))
 
