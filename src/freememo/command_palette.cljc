@@ -12,8 +12,10 @@
   (:require [clojure.string :as str]
             [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
+            [hyperfiddle.electric-scroll0 :refer [Tape]]
             [freememo.commands :as commands]
             [freememo.command-bus :as bus]
+            [freememo.scroll :refer [Scroll-window]]
             [freememo.modal-shell :as modal-shell]))
 
 (defonce !open? (atom false))
@@ -43,7 +45,7 @@
                 :else (recur (inc li) qi))))))
 
 (defn palette-rows
-  "Available commands on `active-tab` matching `query`, best first, capped,
+  "Every available command on `active-tab` that matches `query`, best first,
    plus the persistent search row. Rows carry :idx for selection."
   [active-tab ctx query]
   (let [matches (->> (commands/palette-listed active-tab)
@@ -51,8 +53,7 @@
                   (filter #(bus/available? (:id %) ctx))
                   (keep #(when-let [s (match-score (:label %) query)]
                            (assoc % :score s)))
-                  (sort-by (juxt :score :label))
-                  (take 12))
+                  (sort-by (juxt :score :label)))
         search-row {:id :search :search-row true
                     :label (if (= query "") "Search…" (str "Search: " query))}]
     (vec (map-indexed (fn [i row] (assoc row :idx i))
@@ -71,6 +72,21 @@
    commands/display-chord (the single formatter)."
   [id bind]
   (commands/display-chord id bind))
+
+(defn scroll-selected-row-into-view!
+  "Scroll the palette list until its selected row is visible."
+  [node idx row-height]
+  #?(:cljs
+     (when (and node (>= idx 0))
+       (let [top (* idx row-height)
+             bottom (+ top row-height)
+             viewport-top (.-scrollTop node)
+             viewport-bottom (+ viewport-top (.-clientHeight node))]
+         (cond
+           (< top viewport-top) (set! (.-scrollTop node) top)
+           (> bottom viewport-bottom) (set! (.-scrollTop node) (- bottom (.-clientHeight node))))))
+     :clj nil)
+  nil)
 
 #?(:cljs
    (defn- on-palette-key
@@ -101,6 +117,46 @@
          :else nil)))
    :clj
    (defn- on-palette-key [_active-tab _!query _!idx _e] nil))
+
+(e/defn CommandPaletteRows [palette-items selection-index query-atom filter-key]
+  "Render the command palette's virtualized result list."
+  (e/client
+    (let [row-height 40
+          row-count (count palette-items)]
+      (dom/div
+        (dom/props {:class "command-palette-list tape-scroll"
+                    :style {:--count row-count
+                            :--row-height (str row-height "px")
+                            :--grid-cols "1fr"}})
+        (let [[offset limit] (Scroll-window row-height row-count dom/node
+                               {:overquery-factor 1.5
+                                :reset-key filter-key})]
+          (case (scroll-selected-row-into-view! dom/node selection-index row-height) nil)
+          (dom/table
+            (dom/props {:role "presentation"})
+            (e/for [i (Tape offset limit)]
+              (let [palette-item (nth palette-items i nil)]
+                (when palette-item
+                  (dom/tr
+                    (dom/props {:style {:--order i}})
+                    (dom/td
+                      (dom/button
+                        (dom/props {:class (if (= (:idx palette-item) selection-index)
+                                            "command-palette-row command-palette-row--selected"
+                                            "command-palette-row")
+                                    :type "button"
+                                    :aria-posinset (str (inc i))
+                                    :aria-setsize (str row-count)})
+                        (dom/span
+                          (dom/props {:class "command-palette-label"})
+                          (dom/text (:label palette-item)))
+                        (when-let [bind (format-bind (:id palette-item) (:bind palette-item))]
+                          (dom/span
+                            (dom/props {:class "command-palette-shortcut"})
+                            (dom/text bind)))
+                        (dom/On "click"
+                          (fn [_] (run-row! palette-item @query-atom))
+                          nil)))))))))))))
 
 ;; ── Component ──────────────────────────────────────────────────────────────
 
@@ -147,26 +203,4 @@
                   (reset! !idx 0))
                 nil))
 
-            (dom/div
-              (dom/props {:style {:max-height "50vh" :overflow "auto" :padding "6px"}})
-              (e/for [row (e/diff-by :id rows)]
-                (let [selected? (= (:idx row) idx)]
-                  (dom/button
-                    (dom/props {:style {:display "flex" :width "100%"
-                                        :align-items "center"
-                                        :justify-content "space-between"
-                                        :gap "12px" :padding "8px 10px"
-                                        :border "none" :cursor "pointer"
-                                        :text-align "left" :font-size "14px"
-                                        :border-radius "var(--radius-md)"
-                                        :color "var(--color-text-primary)"
-                                        :background (if selected?
-                                                      "var(--color-bg-hover, rgba(127,127,127,.15))"
-                                                      "transparent")}})
-                    (dom/span (dom/text (:label row)))
-                    (when-let [b (format-bind (:id row) (:bind row))]
-                      (dom/span
-                        (dom/props {:style {:font-size "12px"
-                                            :color "var(--color-text-hint)"}})
-                        (dom/text b)))
-                    (dom/On "click" (fn [_] (run-row! row @!query)) nil)))))))))))
+            (CommandPaletteRows rows idx !query query)))))))

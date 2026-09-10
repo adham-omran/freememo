@@ -16,13 +16,35 @@
 (defn note->state
   "Convert one AnkiConnect notesInfo value into editor display state."
   [note suspended-flags]
-  (let [card-ids (vec (:cards note))]
+  (let [card-ids (vec (:cards note))
+        tags (set (:tags note))
+        card-count (count card-ids)
+        suspended-count (count (filter true? suspended-flags))]
     {:phase :ready
      :note-id (:noteId note)
-     :tags (set (:tags note))
+     :tags tags
+     :marked? (contains? tags "marked")
      :card-ids card-ids
-     :suspended-count (count (filter true? suspended-flags))
+     :card-count card-count
+     :suspended-count suspended-count
      :remarks-html (or (get-in note [:fields :Remarks :value]) "")}))
+
+(defn note-action-request
+  "Return the AnkiConnect request for one editor state change."
+  [note-id state action remarks-html]
+  (case action
+    :mark {:action "addTags" :params {:notes [note-id] :tags "marked"}}
+    :unmark {:action "removeTags" :params {:notes [note-id] :tags "marked"}}
+    :suspend {:action "suspend" :params {:cards (:card-ids state)}}
+    :unsuspend {:action "unsuspend" :params {:cards (:card-ids state)}}
+    :save-remarks {:action "updateNoteFields"
+                   :params {:note {:id note-id
+                                   :fields {"Remarks" (or remarks-html "")}}}}))
+
+(defn remarks-dirty?
+  "True when editor remarks differ from the latest Anki note value."
+  [state remarks-html]
+  (not= (:remarks-html state) remarks-html))
 
 (defn load-note-state!
   "Load the current note fields, tags, and card suspension state from Anki."
@@ -50,17 +72,9 @@
   "Run one Anki note mutation, then refresh both this editor and list overlays."
   [note-id state action remarks-html !state]
   #?(:cljs
-     (let [params (case action
-                    :unmark {:notes [note-id] :tags "marked"}
-                    :unsuspend {:cards (:card-ids state)}
-                    :save-remarks {:note {:id note-id
-                                          :fields {"Remarks" (or remarks-html "")}}})]
+     (let [{:keys [action params]} (note-action-request note-id state action remarks-html)]
        (reset! !state {:phase :saving})
-       ((helpers/anki-call! (case action
-                              :unmark "removeTags"
-                              :unsuspend "unsuspend"
-                              :save-remarks "updateNoteFields")
-                            params)
+       ((helpers/anki-call! action params)
         (fn [_]
           (refresh-anki-overlay!)
           (load-note-state! note-id !state))
@@ -69,12 +83,24 @@
        nil)
      :clj nil))
 
-(e/defn AnkiNoteActions
-  "Render and mutate one pushed card's Anki note.
+(defn save-remarks!
+  "Save changed remarks through the editor's main Save action."
+  [note-id !state !remarks-html]
+  #?(:cljs
+     (let [state @!state
+           remarks-html @!remarks-html]
+       (when (and (= :ready (:phase state))
+                  (remarks-dirty? state remarks-html))
+         (run-note-action! note-id state :save-remarks remarks-html !state)))
+     :clj nil)
+  nil)
 
-   Pre: `note-id` identifies the note the editor's card was pushed as.
-   Post: successful actions re-read Anki before presenting the next state."
-  [note-id]
+(e/defn AnkiNoteActions
+  "Render compact controls for one pushed card's Anki note.
+
+   `!save-remarks` holds the current remarks save function. The card editor
+   invokes it after its card write succeeds."
+  [note-id !save-remarks]
   (e/client
     (when note-id
       (e/for-by identity [_note-key [note-id]]
@@ -85,60 +111,74 @@
           (cond
             (= :loading (:phase state))
             (dom/p
-              (dom/props {:class "card-anki-state-panel" :role "status"})
+              (dom/props {:class "card-anki-action-status" :role "status"})
               (dom/text "Checking Anki…"))
 
             (= :absent (:phase state))
             (dom/p
-              (dom/props {:class "card-anki-state-panel"})
+              (dom/props {:class "card-anki-action-status"})
               (dom/text "This Anki note no longer exists."))
 
             (= :error (:phase state))
             (dom/p
-              (dom/props {:class "card-anki-state-panel"
-                          :style {:color "var(--color-danger-text)"}})
+              (dom/props {:class "card-anki-action-status card-anki-action-status--error"})
               (dom/text (str "Could not reach Anki. " (:message state))))
 
             (contains? #{:ready :saving} (:phase state))
-            (let [saving? (= :saving (:phase state))]
+            (let [saving? (= :saving (:phase state))
+                  marked? (:marked? state)
+                  suspended? (pos? (:suspended-count state))
+                  suspended-label (if (pos? (:suspended-count state))
+                                    (str "Suspended " (:suspended-count state)
+                                      "/" (:card-count state))
+                                    "Suspended")]
               (dom/section
-                (dom/props {:class "card-anki-state-panel" :aria-label "Edit Anki state"})
+                (dom/props {:class "card-anki-actions" :aria-label "Anki state"})
                 (dom/div
-                  (dom/props {:class "card-anki-state-heading"})
-                  (dom/span
-                    (dom/props {:class "card-anki-state-label"})
-                    (dom/text "Anki actions"))
+                  (dom/props {:class "card-anki-toggles"})
+                  (dom/label
+                    (dom/props {:class "card-anki-toggle"})
+                    (dom/input
+                      (dom/props {:type "checkbox" :checked marked? :disabled saving?})
+                      (dom/On "change"
+                        (fn [event]
+                          (run-note-action! note-id state
+                            (if (-> event .-target .-checked) :mark :unmark)
+                            nil !state))
+                        nil))
+                    (dom/text "Marked"))
+                  (dom/label
+                    (dom/props {:class "card-anki-toggle"})
+                    (dom/input
+                      (dom/props {:type "checkbox" :checked suspended?
+                                  :disabled (or saving? (zero? (:card-count state)))})
+                      (dom/On "change"
+                        (fn [event]
+                          (run-note-action! note-id state
+                            (if (-> event .-target .-checked) :suspend :unsuspend)
+                            nil !state))
+                        nil))
+                    (dom/text suspended-label))
+                  (when saving?
+                    (dom/span
+                      (dom/props {:class "card-anki-action-message" :role "status"})
+                      (dom/text "Saving Anki…")))
                   (when (:message state)
                     (dom/span
-                      (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px"}})
+                      (dom/props {:class "card-anki-action-message card-anki-action-message--error"})
                       (dom/text (:message state)))))
-                (when (contains? (:tags state) "marked")
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary" :disabled saving?})
-                    (dom/text "Unmark")
-                    (dom/On "click"
-                      (fn [_] (run-note-action! note-id state :unmark nil !state)) nil)))
-                (when (pos? (:suspended-count state))
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary" :disabled saving?
-                                :style {:margin-left "8px"}})
-                    (dom/text "Unsuspend all")
-                    (dom/On "click"
-                      (fn [_] (run-note-action! note-id state :unsuspend nil !state)) nil)))
                 (e/for-by identity [_remarks-key [[note-id (:remarks-html state)]]]
-                  (let [!remarks-html (atom (:remarks-html state))
-                        remarks-html (e/watch !remarks-html)]
+                  (let [!remarks-html (atom (:remarks-html state))]
                     (dom/div
-                      (dom/props {:style {:margin-top "12px"}})
-                      (dom/label (dom/text "Remarks:"))
-                      (QuillField (:remarks-html state)
-                        (fn [html] (reset! !remarks-html html))
-                        "Remarks…" [:anki-remarks note-id] nil nil nil)
-                      (dom/button
-                        (dom/props {:class "btn btn-sm btn-secondary" :disabled saving?
-                                    :style {:margin-top "8px"}})
-                        (dom/text "Save remarks")
-                        (dom/On "click"
-                          (fn [_]
-                            (run-note-action! note-id state :save-remarks remarks-html !state))
-                          nil)))))))))))))
+                      (dom/props {:class "card-anki-remarks"})
+                      (dom/label
+                        (dom/props {:class "card-anki-remarks-label"})
+                        (dom/text "Remarks"))
+                      (dom/div
+                        (dom/props {:class "card-anki-remarks-editor"})
+                        (QuillField (:remarks-html state)
+                          (fn [html]
+                            (reset! !remarks-html html)
+                            (reset! !save-remarks
+                              (fn [] (save-remarks! note-id !state !remarks-html))))
+                          "Remarks…" [:anki-remarks note-id] nil nil nil)))))))))))))

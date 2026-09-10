@@ -256,6 +256,16 @@
                       :bind "meta+d" :when #{:viewer}
                       :table #{:topics}
                       :views #{:refresh :meta-refresh :schedule-mutations}}
+     :set-page-done  {:label "Set PDF page completion" :class :mutation
+                      :palette-hidden true
+                      :data {:pdf-root-id :payload :page-number :payload :done? :payload}
+                      :table #{:topics}
+                      :views #{:refresh :meta-refresh :schedule-mutations}}
+     :set-pdf-done   {:label "Set PDF completion" :class :mutation
+                      :palette-hidden true
+                      :data {:pdf-root-id :payload :done? :payload}
+                      :table #{:topics}
+                      :views #{:refresh :meta-refresh :schedule-mutations}}
      :restore        {:label "Restore (un-done)" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics}
                       :views #{:refresh :meta-refresh :schedule-mutations}}

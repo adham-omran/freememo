@@ -26,6 +26,28 @@
                     :payload {:pdf-root-id root-id :page-number (inc page) :done? false}}]
                   root-id page true))))))
 
+(deftest queued-pdf-done-prefers-the-last-explicit-request
+  (let [root-id 42]
+    (testing "no queued request preserves the persisted state"
+      (is (false? (optimistic/queued-pdf-done? [] root-id false))))
+    (testing "a request changes its matching PDF immediately"
+      (is (true? (optimistic/queued-pdf-done?
+                  [{:type :set-pdf-done
+                    :payload {:pdf-root-id root-id :done? true}}]
+                  root-id false))))
+    (testing "later requests converge to the last click"
+      (is (false? (optimistic/queued-pdf-done?
+                   [{:type :set-pdf-done
+                     :payload {:pdf-root-id root-id :done? true}}
+                    {:type :set-pdf-done
+                     :payload {:pdf-root-id root-id :done? false}}]
+                   root-id false))))
+    (testing "other PDFs cannot change this PDF's optimistic state"
+      (is (true? (optimistic/queued-pdf-done?
+                  [{:type :set-pdf-done
+                    :payload {:pdf-root-id (inc root-id) :done? false}}]
+                  root-id true))))))
+
 (deftest scheduled-page-nudges-require-a-positive-quota-and-start-page
   (is (= [{:id 1 :pages-today 4 :next-page-number 3}]
         (home/scheduled-page-nudges

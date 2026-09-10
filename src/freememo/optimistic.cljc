@@ -67,6 +67,20 @@
     persisted-done?
     commands))
 
+(defn queued-pdf-done?
+  "Return the effective done state for one PDF. `persisted-done?` is the latest
+   server value. Queued explicit PDF-completion commands override it in FIFO
+   order, so the result matches the user's last click."
+  [commands pdf-root-id persisted-done?]
+  (reduce
+    (fn [done? {:keys [type payload]}]
+      (if (and (= :set-pdf-done type)
+               (= pdf-root-id (:pdf-root-id payload)))
+        (:done? payload)
+        done?))
+    persisted-done?
+    commands))
+
 ;; :pending-cards overlay API (add-* optimistic rows).
 ;; Entry shape: {:tempid uuid :topic-id id :status :pending|:confirmed|:error
 ;;               :real-ids [id...] (confirmed) :error msg (error)

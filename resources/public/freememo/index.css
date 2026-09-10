@@ -327,70 +327,63 @@ html, body {
 /* Card add/edit modal inner panel — viewport-relative.
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
-.card-anki-state-panel {
-    margin: 0 0 var(--sp-4);
-    padding: 10px 12px;
+.card-anki-action-status {
+    margin: 0 0 var(--sp-3);
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+.card-anki-action-status--error,
+.card-anki-action-message--error { color: var(--color-danger-text); }
+.card-anki-actions {
+    display: grid;
+    gap: 8px;
+    margin: 0 0 var(--sp-3);
+    padding: 8px 10px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-bg-subtle);
 }
-.card-anki-state-heading {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    min-height: 24px;
-}
-.card-anki-state-label,
-.card-anki-remark-label {
-    flex: none;
-    color: var(--color-text-hint);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-}
-.card-anki-state-badges {
+.card-anki-toggles {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    align-items: center;
+    gap: 8px 14px;
 }
-.card-anki-state-badge {
+.card-anki-toggle {
     display: inline-flex;
     align-items: center;
-    min-height: 22px;
-    padding: 2px 8px;
-    border-radius: var(--radius-pill);
-    font-size: 11px;
-    font-weight: 700;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 13px;
 }
-.card-anki-state-badge-suspended {
-    color: var(--color-warning-dark);
-    background: var(--color-warning-bg);
-    box-shadow: inset 0 0 0 1px var(--color-warning-light);
+.card-anki-toggle input { accent-color: var(--color-primary); }
+.card-anki-action-message {
+    color: var(--color-text-secondary);
+    font-size: 12px;
 }
-.card-anki-state-badge-marked {
-    color: var(--color-primary-tint-text);
-    background: var(--color-primary-tint);
-}
-.card-anki-state-badge-remarked {
-    color: var(--color-remark-tint-text);
-    background: var(--color-remark-tint);
-}
-.card-anki-remark {
+.card-anki-remarks {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
-    gap: var(--sp-3);
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--color-border);
+    gap: 8px;
+    align-items: start;
 }
-.card-anki-remark-label { padding-top: 2px; }
-.card-anki-remark-text {
-    color: var(--color-text-label);
+.card-anki-remarks-label {
+    padding-top: 7px;
+    color: var(--color-text-hint);
+    font-size: 12px;
+    font-weight: 600;
+}
+.card-anki-remarks-editor { min-width: 0; }
+.card-anki-remarks-editor .ql-toolbar { padding: 3px 5px; }
+.card-anki-remarks-editor .quill-field-wrapper .ql-container {
+    min-height: 52px;
+    max-height: 110px;
+}
+.card-anki-remarks-editor .quill-field-wrapper .ql-editor {
+    min-height: 52px;
+    padding: 7px 9px;
     font-size: 13px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    line-height: 1.4;
 }
 
 /* ── Quiz item statistics (freememo.quiz-item-stats) ──────────────
@@ -1545,6 +1538,47 @@ html, body {
    ~one row — a self-sustaining ±row oscillation. The scroll owns its position. */
 .tape-scroll,
 .tape-scroll * { overflow-anchor: none; }
+
+/* Command palette rows use the shared virtual-scroll table shape. The list
+   holds every available command, while Tape mounts only the visible window. */
+.command-palette-list {
+    max-height: 50vh;
+    overflow-y: auto;
+    padding: 6px;
+    scrollbar-gutter: stable;
+}
+.command-palette-list table { width: 100%; }
+.command-palette-list table td { padding: 0; }
+.command-palette-row {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    font-size: 14px;
+    text-align: left;
+}
+.command-palette-row--selected { background: var(--color-bg-hover, rgba(127,127,127,.15)); }
+.command-palette-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.command-palette-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.command-palette-shortcut {
+    flex: 0 0 auto;
+    color: var(--color-text-hint);
+    font-size: 12px;
+}
 
 .tape-scroll table {
     display: block;

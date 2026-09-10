@@ -9,7 +9,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
-   [freememo.commands :as commands]
    [freememo.schedule :as sched]
    [freememo.schedule-forecast :as fc]
    [freememo.client-state :as cs]
@@ -18,20 +17,16 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
-(defn toggle-pdf-done!*
-  "Flip a PDF root's completion status (DB write only — the :meta-refresh bump
-   is a separate e/server step at the call site, so (t) can spend and unmount
-   the effect before `done?` re-reads; bumping here under e/Offload would let
-   latest-wins restart the thunk with the new `done?` and undo the toggle).
-   Pre:  pdf-root-id non-nil; `currently-done?` is the status at click time.
-   Post: status becomes the opposite of `currently-done?`; returns :ok.
-   Blame: caller bug if pdf-root-id is nil."
-  [user-id pdf-root-id currently-done?]
-  #?(:clj (do (if currently-done?
-                (db/restore-topic! user-id pdf-root-id)
-                (db/done-topic! user-id pdf-root-id))
-              :ok)
-     :cljs nil))
+#?(:clj
+   (defmethod opt/run-command! :set-pdf-done
+     [user-id {:keys [payload]}]
+     (let [{:keys [pdf-root-id done?]} payload
+           result (if done?
+                    (db/done-topic! user-id pdf-root-id)
+                    (db/restore-topic! user-id pdf-root-id))]
+       (if result
+         {:ok? true}
+         {:ok? false :error "PDF was not found"}))))
 
 ;; Pre:  user-id + bib-topic-id from doc-context; bib-topic-id is the document
 ;;       ROOT, which is what `study_schedules.root_topic_id` names.
@@ -109,9 +104,10 @@
           page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
           page-number dctx/page-number
           variant dctx/variant
-          done? (= pdf-status "done")
+          persisted-pdf-done? (= pdf-status "done")
           inline? (= variant :inline)
           pending-commands (e/watch (cs/get-atom :pending-commands))
+          done? (opt/queued-pdf-done? pending-commands bib-topic-id persisted-pdf-done?)
           persisted-page-done? (:current-done? page-info)
           queued-page-done? (when page-info
                               (opt/queued-page-done? pending-commands bib-topic-id page-number
@@ -137,15 +133,12 @@
           (icons/Icon (if done? :rotate-ccw :check) :size 16)
           (dom/span (dom/props {:class "icon-label"})
             (dom/text (if done? "Restore PDF" "Mark PDF Done")))
-          (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                [t _] (e/Token event)]
-            (when t
-              ;; Two-step: DB write, then bump :meta-refresh, then (t). The bump
-              ;; is last so (t) unmounts this block before `done?` re-reads —
-              ;; otherwise the status flips back. Mirrors the old TitleBar.
-              (case (e/server (toggle-pdf-done!* user-id bib-topic-id done?))
-                (case (e/server (commands/bump! user-id :done))
-                  (t)))))))
+          (dom/On "click"
+            (fn [_]
+              (opt/enqueue! {:type :set-pdf-done
+                             :payload {:pdf-root-id bib-topic-id
+                                       :done? (not done?)}}))
+            nil)))
 
       ;; Citation — inline only; first element to collapse (variable width).
       (when (and inline? citation)
