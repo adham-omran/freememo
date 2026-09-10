@@ -13,7 +13,7 @@
    by that tab only.
 
    Keys:
-     :pending-commands  vector of {:id :type :payload} — this tab's dispatch queue
+     :pending-commands  vector of {:id :type :payload} — this tab's FIFO dispatch queue
      :pending-cards     map of tempid -> overlay entry — this tab's add-* rows
 
    Consequence (intended): a command still pending when the tab reloads is lost,
@@ -36,7 +36,7 @@
 (defn get-atom
   "Return this session's atom for `k`, creating it on first use. Same atom for
    repeated calls with the same `k` within one page load. Pre: k ∈
-   #{:pending-commands :pending-cards}."
+   #{:pending-commands :pending-cards :anki-overlay-refresh}."
   [k]
   (-> (swap! registry
         (fn [m]
@@ -44,5 +44,6 @@
             m
             (assoc m k (atom (case k
                                :pending-commands []
-                               :pending-cards    {}))))))
+                               :pending-cards    {}
+                               :anki-overlay-refresh 0))))))
     (get k)))

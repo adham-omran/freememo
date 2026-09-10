@@ -4875,6 +4875,32 @@
       WHERE parent_id = ? AND page_number = ?"
      parent-id page-number]))
 
+(defn set-page-done!
+  "Set one owned PDF page to an explicit completion state.
+
+   Pre: `user-id` owns the page and `done?` is boolean.
+   Post: returns the persisted boolean, or nil when no owned page matched.
+   Inv: an idempotent write preserves `done_at`; only a transition into done
+        stamps the completion time and only a transition out clears it."
+  [user-id parent-id page-number done?]
+  (some-> (jdbc/execute-one! ds
+           ["UPDATE topics
+               SET status = CASE WHEN ? THEN 'done' ELSE 'active' END,
+                   done_at = CASE
+                     WHEN ? AND status <> 'done' THEN now()
+                     WHEN NOT ? AND status = 'done' THEN NULL
+                     ELSE done_at
+                   END
+             WHERE parent_id = ?
+               AND page_number = ?
+               AND user_id = ?
+               AND kind = 'page'
+               AND staged_delete_id IS NULL
+             RETURNING status"
+            done? done? done? parent-id page-number user-id])
+    :topics/status
+    (= "done")))
+
 (defn get-context-pages
   "Get content from page topics in a range, for card generation context."
   [parent-id start-page end-page]
@@ -11989,6 +12015,31 @@
                            [:is :p/staged_delete_id nil]
                            [:not= :f/anki_note_id nil]]
                    :order-by [[:p/page_number :asc] [:f/id :asc]]}))))
+
+(defn get-schedule-range-anki-notes
+  "Return pushed note IDs and unpushed-card count for one owned active schedule.
+
+   Pre: `schedule-id` is supplied by a schedule-detail route.
+   Post: only cards attached to PDF pages inside the schedule's inclusive range
+         are considered. Repeated local cards for one note produce one note ID."
+  [user-id schedule-id]
+  (let [rows (jdbc/execute! ds
+               ["SELECT f.anki_note_id
+                   FROM study_schedules s
+                   JOIN topics p ON p.parent_id = s.root_topic_id
+                   JOIN flashcards f ON f.topic_id = p.id
+                  WHERE s.id = ?
+                    AND s.user_id = ?
+                    AND s.archived_at IS NULL
+                    AND p.user_id = ?
+                    AND p.kind = 'page'
+                    AND p.staged_delete_id IS NULL
+                    AND (s.first_page IS NULL OR p.page_number >= s.first_page)
+                    AND (s.last_page IS NULL OR p.page_number <= s.last_page)
+                  ORDER BY p.page_number ASC, f.id ASC"
+                schedule-id user-id user-id])]
+    {:note-ids (->> rows (keep :flashcards/anki_note_id) distinct vec)
+     :unpushed-card-count (count (remove :flashcards/anki_note_id rows))}))
 
 ;; --- The derived-state cache (§3.1 – §3.3) ---------------------------------
 

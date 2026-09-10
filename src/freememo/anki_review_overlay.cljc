@@ -5,6 +5,7 @@
    [missionary.core :as m]
    [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
+   [freememo.client-state :as cs]
    [freememo.logging :as log]
    [freememo.math :as math]
    #?(:clj [freememo.anki-sync-server :as sync-server])
@@ -76,9 +77,10 @@
     (let [sync-rev (e/server (e/watch (us/get-atom user-id :sync-mutations)))
           card-rev (e/server (e/watch (us/get-atom user-id :card-mutations)))
           payload (e/watch !payload)
-          check-tick (e/watch !check-tick)]
+          check-tick (e/watch !check-tick)
+          action-refresh (e/watch (cs/get-atom :anki-overlay-refresh))]
       (when (seq manifest)
-        (start-fetch! manifest [sync-rev check-tick] !status !payload))
+        (start-fetch! manifest [sync-rev check-tick action-refresh] !status !payload))
       (let [response (when (some? payload)
                        (let [present (:present payload)
                              absent (:absent payload)

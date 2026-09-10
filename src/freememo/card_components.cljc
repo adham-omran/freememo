@@ -259,6 +259,7 @@
           ;; page. Create copy… reads these instead.
           topic-id (e/server (:flashcards/topic_id card))
           root-topic-id (e/server (:flashcards/root_topic_id card))
+          anki-note-id (e/server (:flashcards/anki_note_id card))
           ;; Built server-side from the members: a group row's front cell
           ;; describes the whole group, and its dot folds every member's state.
           front-html (e/server (row-front-html card))
@@ -287,10 +288,12 @@
                                         ;; overlapping pane can pre-fill.
                                         {:id id :kind kind :overlapping ol
                                          :anki-flags anki-flags
+                                         :anki-note-id anki-note-id
                                          :topic-id topic-id :root-topic-id root-topic-id}
                                         :else
                                         {:id id :kind kind :question question :answer answer :cloze cloze
                                          :anki-flags anki-flags
+                                         :anki-note-id anki-note-id
                                          :topic-id topic-id :root-topic-id root-topic-id})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                              (reset! !editing-card data)))]

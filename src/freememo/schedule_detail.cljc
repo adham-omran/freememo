@@ -19,6 +19,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.schedule-forecast :as fc]
    [freememo.schedule-anki :as sa]
+   [freememo.schedule-anki-tags :refer [ScheduleRangeTagger]]
    [freememo.schedule :as sched]
    [freememo.icons :as icons]))
 
@@ -859,6 +860,7 @@
               ;; summary that belongs with the tiles, and it used to separate
               ;; the two tall scroll boxes that are now one switched region.
               (DailyLoadStrip forecast)
+              (ScheduleRangeTagger user-id schedule-id)
               ;; Plan and Pages, one at a time. `PlanSection` survives for the
               ;; degenerate branch below, which has a page plan and no verdicts
               ;; at all and so has nothing to switch between.

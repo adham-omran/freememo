@@ -51,6 +51,22 @@
     (swap! (cs/get-atom :pending-commands) conj command)
     :enqueued))
 
+(defn queued-page-done?
+  "Return the effective done state for one PDF page. `persisted-done?` is the
+   latest server value. Every queued explicit page-completion command overrides
+   it in FIFO order, so the returned value is the state the user last asked
+   for, even while earlier writes are still running."
+  [commands pdf-root-id page-number persisted-done?]
+  (reduce
+    (fn [done? {:keys [type payload]}]
+      (if (and (= :set-page-done type)
+               (= pdf-root-id (:pdf-root-id payload))
+               (= page-number (:page-number payload)))
+        (:done? payload)
+        done?))
+    persisted-done?
+    commands))
+
 ;; :pending-cards overlay API (add-* optimistic rows).
 ;; Entry shape: {:tempid uuid :topic-id id :status :pending|:confirmed|:error
 ;;               :real-ids [id...] (confirmed) :error msg (error)
@@ -205,17 +221,15 @@
      :cljs nil))
 
 (e/defn CommandDispatcher
-  "Always-mounted, headless command pump. Drains THIS session's client queue
-   (freememo.client-state :pending-commands): a per-command token (keyed by the
-   command id) arms on mount, the effect runs server-side via e/Offload, and on
-   completion the client acks — applying the outcome to the overlay and dropping
-   the command (which unmounts the branch). Per-session: two tabs each drain
-   their own queue, so a command is executed exactly once, by the tab that
-   enqueued it."
+  "Always-mounted, headless FIFO command pump. It runs only the first command
+   in THIS session's queue, then acks and removes it before mounting the next
+   command. This serial boundary makes explicit desired-state mutations converge
+   in click order. Per-session: two tabs each drain only their own queue."
   [user-id]
   (e/client
-    (e/for [cmd (e/diff-by :id (e/watch (cs/get-atom :pending-commands)))]
-      (let [[t _] (e/Token (:id cmd))]
+    (let [cmd (first (e/watch (cs/get-atom :pending-commands)))]
+      (when cmd
+        (let [[t _] (e/Token (:id cmd))]
         (when t
           (let [result (e/server (e/Offload #(run-command-effect! user-id cmd)))]
             (when (some? result)
@@ -223,4 +237,4 @@
               ;; branch, so per the token lifecycle it fires from e/on-unmount
               ;; when (t) spends the token.
               (e/on-unmount #(ack-command! cmd result))
-              (t))))))))
+              (t)))))))))

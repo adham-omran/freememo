@@ -730,12 +730,14 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                          (reset! !editing-card
                            {:id id :kind kind :overlapping ol
                             :anki-flags anki-flags
+                            :anki-note-id note-id
                             :topic-id topic-id :root-topic-id root-topic-id})
 
                          :else
                          (reset! !editing-card {:id id :kind kind :question question
                                                 :answer answer :cloze cloze
                                                 :anki-flags anki-flags
+                                                :anki-note-id note-id
                                                 :topic-id topic-id :root-topic-id root-topic-id})))]
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")

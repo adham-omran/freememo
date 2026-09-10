@@ -4,6 +4,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.loading :as loading]
    [freememo.navigation :as nav]
+   [freememo.schedule :as sched]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
@@ -12,7 +13,16 @@
   #?(:clj (settings/get-openrouter-key-status user-id)
      :cljs nil))
 
-(defn home-summary-result* [_refresh user-id enc-key]
+(defn scheduled-page-nudges
+  "Keep only schedules that can name pages the reader should start now."
+  [summaries]
+  (->> summaries
+    (keep (fn [{:keys [pages-today next-page-number] :as schedule}]
+            (when (and (pos? (long (or pages-today 0))) next-page-number)
+              schedule)))
+    vec))
+
+(defn home-summary-result* [settings-refresh schedule-refresh user-id enc-key]
   #?(:clj
      (try
        (let [cal (db/get-review-calendar user-id 30)
@@ -30,14 +40,48 @@
                    (= days 1) "tomorrow"
                    :else (str "in " days " days"))))]
          (loading/region-success
-           {:configured? (:configured? (get-api-key-status* _refresh user-id enc-key))
+           {:configured? (:configured? (get-api-key-status* settings-refresh user-id enc-key))
             :queue-count (db/get-learning-queue-count user-id)
             :total-count (db/get-total-topic-count user-id)
-            :next-review next-review}))
+            :next-review next-review
+            :schedule-nudges
+            (scheduled-page-nudges
+              (sched/schedule-summaries schedule-refresh user-id))}))
        (catch Exception error
          (loading/region-failure (or (ex-message error) "Unknown error"))))
      :cljs (loading/region-success
-             {:configured? false :queue-count 0 :total-count 0 :next-review nil})))
+             {:configured? false :queue-count 0 :total-count 0 :next-review nil
+              :schedule-nudges []})))
+
+(e/defn ScheduleNudges [navigate! schedule-nudges]
+  (e/client
+    (when (seq schedule-nudges)
+      (dom/div
+        (dom/props {:style {:margin "0 0 20px" :display "flex"
+                            :flex-direction "column" :gap "8px"}})
+        (e/for-by :id [schedule schedule-nudges]
+          (let [root-topic-id (:root-topic-id schedule)
+                page-number (:next-page-number schedule)
+                title (:title schedule)
+                href (str "/viewer/topic/" root-topic-id "/" page-number)]
+            (dom/div
+              (dom/props {:style {:padding "10px 12px"
+                                  :border "1px solid var(--color-border)"
+                                  :border-radius "var(--radius-md)"
+                                  :font-size "14px"}})
+              (dom/text (str "You have " (:pages-today schedule)
+                          " pages scheduled in "))
+              (dom/a
+                (dom/props {:href href
+                            :style {:font-weight "600"
+                                    :color "var(--color-primary-text)"
+                                    :text-decoration "underline"}})
+                (dom/text title)
+                (dom/On "click"
+                  (fn [event]
+                    (.preventDefault event)
+                    (navigate! :viewer (nav/nav-topic root-topic-id :home page-number)))
+                  nil)))))))))
 
 (e/defn QuickLinks [navigate!]
   (e/client
@@ -88,7 +132,7 @@
 
 (e/defn HomeSummary [navigate! summary]
   (e/client
-    (let [{:keys [configured? queue-count total-count next-review]} summary
+    (let [{:keys [configured? queue-count total-count next-review schedule-nudges]} summary
           new-user? (zero? total-count)
           has-due? (pos? queue-count)]
       (dom/div
@@ -104,6 +148,8 @@
 
               :else
               (str "All caught up." (when next-review (str " Next review " next-review "."))))))
+
+        (ScheduleNudges navigate! schedule-nudges)
 
         (when (and (not new-user?) has-due?)
           (dom/p
@@ -162,7 +208,8 @@
 (e/defn HomePage [navigate! user-id enc-key]
   (e/client
     (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          request-key [settings-refresh user-id]]
+          schedule-refresh (e/server (e/watch (us/get-atom user-id :schedule-mutations)))
+          request-key [settings-refresh schedule-refresh user-id]]
       (dom/div
         (dom/props {:class "page-container" :style {:padding-top "48px"}})
         (dom/h1
@@ -174,7 +221,7 @@
         (loading/WithLatestRegion request-key
           (e/fn []
             (e/server
-              (e/Offload #(assoc (home-summary-result* settings-refresh user-id enc-key)
+              (e/Offload #(assoc (home-summary-result* settings-refresh schedule-refresh user-id enc-key)
                              :request-key request-key))))
           (e/fn [summary _phase _error] (HomeSummary navigate! summary))
           (e/fn [_phase] (HomeSummaryLoading navigate!))

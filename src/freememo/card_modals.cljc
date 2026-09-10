@@ -10,6 +10,7 @@
    [freememo.segmented :as seg]
    [freememo.pre-prompt-mode :as ppm]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
+   [freememo.anki-note-actions :refer [AnkiNoteActions]]
    [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
@@ -664,6 +665,7 @@
           init-a (or (:answer editing-card) "")
           init-c (or (:cloze editing-card) "")
           init-ol (:overlapping editing-card)
+          anki-note-id (:anki-note-id editing-card)
           anki-flags (:anki-flags editing-card)
           ;; Bound once and used three ways: to seed the atoms, to mount the
           ;; QuillFields, and to build init-shape below. All three MUST read
@@ -743,6 +745,7 @@
             (dom/text "Edit " (cond (= kind "overlapping") "Overlapping"
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
           (AnkiStatePanel anki-flags)
+          (AnkiNoteActions anki-note-id)
           (cond
             (= kind "overlapping")
             (OverlappingPane !ol-question !ol-question-editor init-ol-question [:edit-ol-q card-id]

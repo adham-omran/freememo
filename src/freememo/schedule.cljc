@@ -954,6 +954,7 @@
             ;; open it. `display-rows` already projects it for the sidebar; the
             ;; two views must offer the same destination.
             :root-topic-id (:study_schedules/root_topic_id row)
+            :next-page-number (:page-number (first (remove :done? (:pages inputs))))
             :target-date (:study_schedules/target_date row)
             :days-to-target (signed-days-to-target (:study_schedules/target_date row))
             :status (:status inputs)
@@ -980,6 +981,15 @@
   [_refresh user-id]
   #?(:clj (db/list-schedulable-documents user-id)
      :cljs []))
+
+(defn schedule-range-anki-notes
+  "Read the Anki notes that a schedule-range tag action may change.
+
+   Pre: the caller supplies the current user and selected schedule ID.
+   Post: the database boundary enforces schedule ownership and active status."
+  [_refresh user-id schedule-id]
+  #?(:clj (db/get-schedule-range-anki-notes user-id schedule-id)
+     :cljs {:note-ids [] :unpushed-card-count 0}))
 
 (defn create-schedule!
   "Create a schedule and freeze its starting known count (§6.2).

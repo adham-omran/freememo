@@ -12,6 +12,8 @@
    [freememo.commands :as commands]
    [freememo.schedule :as sched]
    [freememo.schedule-forecast :as fc]
+   [freememo.client-state :as cs]
+   [freememo.optimistic :as opt]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
@@ -105,9 +107,24 @@
   (e/client
     (let [user-id dctx/user-id bib-topic-id dctx/bib-topic-id citation dctx/citation
           page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
+          page-number dctx/page-number
           variant dctx/variant
           done? (= pdf-status "done")
-          inline? (= variant :inline)]
+          inline? (= variant :inline)
+          pending-commands (e/watch (cs/get-atom :pending-commands))
+          persisted-page-done? (:current-done? page-info)
+          queued-page-done? (when page-info
+                              (opt/queued-page-done? pending-commands bib-topic-id page-number
+                                persisted-page-done?))
+          optimistic-page-change? (and page-info
+                                       (not= persisted-page-done? queued-page-done?))
+          page-done-count (if optimistic-page-change?
+                            (+ (:done page-info) (if queued-page-done? 1 -1))
+                            (:done page-info))
+          page-tooltip (if optimistic-page-change?
+                         (str page-done-count " of " (:total page-info)
+                              " pages completed. Saving page " page-number "…")
+                         (:remaining-tooltip page-info))]
 
       ;; Mark PDF Done / Restore — PDF root only.
       (when pdf-root?
@@ -147,8 +164,8 @@
       (when (and inline? page-info (pos? (:total page-info)))
         (dom/span
           (dom/props {:class "toolbar-badge tooltip-right"})
-          (tooltip/Tooltip! (:remaining-tooltip page-info))
-          (dom/text (:done page-info) "/" (:total page-info))))
+          (tooltip/Tooltip! page-tooltip)
+          (dom/text page-done-count "/" (:total page-info))))
 
       ;; Schedule pace — inline only, and only when an active schedule covers
       ;; this document. Gated on `inline?` alone, NOT on page-info: a schedule

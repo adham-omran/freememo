@@ -30,6 +30,8 @@
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
+   [freememo.optimistic :as opt]
+   [freememo.client-state :as cs]
    [freememo.command-bus :as bus]
    [freememo.interaction-trail :as trail]
    [freememo.copy-text :as copy]
@@ -43,7 +45,8 @@
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.toasts :as toasts])))
 
 ;; ---------------------------------------------------------------------------
 ;; Page-done status read. Wraps the DB call with a _refresh-first arg so the
@@ -57,6 +60,18 @@
   #?(:clj (boolean (when (and pdf-root-id page-number)
                      (db/get-page-done-status pdf-root-id page-number)))
      :cljs nil))
+
+#?(:clj
+   (defmethod opt/run-command! :set-page-done
+     [user-id {:keys [payload]}]
+     (let [{:keys [pdf-root-id page-number done?]} payload
+           persisted-done? (db/set-page-done! user-id pdf-root-id page-number done?)]
+       (if (some? persisted-done?)
+         {:ok? true}
+         (do
+           (toasts/push! user-id {:level :error
+                                  :message "Page completion failed. Try again."})
+           {:ok? false :error "Page was not found"})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Control groups — extracted so both the desktop (inline) and phone (overflow
@@ -332,8 +347,10 @@
       (dom/props {:class "toolbar-group"
                   :style {:padding-left "12px"
                           :border-left "1px solid var(--color-border)"}})
-      (let [refresh    (e/server (e/watch (us/get-atom user-id :meta-refresh)))
-            page-done? (e/server (e/Offload #(page-done?* refresh pdf-root-id page-number)))]
+      (let [refresh (e/server (e/watch (us/get-atom user-id :meta-refresh)))
+            persisted-done? (e/server (e/Offload #(page-done?* refresh pdf-root-id page-number)))]
+        (let [pending-commands (e/watch (cs/get-atom :pending-commands))
+              page-done? (opt/queued-page-done? pending-commands pdf-root-id page-number persisted-done?)]
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
                       :aria-label (if page-done?
@@ -348,14 +365,13 @@
           (let [node dom/node]
             (bus/publish-invoker! :done (fn [] (.click node)))
             (e/on-unmount (fn [] (bus/retract-invoker! :done))))
-          (let [click-event (dom/On "click"
-                              (fn [_] {:id (str (random-uuid)) :page page-number})
-                              nil)
-                [t _] (e/Token click-event)]
-            (when t
-              (case (e/server (e/Offload #(db/toggle-page-done! pdf-root-id (:page click-event))))
-                (case (e/server (commands/bump! user-id :done))
-                  (t)))))))))))
+          (dom/On "click"
+            (fn [_]
+              (opt/enqueue! {:type :set-page-done
+                             :payload {:pdf-root-id pdf-root-id
+                                       :page-number page-number
+                                       :done? (not page-done?)}}))
+            nil))))))))
 
 (e/defn PdfScanCopy
   "Scan (+Compare OCR) / Copy (+Copy all) dropdowns, plus the Live-Document

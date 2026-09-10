@@ -102,6 +102,7 @@
                                (remove #(= "done" (:topics/status %)) pages)))
              current-page (first (filter #(= (:topics/page_number %) page-number) pages))]
          {:topic-id (:topics/id current-page)
+          :current-done? (= "done" (:topics/status current-page))
           :done (- (count pages) (count remaining))
           :total (count pages)
           ;; Tooltip built server-side — the client only ever displayed this

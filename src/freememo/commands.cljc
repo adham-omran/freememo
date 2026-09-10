@@ -128,6 +128,11 @@
                         :data {:topic-id :payload :root-topic-id :payload
                                :kind :payload :card-data :payload}
                         :table #{:flashcards} :views #{:card-mutations}}
+     :set-page-done    {:label "Set PDF page completion" :class :mutation
+                        :palette-hidden true
+                        :data {:pdf-root-id :payload :page-number :payload :done? :payload}
+                        :table #{:topics}
+                        :views #{:refresh :meta-refresh :schedule-mutations}}
      ;; Writes `flashcards` too: a citation change fans out onto every citing
      ;; card's `anki_bibliography_html` snapshot, so the unsynced counts move.
      :save-biblio      {:label "Save bibliography" :class :mutation :palette-hidden true
