@@ -264,6 +264,7 @@
           :reasoning-tokens 9
           :cached-tokens 80
           :cache-write-tokens 12
+          :web-search-requests 1
           :cost-usd 0.0042}
         (openrouter/stream-chunk-metadata
           {:id "gen-1"
@@ -272,6 +273,7 @@
            :usage {:prompt_tokens 120
                    :completion_tokens 35
                    :cost 0.0042
+                   :server_tool_use {:web_search_requests 1}
                    :prompt_tokens_details {:cached_tokens 80
                                            :cache_write_tokens 12}
                    :completion_tokens_details {:reasoning_tokens 9}}})))
@@ -280,6 +282,12 @@
 (deftest native-web-search-support-and-sources-are-explicit
   (is (card-models/native-web-search-supported? "gpt-5.1"))
   (is (not (card-models/native-web-search-supported? "glm-5.3-flash")))
+  (is (every? (comp card-models/web-search-supported? :id)
+        card-models/registry))
+  (is (= {:tools [{:type "openrouter:web_search"
+                   :parameters {:engine "auto"}}]
+          :tool_choice "required"}
+        (openrouter/web-search-fields)))
   (is (= [{:title "OpenRouter docs" :url "https://openrouter.ai/docs"}]
         (openrouter/web-source-links
           [{:type "url_citation"

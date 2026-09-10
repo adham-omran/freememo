@@ -123,7 +123,7 @@
           model-id
           (first model-state)
           web-search-supported?
-          (card-models/native-web-search-supported? model-id)]
+          (card-models/web-search-supported? model-id)]
       {:chat-options chat-options
        :active-run active-run
        :details details

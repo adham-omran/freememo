@@ -248,6 +248,9 @@
       (assoc :cached-tokens (:cached_tokens prompt-details))
       (some? (:cache_write_tokens prompt-details))
       (assoc :cache-write-tokens (:cache_write_tokens prompt-details))
+      (some? (get-in usage [:server_tool_use :web_search_requests]))
+      (assoc :web-search-requests
+        (get-in usage [:server_tool_use :web_search_requests]))
       (some? (:cost usage)) (assoc :cost-usd (:cost usage)))))
 
 (defn web-source-links
@@ -267,6 +270,15 @@
                        :title (or (:title citation) url)}))))
     []
     annotations))
+
+(defn web-search-fields
+  "Request one web search before the model answers.
+   The auto engine uses native provider search when available and the configured
+   fallback otherwise."
+  []
+  {:tools [{:type "openrouter:web_search"
+            :parameters {:engine "auto"}}]
+   :tool_choice "required"})
 
 (defn- parse-sse-data
   "Parse one SSE data payload. [DONE] returns nil.

@@ -387,8 +387,7 @@
                                  :messages messages)
                          (and (:assistant_chats/web_search chat)
                            web-search-supported?)
-                         (assoc :tools [{:type "openrouter:web_search"
-                                         :parameters {:engine "native"}}]))
+                         (merge (openrouter/web-search-fields)))
      :source-snapshot (:evidence sources)
      :evidence (:evidence sources)}))
 
@@ -447,7 +446,7 @@
                      (settings/effective-assistant-model user-id root-topic-id))
                    (card-models/resolve-model settings/assistant-default-model-id))
          web-search? (and web-search?
-                          (card-models/native-web-search-supported? (:id entry)))
+                          (card-models/web-search-supported? (:id entry)))
          chat-id (db/create-assistant-chat! user-id root-topic-id "New chat"
                    (:id (modes/resolve-mode mode-id)) web-search?)]
      (bump! user-id)
@@ -490,7 +489,7 @@
                       (settings/effective-assistant-model user-id root-topic-id))
                     (card-models/resolve-model settings/assistant-default-model-id))]
       (if (and web-search?
-               (not (card-models/native-web-search-supported? (:id entry))))
+               (not (card-models/web-search-supported? (:id entry))))
         {:success false :error "This model does not support web search."}
         (try
           (db/set-assistant-chat-web-search! user-id chat-id web-search?)
@@ -614,6 +613,8 @@
                             :outcome :ok
                             :duration-ms (quot (- (System/nanoTime) started-ns)
                                            1000000)
+                            :web-search-requests
+                            (:web-search-requests metadata)
                             :response-chars (count (or (:response_text run) ""))
                             :publish-count @publish-count*}}
             "Assistant run reached a terminal state"))
@@ -696,7 +697,7 @@
                              :evidence exact-evidence}
                             (answer-request user-id chat page-topic-id user-text
                               ref-topic-ids model-fields
-                              (card-models/native-web-search-supported?
+                              (card-models/web-search-supported?
                                 (:id entry))))
                  run-uuid (str (random-uuid))
                  created (db/create-assistant-answer-run!

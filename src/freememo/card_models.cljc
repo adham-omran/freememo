@@ -208,3 +208,10 @@
    models that do not resolve to an allow-listed current model."
   [id]
   (some-> id resolve-model :id native-web-search-model-ids boolean))
+
+(defn web-search-supported?
+  "True when the effective model can use OpenRouter's web-search server tool.
+   OpenRouter uses native search where the provider supports it. Otherwise it
+   uses its configured fallback search engine."
+  [id]
+  (boolean (resolve-model id)))
