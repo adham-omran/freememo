@@ -1,0 +1,18 @@
+{
+  "addons": {
+    "freememo@freememo.net": {
+      "updates": [
+        {
+          "version": "0.1.1",
+          "update_link": "https://raw.githubusercontent.com/adham-omran/freememo/main/extensions/zotero/dist/freememo-zotero-plugin-0.1.1.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "6.999",
+              "strict_max_version": "10.0.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

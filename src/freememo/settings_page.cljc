@@ -72,7 +72,7 @@
 ;; The artifact NAME is independent of the directory — build.sh hardcodes
 ;; NAME=freememo-zotero-plugin — so relocating the source moves only the path.
 (def ^:private plugin-download-url
-  "https://github.com/adham-omran/freememo/raw/main/extensions/zotero/dist/freememo-zotero-plugin-0.1.0.xpi")
+  "https://github.com/adham-omran/freememo/raw/main/extensions/zotero/dist/freememo-zotero-plugin-0.1.1.xpi")
 
 (e/defn ZoteroSection
   "Settings → Zotero. Per-user enable toggle + plugin-install link + a
@@ -139,7 +139,7 @@
                           ;; download attribute hints "save as" instead of
                           ;; navigating; GitHub's raw redirect already serves
                           ;; binary so this is belt-and-braces.
-                          :download "freememo-zotero-plugin-0.1.0.xpi"
+                          :download "freememo-zotero-plugin-0.1.1.xpi"
                           :rel "noopener noreferrer"
                           :class "btn btn-secondary"
                           :style {:font-size "13px"}})

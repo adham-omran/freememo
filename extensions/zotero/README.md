@@ -1,6 +1,6 @@
 # FreeMemo for Zotero
 
-A Zotero 7/8/9 plugin that exposes a small HTTP API for the FreeMemo web app.
+A Zotero 7 through 10 plugin that exposes a small HTTP API for the FreeMemo web app.
 Adds endpoints under `/freememo/` on Zotero's loopback server
 (`127.0.0.1:23119`) with permissive CORS headers for `https://freememo.net`
 and local development origins.
@@ -58,6 +58,12 @@ matching `https://freememo.net` or any `http://localhost:*` /
 
 Produces `dist/freememo-zotero-plugin-<version>.xpi`.
 
+Run the compatibility checks before you build:
+
+```sh
+node test/compatibility.test.mjs
+```
+
 ## Install — release flow
 
 1. Download the `.xpi` from the latest GitHub Release.
@@ -98,7 +104,7 @@ From a tab at `https://freememo.net` (production) or
 fetch("http://127.0.0.1:23119/freememo/probe")
   .then(r => r.json())
   .then(console.log);
-// → { ok: true, plugin_version: "0.1.0", zotero_version: "9.0.3", library_id: 1 }
+// → { ok: true, plugin_version: "0.1.1", zotero_version: "10.0.0", library_id: 1 }
 ```
 
 If CORS blocks the response:
@@ -123,6 +129,7 @@ If the response is `{ error: "origin-not-allowed", got: ... }`:
 ```
 extensions/zotero/
 ├── manifest.json                plugin metadata (Zotero 7+ format)
+├── updates.json                 automatic-update metadata
 ├── bootstrap.js                 lifecycle hooks (startup, shutdown, …)
 ├── src/
 │   ├── server.js                register/unregister, CORS, origin allowlist

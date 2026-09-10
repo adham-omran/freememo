@@ -56,8 +56,8 @@ FreeMemoEndpoints.ItemsTop = class {
     const start = Math.max(0, parseInt(params.get("start"), 10) || 0);
 
     const libraryID = Zotero.Libraries.userLibraryID;
-    // getAll(libraryID, asIDs, onlyTopLevel, includeDeleted)
-    const all = await Zotero.Items.getAll(libraryID, false, true, false);
+    // getAll(libraryID, onlyTopLevel, includeDeleted, asIDs)
+    const all = await Zotero.Items.getAll(libraryID, true, false, false);
     // Sort by dateAdded desc (ISO 8601 strings are lexicographically comparable).
     all.sort(function (a, b) {
       const da = a.dateAdded || "";

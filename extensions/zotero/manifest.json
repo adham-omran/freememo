@@ -1,15 +1,15 @@
 {
   "manifest_version": 2,
   "name": "FreeMemo for Zotero",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Exposes Zotero items and attachments to the FreeMemo web app via CORS-permissive endpoints under /freememo on Zotero's loopback server.",
   "homepage_url": "https://freememo.net",
   "applications": {
     "zotero": {
       "id": "freememo@freememo.net",
-      "update_url": "https://github.com/adham-omran/freememo/releases/latest/download/updates.json",
+      "update_url": "https://raw.githubusercontent.com/adham-omran/freememo/main/extensions/zotero/updates.json",
       "strict_min_version": "6.999",
-      "strict_max_version": "9.999"
+      "strict_max_version": "10.0.*"
     }
   }
 }

@@ -23,9 +23,8 @@ FreeMemoEndpoints.Probe = class {
   }
 
   async init(request) {
-    // First-run diagnostic: surface the request shape to Zotero's debug log
-    // so we can verify origin extraction works against the actual Zotero 9
-    // Server.RequestHandler shape (currently inferred from server.js source).
+    // Log the request shape so we can verify origin extraction.
+    // Zotero 10 still passes headers, pathParams, and searchParams here.
     try {
       Zotero.debug("FreeMemo probe: request keys = " +
                    JSON.stringify(Object.keys(request || {})));
