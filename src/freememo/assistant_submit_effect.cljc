@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [clojure.string :as str]
+   [freememo.assistant-composer :as composer]
    [freememo.assistant-diagnostics :as diagnostics]
    [freememo.interaction-trail :as trail]
    #?(:clj [freememo.assistant :as assistant])))
@@ -23,7 +24,7 @@
                :client-id id :chat-id chat :topic-id root-topic-id
                :page-topic-id page-topic-id :reference-count (count ref-ids)})
             (do
-              (reset! !draft "")
+              (composer/replace-composer-draft! !draft "")
               (reset! !refs [])
               (reset! !echo (when-not compact? {:id id :text text}))
               (let [result
@@ -48,7 +49,7 @@
                         (reset! !error nil)
                         (do
                           (reset! !error (:error result))
-                          (reset! !draft text)
+                          (composer/replace-composer-draft! !draft text)
                           (reset! !refs refs-snapshot)
                           (reset! !echo nil)))
                       (token))))))))))))

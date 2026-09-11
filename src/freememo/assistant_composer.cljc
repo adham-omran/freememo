@@ -19,13 +19,24 @@
   "Set the visible composer value after a programmatic draft edit.
 
    Forms5 owns the textarea's value, so a `reset!` on the draft atom alone does
-   not move what the learner sees. Picking a reference and removing one both
-   rewrite the draft from outside the input, and both go through here."
+   not move what the learner sees. Picking a reference, removing one, and
+   sending all rewrite the draft from outside the input, and all go through here."
   [value]
   #?(:cljs
      (when-let [input (.querySelector js/document ".assistant-panel__input")]
        (set! (.-value input) value))
      :clj nil))
+
+(defn replace-composer-draft!
+  "Replace the draft from outside the textarea, in the atom and on screen.
+
+   Enter leaves focus in the textarea, and Forms5 writes no value into a focused
+   field. So a `reset!` alone left the sent text on screen with an empty draft.
+
+   Post: `@!draft` and the visible textarea value both equal `value`."
+  [!draft value]
+  (sync-composer-draft-value! value)
+  (reset! !draft value))
 
 (defn close-reference-menu-after-input!
   "Close the menu after Forms5 finishes the current input transaction."
