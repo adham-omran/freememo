@@ -9,7 +9,7 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## v20260910-3fc7485
+## v20260910-9781008
 
 ### For users
 
@@ -168,9 +168,9 @@ Format contract (see freememo.changelog):
 - **Deleting a `Page N` rule moves that page's text into the page above.** The
   page itself stays, empty, until you restore its boundary from the format
   menu. Focus reader cannot add a page.
-- **`Apply language to all code…` cannot be undone as one step.** `⌘Z` does not
-  reach it. Every card it rewrites becomes unsynced, and the card history keeps
-  the earlier version of each card. It has not run against the 707-block
+- **`Apply language to all code...` cannot be undone as one step.** `⌘Z` does
+  not reach it. Every card it rewrites becomes unsynced, and the card history
+  keeps the earlier version of each card. It has not run against the 707-block
   document that froze the tab before the fix.
 - **An occlusion card synced before this update keeps its old mask names in
   Anki.** This update does not mark those cards for sync. Contact me if
@@ -188,12 +188,6 @@ Format contract (see freememo.changelog):
   again.
 - **Zig highlighting follows Zig 0.8.** It still colors `async` and `await`, and
   it does not know `addrspace`, `opaque` or `anyopaque`.
-- **Deleting a curriculum cannot be undone.** It removes the curriculum's exams,
-  and generating them again costs credits. The confirm dialog says so.
-- **Some of this has not been driven in a browser or against a real Anki.** That
-  covers cancelling and archiving an exam sitting, `Apply language to all
-  code…`, the Anki controls in the card editor, and `Tag range cards`. Tell me
-  what breaks.
 
 ### Technical
 
