@@ -78,6 +78,10 @@
   #?(:clj (settings/get-theme user-id)
      :cljs nil))
 
+(defn get-code-block-font-size* [_refresh user-id]
+  #?(:clj (settings/get-code-block-font-size user-id)
+     :cljs nil))
+
 (defn get-usage-pct* [_refresh user-id]
   #?(:clj (let [usage (quota/get-user-usage db/ds user-id)
                 cap (quota/get-user-quota db/ds user-id)]
@@ -294,11 +298,21 @@
             auth-error (e/server (get-in ring-request [:session :auth-error]))
             base-url (e/server (credits/request-base-url ring-request))
             client-country (e/server (-> ring-request geo/client-ip geo/country-of))
-            theme (e/server
-                    (when user-id
-                      (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
-                        user-id)))]
-        (dom/props {:data-theme (when (and theme (not= theme "auto")) theme)})
+            appearance-settings (e/server
+                                  (when user-id
+                                    (let [refresh (e/watch
+                                                    (us/get-atom user-id :settings-refresh))]
+                                      [(get-theme* refresh user-id)
+                                       (get-code-block-font-size* refresh user-id)])))
+            theme (first appearance-settings)
+            code-block-font-size (second appearance-settings)
+            code-block-font-size-css ({"extra-small" "0.75em"
+                                       "small" "0.875em"
+                                       "regular" "1em"
+                                       "large" "1.25em"}
+                                      code-block-font-size "1em")]
+        (dom/props {:data-theme (when (and theme (not= theme "auto")) theme)
+                    :style {:--code-block-font-size code-block-font-size-css}})
         (cond
           ;; Public legal document — same words for a visitor, a signed-in
           ;; reader, and (through freememo.crawler-page) a crawler.

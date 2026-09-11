@@ -43,6 +43,7 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 (def PRE_PROMPT_MODE "pre_prompt_mode")
 (def CARD_FONT_SIZE "card_font_size")
+(def CODE_BLOCK_FONT_SIZE "code_block_font_size")
 
 ;; Whether a link Import follows the page when it finds one already imported.
 ;; The key `freememo.editor-pane/link-import-navigates?*` reads on the click
@@ -853,6 +854,23 @@
     (catch Exception e
       (tel/error! {:id ::save-card-font-size} e)
       {:success false :error "Failed to save card font size"})))
+
+(def code-block-font-sizes
+  #{"extra-small" "small" "regular" "large"})
+
+(defn get-code-block-font-size [user-id]
+  (let [value (db/get-setting user-id CODE_BLOCK_FONT_SIZE)]
+    (if (code-block-font-sizes value) value "regular")))
+
+(defn save-code-block-font-size [user-id value]
+  (try
+    (when-not (code-block-font-sizes value)
+      (throw (Exception. "Invalid code block font size")))
+    (db/set-setting user-id CODE_BLOCK_FONT_SIZE value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-code-block-font-size} e)
+      {:success false :error "Failed to save the code block font size"})))
 
 (defn get-link-import-navigates
   "Whether Import opens a page it found already imported.

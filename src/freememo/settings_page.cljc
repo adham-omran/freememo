@@ -314,6 +314,47 @@
         (dom/div (dom/props {:class "hint"})
           (dom/text "Adjusts text size for cards (10-20px)"))))))
 
+(def code-block-font-size-choices
+  [["extra-small" "Extra Small"]
+   ["small" "Small"]
+   ["regular" "Regular"]
+   ["large" "Large"]])
+
+(e/defn CodeBlockFontSizeField
+  "Code-block font-size select. Regular keeps the previous inherited size. The save
+   bumps the settings channel so the body CSS variable updates at once."
+  [user-id]
+  (e/client
+    (let [server-size (e/server (settings/get-code-block-font-size user-id))
+          !size (atom server-size)
+          size (e/watch !size)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label
+          (dom/props {:class "label" :for "code-block-font-size"})
+          (dom/text "Code Block Font Size"))
+        (dom/select
+          (dom/props {:id "code-block-font-size" :value size
+                      :class "select code-block-font-size-select"})
+          (e/for-by first [[value label] code-block-font-size-choices]
+            (dom/option (dom/props {:value value}) (dom/text label)))
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t ?error] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !size change-event))
+            (when t
+              (let [r (e/server
+                        (e/Offload
+                          #(settings/save-code-block-font-size user-id change-event)))]
+                (case r
+                  (if (:success r)
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text "Adjusts monospaced text in code blocks"))))))
+
 (e/defn LinkImportNavigatesField
   "Whether Import follows the page it just found.
 
@@ -345,8 +386,8 @@
                 (e/amb))))))))
 
 (e/defn AppearanceSection
-  "Settings → Appearance. Theme (hand-rolled select), card text size
-   (Forms5 Input!) and the link-Import navigation toggle. Wrapped by the caller
+  "Settings → Appearance. Theme, card text size, code-block text size,
+   and the link-Import navigation toggle. Wrapped by the caller
    in the tab-visibility div, same convention as AIFeaturesSection.
 
    The link toggle lives here rather than in a section of its own because
@@ -360,6 +401,7 @@
       (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
       (ThemeField user-id)
       (CardFontSizeField user-id)
+      (CodeBlockFontSizeField user-id)
       (LinkImportNavigatesField user-id))))
 
 ;; ---------------------------------------------------------------------------

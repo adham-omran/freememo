@@ -2211,6 +2211,14 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 /* ── Tree View ───────────────────────────────────────────────── */
 .tree-title:hover { text-decoration: underline; }
 
+/* Regular keeps the previous inherited size. Settings writes the other
+   values to --code-block-font-size on body. */
+body .ql-editor .ql-code-block-container,
+body .ql-editor pre.ql-syntax {
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: var(--code-block-font-size, 1em);
+}
+
 /* ── Inline <code> ───────────────────────────────────────────── */
 /* Mirrors the Anki-side pill (freememo-anki.css `:not(pre) > code` for light,
    `.nightMode :not(pre) > code` for dark) so the editor renders inline code
@@ -2242,6 +2250,10 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
    nothing, so the doc editor fell back to the UA dark-scheme link colour and
    the two editors disagreed. --color-primary-text is the accent-TEXT role
    (5.17:1 light, 5.77:1 dark on card). (0,2,1) beats snow's rule. */
+.code-block-font-size-select {
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 .ql-snow .ql-editor a,
 .ql-bubble .ql-editor a { color: var(--color-primary-text); }
 
