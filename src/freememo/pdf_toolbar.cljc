@@ -345,7 +345,8 @@
     (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id page-number dctx/page-number]
     (dom/div
       (dom/props {:class "toolbar-group"
-                  :style {:padding-left "12px"
+                  :style {:margin-left "auto"
+                          :padding-left "12px"
                           :border-left "1px solid var(--color-border)"}})
       (let [refresh (e/server (e/watch (us/get-atom user-id :meta-refresh)))
             persisted-done? (e/server (e/Offload #(page-done?* refresh pdf-root-id page-number)))]
@@ -453,9 +454,9 @@
                 (e/amb (PdfFocusToggle) (ScoreRectButton))
                 (e/amb
                   (PdfFocusToggle)
-                  (PdfMarkDone)
                   (binding [dctx/extract-style extract-style dctx/is-live? false]
-                    (PdfScanCopy))))))
+                    (PdfScanCopy))
+                  (PdfMarkDone)))))
           (PdfOcrError))
         (PdfOverflowBackdrop !overflow-open)))))
 
@@ -463,8 +464,8 @@
   "Focus reader: the reading controls inline, everything else one click away.
    Own e/defn for the 64KB method cap (plans/focus-reader.md §3.8).
 
-   Inline are page-nav, the focus toggle, Mark Done and the OCR error, plus the
-   ⋮ trigger. The zoom group is absent, not collapsed: all four of its controls
+   Inline are page-nav, the focus toggle, the OCR error, the ⋮ trigger, and Mark
+   Done at the right edge. The zoom group is absent: all four of its controls
    — zoom, fit, rotate and the layout toggle — act on a viewer this mode has
    destroyed. Arm selection is the only gate, so turning the mode off restores
    them unchanged.
@@ -494,9 +495,8 @@
               ;; Score topics have no page children — Mark Done targets a page
               ;; topic. They get the notation rect tool instead, and their
               ;; overflow panel would be empty, so they get no ⋮ either.
-              (if score?
-                (ScoreRectButton)
-                (PdfMarkDone))
+              (when score?
+                (ScoreRectButton))
               (when-not score?
                 (PdfOverflowTrigger !overflow-open))
               (when (and overflow-open (not score?))
@@ -504,7 +504,9 @@
                   (dom/props {:class "pdf-overflow-panel"})
                   (binding [dctx/extract-style extract-style]
                     (PdfScanCopy))))
-              (PdfOcrError))))
+              (PdfOcrError)
+              (when-not score?
+                (PdfMarkDone)))))
         (when-not score?
           (PdfOverflowBackdrop !overflow-open))))))
 
@@ -535,10 +537,10 @@
               (if dctx/is-score?
                 (ScoreRectButton)
                 (e/amb
-                  (PdfMarkDone)
                   (binding [dctx/extract-style extract-style]
-                    (PdfScanCopy))))
-              (PdfOcrError))))))))
+                    (PdfScanCopy))
+                  (PdfOcrError)
+                  (PdfMarkDone))))))))))
 
 (e/defn PdfToolbar
   "Second command bar for a PDF item. Reads ambient doc-context and picks one of

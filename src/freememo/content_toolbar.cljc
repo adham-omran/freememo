@@ -17,7 +17,6 @@
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
    [freememo.document-options :refer [DocumentOptionsButton]]
-   [freememo.auto-extract-button :refer [AutoExtractButton]]
    [freememo.transcribe-button :refer [TranscribeButton]]
    [freememo.jump-to-source-button :refer [JumpToSourcePageButton]]
    #?(:clj [freememo.settings :as user-settings])
@@ -46,7 +45,7 @@
 
 (e/defn OverflowPanel
   "The ⋮ overflow dropdown/panel body — proxy buttons for actions that collapse
-   out of the inline toolbar at narrow widths (Auto-extract, Document-options,
+   out of the inline toolbar at narrow widths (Document-options,
    DocumentMeta, Add-new/Export/Pull/Push/Delete). Split out of ContentToolbar
    per the JVM 64KB method-limit convention (§7.4); always mounted (display via
    CSS/.overflow-open) so its e/Token handlers stay live."
@@ -66,18 +65,6 @@
 
       ;; Bibliography (Refetch) proxy removed — Refetch folded into the
       ;; Edit-Bibliography modal (C4).
-
-      ;; Auto-extract proxy (.toolbar-overflow-bib, reveals T5+).
-      ;; Disabled pending release — tooltip surfaces the status.
-      (dom/div
-        (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label "Auto-extract (future feature)"
-                      :disabled true})
-          (tooltip/Tooltip! "Future Feature")
-          (icons/Icon :scan-text :size 16)
-          (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
 
       ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
       ;; Hosts the Priority field (C5), so it targets review-topic-id.
@@ -274,7 +261,7 @@
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:
           ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete
-          ;; · 5 Transcribe/Bibliography-refetch/Auto-extract.
+          ;; · 5 Transcribe/Jump-to-source/Document-options.
           ;; Collapse tiers are by CSS class (not position). Dividers between
           ;; groups carry the collapse class of the neighbor that disappears so
           ;; they hide in lockstep (no dangling separator): the Sync→lifecycle
@@ -328,7 +315,7 @@
           ;; Divider hides with the doc-context group at tier 5.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))
 
-          ;; 5. Transcribe (audio) + Auto-extract + Document-options.
+          ;; 5. Transcribe (audio) + Jump-to-source + Document-options.
           ;; Refetch-bibliography folded into the Edit-Bibliography modal (C4).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-doc-context-group toolbar-collapse-bib"})
@@ -336,7 +323,6 @@
                   (TranscribeButton user-id topic-id enc-key))
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
-                (AutoExtractButton)
                 (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
 
           ;; Divider hides with the document-meta group at tier 2.

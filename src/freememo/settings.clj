@@ -66,6 +66,7 @@
 (def FSRS_REVIEW_PER_DAY "fsrs_review_per_day")
 (def FSRS_FUZZ "fsrs_fuzz")
 (def CARD_QUIZ_LLM_GRADING "card_quiz_llm_grading")
+(def USE_FACTS_FOR_CARD_GENERATION "use_facts_for_card_generation")
 (def KG_DEDUP_ENABLED "kg_dedup_enabled")
 (def KG_DEDUP_FLAT_TRIGRAM "kg_dedup_flat_trigram")
 (def KG_DEDUP_OBJECT_TRIGRAM "kg_dedup_object_trigram")
@@ -297,6 +298,21 @@
     (catch Exception e
       (tel/error! {:id ::save-llm-enabled} e)
       {:success false :error "Failed to save LLM enabled"})))
+
+(defn get-use-facts-for-card-generation
+  "Return the account default for fact-aware card generation.
+   An absent setting keeps the existing behavior enabled."
+  [user-id]
+  (let [v (db/get-setting user-id USE_FACTS_FOR_CARD_GENERATION)]
+    (or (nil? v) (= "true" v))))
+
+(defn save-use-facts-for-card-generation [user-id value]
+  (try
+    (db/set-setting user-id USE_FACTS_FOR_CARD_GENERATION (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-use-facts-for-card-generation} e)
+      {:success false :error "Failed to save the fact usage setting"})))
 
 (defn normalize-scope
   "Map any stored/legacy Anki-sync scope value to a current key:
@@ -606,6 +622,33 @@
     (if (some #{per-doc} (card-model-ids))
       per-doc
       (get-model user-id))))
+
+(defn get-use-facts-for-document
+  "Return the raw per-document override: true, false, or nil for the account default."
+  [user-id root-topic-id]
+  (case (db/get-setting user-id (str "use_facts_for_card_generation_" root-topic-id))
+    "true" true
+    "false" false
+    nil))
+
+(defn save-use-facts-for-document
+  "Save a per-document fact usage override. A nil value clears the override."
+  [user-id root-topic-id value]
+  (try
+    (db/set-setting user-id (str "use_facts_for_card_generation_" root-topic-id)
+      (case value true "true" false "false" ""))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-use-facts-for-document} e)
+      {:success false :error "Failed to save the document fact usage setting"})))
+
+(defn effective-use-facts-for-card-generation
+  "Use the document override when present. Otherwise, use the account default."
+  [user-id root-topic-id]
+  (let [per-doc (get-use-facts-for-document user-id root-topic-id)]
+    (if (some? per-doc)
+      per-doc
+      (get-use-facts-for-card-generation user-id))))
 
 ;; Per-document assistant-chat model. Value is an :id from card-models/registry.
 ;; nil/"" = unset → global default (get-assistant-model).

@@ -143,6 +143,39 @@
         (dom/div (dom/props {:class "hint"})
           (dom/text "Model used for flashcard generation."))))))
 
+(e/defn UseFactsForCardsField
+  "Account default for using approved document facts during card generation."
+  [user-id]
+  (e/client
+    (let [server-on? (e/server (settings/get-use-facts-for-card-generation user-id))
+          !on? (atom server-on?)
+          on? (e/watch !on?)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
+                              :cursor "pointer"}})
+          (e/for [[t {:keys [use-facts]}]
+                  (forms/Checkbox! :use-facts on?
+                    :style {:width "18px" :height "18px"
+                            :accent-color "var(--color-primary)"})]
+            (reset! !on? use-facts)
+            (let [r (e/server (e/Offload
+                                #(settings/save-use-facts-for-card-generation user-id use-facts)))]
+              (case r
+                (if (:success r)
+                  (case (e/server (commands/bump! user-id :set-setting))
+                    (t))
+                  (t (:error r))))))
+          (dom/div
+            (dom/span
+              (dom/props {:style {:font-size "14px" :font-weight "500"
+                                  :color "var(--color-text-primary)"}})
+              (dom/text "Use facts for card generation"))
+            (dom/div
+              (dom/props {:class "hint"})
+              (dom/text "When approved facts exist, generate cards from relevant facts. Each document can override this default."))))))))
+
 (e/defn CardQuizGradingField
   "Whether the Quiz grades CARD items with the LLM, or the learner rates them 1-4.
 
@@ -625,6 +658,8 @@
             (ProviderKeyStatusField api-key-configured?))
 
           (CardModelField user-id card-model-ids card-label-of)
+
+          (UseFactsForCardsField user-id)
 
           (CardQuizGradingField user-id credits-enabled?)
 

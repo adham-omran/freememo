@@ -285,6 +285,19 @@
                (.insert "\n" #js {"code-block" lang}))))))
      :clj nil))
 
+(defn install-cmd-y-redo!
+  "Add Cmd-Y and Ctrl-Y as Quill redo shortcuts."
+  [ed]
+  #?(:cljs
+     (when ed
+       (let [^js ed ed]
+         (.addBinding (.-keyboard ed)
+           #js {:key "y" :shortKey true}
+           (fn []
+             (.redo (.-history ed))
+             false))))
+     :clj nil))
+
 ;; ---------------------------------------------------------------------------
 ;; Resize-module focus containment — shared by both editors, like the clipboard
 ;; matchers above.
@@ -392,6 +405,7 @@
        (let [Quill (.-Quill js/window)
              cfg (clj->js (quill-config placeholder nil))
              ed (new Quill container cfg)
+             _redo (install-cmd-y-redo! ed)
              cb (.-clipboard ed)
              ;; See install-clipboard-matchers! above for what each matcher
              ;; does and why (shared with rich_text_editor.cljc's main editor).

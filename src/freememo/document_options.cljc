@@ -132,6 +132,48 @@
                 (case r
                   (if (:success r) (t) (t (:error r))))))))))))
 
+(e/defn DocUseFactsSelect
+  "Per-document fact usage override. An empty value uses the account default."
+  [user-id root-topic-id]
+  (e/client
+    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          current (e/server (do settings-refresh
+                            (e/Offload #(settings/get-use-facts-for-document
+                                         user-id root-topic-id))))
+          default? (e/server (e/Offload
+                              #(settings/get-use-facts-for-card-generation user-id)))
+          !value (atom (e/snapshot (case current true "true" false "false" "")))
+          value (e/watch !value)]
+      (dom/div
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+        (dom/label
+          (dom/props {:style {:display "block" :margin-bottom "4px"
+                              :font-weight "500" :font-size "13px"}})
+          (dom/text "Facts for card generation"))
+        (dom/select
+          (dom/props {:class "input" :style {:width "100%"} :value value})
+          (dom/option
+            (dom/props {:value "" :selected (= "" value)})
+            (dom/text (str "Use my default (" (if default? "On" "Off") ")")))
+          (dom/option (dom/props {:value "true" :selected (= "true" value)})
+            (dom/text "On"))
+          (dom/option (dom/props {:value "false" :selected (= "false" value)})
+            (dom/text "Off"))
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t _] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !value change-event))
+            (when t
+              (let [override (case change-event "true" true "false" false nil)
+                    r (e/server (e/Offload
+                                 #(settings/save-use-facts-for-document
+                                    user-id root-topic-id override)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text "Turn this off to generate from the document text, even when approved facts exist."))))))
+
 (e/defn CustomPromptField
   "Editable per-item Custom Prompt, appended to the effective system prompt for
    this item and everything under it. Tracked Forms5 field (Input! :as :textarea)
@@ -391,6 +433,9 @@
 
           ;; Card-generation model — document-scoped (root-topic-id), all kinds.
           (DocCardModelSelect user-id root-topic-id)
+
+          ;; Fact-aware generation — document-scoped override of the account default.
+          (DocUseFactsSelect user-id root-topic-id)
 
           ;; Learning goal — document-scoped (root-topic-id); grounds the
           ;; assistant and card generation.

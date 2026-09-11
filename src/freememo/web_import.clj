@@ -100,7 +100,8 @@
               (when topic-id
                 (attach-biblio-best-effort! user-id topic-id (:biblio r))
                 (commands/bump! user-id :import-document))
-              {:ok true :flow :imported :topic-id topic-id :title (:title r)})))))
+              {:ok true :flow :imported :topic-id topic-id
+               :title (:topics/title (db/get-topic topic-id))})))))
     (catch Exception e
       (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
@@ -234,7 +235,8 @@
               (attach-biblio-best-effort! user-id topic-id
                 (if csl (csl/csljson->web-biblio csl) (:biblio page)))
               (commands/bump! user-id :import-document))
-            {:ok true :flow :captured :topic-id topic-id :title (:title page)}))))
+            {:ok true :flow :captured :topic-id topic-id
+             :title (:topics/title (db/get-topic topic-id))}))))
     (catch Exception e
       (tel/error! {:id ::capture-page :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))

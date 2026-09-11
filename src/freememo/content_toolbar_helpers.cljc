@@ -166,8 +166,10 @@
             {:success false :error … :error-type kw?} passthrough when fact
             selection fails (e.g. out of credits)."
      [content user-id root-topic-id]
-     (let [approved (db/get-kg-facts user-id root-topic-id "approved" nil)]
-       (if (empty? approved)
+     (if-not (settings/effective-use-facts-for-card-generation user-id root-topic-id)
+       {:content content :from-facts? false}
+       (let [approved (db/get-kg-facts user-id root-topic-id "approved" nil)]
+         (if (empty? approved)
          (do (log/log-info (str "Card gen: no KG facts for root=" root-topic-id "; raw-text path"))
            {:content content :from-facts? false})
          (let [sel (cff/select-relevant-facts user-id root-topic-id content approved)]
@@ -185,7 +187,7 @@
                (log/log-info (str "Card gen: sourcing cards from " (count (:facts sel)) "/"
                                (count approved) " fact(s) root=" root-topic-id
                                " ids=" (mapv :id (:facts sel)) "\n" rendered))
-               {:content rendered :from-facts? true})))))))
+               {:content rendered :from-facts? true}))))))))
 
 #?(:clj
    (defn generate-and-save! [item]

@@ -3611,6 +3611,40 @@
     (audit-doc-created! (:user-id attrs) (:topics/id created))
     created))
 
+(defn available-import-title
+  "Return an unused root-document title for a user.
+   Hidden topics reserve their titles until the undo window expires."
+  ([user-id requested-title]
+   (available-import-title ds user-id requested-title))
+  ([conn user-id requested-title]
+   (let [base (input/prettify-title (input/sanitize-title requested-title))
+         escaped (-> base
+                   (str/replace "\\" "\\\\")
+                   (str/replace "%" "\\%")
+                   (str/replace "_" "\\_"))
+         rows (jdbc/execute! conn
+                ["SELECT title FROM topics
+                  WHERE user_id = ? AND parent_id IS NULL
+                    AND lower(title) LIKE lower(?) ESCAPE '\\'"
+                 user-id (str escaped "%")]
+                {:builder-fn rs/as-unqualified-maps})
+         pattern (re-pattern (str "(?i)^" (java.util.regex.Pattern/quote base)
+                               "(?: \\(([0-9]+)\\))?$"))
+         used (into #{}
+                (keep (fn [{:keys [title]}]
+                        (when-let [[_ n] (re-matches pattern title)]
+                          (if n
+                            (try (Long/parseLong n)
+                                 (catch NumberFormatException _ nil))
+                            1))))
+                rows)]
+     (if-not (contains? used 1)
+       base
+       (let [n (first (remove used (iterate inc 2)))
+             suffix (str " (" n ")")
+             room (max 0 (- input/title-max (count suffix)))]
+         (str (subs base 0 (min room (count base))) suffix))))))
+
 (defn get-topic
   "Get a topic by ID. Excludes topics staged for deletion (hidden)."
   [id]
@@ -4417,7 +4451,8 @@
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
-      (let [csl {:type "document" :title clean-name
+      (let [topic-title (available-import-title tx user-id clean-name)
+            csl {:type "document" :title clean-name
                  :accessed {:date-parts (now-date-parts)}}
             source (jdbc/execute-one! tx
                      (sql/format {:insert-into :sources
@@ -4431,7 +4466,7 @@
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "pdf"
-                                           :title clean-name
+                                           :title topic-title
                                            :source_id source-id}]
                                  :returning [:id]}))
             topic-id (:topics/id topic)]
@@ -4456,7 +4491,8 @@
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
-      (let [csl {:type "song" :title clean-name
+      (let [topic-title (available-import-title tx user-id clean-name)
+            csl {:type "song" :title clean-name
                  :accessed {:date-parts (now-date-parts)}}
             source (jdbc/execute-one! tx
                      (sql/format {:insert-into :sources
@@ -4470,7 +4506,7 @@
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "audio"
-                                           :title clean-name
+                                           :title topic-title
                                            :content ""
                                            :source_id source-id}]
                                  :returning [:id]}))
@@ -4495,7 +4531,8 @@
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id (+ pdf-size audio-size))
-      (let [csl {:type "song" :title clean-name
+      (let [topic-title (available-import-title tx user-id clean-name)
+            csl {:type "song" :title clean-name
                  :accessed {:date-parts (now-date-parts)}}
             source (jdbc/execute-one! tx
                      (sql/format {:insert-into :sources
@@ -4509,7 +4546,7 @@
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "score"
-                                           :title clean-name
+                                           :title topic-title
                                            :content ""
                                            :source_id source-id}]
                                  :returning [:id]}))
@@ -4613,7 +4650,8 @@
                            [:= :user_id user-id]
                            [:= :kind "web"]
                            [:is :parent_id nil]
-                           [:= :source_id source-id]]
+                           [:= :source_id source-id]
+                           [:is :staged_delete_id nil]]
                    :order-by [[:id :asc]]
                    :limit 1}))))
 
@@ -4634,6 +4672,7 @@
     (jdbc/execute-one! ds
       ["SELECT id, title FROM topics
         WHERE user_id = ? AND source_id = ? AND parent_id IS NULL
+          AND staged_delete_id IS NULL
           AND content_text IS NOT NULL
           AND md5(content_text) = md5(?)
         ORDER BY id ASC
@@ -4659,7 +4698,8 @@
                            [:= :user_id user-id]
                            [:= :kind "pdf"]
                            [:is :parent_id nil]
-                           [:= :source_id source-id]]
+                           [:= :source_id source-id]
+                           [:is :staged_delete_id nil]]
                    :order-by [[:id :asc]]
                    :limit 1}))))
 
@@ -4701,11 +4741,12 @@
         source-id (some-> (ensure-source-for-url! user-id url
                             (assoc bib :title clean-title))
                     :sources/id)
+        topic-title (available-import-title user-id clean-title)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [(cond-> {:user_id user-id
                                                :kind "web"
-                                               :title clean-title
+                                               :title topic-title
                                                :content sanitized
                                                :content_text (text/strip-html sanitized)}
                                         source-id (assoc :source_id source-id))]
@@ -4719,11 +4760,12 @@
   (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
+        topic-title (available-import-title user-id clean-title)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "markdown"
-                                       :title clean-title
+                                       :title topic-title
                                        :content sanitized
                                        :content_text (text/strip-html sanitized)}]
                              :returning [:id]}))]
@@ -4747,6 +4789,9 @@
   [tx user-id title parent-id chapters]
   (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
+        topic-title (if parent-id
+                      clean-title
+                      (available-import-title tx user-id clean-title))
         csl {:type "book" :title clean-title
              :accessed {:date-parts (now-date-parts)}}
         source (jdbc/execute-one! tx
@@ -4761,7 +4806,7 @@
                              :values [{:user_id user-id
                                        :parent_id parent-id
                                        :kind "epub"
-                                       :title clean-title
+                                       :title topic-title
                                        :source_id (:sources/id source)}]
                              :returning [:id]}))
         topic-id (:topics/id topic)

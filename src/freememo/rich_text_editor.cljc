@@ -306,6 +306,7 @@
                       (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
                         ;; Cmd/Ctrl+\\ clears selected formatting in this editor.
                         (editor-actions/install-clear-format-binding!))
+           _redo (quill-field/install-cmd-y-redo! editor)
            ^js clipboard (.-clipboard editor)
            ;; See quill-field/install-clipboard-matchers! for what each
            ;; matcher does and why (shared with QuillField's own editor).

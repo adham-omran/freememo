@@ -28,10 +28,14 @@
    {:model-id id :result {:success ..}}; nothing is persisted."
   [ctx model-ids]
   #?(:clj (let [{:keys [content context]} (helpers/build-gen-context* ctx)
-                opts (-> (select-keys ctx [:card-type :card-count :user-id :enc-key
-                                           :topic-id :root-topic-id :pre-prompt])
-                       (assoc :content content :context context))]
-            (cards/compare-card-gen opts model-ids))
+                resolved (helpers/resolve-gen-content content (:user-id ctx) (:root-topic-id ctx))]
+            (if (false? (:success resolved))
+              (mapv (fn [model-id] {:model-id model-id :result resolved}) model-ids)
+              (let [opts (-> (select-keys ctx [:card-type :card-count :user-id :enc-key
+                                               :topic-id :root-topic-id :pre-prompt])
+                           (assoc :content (:content resolved)
+                                  :context (when-not (:from-facts? resolved) context)))]
+                (cards/compare-card-gen opts model-ids))))
      :cljs nil))
 
 (defn commit-and-maybe-default!*
