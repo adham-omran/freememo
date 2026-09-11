@@ -15,6 +15,7 @@
    [freememo.a11y :as a11y]
    [freememo.code-languages :refer [code-languages]]
    [freememo.editor-actions :as editor-actions]
+   [freememo.quill-markdown :as quill-markdown]
    [freememo.math :as math]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
@@ -451,40 +452,28 @@
          ;; action for a selected range. It is editor-local, so it never reaches
          ;; another contenteditable surface through the global chord handler.
          (editor-actions/install-clear-format-binding! ed)
-         ;; Wire the table toolbar handler + contextual action bar.
-         ;; The QuillField's toolbar config includes "table", so without
-         ;; this the button is rendered but inert. Cleanup is paired in
-         ;; destroy-quill-field! via table-ui/teardown!.
-         (table-ui/init! ed)
-         ;; Bubble hides its native tooltip (CSS); the custom format-menu is
-         ;; the formatting UI and the code-lang-picker owns code-block language
-         ;; selection. label-quill-toolbar! stays for the (hidden) tooltip
-         ;; pickers — inert but harmless.
-         (a11y/label-quill-toolbar! (.-parentElement container))
-         ;; Tab moves focus out (Quill's indent bindings removed); Escape
-         ;; also blurs, as belt-and-suspenders for nested contexts.
-         (a11y/free-quill-tab! ed)
-         (a11y/install-quill-tab-escape! ed)
-         ;; Cloze chords — mod+shift+C and mod+shift+alt+C, the keyboard twins of
-         ;; the format-menu's {+} / {=} buttons. Gated here rather than inside
-         ;; the installer: `cloze?` is the boundary that already decides whether
-         ;; this editor holds a cloze field, and it gates the format-menu row
-         ;; below through the same flag.
-         (when cloze? (editor-actions/install-cloze-bindings! ed))
-         ;; Custom components — image on every card field, cloze row only when
-         ;; cloze?. Teardowns are returned so destroy-quill-field! can remove
-         ;; the body cards + document listeners on modal close.
-         {:editor ed
-          :teardowns [(format-menu/install! ed {:image? true
-                                                :cloze? (boolean cloze?)})
-                      (code-lang-picker/install! ed)
-                      ;; Bound the resize module's document keydown listener to
-                      ;; this editor. Card fields hold images too, and a modal
-                      ;; stacked over one is exactly the surface it steals from.
-                      (install-resize-release-on-focus-out! ed)
-                      ;; Formula popover + typed-source conversion. Only when KaTeX
-                      ;; arrived — Formula.create throws without it.
-                      (when math? (formula-ui/install! ed))]}))
+         ;; Convert Markdown markers as the user types. This local extension
+         ;; targets Quill 2 and shares the editor's teardown lifecycle.
+         (let [markdown-teardown (quill-markdown/install! ed)]
+           ;; Wire the table toolbar handler and the contextual action bar.
+           ;; The QuillField toolbar includes "table", so it needs this handler.
+           (table-ui/init! ed)
+           ;; The custom menu replaces the hidden Bubble tooltip.
+           (a11y/label-quill-toolbar! (.-parentElement container))
+           ;; Tab moves focus out. Escape also blurs the editor.
+           (a11y/free-quill-tab! ed)
+           (a11y/install-quill-tab-escape! ed)
+           ;; Add cloze shortcuts only to a cloze field.
+           (when cloze? (editor-actions/install-cloze-bindings! ed))
+           {:editor ed
+            :teardowns [markdown-teardown
+                        (format-menu/install! ed {:image? true
+                                                  :cloze? (boolean cloze?)})
+                        (code-lang-picker/install! ed)
+                        ;; Release the resize module when focus leaves the editor.
+                        (install-resize-release-on-focus-out! ed)
+                        ;; Install the formula popover only when KaTeX is ready.
+                        (when math? (formula-ui/install! ed))]})))
      :clj nil))
 
 (defn destroy-quill-field!

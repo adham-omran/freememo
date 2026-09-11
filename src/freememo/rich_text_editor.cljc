@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    [freememo.quill-table-ui :as table-ui]
    [freememo.quill-field :as quill-field]
+   [freememo.quill-markdown :as quill-markdown]
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
    [freememo.a11y :as a11y]
@@ -149,7 +150,7 @@
      (do
        (reset! !editor-ready? false)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -164,6 +165,8 @@
            (when code-lang-teardown (code-lang-teardown))
            ;; Remove the formula click/blur/Escape listeners on the editor root.
            (when formula-teardown (formula-teardown))
+           ;; Remove the delayed Markdown listener before the editor DOM.
+           (when markdown-teardown (markdown-teardown))
            ;; Remove the resize focus-out listener on the editor container.
            (when resize-focus-teardown (resize-focus-teardown))
            ;; Remove the scroll listener that reports the merged document's
@@ -386,6 +389,7 @@
                               ;; it, and there is no insert button to gate instead.
                               :formula-teardown (when math?
                                                   (formula-ui/install! editor))
+                              :markdown-teardown (quill-markdown/install! editor)
                               ;; Bound the resize module's document keydown
                               ;; listener to this editor — see
                               ;; quill-field/install-resize-release-on-focus-out!.
