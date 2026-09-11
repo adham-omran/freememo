@@ -22,6 +22,7 @@
    [freememo.a11y :as a11y]
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
+   [freememo.page-title :refer [PageTitle]]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [clojure.string :as str]
@@ -628,7 +629,12 @@
             (dom/props {:class "btn" :style {:margin-left "10px" :font-size "12px"}})
             (dom/text "Back to schedules")
             (dom/On "click" (fn [_] (navigate! :schedule)) nil)))
-        (ScheduleForecast user-id schedule-id forecast anki-status navigate!)))))
+        (ScheduleForecast user-id schedule-id forecast anki-status navigate!))
+      ;; A schedule has no name of its own. Its tab title is its document's.
+      (PageTitle user-id
+        (if (e/server (= :not-found (:status forecast)))
+          :not-found
+          [:topic (e/server (get-in forecast [:schedule :study_schedules/root_topic_id]))])))))
 
 ;; ---------------------------------------------------------------------------
 ;; Home dashboard
@@ -786,4 +792,7 @@
             (cond
               new-open? (NewScheduleForm user-id navigate! !new-open?)
               selected-id (ScheduleDetailPane user-id selected-id navigate! anki-status)
-              :else (ScheduleDashboard user-id navigate!))))))))
+              :else (ScheduleDashboard user-id navigate!)))))
+      ;; A selected schedule's pane titles itself, from its forecast.
+      (when-not selected-id
+        (PageTitle user-id [:label :schedule])))))

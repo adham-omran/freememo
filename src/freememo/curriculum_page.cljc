@@ -8,6 +8,7 @@
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
+   [freememo.page-title :refer [PageTitle]]
    [freememo.typeahead :as typeahead]
    ;; One way only. The exam page never requires this namespace back, because
    ;; the chip below and that page share `GenerateExamButton`.
@@ -827,4 +828,7 @@
                   (dom/text "New curriculum")
                   (dom/On "click" (fn [_] (reset! !new-open? true)) nil))))
             (when new-open? (NewCurriculumForm user-id navigate! !new-open?))
-            (CurriculumDashboard user-id navigate!))))))))
+            (CurriculumDashboard user-id navigate!)))))
+      ;; An exam route titles itself, from the curriculum its form belongs to.
+      (when-not exam-form-id
+        (PageTitle user-id (if selected-id [:curriculum selected-id] [:label :curriculum]))))))

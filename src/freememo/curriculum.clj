@@ -61,6 +61,20 @@
        curriculum-id user-id]
       opts)))
 
+(defn curriculum-title
+  "The title of one curriculum the user owns, or nil.
+
+   Pre: curriculum-id is an integer.
+   Post: nil for a missing id, another user's curriculum, and one staged for
+   deletion — the scope `own-curriculum` checks, without its other columns."
+  [user-id curriculum-id]
+  (:title
+    (jdbc/execute-one! db/ds
+      ["SELECT title FROM curricula
+         WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
+       curriculum-id user-id]
+      opts)))
+
 (defn- own-block [connectable user-id block-id]
   (jdbc/execute-one! connectable
     ["SELECT b.* FROM curriculum_blocks b

@@ -23,6 +23,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.loading :as loading]
+   [freememo.page-title :refer [PageTitle]]
    [freememo.util :as util]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.db :as db])
@@ -1271,4 +1272,10 @@
           (= sub-kw :questions) (QuestionsView user-id kg-bump arg navigate!)
           (= sub-kw :facts) (FactsView user-id arg navigate! kg-bump)
           :else (dom/div (dom/props {:style {:padding "0 16px"}})
-                  (DocumentsView user-id navigate! kg-bump)))))))
+                  (DocumentsView user-id navigate! kg-bump))))
+      ;; A document the user does not own reads Not found here, although the
+      ;; views show an empty list for it (plans/reactive-page-title.md D16).
+      (PageTitle user-id
+        (if (and (not= sub-kw :documents) (some? arg))
+          [:topic arg]
+          [:label :knowledge])))))

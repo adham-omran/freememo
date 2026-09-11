@@ -3650,6 +3650,20 @@
                  :from [:topics]
                  :where [:and [:= :id id] [:= :user_id user-id] [:is :staged_delete_id nil]]})))
 
+(defn get-topic-title-for-user
+  "The title of one topic the user owns, or nil.
+
+   Pre: id is an integer.
+   Post: nil for a missing id, another user's topic, and a topic staged for
+   deletion — the scope `get-topic-for-user` checks, without the content
+   columns its `SELECT *` fetches. Read on every rename by the tab title."
+  [user-id id]
+  (:topics/title
+    (jdbc/execute-one! ds
+      (sql/format {:select [:title]
+                   :from [:topics]
+                   :where [:and [:= :id id] [:= :user_id user-id] [:is :staged_delete_id nil]]}))))
+
 (def ^:private topic-file-sizes
   "Derived table summing STORED BYTES per topic. Join THIS instead of
    topic_files directly in list queries: score topics own TWO file rows

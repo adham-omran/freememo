@@ -21,6 +21,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.icons :as icons]
+   [freememo.page-title :refer [PageTitle]]
    #?(:clj [freememo.curriculum :as curriculum])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.user-state :as us])))
@@ -1073,4 +1074,10 @@
           (dom/p (dom/props {:class "curriculum-empty"}) (dom/text "Not found.")))
 
         (some? sitting-id) (SittingBody user-id navigate! model)
-        :else (ExamPageBody user-id navigate! model)))))
+        :else (ExamPageBody user-id navigate! model))
+      ;; An exam has no name of its own. Its tab title is its curriculum's, found
+      ;; through the form, because the page ignores the curriculum id in the URL.
+      (PageTitle user-id
+        (if (and found? (or (nil? sitting-id) sitting-found?))
+          [:curriculum (e/server (get-in model [:breadcrumb :curriculum_id]))]
+          :not-found)))))

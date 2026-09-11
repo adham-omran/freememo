@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.topic-page :refer [TopicPage]]
+   [freememo.page-title :refer [PageTitle]]
    [freememo.bibliography-form :as bibform]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
@@ -129,7 +130,8 @@
               (let [event (dom/On "click" (fn [_] :back) nil)
                     [t _error] (e/Token event)]
                 (when t
-                  (case (t) (navigate! :learn))))))
+                  (case (t) (navigate! :learn)))))
+            (PageTitle user-id [:label :learn]))
 
           ;; Active topic
           ;; All three reads of `item` are server-sited. The row carries the
@@ -160,4 +162,6 @@
                     navigate!
                     llm-enabled?
                     queue-ctx nil))
-                (BottomBar user-id topic-id !queue-idx)))))))))
+                (BottomBar user-id topic-id !queue-idx)))
+            ;; The session owns the title. TopicPage never writes one.
+            (PageTitle user-id [:topic topic-id])))))))

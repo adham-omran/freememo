@@ -40,6 +40,8 @@
             [freememo.toolbar-overflow :refer [install-overflow-detector!]]
             [freememo.command-bus :as bus]
             [freememo.command-palette :refer [CommandPalette]]
+            [freememo.page-title :refer [PageTitle]]
+            [freememo.page-title-format :as page-title-format]
             [freememo.keyboard :as keyboard] ; loads the registry-driven shortcut handler
 
             #?(:clj [freememo.settings :as settings])
@@ -175,7 +177,8 @@
     (r/pop ; consume 'viewer from route
       (let [[vtype] r/route]
         (if (nil? vtype)
-          (EmptyViewerView)
+          (do (EmptyViewerView)
+              (PageTitle user-id [:label :viewer]))
           (case vtype
             topic
             (r/pop
@@ -188,7 +191,10 @@
                   (NotFoundView)
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil url-page)))))
+                    (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil url-page)))
+                ;; The route owns the title, never TopicPage: the Learn session and
+                ;; subset review mount TopicPage too, and title themselves.
+                (PageTitle user-id [:topic topic-id])))
 
             learn-session
             ;; Freeze the queue for the session: fetch once on mount, do NOT watch
@@ -210,10 +216,12 @@
                   (let [root-name (e/server (:topics/title (db/get-topic-for-user user-id root-id)))]
                     (SubsetReviewSession user-id enc-key root-id root-name
                       (fn [] (navigate! :library))
-                      llm-enabled?)))))
+                      llm-enabled?)))
+                (PageTitle user-id [:topic root-id])))
 
             ;; Unknown viewer sub-type
-            (EmptyViewerView)))))))
+            (do (EmptyViewerView)
+                (PageTitle user-id [:label :viewer]))))))))
 
 ;; A primary-nav destination — text-only in the bar (item 3: icons live only on
 ;; the right-cluster utilities). `.is-active` drives the filled active pill (CSS
@@ -540,7 +548,12 @@
                       (r/pop
                         (CurriculumPage user-id navigate!)))
                     (when (= active-tab :viewer)
-                      (ViewerContent user-id enc-key navigate! llm-enabled?))))
+                      (ViewerContent user-id enc-key navigate! llm-enabled?))
+                    ;; One title owner per route: Main for plain tabs, the page for
+                    ;; tabs whose routes name an item. A tab with no label reads
+                    ;; Not found (plans/reactive-page-title.md §4).
+                    (when-not (page-title-format/self-titled-tabs active-tab)
+                      (PageTitle user-id [:label active-tab]))))
 
                 ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
                 (ToastStack user-id navigate!)
