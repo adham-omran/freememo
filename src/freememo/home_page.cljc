@@ -136,24 +136,19 @@
           new-user? (zero? total-count)
           has-due? (pos? queue-count)]
       (dom/div
-        (dom/p
-          (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
-          (dom/text
-            (cond
-              new-user?
-              "Import your first document to get started."
-
-              has-due?
-              ""
-
-              :else
-              (str "All caught up." (when next-review (str " Next review " next-review "."))))))
+        (when-not has-due?
+          (dom/p
+            (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
+            (dom/text
+              (if new-user?
+                "Import your first document to get started."
+                (str "All caught up." (when next-review (str " Next review " next-review ".")))))))
 
         (ScheduleNudges navigate! schedule-nudges)
 
         (when (and (not new-user?) has-due?)
           (dom/p
-            (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "-28px 0 32px 0"}})
+            (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
             (dom/a
               (dom/props {:style {:font-weight "600" :color "var(--color-primary-text)" :cursor "pointer"
                                   :text-decoration "none"}})
