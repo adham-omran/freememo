@@ -1375,9 +1375,10 @@ bytecode cap in the :prod build, which dev compilation never emits.
     (let [sort-col (e/watch !sort-col)
           sort-dir (e/watch !sort-dir)]
       (dom/table
+        ;; The column template is --grid-cols, read by `.cards-table-header` in
+        ;; index.css, so the phone rule can replace it for header and body alike.
         (dom/props {:class "cards-table-header table-frame-head"
-                    :style {:width "100%" :display "grid" :grid-template-columns grid-cols
-                            :flex-shrink "0"}})
+                    :style {:--grid-cols grid-cols}})
         (dom/thead
           (dom/props {:style {:display "contents"}})
           (dom/tr

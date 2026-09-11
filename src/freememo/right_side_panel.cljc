@@ -12,13 +12,18 @@
    [freememo.hierarchy-side-panel :refer [SidePanelShell]]
    [freememo.assistant-panel :refer [AssistantPanel]]
    [freememo.command-bus :as bus]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn RightSidePanel [page-topic-id root-topic-id user-id]
   (e/client
     (e/for-by identity [_k [root-topic-id]]
-      (let [persisted-open? (e/server (settings/get-assistant-open user-id root-topic-id))
-            ;; A command-set state must restore at every Viewer viewport.
+      (let [;; A saved state restores at every Viewer viewport, including a state
+            ;; a command set. Only a document with no saved state starts closed on
+            ;; a phone, where the open panel covers the document. A deref, not a
+            ;; watch: rotating the phone must not re-create !open?.
+            default-open?   (not @viewport/!phone?)
+            persisted-open? (e/server (settings/get-assistant-open user-id root-topic-id default-open?))
             initial-open?   persisted-open?
             !open? (atom initial-open?)
             open? (e/watch !open?)

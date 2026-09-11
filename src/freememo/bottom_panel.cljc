@@ -41,8 +41,7 @@
     (let [user-id dctx/user-id topic-id dctx/page-topic-id
           card-font-size dctx/card-font-size refresh dctx/card-refresh]
       (dom/div
-        ;; min-width: 0 lets this flex item shrink below its intrinsic content
-        ;; width (keeps the card table from forcing the column wider).
-        (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
-                            :min-width "0" :min-height "0"}})
+        ;; `.bottom-panel` lives in CSS, not inline, so a phone rule can shrink
+        ;; an empty card table to its message.
+        (dom/props {:class "bottom-panel"})
         (ContentCardTable)))))

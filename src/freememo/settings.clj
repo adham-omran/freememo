@@ -707,11 +707,15 @@
   [topic-id]
   (or (db/get-root-topic-id topic-id) topic-id))
 
-(defn get-hierarchy-open [user-id topic-id]
-  (try
-    (let [v (db/get-setting user-id (str "hierarchy_open_" (pane-scope-id topic-id)))]
-      (if (nil? v) true (= v "true")))
-    (catch Exception _ true)))
+(defn get-hierarchy-open
+  "A missing key reads as `default-open?`, which is true unless the caller
+   passes one. A phone passes false, because an open panel covers its document."
+  ([user-id topic-id] (get-hierarchy-open user-id topic-id true))
+  ([user-id topic-id default-open?]
+   (try
+     (let [v (db/get-setting user-id (str "hierarchy_open_" (pane-scope-id topic-id)))]
+       (if (nil? v) default-open? (= v "true")))
+     (catch Exception _ default-open?))))
 
 (defn save-hierarchy-open [user-id topic-id open?]
   (try
@@ -721,11 +725,14 @@
       (tel/error! {:id ::save-hierarchy-open} e)
       {:success false})))
 
-(defn get-pins-open [user-id topic-id]
-  (try
-    (let [v (db/get-setting user-id (str "pins_open_" (pane-scope-id topic-id)))]
-      (if (nil? v) true (= v "true")))
-    (catch Exception _ true)))
+(defn get-pins-open
+  "A missing key reads as `default-open?`, as in `get-hierarchy-open`."
+  ([user-id topic-id] (get-pins-open user-id topic-id true))
+  ([user-id topic-id default-open?]
+   (try
+     (let [v (db/get-setting user-id (str "pins_open_" (pane-scope-id topic-id)))]
+       (if (nil? v) default-open? (= v "true")))
+     (catch Exception _ default-open?))))
 
 (defn save-pins-open [user-id topic-id open?]
   (try
@@ -766,8 +773,9 @@
 
 ;; The assistant keeps the former right-panel open and width keys. This preserves
 ;; each user's layout after Pins moves to the left panel.
-(defn get-assistant-open [user-id topic-id]
-  (get-pins-open user-id topic-id))
+(defn get-assistant-open
+  ([user-id topic-id] (get-pins-open user-id topic-id))
+  ([user-id topic-id default-open?] (get-pins-open user-id topic-id default-open?)))
 
 (defn save-assistant-open [user-id topic-id open?]
   (save-pins-open user-id topic-id open?))

@@ -19,7 +19,10 @@
 (e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page]
   (e/client
     (dom/div
-      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+      ;; `.topic-page` draws a spinner in index.css while this div is still
+      ;; empty, which lasts until every ResolveTopic read returns.
+      (dom/props {:class "topic-page"
+                  :style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
       (if (nil? topic-id)
         (dom/div

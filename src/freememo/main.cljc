@@ -329,7 +329,10 @@
           (e/server (some? user-id))
           ;; Authenticated: render app with URL router
           (dom/div
-            (dom/props {:style {:height "100dvh" :display "flex" :flex-direction "column" :overflow "hidden"}})
+            ;; `.app-shell` in index.css sets the height and also locks the
+            ;; document scroll. Without that lock, Safari could scroll the page
+            ;; itself and move the whole app out of view.
+            (dom/props {:class "app-shell"})
 
             (r/router (r/HTML5-History)
               (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))

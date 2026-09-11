@@ -825,7 +825,7 @@
             (dom/props {:style {:margin-top "var(--sp-3)"}})
             (AnkiNoteActions anki-note-id !save-anki-remarks))
           (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+            (dom/props {:style {:display "flex" :flex-wrap "wrap" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (let [[click-event btn-node]
                   (dom/button
                     (dom/props {:class "btn btn-primary" :style {:order "1"}})
@@ -1208,7 +1208,7 @@
           (let [commits (forms/Form! {}
                           (e/fn Fields [_]
                             (dom/div
-                              (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+                              (dom/props {:style {:display "flex" :flex-wrap "wrap" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
                               (e/amb
                                 (forms/SubmitButton! :label (if copy? "Save" "Add") :class "btn btn-primary"
                                   :style {:border-radius "var(--radius-sm)" :order "1"})

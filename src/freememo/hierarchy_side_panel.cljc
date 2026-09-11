@@ -20,6 +20,7 @@
    [freememo.command-bus :as bus]
    [freememo.util :as util]
    [freememo.tree-dnd :as tree-dnd]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.topic-move :as topic-move])
@@ -151,9 +152,10 @@
   (e/client
     (let [[content-side invert?] (case side :left [:before true] :right [:after false])]
       (dom/div
+        ;; The width is a custom property, not an inline width, so the phone
+        ;; overlay rule in index.css can replace it. Position lives there too.
         (dom/props {:class (str class (when-not open? (str " " class "--collapsed")))
-                    :style (merge {:position "relative"}
-                             (when open? {:width (str width-px "px")}))})
+                    :style {:--side-panel-width (when open? (str width-px "px"))}})
 
         ;; Header row — toggle (always visible) + Header-extra (only when
         ;; open). The row renders even when collapsed so the fixed gutter
@@ -374,8 +376,13 @@
     ;; updates :current? reactively without remount, so !open? state and the
     ;; DOM subtree persist across page scrolls.
     (e/for-by identity [_k [root-topic-id]]
-      (let [persisted-open? (e/server (e/Offload #(settings/get-hierarchy-open user-id root-topic-id)))
-            ;; A command-set state must restore at every Viewer viewport.
+      (let [;; A saved state restores at every Viewer viewport, including a state
+            ;; a command set. Only a document with no saved state starts closed on
+            ;; a phone, where the open panel covers the document. A deref, not a
+            ;; watch: rotating the phone must not re-create !open?.
+            default-open?   (not @viewport/!phone?)
+            persisted-open? (e/server (e/Offload #(settings/get-hierarchy-open
+                                                    user-id root-topic-id default-open?)))
             initial-open?   persisted-open?
             !open?          (atom initial-open?)
             open?           (e/watch !open?)

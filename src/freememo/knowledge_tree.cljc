@@ -256,18 +256,20 @@
                                (fn [{:keys [ids] :as ex}]
                                  (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id))))))]
       (dom/tr
+        ;; Border and height come from CSS (`.library-document-row` and the C1c
+        ;; `--row-height`). Inline values beat the phone card rules, so each
+        ;; card filled its whole slot and hid the next card's top edge.
         (dom/props {:class (str "library-document-row" (when (even? i) " row-alt"))
                     :role "row"
-                    :style {:border-bottom "1px solid var(--color-bg-subtle)"
-                            :height (str row-height "px")
-                            :opacity (if (or dismissed? (= topic-status "done")) "0.6" "1")
-                            :cursor "pointer"
+                    :style {:opacity (if (or dismissed? (= topic-status "done")) "0.6" "1")
                             ;; 0-based absolute index → per-row translateY (C1c)
                             :--order i}})
         (dom/On "click" open-topic! nil)
         ;; Column 1: Document (arrow + badge + title)
-        ;; --row-indent carries the depth indent as a custom property so the
-        ;; phone media query can flatten it (`var(--row-indent, 10px)` → 10px).
+        ;; --row-indent carries the depth indent as a custom property.
+        ;; `.library-document-main` applies it as padding-left, and the phone
+        ;; media query replaces that padding to flatten the tree. A stylesheet
+        ;; rule cannot override the inline property itself.
         ;; Base 31 reserves the fixed left gutter the absolutely positioned
         ;; .drag-grip button occupies: grip spans 1–25px (24px hit area,
         ;; 2.5.8), and the expand arrow's -6px margin pulls its hit box back
@@ -275,10 +277,7 @@
         ;; (see tree_dnd / index.css .drag-grip).
         (dom/td
           (dom/props {:role "cell" :class "library-document-main"
-                      :style {:display "flex" :align-items "center" :gap "6px"
-                              :--row-indent (str (+ 31 (* depth 20)) "px")
-                              :padding-left "var(--row-indent)"
-                              :overflow "hidden"
+                      :style {:--row-indent (str (+ 31 (* depth 20)) "px")
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
           ;; Native drag-and-drop re-parenting lives on this cell (the tr is
           ;; display:contents → no box → not draggable). Page stubs are flattened
@@ -369,11 +368,11 @@
                                   :flex-shrink "0"}})
               (dom/text "Dismissed"))))
         ;; Column 2: Done
+        ;; Stat and action cell layout lives in `.library-document-stat` and
+        ;; `.library-document-actions`. Inline values beat the phone card rules.
         (dom/td
           (dom/props {:role "cell" :class "library-document-stat library-document-done"
-                      :data-label "Done"
-                      :style {:padding "4px 6px" :text-align "center"
-                              :display "flex" :align-items "center" :justify-content "center"}})
+                      :data-label "Done"})
           (when is-root
             (dom/span
               (dom/props {:style {:color (cond
@@ -384,10 +383,7 @@
         ;; Column 3: Synced
         (dom/td
           (dom/props {:role "cell" :class "library-document-stat library-document-synced"
-                      :data-label "Synced"
-                      :style {:padding "4px 6px" :text-align "center"
-                              :display "flex" :align-items "center" :justify-content "center"
-                              :color "var(--color-text-secondary)"}})
+                      :data-label "Synced"})
           (when is-root
             (dom/span
               (dom/text (if (pos? total-cards)
@@ -396,18 +392,13 @@
         ;; Column 4: Added
         (dom/td
           (dom/props {:role "cell" :class "library-document-stat library-document-added"
-                      :data-label "Added"
-                      :style {:padding "4px 6px" :text-align "right"
-                              :display "flex" :align-items "center" :justify-content "flex-end"
-                              :color "var(--color-text-secondary)"}})
+                      :data-label "Added"})
           (when is-root
             (dom/span
               (dom/text (or formatted-date "")))))
         ;; Column 5: Actions — all row actions collapsed behind one ⋯ menu.
         (dom/td
-          (dom/props {:class "library-document-actions"
-                      :style {:padding "4px 6px" :display "flex" :align-items "center"
-                              :justify-content "flex-end"}})
+          (dom/props {:class "library-document-actions"})
           (RowActionsMenu user-id id title is-root has-children kind dismissed?
             navigate! !editing-id !drop-cmd !show-confirm !scroll-node !dismiss-cmd))))))
 

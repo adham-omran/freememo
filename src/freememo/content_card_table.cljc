@@ -208,7 +208,7 @@
                       (CardRow card !editing-card user-id i anki-overlay (= visible-index review-target)))))
                 (when (zero? total-row-count)
                   (dom/tr
-                    (dom/props {:style {:height "auto"}})
+                    (dom/props {:class "card-table-empty" :style {:height "auto"}})
                     (dom/td
                       (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                           :color "var(--color-text-hint)" :font-size "13px"}})

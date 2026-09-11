@@ -142,6 +142,34 @@ html, body {
     color: var(--color-text-primary);
 }
 
+/* Signed-in app root (main.cljc). It fills the dynamic viewport. While it is
+   mounted, the document itself cannot scroll: a drag past an inner scroller
+   made Safari scroll the page, collapse its toolbar, and move the whole app
+   out of view. overflow: clip also stops scrollIntoView() and focus() from
+   scrolling the root, which overflow: hidden allows. The first value of each
+   pair is the fallback for a browser without the second. */
+.app-shell {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    overflow: clip;
+}
+html:has(> body > .app-shell) {
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+/* The body clips everything under it, including an absolutely positioned node
+   that a library appends to it. Nothing then extends the document past the
+   viewport, so a programmatic scroll has no range to move either. */
+html:has(> body > .app-shell) > body {
+    position: relative;
+    overflow: hidden;
+    overflow: clip;
+    overscroll-behavior: none;
+}
+
 /* ── Focus ─────────────────────────────────────────────────────── */
 *:focus-visible {
     outline: 2px solid var(--color-primary);
@@ -327,6 +355,17 @@ html, body {
 /* Card add/edit modal inner panel — viewport-relative.
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
+/* Phone: 80vw left 283px inside the padding, and the footer buttons ran past
+   the left edge. The panel takes the screen width less a margin. The tablet
+   rule below also matches at this width and comes later, and the padding is
+   inline, so both values need !important. */
+@media (max-width: 600px) {
+    .card-modal-inner {
+        box-sizing: border-box;
+        width: calc(100vw - 16px) !important;
+        padding: var(--sp-4) !important;
+    }
+}
 .card-anki-action-status {
     margin: 0 0 var(--sp-3);
     color: var(--color-text-secondary);
@@ -1396,6 +1435,45 @@ html, body {
     font-size: 12px;
 }
 
+/* The Cards header grid. CardsTableHeader sets --grid-cols, the template the
+   body rows also read, so one phone rule can replace both. */
+.cards-table-header {
+    width: 100%;
+    display: grid;
+    grid-template-columns: var(--grid-cols);
+    flex-shrink: 0;
+}
+
+/* Phone: the nine desktop columns need 508px of fixed tracks, and a phone has
+   about 380px. Body cells clip, so their 1fr tracks fell to 0px while the
+   header kept its text widths, and the columns stopped lining up. Document,
+   Added and Stats hide, and header and body share one template that fits. */
+@media (max-width: 600px) {
+    .cards-table-header,
+    .tape-scroll .cards-table-body tr {
+        grid-template-columns: 28px 24px 64px minmax(0, 1fr) minmax(0, 1fr) 40px;
+    }
+    .cards-table-header th:nth-child(n+6):nth-child(-n+8),
+    .tape-scroll .cards-table-body tr > td:nth-child(n+6):nth-child(-n+8) {
+        display: none;
+    }
+    .cards-table-header th {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    /* The counts wrap instead of running past the screen edge. */
+    .cards-summary {
+        padding-inline: 4px;
+        row-gap: 8px;
+    }
+    .cards-summary-counts {
+        flex-shrink: 1;
+        min-width: 0;
+    }
+}
+
 /* ── Sync-source chips ([FM]/[Anki]) ───────────────────────────── */
 .source-chip {
     display: inline-flex;
@@ -1856,7 +1934,7 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     .tape-scroll .library-table-body tr.library-document-row > .library-document-main {
         grid-column: 1 / 4;
         grid-row: 1;
-        --row-indent: 0px;
+        padding-left: 0;
         overflow: hidden;
         gap: 7px !important;
         border-left-width: 3px !important;
@@ -2098,6 +2176,11 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     padding: var(--sp-2);
     gap: 2px;
     min-width: 200px;
+}
+/* Phone: the tab bar has no side padding, so right: 0 put the menu flush
+   against the screen edge. */
+@media (max-width: 600px) {
+    .tab-bar-container.overflow-open .nav-overflow-panel { right: var(--sp-2); }
 }
 .tab-bar-container.overflow-open .nav-overflow-item { width: 100%; }
 
@@ -2889,6 +2972,71 @@ textarea:hover {
 .skeleton-text:last-child { width: 60%; }
 .skeleton-row { height: 40px; margin-bottom: 4px; }
 
+/* ── Loading placeholders ─────────────────────────────────────────
+   Several regions mount nothing until a server read returns. A pending
+   Electric value is an empty e/amb, not nil, so an `(if (nil? v) Loading
+   Loaded)` branch never shows its loading side, and on a phone network the
+   region stayed blank. These rules draw a placeholder with a pseudo-element
+   on a host that already exists, and drop it when real content mounts. They
+   add no DOM node, so no Electric frame changes shape. A spinner fades in
+   after 300ms, so a fast load shows nothing. */
+body:not(:has(> *))::before,
+#main-content:not(:has(> *))::before,
+.page-container:not(:has(> *))::before,
+.topic-page:not(:has(> *))::before {
+    content: "";
+    display: block;
+    box-sizing: border-box;
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--color-text-hint);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: fade-in 0.2s ease 300ms both, spin 0.6s linear infinite;
+}
+/* Before boot, the body has no layout to center in. */
+body:not(:has(> *))::before {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    margin: -11px 0 0 -11px;
+}
+#main-content:not(:has(> *))::before,
+.topic-page:not(:has(> *))::before {
+    margin: 64px auto 0;
+}
+
+/* Documents: after the region's first value, the row count and each row are
+   separate server reads. The cold skeleton was already gone, and the list
+   painted blank until the first row mounted. This striped skeleton matches
+   the row pitch and holds until a row, the empty message, or the failure
+   notice exists. */
+.table-frame[aria-label="Library documents"] {
+    --pending-rows: 6;
+    --pending-pitch: 36px;
+    --pending-gap: 1px;
+}
+.table-frame[aria-label="Library documents"]:not(:has(tr.library-document-row, .library-document-empty, .library-document-loading, .library-document-failed))::after {
+    content: "";
+    display: block;
+    flex: none;
+    height: calc(var(--pending-rows) * var(--pending-pitch));
+    background:
+        repeating-linear-gradient(to bottom,
+            transparent 0 calc(var(--pending-pitch) - var(--pending-gap)),
+            var(--color-bg-page) calc(var(--pending-pitch) - var(--pending-gap)) var(--pending-pitch)),
+        linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
+    background-size: auto, 200% 100%;
+    animation: skeleton-pulse 1.5s ease-in-out 150ms infinite;
+}
+@media (max-width: 600px) {
+    .table-frame[aria-label="Library documents"] {
+        --pending-rows: 3;
+        --pending-pitch: 88px;
+        --pending-gap: 8px;
+    }
+}
+
 .progressive-skeleton {
     width: 100%;
 }
@@ -3555,7 +3703,15 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
    it (above / opposite side) when the default below-centered placement would
    overflow the viewport, so it never overruns an edge or covers the buttons
    below it. Non-supporting browsers keep the static below-centered rules above. */
+/* Hover devices only. A touch device shows no tooltip (content: none above),
+   so the anchored path does nothing for it. On an iPhone in Safari, every
+   tooltip host that took this path and no override below was left unpainted,
+   with its space kept: Check Anki, Keep FreeMemo, Keep Anki, and the select-all
+   and sync-direction header cells in /library/cards. The hosts that the
+   .toolbar and .tape-scroll overrides move back to absolute positioning
+   painted. */
 @supports (position-area: bottom) {
+  @media (hover: hover) {
     [data-tooltip]::after {
         position: fixed;
         position-area: bottom;
@@ -3571,6 +3727,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     [data-tooltip].tooltip-right::after {
         position-area: bottom span-left;
     }
+  }
 }
 
 /* Toolbar tooltips: plain absolute positioning relative to the button (which is
@@ -3763,11 +3920,14 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1;
 }
 
-/* Viewer side panels. Pins share the left panel with Hierarchy. */
+/* Viewer side panels. Pins share the left panel with Hierarchy. An open
+   panel's width is --side-panel-width, which SidePanelShell sets from the
+   persisted width. */
 .assistant-side-panel {
+    position: relative;
     display: flex;
     flex-direction: column;
-    width: 360px;
+    width: var(--side-panel-width, 360px);
     flex-shrink: 0;
     border-left: 1px solid var(--color-border);
     background: var(--color-bg-card, #fff);
@@ -3779,9 +3939,10 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 
 .hierarchy-side-panel {
+    position: relative;
     display: flex;
     flex-direction: column;
-    width: 280px;
+    width: var(--side-panel-width, 280px);
     flex-shrink: 0;
     min-width: 0;
     overflow: hidden;
@@ -3802,6 +3963,38 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     .hierarchy-side-panel {
         max-width: 60vw;
     }
+}
+
+/* Phone: an open side panel covers the document. As a column it left the
+   document about 134px wide at 414px, which is four words per line. The
+   collapsed 32px rail stays in the row, so its toggle never covers text.
+   `.document-columns` and the full-height workspace anchor the overlay. */
+@media (max-width: 600px) {
+    .document-columns,
+    .document-workspace--assistant-full {
+        position: relative;
+    }
+    .hierarchy-side-panel:not(.hierarchy-side-panel--collapsed),
+    .assistant-side-panel:not(.assistant-side-panel--collapsed) {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        z-index: 40;
+        max-width: none;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+    }
+    .hierarchy-side-panel:not(.hierarchy-side-panel--collapsed) {
+        left: 0;
+        width: min(var(--side-panel-width, 280px), 85%);
+    }
+    /* A chat needs the whole width, and nobody reads beside it at 414px. */
+    .assistant-side-panel:not(.assistant-side-panel--collapsed) {
+        right: 0;
+        width: 100%;
+        border-left: 0;
+    }
+    /* An overlay has no neighbouring column to resize against. */
+    .side-panel__resize { display: none; }
 }
 
 /* Header row containing the hamburger toggle + (when open) the title label.
@@ -4444,6 +4637,55 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     overflow: hidden;
 }
 
+/* Top region of the viewer: left panel, content column, assistant panel.
+   DocumentColumns sets --top-pct from the saved split. */
+.document-columns {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+.document-columns--split {
+    height: calc(var(--top-pct, 50) * 1%);
+}
+
+/* Card table region below the split divider. min-width: 0 lets it shrink below
+   its intrinsic width, so the card table cannot force the column wider. */
+.bottom-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Phone: an empty card table shrinks to its message and the document takes
+   the rest. At the saved split, "No cards yet" took about 40% of the height.
+   The divider has nothing to resize, so it hides. The first pending or saved
+   card removes .card-table-empty and restores the split. Each :has() searches
+   only the bottom panel, never the editor subtree. */
+@media (max-width: 600px) {
+    .document-columns--split:has(~ .bottom-panel .card-table-empty) {
+        flex: 1;
+        height: auto;
+    }
+    .split-divider-v:has(~ .bottom-panel .card-table-empty) {
+        display: none;
+    }
+    .bottom-panel:has(.card-table-empty) {
+        flex: none;
+        border-top: 1px solid var(--color-border);
+    }
+    .bottom-panel .tape-scroll table:has(> .card-table-empty) {
+        height: auto;
+    }
+    .bottom-panel .tape-scroll table > tr.card-table-empty {
+        position: static;
+        transform: none;
+    }
+}
+
 .pin-thumb {
     position: relative;
     width: 100%;
@@ -5044,6 +5286,42 @@ form[aria-busy="true"] {
     margin-right: 10px;
 }
 
+/* Library Documents rows (knowledge_tree.cljc DocumentRow). This layout was
+   inline, and inline values beat the phone card rules: each card filled its
+   whole slot, hid the next card's top edge, and kept a 31px indent. */
+.library-document-row {
+    border-bottom: 1px solid var(--color-bg-subtle);
+    cursor: pointer;
+}
+.library-document-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: var(--row-indent);
+    overflow: hidden;
+}
+.library-document-stat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 6px;
+    text-align: center;
+}
+.library-document-synced,
+.library-document-added {
+    color: var(--color-text-secondary);
+}
+.library-document-added {
+    justify-content: flex-end;
+    text-align: right;
+}
+.library-document-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 4px 6px;
+}
+
 .library-document-empty {
     position: absolute;
     inset: 0;
@@ -5486,6 +5764,10 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     display: flex;
     flex-direction: column;
     gap: var(--sp-5);
+}
+/* Phone: 80px of top padding left an empty band under the top bar. */
+@media (max-width: 600px) {
+    .import-page { padding: var(--sp-5) var(--sp-4) var(--sp-6); }
 }
 
 .import-page-body {

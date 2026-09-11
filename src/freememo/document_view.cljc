@@ -203,9 +203,11 @@
           target-page dctx/target-page !nav-target dctx/!nav-target]
       (dom/div
         ;; The content region fills the workspace when the card table is closed.
-        (dom/props {:style {:height (if card-table-open? (str top-pct "%") "100%")
-                            :display "flex" :flex-direction "row"
-                            :min-height "0" :overflow "hidden"}})
+        ;; The height lives in CSS, not inline, so a phone rule can release it
+        ;; when the card table is empty.
+        (dom/props {:class (str "document-columns"
+                             (when card-table-open? " document-columns--split"))
+                    :style {:--top-pct top-pct}})
 
         ;; Clear nav-target after deriving target-page, so the viewer can navigate
         ;; away manually without being snapped back.

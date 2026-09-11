@@ -2,8 +2,9 @@
   "Reactive viewport signals mirroring `window.matchMedia` queries, each seeded
    on load and kept live on its MediaQueryList `change` event. Declared on both
    CLJ and CLJS so `(e/watch ...)` compiles identically across the dual-compiler:
-     !phone?   — max-width 600px (phone; distraction-free reading mode)
-     !compact? — max-width 900px (phone + portrait tablet; collapse side panels)
+     !phone?   — max-width 600px (phone; distraction-free reading mode, and
+                 viewer side panels with no saved state start closed)
+     !compact? — max-width 900px (phone + portrait tablet; graph filters start closed)
      !coarse?  — pointer: coarse (touch; suppress text-input autofocus)")
 
 (defonce !phone? (atom false))
