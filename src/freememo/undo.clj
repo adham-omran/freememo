@@ -11,6 +11,7 @@
   (:require
    [freememo.db :as db]
    [freememo.commands :as commands]
+   [freememo.curriculum :as curriculum]
    [freememo.optimistic :as opt]
    [freememo.toasts :as toasts]
    [freememo.logging :as log]
@@ -40,6 +41,7 @@
     "reset-prompt"    (let [{:keys [key value]} (first (:snapshot entry))]
                         (db/set-setting user-id key value) nil)
     "delete-document" (db/restore-staged-document! user-id entry)
+    "delete-curriculum" (curriculum/restore-staged-curriculum! user-id entry)
     "move-topic"      (do (db/restore-topic-parent! entry) nil)
     "reject-question" (do (db/restore-rejected-question! (:snapshot entry)) nil)
     "reject-fact"     (do (db/restore-rejected-fact! (:snapshot entry)) nil)
@@ -72,6 +74,9 @@
 
         (:undone_at entry)
         {:success true :nothing? true}
+
+        (not (db/undo-entry-within-window? entry-id))
+        {:success false :error "The 12-hour recovery window has ended."}
 
         :else
         (let [warn? (boolean (anki-divergence? entry))

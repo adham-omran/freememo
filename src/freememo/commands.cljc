@@ -70,6 +70,7 @@
    "pin"       #{:pin-mutations}
    "setting"   #{:settings-refresh}
    "document"  #{:card-mutations :tree-mutations :refresh}
+   "curriculum" #{:curriculum-mutations :schedule-mutations}
    "question"  #{:kg-mutations}
    "fact"      #{:kg-mutations}})
 
@@ -116,7 +117,10 @@
      :delete-curriculum {:label "Delete curriculum" :class :mutation
                          :palette-hidden true
                          :data {:curriculum-id :payload}
-                         :table #{:curricula}
+                         :table #{:curricula :curriculum_blocks :curriculum_materials
+                                  :curriculum_exam_forms :curriculum_exam_sittings
+                                  :curriculum_grade_revisions :curriculum_unlock_overrides
+                                  :undo_log}
                          :views #{:curriculum-mutations :schedule-mutations}}
      :rename-block     {:label "Rename curriculum block" :class :mutation
                         :palette-hidden true

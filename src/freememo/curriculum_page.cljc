@@ -57,8 +57,8 @@
 (defn add-block* [user-id curriculum-id title]
   #?(:clj (result #(curriculum/add-block! user-id curriculum-id title)) :cljs nil))
 
-(defn delete-curriculum* [user-id curriculum-id]
-  #?(:clj (result #(curriculum/delete-curriculum! user-id curriculum-id)) :cljs nil))
+(defn stage-curriculum-for-deletion* [user-id curriculum-id]
+  #?(:clj (result #(curriculum/stage-curriculum-for-deletion! user-id curriculum-id)) :cljs nil))
 
 (defn rename-block* [user-id block-id title]
   #?(:clj (result #(curriculum/rename-block! user-id block-id title)) :cljs nil))
@@ -761,23 +761,23 @@
                 (dom/p (dom/props {:class "curriculum-inline-error"})
                   (dom/text delete-error))))
             (ScheduleSummary user-id curriculum-id))
-          ;; The confirm names what the cascade takes, because nothing here
-          ;; restores it and a generated exam costs credits to make again.
+          ;; The confirm states the recovery boundary and the two things the
+          ;; stage does not change: imported sources and recorded credits.
           (modal/ConfirmModal !confirm-delete
             "Delete curriculum?"
             (str "Delete \"" (:title detail) "\"? The blocks, the materials, the "
-              "exams and the exam results go with it. The imported documents stay. "
-              "A generated exam costs credits to make again.")
+              "exams and the exam results will be hidden. You can undo this for 12 hours. "
+              "Imported documents stay. Generated exam charges stay spent.")
             "Delete curriculum" "btn btn-danger-fill"
             ;; The navigate rides `e/on-unmount`, not the success branch.
-            ;; `delete-curriculum!` bumps `:curriculum-mutations` inside the
+            ;; Staging bumps `:curriculum-mutations` inside the
             ;; same server call whose result this reads, so `detail` goes nil
             ;; in the same tick and tears down the subtree holding this
             ;; `e/fn`. A navigate sequenced after the answer races that
             ;; teardown; one registered here fires whichever teardown wins.
             (e/fn [_payload]
               (let [response (e/server (e/Offload
-                                        #(delete-curriculum* user-id curriculum-id)))]
+                                        #(stage-curriculum-for-deletion* user-id curriculum-id)))]
                 (if (e/server (:ok response))
                   (do (e/on-unmount #(navigate! :curriculum)) :deleted)
                   (case (reset! !delete-error (e/server (:error response))) :failed)))))

@@ -1028,18 +1028,18 @@
    after setup-schema-topics! (topics must already exist).
    Split out of setup-schema (see 7.4); called from it in order."
   []
-  ;; Undo log — bounded per-user action history for the Undo feature.
+  ;; Undo log — per-user action history for the Undo feature.
   ;; entity_refs/snapshot are JSONB; occurred_at drives the 12h window,
-  ;; undone_at IS NULL marks an entry still reversible. Hard-capped to the
-  ;; most recent 100 live-or-not rows per user by prune-undo-log!.
+  ;; undone_at IS NULL marks an entry still reversible. Ordinary rows are
+  ;; capped at 100; staged deletions stay until their root is purged.
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS undo_log (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       action_type TEXT NOT NULL CHECK (action_type IN
-        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
+        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts')),
-      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact')),
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact')),
       entity_refs JSONB NOT NULL,
       snapshot JSONB NOT NULL,
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1055,11 +1055,11 @@
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_action_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
                       CHECK (action_type IN
-                        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
+                        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
                          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
-                      CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact'))"])
+                      CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact'))"])
 
   ;; Staged-delete marker: a topic (and its whole subtree) hidden pending the
   ;; 12h undo window points at the undo_log entry that staged it. ON DELETE
@@ -1904,6 +1904,12 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_curricula_user
                       ON curricula(user_id, updated_at DESC)"])
+  ;; A staged curriculum stays intact until its Undo window ends.
+  ;; Purge deletes the root before the entry so the FK never resurfaces it.
+  (jdbc/execute! ds ["ALTER TABLE curricula ADD COLUMN IF NOT EXISTS staged_delete_id BIGINT
+                      REFERENCES undo_log(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_curricula_staged_delete
+                      ON curricula(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
 
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS curriculum_blocks (
@@ -7519,7 +7525,7 @@
         ordered))))
 
 ;; ---------------------------------------------------------------------------
-;; Undo log — bounded per-user action history (12h window, ≤100 entries).
+;; Undo log — per-user action history (12h window; ordinary entries ≤100).
 ;; Forward (log) writes happen at delete time; reverse (restore) replays a
 ;; snapshot. Restores are idempotent via ON CONFLICT (id) DO NOTHING, so a
 ;; double-undo cannot resurrect a row twice.
@@ -7552,19 +7558,18 @@
 (defn prune-undo-log!
   "Drop user-id's undo entries older than 12h or beyond the 100 most recent.
    Idempotent; called after every insert to keep the log bounded.
-   Excludes 'delete-document' entries entirely: removing one would SET NULL its
-   topics' staged_delete_id and resurface a document whose cards are already
-   gone. Those entries are removed only by purge-staged-documents! (which
-   hard-deletes the topics first)."
+   Excludes staged-delete entries entirely: removing one would SET NULL its
+   root marker and resurface data whose dependent rows may already be gone.
+   The staged purges delete their roots first, then remove their entries."
   [conn user-id]
   (jdbc/execute! conn
     ["DELETE FROM undo_log
       WHERE user_id = ?
-        AND action_type <> 'delete-document'
+        AND action_type NOT IN ('delete-document', 'delete-curriculum')
         AND (occurred_at < now() - interval '12 hours'
              OR id IN (SELECT id FROM undo_log
                        WHERE user_id = ?
-                         AND action_type <> 'delete-document'
+                         AND action_type NOT IN ('delete-document', 'delete-curriculum')
                        ORDER BY occurred_at DESC
                        OFFSET 100))"
      user-id user-id]))
@@ -7631,7 +7636,8 @@
 
 (defn get-undo-entries
   "Live (not-yet-undone) undo entries for user-id within the 12h window,
-   newest first, capped at 100."
+   newest first. Ordinary entries are capped by prune-undo-log!, while staged
+   deletions stay visible until their own purges run."
   [user-id]
   (mapv parse-undo-row
     (jdbc/execute! ds
@@ -7641,8 +7647,7 @@
                            [:= :user_id user-id]
                            [:is :undone_at nil]
                            [:> :occurred_at [:raw "now() - interval '12 hours'"]]]
-                   :order-by [[:occurred_at :desc]]
-                   :limit 100})
+                   :order-by [[:occurred_at :desc]]})
       {:builder-fn rs/as-unqualified-maps})))
 
 (defn get-undo-entry
@@ -7652,6 +7657,20 @@
             (sql/format {:select [:*] :from [:undo_log] :where [:= :id entry-id]})
             {:builder-fn rs/as-unqualified-maps})
     parse-undo-row))
+
+(defn undo-entry-within-window?
+  "True when entry-id remains live in the database's 12-hour Undo window.
+   The server, not a stale client, owns the deadline check."
+  [entry-id]
+  (boolean (:exists
+             (jdbc/execute-one! ds
+               ["SELECT EXISTS (
+                    SELECT 1 FROM undo_log
+                     WHERE id = ?
+                       AND undone_at IS NULL
+                       AND occurred_at > now() - interval '12 hours') AS exists"
+                entry-id]
+               {:builder-fn rs/as-unqualified-maps}))))
 
 (defn mark-undone!
   "Stamp undone_at on a live entry. Idempotent: a no-op if already undone.
@@ -8110,6 +8129,24 @@
             AND occurred_at < now() - interval '12 hours'"])
       n)))
 
+(defn purge-staged-curricula!
+  "Hard-delete curricula whose staged Undo entries are older than 12 hours.
+   Delete the root before its entry because the entry owns the staged marker."
+  []
+  (jdbc/with-transaction [tx ds]
+    (let [deleted (jdbc/execute! tx
+                    ["DELETE FROM curricula
+                      WHERE staged_delete_id IN
+                        (SELECT id FROM undo_log
+                          WHERE action_type = 'delete-curriculum'
+                            AND occurred_at < now() - interval '12 hours')"])
+          n (or (some-> deleted first ::jdbc/update-count) 0)]
+      (jdbc/execute! tx
+        ["DELETE FROM undo_log
+          WHERE action_type = 'delete-curriculum'
+            AND occurred_at < now() - interval '12 hours'"])
+      n)))
+
 (defn purge-orphan-video-objects!
   "§4.7 7.4 — unlink every large object this role owns that no live row
    references: neither a `topic_videos` row nor an in-flight
@@ -8211,11 +8248,12 @@
   nil)
 
 (defn- run-sweep!
-  "One pass of the hourly sweep: staged purge, then the large-object reclaimers,
+  "One pass of the hourly sweep: staged purges, then the large-object reclaimers,
    then every registered job. Total — each step's failure is logged and the rest
    still run, because a wedged metering job must not stop deletions."
   []
   (doseq [[label thunk] (into [[::purge-staged-documents purge-staged-documents!]
+                               [::purge-staged-curricula purge-staged-curricula!]
                                [::reclaim-unowned-videos reclaim-unowned-videos!]
                                [::purge-orphan-video-objects purge-orphan-video-objects!]]
                          @!sweep-jobs)]

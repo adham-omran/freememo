@@ -17,6 +17,7 @@
    [taoensso.telemere :as tel])
   (:import
    [java.text Normalizer Normalizer$Form]
+   [java.time Instant]
    [java.util.concurrent ExecutorService Executors TimeUnit]
    [missionary Cancelled]))
 
@@ -198,7 +199,8 @@
    and form persistence."
   [user-id subject form-kind threshold]
   (try
-    (let [work-key (form-generation-work-key subject)
+    (let [operation-started-at (Instant/now)
+          work-key (form-generation-work-key subject)
           {:keys [materials source-versions]}
           (curriculum/subject-evidence db/ds user-id subject)
           retry? (= "targeted-retry" form-kind)
@@ -229,10 +231,12 @@
                          :blueprint (assoc blueprint :evidence_packets (:evidence payload))
                          :questions questions
                          :source-versions source-versions
-                         :cost nil})
-              _recorded-charge (curriculum/record-form-generation-charge!
-                                 user-id form-id charge)]
-          {:success true :form-id form-id :charged-credits charge})))
+                         :cost nil
+                         :operation-started-at operation-started-at})]
+          (if form-id
+            (do (curriculum/record-form-generation-charge! user-id form-id charge)
+                {:success true :form-id form-id :charged-credits charge})
+            {:success false :cancelled? true :charged-credits charge}))))
     (catch Exception error
       (when-not (llm/insufficient-credits? error)
         (tel/error! {:id ::generate-form :data {:user-id user-id :subject subject}} error))
@@ -456,7 +460,8 @@
    charge and Grade Revision transition."
   [user-id sitting-id]
   (try
-    (let [sitting (or (curriculum/sitting-for-grade user-id sitting-id)
+    (let [operation-started-at (Instant/now)
+          sitting (or (curriculum/sitting-for-grade user-id sitting-id)
                     (throw (ex-info "Submitted exam sitting not found."
                              {:type ::missing-sitting})))
           {:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
@@ -473,12 +478,13 @@
                    (:id entry) cost)
           grade (validate-grade! parsed (:blueprint sitting))
           revision-id (curriculum/record-grade-revision! user-id sitting-id
-                        (assoc grade :cost nil))
-          _recorded-charge (curriculum/record-grade-charge!
-                             user-id revision-id charge)]
-      {:success true :revision-id revision-id :charged-credits charge
-       :raw-score (:raw-score grade)
-       :passed (>= (:raw-score grade) (:threshold sitting))})
+                        (assoc grade :cost nil :operation-started-at operation-started-at))]
+      (if revision-id
+        (do (curriculum/record-grade-charge! user-id revision-id charge)
+            {:success true :revision-id revision-id :charged-credits charge
+             :raw-score (:raw-score grade)
+             :passed (>= (:raw-score grade) (:threshold sitting))})
+        {:success false :cancelled? true :charged-credits charge}))
     (catch Exception error
       (when-not (llm/insufficient-credits? error)
         (tel/error! {:id ::grade-sitting

@@ -213,10 +213,11 @@
   "Subquery for forms whose subject survives the same export."
   (str "SELECT f.id FROM curriculum_exam_forms f WHERE f.user_id = ? AND ("
     "f.block_id IN (SELECT b.id FROM curriculum_blocks b JOIN curricula c"
-    " ON c.id = b.curriculum_id WHERE c.user_id = ?) OR "
+    " ON c.id = b.curriculum_id WHERE c.user_id = ? AND c.staged_delete_id IS NULL) OR "
     "f.material_id IN (SELECT m.id FROM curriculum_materials m"
     " JOIN curriculum_blocks b ON b.id = m.block_id"
     " JOIN curricula c ON c.id = b.curriculum_id WHERE c.user_id = ?"
+    " AND c.staged_delete_id IS NULL"
     " AND m.topic_id IN (" owned-topics ")))"))
 
 (def entity-scopes
@@ -310,15 +311,21 @@
    :study_schedules {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
                      :params 2 :order "t.id"}
 
-   :curricula {:where "t.user_id = ?" :params 1 :order "t.id"}
+   ;; A staged curriculum owns an undo_log reference that an account archive
+   ;; does not carry. Excluding it keeps both the graph and the live marker
+   ;; intact in its current account until Undo or purge resolves it.
+   :curricula {:where "t.user_id = ? AND t.staged_delete_id IS NULL"
+               :params 1 :order "t.id" :drop-keys ["staged_delete_id"]}
 
    :curriculum_blocks
-   {:where "t.curriculum_id IN (SELECT id FROM curricula WHERE user_id = ?)"
+   {:where "t.curriculum_id IN (SELECT id FROM curricula
+                                 WHERE user_id = ? AND staged_delete_id IS NULL)"
     :params 1 :order "t.id"}
 
    :curriculum_materials
    {:where (str "t.block_id IN (SELECT b.id FROM curriculum_blocks b"
-             " JOIN curricula c ON c.id = b.curriculum_id WHERE c.user_id = ?)"
+             " JOIN curricula c ON c.id = b.curriculum_id"
+             " WHERE c.user_id = ? AND c.staged_delete_id IS NULL)"
              " AND t.topic_id IN (" owned-topics ")")
     :params 2 :order "t.id"}
 
@@ -335,7 +342,8 @@
     :params 5 :order "t.id"}
 
    :curriculum_unlock_overrides
-   {:where "t.curriculum_id IN (SELECT id FROM curricula WHERE user_id = ?)"
+   {:where "t.curriculum_id IN (SELECT id FROM curricula
+                                 WHERE user_id = ? AND staged_delete_id IS NULL)"
     :params 1 :order "t.id"}
 
    :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")

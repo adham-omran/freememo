@@ -5,9 +5,12 @@
    [freememo.curriculum :as curriculum]
    [freememo.curriculum-exam :as exam]
    [freememo.db :as db]
+   [freememo.undo :as undo]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs])
-  (:import [java.time LocalDate]))
+  (:import [java.time Instant LocalDate]))
+
+(def opts {:builder-fn rs/as-unqualified-maps})
 
 (def rubric
   {:factual_accuracy "Facts match the evidence."
@@ -152,6 +155,131 @@
                               WHERE curriculum_id = ? ORDER BY position" curriculum-id]
                             {:builder-fn rs/as-unqualified-maps})))
             "a block swaps with its neighbour"))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
+(deftest staged-curriculum-retains-the-whole-graph-and-rejects-late-results
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "curriculum-recovery-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")]
+                         {:builder-fn rs/as-unqualified-maps}))
+          topic-id (:id (jdbc/execute-one! db/ds
+                          ["INSERT INTO topics (user_id, title, kind, content_text)
+                            VALUES (?, 'Evidence', 'markdown', 'frozen evidence') RETURNING id"
+                           user-id]
+                          {:builder-fn rs/as-unqualified-maps}))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum!
+                              user-id {:title "Recover me" :daily-minutes 60
+                                       :study-weekdays []})
+              first-block (curriculum/add-block! user-id curriculum-id "First")
+              _second-block (curriculum/add-block! user-id curriculum-id "Second")
+              _material (curriculum/add-material! user-id first-block topic-id 30)
+              evidence (curriculum/subject-evidence db/ds user-id {:block-id first-block})
+              form-id (curriculum/save-draft-form! user-id {:block-id first-block}
+                        {:threshold 70
+                         :blueprint {:assessed_outcomes ["a"] :unassessed_outcomes []
+                                     :evidence_packets []}
+                         :questions (mapv question (range 5))
+                         :source-versions (:source-versions evidence)})
+              _approved (curriculum/approve-form! user-id form-id)
+              sitting-id (curriculum/start-sitting! user-id form-id)
+              _drafted (curriculum/save-answer-draft! user-id sitting-id
+                         (mapv (fn [index] {:index index :answer "Answer"
+                                            :do-not-know false})
+                           (range 5)))
+              _submitted (curriculum/finalize-sitting! user-id sitting-id)
+              criteria (vec (repeat 5 {:criteria {:factual_accuracy 3 :reasoning 3
+                                                   :source_evidence 3 :integration 3
+                                                   :completeness 2}}))
+              _grade (curriculum/record-grade-revision! user-id sitting-id
+                       {:raw-score 70 :criteria criteria :explanation "Pass."})
+              _override (curriculum/unlock-next-block! user-id first-block)
+              graph-counts (fn []
+                             {:blocks (:count (jdbc/execute-one! db/ds
+                                        ["SELECT count(*)::int AS count FROM curriculum_blocks
+                                          WHERE curriculum_id = ?" curriculum-id] opts))
+                              :materials (:count (jdbc/execute-one! db/ds
+                                           ["SELECT count(*)::int AS count FROM curriculum_materials m
+                                             JOIN curriculum_blocks b ON b.id = m.block_id
+                                            WHERE b.curriculum_id = ?" curriculum-id] opts))
+                              :forms (:count (jdbc/execute-one! db/ds
+                                       ["SELECT count(*)::int AS count FROM curriculum_exam_forms f
+                                         JOIN curriculum_blocks b ON b.id = f.block_id
+                                        WHERE b.curriculum_id = ?" curriculum-id] opts))
+                              :sittings (:count (jdbc/execute-one! db/ds
+                                          ["SELECT count(*)::int AS count FROM curriculum_exam_sittings s
+                                            JOIN curriculum_exam_forms f ON f.id = s.form_id
+                                            JOIN curriculum_blocks b ON b.id = f.block_id
+                                           WHERE b.curriculum_id = ?" curriculum-id] opts))
+                              :revisions (:count (jdbc/execute-one! db/ds
+                                           ["SELECT count(*)::int AS count FROM curriculum_grade_revisions g
+                                             JOIN curriculum_exam_sittings s ON s.id = g.sitting_id
+                                             JOIN curriculum_exam_forms f ON f.id = s.form_id
+                                             JOIN curriculum_blocks b ON b.id = f.block_id
+                                            WHERE b.curriculum_id = ?" curriculum-id] opts))
+                              :overrides (:count (jdbc/execute-one! db/ds
+                                           ["SELECT count(*)::int AS count FROM curriculum_unlock_overrides
+                                            WHERE curriculum_id = ?" curriculum-id] opts))})
+              before (graph-counts)
+              operation-started-at (Instant/now)
+              staged (curriculum/stage-curriculum-for-deletion! user-id curriculum-id)]
+          (is (= {:blocks 2 :materials 1 :forms 1 :sittings 1 :revisions 1 :overrides 1}
+                before))
+          (is (= before (graph-counts)) "staging retains every owned child row")
+          (is (nil? (curriculum/curriculum-detail 0 user-id curriculum-id)))
+          (is (some? (jdbc/execute-one! db/ds ["SELECT id FROM topics WHERE id = ?" topic-id]
+                opts))
+            "staging does not delete the imported source topic")
+          (is (:success (undo/undo-entry! user-id (:entry-id staged))))
+          (is (= before (graph-counts)) "Undo clears only the root marker")
+          (is (nil? (curriculum/save-draft-form! user-id {:block-id first-block}
+                     {:threshold 70
+                      :blueprint {:assessed_outcomes ["a"] :unassessed_outcomes []
+                                  :evidence_packets []}
+                      :questions (mapv question (range 5))
+                      :source-versions (:source-versions evidence)
+                      :operation-started-at operation-started-at}))
+            "a form result that began before deletion cannot land after Undo")
+          (is (nil? (curriculum/record-grade-revision! user-id sitting-id
+                     {:raw-score 70 :criteria criteria :explanation "Late."
+                      :operation-started-at operation-started-at}))
+            "a grade result that began before deletion cannot land after Undo")
+          (is (= before (graph-counts)) "discarded late results write no child row"))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
+(deftest staged-curriculum-survives-the-ordinary-undo-cap-and-purges-after-expiry
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (let [tag (str "curriculum-expiry-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")]
+                         {:builder-fn rs/as-unqualified-maps}))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum!
+                              user-id {:title "Expire me" :daily-minutes 30
+                                       :study-weekdays []})
+              {:keys [entry-id]} (curriculum/stage-curriculum-for-deletion!
+                                   user-id curriculum-id)]
+          (dotimes [n 101]
+            (db/insert-undo-entry! user-id "reset-prompt" "setting" [(str "setting-" n)]
+              [{:key (str "setting-" n) :value "before"}]))
+          (is (some #(= entry-id (:id %)) (db/get-undo-entries user-id))
+            "the staged curriculum is not removed by the ordinary 100-entry cap")
+          (jdbc/execute-one! db/ds
+            ["UPDATE undo_log SET occurred_at = now() - interval '12 hours 1 minute'
+              WHERE id = ?" entry-id])
+          (is (= 1 (db/purge-staged-curricula!)))
+          (is (nil? (jdbc/execute-one! db/ds
+                     ["SELECT id FROM curricula WHERE id = ?" curriculum-id] opts)))
+          (is (nil? (db/get-undo-entry entry-id))
+            "purge deletes the log entry after it physically deletes the root"))
         (finally
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
 
@@ -318,9 +446,9 @@
           (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
 
-(deftest a-deleted-curriculum-reads-as-nil-not-as-an-exception
+(deftest a-staged-curriculum-reads-as-nil-not-as-an-exception
   ;; The readers a MOUNTED page holds must answer nil for a curriculum that is
-  ;; gone. `require-owned!` reported it as a server exception instead, which
+  ;; staged. `require-owned!` reported it as a server exception instead, which
   ;; Electric propagates as a reactor failure — so deleting a curriculum closed
   ;; the WebSocket before the client could navigate away, and the page froze on
   ;; the row it had just removed. Writers keep throwing; a writer that names a
@@ -331,22 +459,34 @@
           user-id (:id (jdbc/execute-one! db/ds
                          ["INSERT INTO users (username, password_hash)
                            VALUES (?, 'x') RETURNING id" tag]
-                         {:builder-fn rs/as-unqualified-maps}))]
+                         {:builder-fn rs/as-unqualified-maps}))
+          other-user-id (:id (jdbc/execute-one! db/ds
+                               ["INSERT INTO users (username, password_hash)
+                                 VALUES (?, 'x') RETURNING id" (str tag "-other")]
+                               {:builder-fn rs/as-unqualified-maps}))]
       (try
         (let [curriculum-id (curriculum/create-curriculum! user-id
                               {:title tag :daily-minutes 30 :study-weekdays [1 2 3 4 5]})]
           (curriculum/add-block! user-id curriculum-id "Block one")
           (is (some? (curriculum/curriculum-detail 0 user-id curriculum-id)))
           (is (some? (curriculum/build-schedule 0 user-id curriculum-id)))
-          (is (= :deleted (curriculum/delete-curriculum! user-id curriculum-id)))
+          (is (thrown? clojure.lang.ExceptionInfo
+                (curriculum/stage-curriculum-for-deletion! other-user-id curriculum-id))
+            "another user cannot stage this curriculum")
+          (let [{:keys [entry-id]} (curriculum/stage-curriculum-for-deletion!
+                                   user-id curriculum-id)]
           (is (nil? (curriculum/curriculum-detail 0 user-id curriculum-id))
-            "a reader answers nil for a curriculum that is gone")
+            "a reader answers nil for a staged curriculum")
           (is (nil? (curriculum/build-schedule 0 user-id curriculum-id))
             "the schedule panel re-queries on the delete's own bump")
           (is (empty? (curriculum/list-curricula 0 user-id))
-            "the cascade removed the blocks with it")
+            "the staged curriculum stays out of its list")
           (is (thrown? clojure.lang.ExceptionInfo
-                (curriculum/delete-curriculum! user-id curriculum-id))
-            "a WRITER still blames a caller that names a row it does not own"))
+                (curriculum/stage-curriculum-for-deletion! user-id curriculum-id))
+            "a WRITER still blames a caller that names a row it does not own")
+          (is (:success (undo/undo-entry! user-id entry-id)))
+          (is (some? (curriculum/curriculum-detail 0 user-id curriculum-id))
+            "Undo restores the same root without rebuilding it")))
         (finally
-          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id])
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" other-user-id]))))))

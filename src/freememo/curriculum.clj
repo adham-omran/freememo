@@ -9,6 +9,8 @@
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.db :as db]
+   [freememo.toasts :as toasts]
+   [freememo.user-state :as us]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
    [taoensso.telemere :as tel])
@@ -54,14 +56,16 @@
 (defn- own-curriculum [connectable user-id curriculum-id]
   (curriculum-row->map
     (jdbc/execute-one! connectable
-      ["SELECT * FROM curricula WHERE id = ? AND user_id = ?" curriculum-id user-id]
+      ["SELECT * FROM curricula
+         WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
+       curriculum-id user-id]
       opts)))
 
 (defn- own-block [connectable user-id block-id]
   (jdbc/execute-one! connectable
     ["SELECT b.* FROM curriculum_blocks b
        JOIN curricula c ON c.id = b.curriculum_id
-      WHERE b.id = ? AND c.user_id = ?" block-id user-id]
+      WHERE b.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL" block-id user-id]
     opts))
 
 (defn- own-material [connectable user-id material-id]
@@ -69,12 +73,16 @@
     ["SELECT m.*, b.curriculum_id FROM curriculum_materials m
        JOIN curriculum_blocks b ON b.id = m.block_id
        JOIN curricula c ON c.id = b.curriculum_id
-      WHERE m.id = ? AND c.user_id = ?" material-id user-id]
+      WHERE m.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL" material-id user-id]
     opts))
 
 (defn- own-form [connectable user-id form-id]
   (some-> (jdbc/execute-one! connectable
-            ["SELECT * FROM curriculum_exam_forms WHERE id = ? AND user_id = ?"
+            ["SELECT f.* FROM curriculum_exam_forms f
+               LEFT JOIN curriculum_materials m ON m.id = f.material_id
+               JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+               JOIN curricula c ON c.id = b.curriculum_id
+              WHERE f.id = ? AND f.user_id = ? AND c.staged_delete_id IS NULL"
              form-id user-id]
             opts)
     (update :blueprint read-json)
@@ -97,7 +105,7 @@
                count(b.completed_at)::int AS completed_block_count
           FROM curricula c
           LEFT JOIN curriculum_blocks b ON b.curriculum_id = c.id
-         WHERE c.user_id = ?
+         WHERE c.user_id = ? AND c.staged_delete_id IS NULL
          GROUP BY c.id
          ORDER BY c.updated_at DESC" user-id]
       opts)))
@@ -145,24 +153,100 @@
        (into-array Short (map short weekdays)) curriculum-id user-id])
     (bump! user-id)))
 
-(defn delete-curriculum!
-  "Delete one curriculum and everything under it.
+(defn- curriculum-form-work-keys
+  "Return every running-form key the curriculum can own.
 
-   Pre: `curriculum-id` belongs to `user-id`. The ownership clause is in the
-   statement as well as in the check, so a race cannot delete another
-   account's row.
-   Post: the curriculum row is gone. PostgreSQL cascades to the blocks, the
-   materials, the exam forms, the sittings, the grade revisions and the unlock
-   overrides. Nothing here restores any of them, and a generated exam costs
-   credits to make again.
-   Invariant: the source topics stay. A material row points at a topic and
-   does not own it."
+   The keys match curriculum-exam/form-generation-work-key. This namespace
+   must not require that namespace because it already depends on this one."
+  [connectable curriculum-id]
+  (let [blocks (jdbc/execute! connectable
+                 ["SELECT id FROM curriculum_blocks WHERE curriculum_id = ?"
+                  curriculum-id] opts)
+        materials (jdbc/execute! connectable
+                    ["SELECT m.id FROM curriculum_materials m
+                        JOIN curriculum_blocks b ON b.id = m.block_id
+                       WHERE b.curriculum_id = ?" curriculum-id] opts)]
+    (into #{}
+      (concat (map #(str "block/" (:id %)) blocks)
+              (map #(str "material/" (:id %)) materials)))))
+
+(defn- cancel-curriculum-form-generations!
+  "Ask every running form generation for curriculum-id not to commit.
+
+   The canceller is an interruption attempt. The cancelled set and the durable
+   deletion entry are the commit guards, so an HTTP call that ignores interrupt
+   cannot write a late form."
+  [user-id work-keys]
+  (let [cancelled (us/get-atom user-id :exam-form-generation-cancelled)
+        cancellers (us/get-atom user-id :exam-form-generation-cancellers)]
+    (swap! cancelled into work-keys)
+    (doseq [work-key work-keys]
+      (when-some [cancel (get @cancellers work-key)]
+        (cancel)))))
+
+(defn stage-curriculum-for-deletion!
+  "Hide a curriculum for the 12-hour recovery window.
+
+   Pre: curriculum-id names a live curriculum owned by user-id.
+   Post: one undo entry and one staged root marker commit atomically; blocks,
+   materials, forms, sittings, revisions, overrides, source topics, and credit
+   ledger rows stay unchanged.
+   Invariant: only the marker hides this graph. The hourly purge owns the later
+   physical cascade, and an entry cannot exist without its marked root."
   [user-id curriculum-id]
-  (require-owned! (own-curriculum db/ds user-id curriculum-id) :curriculum curriculum-id)
-  (jdbc/execute-one! db/ds
-    ["DELETE FROM curricula WHERE id = ? AND user_id = ?" curriculum-id user-id])
-  (bump! user-id)
-  :deleted)
+  (let [{:keys [entry-id title work-keys] :as staged}
+        (jdbc/with-transaction [tx db/ds]
+          (let [curriculum (require-owned!
+                             (jdbc/execute-one! tx
+                               ["SELECT title FROM curricula
+                                  WHERE id = ? AND user_id = ?
+                                    AND staged_delete_id IS NULL FOR UPDATE"
+                                curriculum-id user-id] opts)
+                             :curriculum curriculum-id)
+                entry-id (db/insert-undo-entry-raw!
+                           tx user-id "delete-curriculum" "curriculum" [curriculum-id]
+                           {:title (:title curriculum)})
+                staged-row (jdbc/execute-one! tx
+                             ["UPDATE curricula
+                                  SET staged_delete_id = ?, updated_at = now()
+                                WHERE id = ? AND user_id = ?
+                                  AND staged_delete_id IS NULL
+                              RETURNING title"
+                              entry-id curriculum-id user-id] opts)]
+            (require-owned! staged-row :curriculum curriculum-id)
+            (db/prune-undo-log! tx user-id)
+            {:entry-id entry-id
+             :title (:title staged-row)
+             :work-keys (curriculum-form-work-keys tx curriculum-id)}))]
+    ;; This is after the database commit: a failed stage must never cancel work.
+    (cancel-curriculum-form-generations! user-id work-keys)
+    (commands/bump-channels! user-id
+      #{:curriculum-mutations :schedule-mutations :undo-mutations})
+    (toasts/push! user-id
+      {:level :success
+       :message (str "Deleted \"" title "\". You can undo this for 12 hours.")
+       :dedup? false
+       :actions [{:label "Undo" :undo-id entry-id}]})
+    staged))
+
+(defn restore-staged-curriculum!
+  "Clear one owned staged marker.
+
+   Pre: entry is a live delete-curriculum entry for user-id.
+   Post: the curriculum graph is visible without rewriting retained rows.
+   Invariant: restoration clears only the matching entry marker, so a newer
+   deletion cannot be undone by an older action."
+  [user-id entry]
+  (let [curriculum-id (first (:entity_refs entry))]
+    (jdbc/with-transaction [tx db/ds]
+      (let [row (jdbc/execute-one! tx
+                  ["UPDATE curricula
+                      SET staged_delete_id = NULL, updated_at = now()
+                    WHERE id = ? AND user_id = ? AND staged_delete_id = ?
+                  RETURNING id, title"
+                   curriculum-id user-id (:id entry)] opts)]
+        (require-owned! row :curriculum curriculum-id)
+        row))))
 
 (defn- resequence!
   "Write `ids` as positions 0, 1, 2 … under one parent.
@@ -473,6 +557,45 @@
     (throw (ex-info "Choose exactly one exam subject." {:type ::invalid-subject})))
   (if material-id ["material_id" material-id] ["block_id" block-id]))
 
+(defn- curriculum-deleted-since?
+  "True when the curriculum was staged after operation-started-at.
+
+   This reads deletion history, not the current staged marker. An Undo can make
+   a curriculum live again, but it must not authorize an older model result."
+  [connectable user-id curriculum-id operation-started-at]
+  (boolean (:deleted
+             (jdbc/execute-one! connectable
+               ["SELECT EXISTS (
+                    SELECT 1 FROM undo_log
+                     WHERE user_id = ?
+                       AND action_type = 'delete-curriculum'
+                       AND entity_refs @> ?::jsonb
+                       AND occurred_at >= ?) AS deleted"
+                user-id (json/generate-string [curriculum-id]) operation-started-at]
+               opts))))
+
+(defn- lock-subject-curriculum!
+  "Lock a subject's parent curriculum for a form commit.
+
+   The lock orders staging against the final insert. If staging won, the
+   durable history check rejects the result; if this insert won, staging starts
+   after the result and retains that completed work for recovery."
+  [connectable user-id subject]
+  (let [[_ subject-id] (subject-column+id subject)
+        material-id (:material-id subject)]
+    (jdbc/execute-one! connectable
+      (if material-id
+        ["SELECT c.id AS curriculum_id, c.staged_delete_id
+            FROM curriculum_materials m
+            JOIN curriculum_blocks b ON b.id = m.block_id
+            JOIN curricula c ON c.id = b.curriculum_id
+           WHERE m.id = ? AND c.user_id = ? FOR UPDATE OF c" subject-id user-id]
+        ["SELECT c.id AS curriculum_id, c.staged_delete_id
+            FROM curriculum_blocks b
+            JOIN curricula c ON c.id = b.curriculum_id
+           WHERE b.id = ? AND c.user_id = ? FOR UPDATE OF c" subject-id user-id])
+      opts)))
+
 (defn next-form-version [connectable user-id subject]
   (let [{:keys [material-id]} subject
         [column id] (subject-column+id subject)]
@@ -486,25 +609,33 @@
                      opts)))))
 
 (defn save-draft-form!
-  "Persist one validated five-question draft."
-  [user-id subject {:keys [form-kind threshold blueprint questions source-versions cost]}]
+  "Persist one validated five-question draft.
+
+   Returns nil when a deletion happened after operation-started-at. This keeps
+   a late model result from landing even if Undo has since restored the graph."
+  [user-id subject {:keys [form-kind threshold blueprint questions source-versions cost
+                           operation-started-at]}]
   (when-not (= 5 (count questions))
     (throw (ex-info "An exam form must contain five questions."
              {:type ::invalid-form :question-count (count questions)})))
   (jdbc/with-transaction [tx db/ds]
-    (let [version (next-form-version tx user-id subject)
-          row (jdbc/execute-one! tx
-                ["INSERT INTO curriculum_exam_forms
-                    (user_id, block_id, material_id, version, form_kind,
-                     threshold, blueprint, questions, source_versions,
-                     generation_cost_credits)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-                 user-id (:block-id subject) (:material-id subject) version
-                 (or form-kind "standard") (or threshold default-threshold)
-                 (pg-json blueprint) (pg-json questions) (pg-json source-versions) cost]
-                opts)]
-      (bump! user-id)
-      (:id row))))
+    (let [curriculum (lock-subject-curriculum! tx user-id subject)]
+      (when-not (and operation-started-at curriculum
+                     (curriculum-deleted-since?
+                       tx user-id (:curriculum_id curriculum) operation-started-at))
+        (let [version (next-form-version tx user-id subject)
+              row (jdbc/execute-one! tx
+                    ["INSERT INTO curriculum_exam_forms
+                        (user_id, block_id, material_id, version, form_kind,
+                         threshold, blueprint, questions, source_versions,
+                         generation_cost_credits)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+                     user-id (:block-id subject) (:material-id subject) version
+                     (or form-kind "standard") (or threshold default-threshold)
+                     (pg-json blueprint) (pg-json questions) (pg-json source-versions) cost]
+                    opts)]
+          (bump! user-id)
+          (:id row))))))
 
 (defn- questions-with-prompts
   "Return the stored questions carrying the reader's prompts, in order.
@@ -767,9 +898,14 @@
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT id, submitted_at, cancelled_at, draft_answers
-                                FROM curriculum_exam_sittings
-                               WHERE id = ? AND user_id = ? FOR UPDATE"
+                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers
+                                FROM curriculum_exam_sittings s
+                                JOIN curriculum_exam_forms f ON f.id = s.form_id
+                                LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                                JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                               JOIN curricula c ON c.id = b.curriculum_id
+                               WHERE s.id = ? AND s.user_id = ?
+                                 AND c.staged_delete_id IS NULL FOR UPDATE OF s"
                              sitting-id user-id] opts)
                           :sitting sitting-id)]
             (if (or (:submitted_at sitting) (:cancelled_at sitting))
@@ -797,9 +933,14 @@
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT id, submitted_at, cancelled_at, draft_answers
-                                FROM curriculum_exam_sittings
-                               WHERE id = ? AND user_id = ? FOR UPDATE"
+                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers
+                                FROM curriculum_exam_sittings s
+                                JOIN curriculum_exam_forms f ON f.id = s.form_id
+                                LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                                JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                               JOIN curricula c ON c.id = b.curriculum_id
+                               WHERE s.id = ? AND s.user_id = ?
+                                 AND c.staged_delete_id IS NULL FOR UPDATE OF s"
                              sitting-id user-id] opts)
                           :sitting sitting-id)]
             (if (or (:submitted_at sitting) (:cancelled_at sitting))
@@ -831,6 +972,14 @@
                   ["UPDATE curriculum_exam_sittings SET cancelled_at = now()
                      WHERE id = ? AND user_id = ?
                        AND submitted_at IS NULL AND cancelled_at IS NULL
+                       AND EXISTS (
+                         SELECT 1
+                           FROM curriculum_exam_forms f
+                           LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                           JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                           JOIN curricula c ON c.id = b.curriculum_id
+                          WHERE f.id = curriculum_exam_sittings.form_id
+                            AND c.staged_delete_id IS NULL)
                      RETURNING id" sitting-id user-id] opts)]
     (bump! user-id)
     (if updated :cancelled :already-closed)))
@@ -846,8 +995,14 @@
    and the answers stay, so an account export still carries the whole history."
   [user-id sitting-id]
   (let [sitting (jdbc/execute-one! db/ds
-                  ["SELECT cancelled_at, archived_at FROM curriculum_exam_sittings
-                     WHERE id = ? AND user_id = ?" sitting-id user-id] opts)]
+                  ["SELECT s.cancelled_at, s.archived_at
+                      FROM curriculum_exam_sittings s
+                      JOIN curriculum_exam_forms f ON f.id = s.form_id
+                      LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                      JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                      JOIN curricula c ON c.id = b.curriculum_id
+                     WHERE s.id = ? AND s.user_id = ?
+                       AND c.staged_delete_id IS NULL" sitting-id user-id] opts)]
     (cond
       (nil? sitting) (throw (ex-info "Sitting not found"
                               {:type ::not-found :entity :sitting :id sitting-id}))
@@ -855,7 +1010,15 @@
       (nil? (:cancelled_at sitting)) :not-cancelled
       :else (do (jdbc/execute-one! db/ds
                   ["UPDATE curriculum_exam_sittings SET archived_at = now()
-                     WHERE id = ? AND user_id = ?" sitting-id user-id])
+                     WHERE id = ? AND user_id = ?
+                       AND EXISTS (
+                         SELECT 1
+                           FROM curriculum_exam_forms f
+                           LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                           JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                           JOIN curricula c ON c.id = b.curriculum_id
+                          WHERE f.id = curriculum_exam_sittings.form_id
+                            AND c.staged_delete_id IS NULL)" sitting-id user-id])
               (bump! user-id)
               :archived))))
 
@@ -867,7 +1030,11 @@
                      f.material_id, f.source_versions
                 FROM curriculum_exam_sittings s
                 JOIN curriculum_exam_forms f ON f.id = s.form_id
-               WHERE s.id = ? AND s.user_id = ? AND s.submitted_at IS NOT NULL"
+                LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                JOIN curricula c ON c.id = b.curriculum_id
+               WHERE s.id = ? AND s.user_id = ? AND s.submitted_at IS NOT NULL
+                 AND c.staged_delete_id IS NULL"
              sitting-id user-id] opts)
     (update :answers read-json)
     (update :questions read-json)
@@ -876,8 +1043,10 @@
 
 (defn record-grade-revision!
   "Append one successful AI grade and apply progression atomically.
+
+   Returns nil when a curriculum deletion occurred after operation-started-at.
    Completion never reverses after a later lower revision."
-  [user-id sitting-id {:keys [raw-score criteria explanation cost]}]
+  [user-id sitting-id {:keys [raw-score criteria explanation cost operation-started-at]}]
   (let [criterion-scores (mapcat #(vals (:criteria %)) criteria)]
     (when-not (and (= 5 (count criteria)) (= 25 (count criterion-scores))
                 (= raw-score (reduce + criterion-scores)))
@@ -885,48 +1054,65 @@
                {:type ::invalid-grade-revision}))))
   (let [revision-id
         (jdbc/with-transaction [tx db/ds]
-          (let [sitting (some-> (jdbc/execute-one! tx
-                            ["SELECT s.*, f.threshold, f.block_id, f.material_id
-                                FROM curriculum_exam_sittings s
-                                JOIN curriculum_exam_forms f ON f.id = s.form_id
-                               WHERE s.id = ? AND s.user_id = ? AND s.submitted_at IS NOT NULL"
-                             sitting-id user-id] opts)
-                    (require-owned! :sitting sitting-id))
-          passed (>= raw-score (:threshold sitting))
-          revision (inc (:revision (jdbc/execute-one! tx
-                                    ["SELECT COALESCE(max(revision), 0)::int AS revision
-                                       FROM curriculum_grade_revisions WHERE sitting_id = ?"
-                                     sitting-id] opts)))
-          row (jdbc/execute-one! tx
-                ["INSERT INTO curriculum_grade_revisions
-                    (sitting_id, revision, raw_score, passed, criteria,
-                     explanation, grading_cost_credits)
-                  VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-                 sitting-id revision raw-score passed (pg-json criteria) explanation cost] opts)]
-            (when (and passed (:block_id sitting))
-              (let [block (jdbc/execute-one! tx
-                      ["UPDATE curriculum_blocks
-                          SET completed_at = COALESCE(completed_at, now()), focused_at = NULL
-                        WHERE id = ? RETURNING curriculum_id, position"
-                       (:block_id sitting)] opts)
-              next-block (jdbc/execute-one! tx
-                           ["SELECT id FROM curriculum_blocks
-                             WHERE curriculum_id = ? AND position > ?
-                             ORDER BY position LIMIT 1"
-                            (:curriculum_id block) (:position block)] opts)]
-                (when next-block
-                  (jdbc/execute-one! tx
-              ["UPDATE curriculum_blocks
-                  SET unlocked_at = COALESCE(unlocked_at, now()),
-                      focused_at = CASE
-                        WHEN NOT EXISTS (
-                          SELECT 1 FROM curriculum_blocks focused
-                           WHERE focused.curriculum_id = ?
-                             AND focused.focused_at IS NOT NULL)
-                        THEN now() ELSE focused_at END
-                WHERE id = ?" (:curriculum_id block) (:id next-block)]))))
-            (:id row)))]
-    (bump! user-id)
+          (let [sitting (jdbc/execute-one! tx
+                          ["SELECT s.*, f.threshold, f.block_id, f.material_id,
+                                  c.id AS curriculum_id, c.staged_delete_id
+                              FROM curriculum_exam_sittings s
+                              JOIN curriculum_exam_forms f ON f.id = s.form_id
+                              LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                              JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                              JOIN curricula c ON c.id = b.curriculum_id
+                             WHERE s.id = ? AND s.user_id = ?
+                               AND s.submitted_at IS NOT NULL FOR UPDATE OF c"
+                           sitting-id user-id] opts)]
+            (cond
+              (and operation-started-at sitting
+                   (curriculum-deleted-since?
+                     tx user-id (:curriculum_id sitting) operation-started-at))
+              nil
+
+              (:staged_delete_id sitting)
+              (throw (ex-info "Sitting not found"
+                       {:type ::not-found :entity :sitting :id sitting-id}))
+
+              :else
+              (let [sitting (require-owned! sitting :sitting sitting-id)
+                    passed (>= raw-score (:threshold sitting))
+                    revision (inc (:revision (jdbc/execute-one! tx
+                                              ["SELECT COALESCE(max(revision), 0)::int AS revision
+                                                 FROM curriculum_grade_revisions WHERE sitting_id = ?"
+                                               sitting-id] opts)))
+                    row (jdbc/execute-one! tx
+                          ["INSERT INTO curriculum_grade_revisions
+                              (sitting_id, revision, raw_score, passed, criteria,
+                               explanation, grading_cost_credits)
+                            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+                           sitting-id revision raw-score passed (pg-json criteria) explanation cost]
+                          opts)]
+                (when (and passed (:block_id sitting))
+                  (let [block (jdbc/execute-one! tx
+                                ["UPDATE curriculum_blocks
+                                    SET completed_at = COALESCE(completed_at, now()), focused_at = NULL
+                                  WHERE id = ? RETURNING curriculum_id, position"
+                                 (:block_id sitting)] opts)
+                        next-block (jdbc/execute-one! tx
+                                     ["SELECT id FROM curriculum_blocks
+                                       WHERE curriculum_id = ? AND position > ?
+                                       ORDER BY position LIMIT 1"
+                                      (:curriculum_id block) (:position block)] opts)]
+                    (when next-block
+                      (jdbc/execute-one! tx
+                        ["UPDATE curriculum_blocks
+                            SET unlocked_at = COALESCE(unlocked_at, now()),
+                                focused_at = CASE
+                                  WHEN NOT EXISTS (
+                                    SELECT 1 FROM curriculum_blocks focused
+                                     WHERE focused.curriculum_id = ?
+                                       AND focused.focused_at IS NOT NULL)
+                                  THEN now() ELSE focused_at END
+                          WHERE id = ?" (:curriculum_id block) (:id next-block)]))))
+                (:id row)))))]
+    (when revision-id (bump! user-id))
     revision-id))
 
 (defn record-grade-charge!
@@ -950,7 +1136,16 @@
   (let [row (jdbc/execute-one! db/ds
               ["UPDATE curriculum_exam_sittings
                   SET self_correction_score = ?, self_correction_reason = ?
-                WHERE id = ? AND user_id = ? RETURNING id"
+                WHERE id = ? AND user_id = ?
+                  AND EXISTS (
+                    SELECT 1
+                      FROM curriculum_exam_forms f
+                      LEFT JOIN curriculum_materials m ON m.id = f.material_id
+                      JOIN curriculum_blocks b ON b.id = COALESCE(f.block_id, m.block_id)
+                      JOIN curricula c ON c.id = b.curriculum_id
+                     WHERE f.id = curriculum_exam_sittings.form_id
+                       AND c.staged_delete_id IS NULL)
+              RETURNING id"
                score reason sitting-id user-id] opts)]
     (require-owned! row :sitting sitting-id)
     (bump! user-id)))

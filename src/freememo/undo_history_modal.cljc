@@ -1,6 +1,7 @@
 (ns freememo.undo-history-modal
   "Undo/Actions UI: a modal listing the user's recent reversible actions
-   (12h / 100 cap, newest first). Each row reverses one action via the
+   (12h, newest first; staged deletions stay beyond the ordinary 100 cap).
+   Each row reverses one action via the
    :undo-entry command; Cmd-Z dispatches :undo-newest through the
    registry-driven keyboard layer. Rows whose target was touched by a newer
    action are shown as superseded and disabled (the hybrid ordering model —
@@ -40,6 +41,7 @@
          "remove-pin"         "Removed a pin"
          "reset-prompt"       "Reset a prompt"
          "delete-document"    "Deleted a document"
+         "delete-curriculum"  "Deleted a curriculum"
          "move-topic"         "Moved a topic"
          "reject-question"    "Rejected a question"
          "reject-fact"        "Rejected a fact"
@@ -122,7 +124,9 @@
                                  :label (action-label (:action_type e) (:entity_refs e))
                                  :time-str (format-ts (:occurred_at e))
                                  :card-text (card-cell e)
-                                 :source (source-cell titles (entry-source-ids e) (entry-card-count e))
+                                 :source (if (= "curriculum" et)
+                                           (:title (:snapshot e))
+                                           (source-cell titles (entry-source-ids e) (entry-card-count e)))
                                  :superseded? sup?})}))
           {:seen {} :rows []}
           entries)))))

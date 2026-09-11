@@ -147,3 +147,12 @@
                   (swap! bad conj [(first node) parameter]))))))))
     (is (empty? @bad)
       (str "An e/fn argument needs a capitalized parameter: " (pr-str @bad)))))
+
+(deftest curriculum-delete-dialog-states-the-recovery-boundary
+  (let [source (slurp "src/freememo/curriculum_page.cljc")]
+    (is (.contains source "stage-curriculum-for-deletion!")
+      "the dialog must stage the root instead of physically deleting it")
+    (is (.contains source "You can undo this for 12 hours.")
+      "the dialog must state the recovery deadline")
+    (is (.contains source "Imported documents stay.")
+      "the dialog must state that imported sources remain")))

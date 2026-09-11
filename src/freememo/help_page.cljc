@@ -74,7 +74,7 @@
             ["Order the work" "Use the arrow controls to move blocks and materials. Edit a material's minute estimate when the default is wrong."]
             ["Set the focus" "Make one available block the focus. Later blocks unlock after you pass the prior block exam. The override can skip that exam."]
             ["Track readiness" "Mark a material studied, build its Anki cards, and pass its exam. The curriculum schedule shows the next tasks and estimated finish."]
-            ["Edit or delete" "Edit schedule controls from the curriculum header. Use the pencil to rename a block. Delete curriculum removes its blocks and exams, but keeps imported documents."]]}
+            ["Edit or delete" "Edit schedule controls from the curriculum header. Use the pencil to rename a block. Delete curriculum hides its blocks and exams for 12 hours. Undo restores them. Imported documents stay."]]}
    {:title "Taking curriculum exams"
     :intro "Generate evidence-bound material and block exams, save answer drafts, and keep a reviewable grade history."
     :steps [["Generate an exam" "Select Generate exam on a material or block. Generation shows progress and survives page changes. Use Activity to monitor or cancel it."]
