@@ -193,7 +193,9 @@
                      (card-models/resolve-model "gemini-3.8-flash")
                      {:reasoning_effort "low"})))))
   (testing "an entry that permits none keeps it"
-    (doseq [id ["gpt-5.1" "gemini-3-flash" "claude-sonnet-5"]]
+    ;; Ling 3.0 Flash measured 2026-09-11: "none" returns HTTP 200 with 0
+    ;; reasoning tokens on both of its providers, DeepInfra and Novita.
+    (doseq [id ["gpt-5.1" "gemini-3-flash" "claude-sonnet-5" "ling-3.0-flash"]]
       (is (= "none" (:reasoning_effort
                       (openrouter/chat-completion-fields
                         (card-models/resolve-model id)

@@ -137,7 +137,28 @@
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true
     :provider {:sort "price"
-               :max_price {:prompt 0.15 :completion 0.50}}}])
+               :max_price {:prompt 0.15 :completion 0.50}}}
+   ;; A 124B MoE model with 5.1B active parameters. It reads text only, so the
+   ;; OCR registry has no entry for it. The one vision variant,
+   ;; `inclusionai/ling-3.0-flash-vl`, exists only as a `:free` route.
+   ;;
+   ;; Two providers serve it, and only DeepInfra accepts response_format. The
+   ;; structured lanes send `require_parameters true`, so card generation and the
+   ;; KG steps always run on DeepInfra. There they pay 0.06 / 0.18 per million
+   ;; tokens and get a 131K context. The assistant lane sends no such filter, and
+   ;; OpenRouter routed it to Novita: 0.021 / 0.063, a 65% discount with no stated
+   ;; end. A DeepInfra outage fails the structured lanes. That is a capability
+   ;; gap, not a pin, so no :provider object can fix it. Both providers list the
+   ;; same undiscounted price, so there is no overpay to cap either.
+   ;;
+   ;; Neither endpoint lists reasoning_effort, but OpenRouter accepts it and still
+   ;; routes it under require_parameters. Measured 2026-09-11 on both providers:
+   ;; "none" returns HTTP 200 with 0 reasoning tokens, so the Settings None works.
+   ;; "low" and "high" did not differ, so any value other than "none" means on.
+   {:id "ling-3.0-flash"
+    :label "inclusionAI · Ling 3.0 Flash"
+    :openrouter-model "inclusionai/ling-3.0-flash"
+    :supported-parameters json-and-reasoning-parameters}])
 
 (def retired
   "Entries withdrawn from the picker, kept because an :id is a durable settings
