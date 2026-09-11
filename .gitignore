@@ -51,3 +51,4 @@ logs/
 # Python test and script caches.
 __pycache__/
 *.py[cod]
+/.mcp.json
