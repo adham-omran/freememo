@@ -9,6 +9,268 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260910-3fc7485
+
+### For users
+
+- **Curriculum is a new tab for a study program you build from your own
+  documents.** You put imported material into ordered blocks. A long-form exam
+  decides when a block is complete, and Schedule plans your focus block first.
+  - **An exam asks five essay questions, and the AI grades your answers against
+    passages from your material.** The grader must cite a passage for every
+    deduction. A failed block exam can produce a targeted retry that stresses
+    the outcomes you missed.
+  - **A material can have its own exam too.** Its score guides your study and
+    unlocks nothing. You can also unlock the next block without a pass, and the
+    control says what it skips.
+  - **Each exam has its own page, and a reload keeps your place.** An answer
+    saves when you leave its box. The timer comes from the server, so a reload
+    20 minutes in still reads 20 minutes.
+  - **Exam generation takes minutes, so the server owns it.** A refresh does not
+    stop it, the Activity monitor can cancel it, and a deploy waits for it.
+  - **Every paid exam action states its cost.** Generate, Regenerate, Targeted
+    retry and Regrade each carry a credit note. After a run, the page shows what
+    FreeMemo charged, and AI Costs lists both exam operations.
+  - **You can cancel a sitting you started by mistake, then archive it.** A
+    cancelled sitting takes no answers and gets no grade. A submitted sitting
+    stays on the list, because a grade can already cite its answers.
+  - **A curriculum can be deleted and a block renamed.** Material search now
+    reaches every document you imported, and the kind row only narrows it.
+  - **The timed exam on the Quiz tab is now called Timed Quiz.** It works as
+    before. Its palette entry is `Start timed quiz…`.
+- **Focus reader shows a PDF as one document you read from top to bottom.** It
+  hides the PDF pane and centers the text in a column about 720px wide. Every
+  page joins into one scroll, with a `Page N` rule at each boundary.
+  - **Turn it on from the PDF toolbar or the palette.** FreeMemo remembers the
+    choice for each document.
+  - **An edit still belongs to its page.** A save splits the text back into the
+    page rows, so cards, extracts, search and `p. N` links on Anki notes stay
+    with their page.
+  - **Your page survives a deep link, a reload and leaving the mode.** Page
+    turns inside the mode are saved, so the document reopens where you stopped.
+  - **The format menu can restore a page boundary you deleted.** It restores the
+    lowest missing boundary. It never creates a new page.
+- **`Previous page` and `Next page` are palette commands with shortcuts.** Use
+  `⌘⇞` and `⌘⇟` on macOS, or `Alt+PgUp` and `Alt+PgDn` elsewhere.
+- **Scan Page keeps paragraphs whole.** It used to break a paragraph at every
+  printed line, so a page of four paragraphs could store forty. A word
+  hyphenated across two lines now joins again, so search can find it.
+- **The assistant streams its answers, and `Stop` ends one early.** Text appears
+  as the model writes it. A partial answer stays after a reload.
+  - **Each answer keeps the sources it used.** A citation opens a formatted
+    preview of its passage, with the cited text highlighted. `Answer details`
+    shows the model, the provider, token use, cost and the context the answer
+    read.
+  - **`Retry answer` sends the exact request of a failed answer again.** The
+    `/compact` command summarizes a long chat for later answers. The original
+    messages stay visible.
+  - **Web Search works with every assistant model.** You turn it on per chat,
+    and it starts off. Links from the web show apart from your document sources.
+  - **General mode answers from general knowledge when your material has no
+    answer.**
+  - **The viewer layout changed.** The assistant has the right rail. Hierarchy
+    and Pins share the left pane, and Hierarchy opens first. A new Settings
+    option, `Full workspace`, extends the assistant beside the card table.
+  - **An `@` reference stays in the message you send.** The reference menu
+    searches all your documents instead of showing eight matches.
+- **The knowledge graph starts from a search.** You filter by document and
+  relation, open a concept's neighborhood in rings by distance, and read its
+  facts in a docked panel. Long relation and fact lists render only the rows on
+  screen.
+- **Library, Learn and Home draw their layout at once and fill each part as its
+  data arrives.** Library sorts by Done and Synced without recomputing progress
+  on each visit. It loads a document's children only when you expand it.
+- **Library is easier to use on a phone.** Filters get fixed space, a document's
+  state reads as one compact line, and the row menu is a 44px touch target.
+- **Schedule changes.**
+  - **The schedule pill in the reading view names the schedule for the page you
+    are on.** A PDF split into a finished half and a live half used to show the
+    finished one.
+  - **A schedule past its target date shows a report instead of a warning.** It
+    says how long ago the target passed, what the schedule reached, and when
+    every carded page reaches your retention target. `Archive` sits in that
+    report.
+  - **Home tells you how many pages each schedule wants today.** The book name
+    links to the first unfinished page in that schedule's range.
+  - **`Tag range cards` adds one Anki tag to every pushed note in a schedule's
+    page range.** It reports the notes it tagged and the unpushed cards it
+    skipped.
+  - **The detail pane has one scroll bar, not two.**
+- **Anki review state is visible in FreeMemo.** Card rows in the viewer and in
+  Library show when a note is marked, suspended or carries Remarks. FreeMemo
+  reads that state live from Anki. Three palette commands find the next marked,
+  suspended or remarked card.
+  - **The editor of a pushed card can change that state.** Marked and Suspended
+    are toggles, and an edit to Remarks saves with the card. Occlusion and score
+    cards do not get these controls.
+- **PDF page completion responds at once.** The done control and the page count
+  change when you click. A failed save puts them back and shows an error.
+- **Add Card gains `Add & Keep` and `Freeze`.** `Add & Keep` adds the card and
+  keeps the modal open for the next one. `Freeze` keeps the front or the back
+  across cards. Card kind is now a dropdown, and a Basic card has a flip button.
+  - **`⌘\` (`Ctrl+\`) clears formatting from the selected text.**
+  - **A Basic card switched to Overlapping and back keeps its question and
+    answer.**
+- **The palette lists every command that applies, not the first 12.** New viewer
+  commands show and hide panes: `Toggle Assistant pane`, `Toggle Left pane`,
+  `Show Hierarchy`, `Show Pins` and `Toggle Card Table View`. The viewer keeps
+  that pane state after a reload.
+- **`Parse questions` in the format menu turns selected lines into Basic cards
+  with no AI call.** Each line must read `Question? Answer`, with one question
+  mark. One bad line rejects the whole selection, so you never get a partial
+  set. The lines that made cards are highlighted afterward.
+- **`Apply language to all code…` sets one language on every code block in a
+  document.** It also rewrites the code blocks in that document's cards. The
+  picker shows its progress while it works.
+- **Code blocks can highlight Zig and C.**
+- **A title keeps its slashes, backslashes and `\(TeX\)` delimiters.** "Foo /
+  Bar" used to become "Foo Bar". A downloaded PDF also keeps the title's own
+  characters in its filename, non-Latin scripts included.
+- **New models: Gemini 3.8 Flash and GLM 5.3 Flash.** Both appear wherever you
+  pick a model, OCR included. Gemini 3.8 Flash costs the same as 3.6 and scores
+  higher, but it is slower. Gemini 3.5 Flash is retired, because 3.6 is
+  cheaper, faster and scores higher.
+- **The Help page covers Schedule, Curriculum, exams and the new assistant
+  controls.**
+- **The Zotero plugin works with Zotero 10.** Install version 0.1.1 from the link
+  in Settings. It also stops listing child items and items in the trash.
+- Bug fix: **AnkiMobile could not find image occlusion masks.** Anki 26.05
+  lowercases media filenames, and FreeMemo kept uppercase names in the note.
+  Both sides now use lowercase.
+- Bug fix: **a slow card generation could save its cards and still report a
+  timeout.** The result of the work now decides the outcome.
+- Bug fix: **saving a card could scroll the document away from where you were
+  reading.**
+- Bug fix: **reasoning effort `None` made every call fail on Gemini 3.6 Flash and
+  Gemini 3.5 Flash-Lite.** Those models cannot turn reasoning off. FreeMemo now
+  sends the provider default for them, and for the two new models with the same
+  limit.
+
+### Known issues
+
+- **`Stop` does not stop the model call.** The server reads the rest of the
+  reply and records its cost. You keep only the text that arrived before you
+  clicked.
+- **The assistant keeps a record of every answer until you delete its chat.**
+  The record holds the context the answer read, its sources and the provider's
+  data. Deleting the chat removes all of it. Your credit ledger entries stay.
+- **With Web Search on, every message in that chat runs a web search first.** A
+  search can add to the cost of the message. A model with no search of its own
+  uses OpenRouter's fallback search engine.
+- **Pages you scanned before this update keep their line breaks.** Only a new
+  scan applies the new rule, and a scan costs credits. If you edited the OCR
+  prompt in Settings, press Reset to get the new default. The Mistral OCR model
+  reads no prompt, so it did not change. No billed scan has checked this change
+  yet.
+- **Focus reader is slow on very large PDFs.** Typing costs about 46ms per
+  keystroke at 883 pages. Leaving the mode holds the page for about two seconds
+  while the PDF viewer builds again.
+- **Deleting a `Page N` rule moves that page's text into the page above.** The
+  page itself stays, empty, until you restore its boundary from the format
+  menu. Focus reader cannot add a page.
+- **`Apply language to all code…` cannot be undone as one step.** `⌘Z` does not
+  reach it. Every card it rewrites becomes unsynced, and the card history keeps
+  the earlier version of each card. It has not run against the 707-block
+  document that froze the tab before the fix.
+- **An occlusion card synced before this update keeps its old mask names in
+  Anki.** This update does not mark those cards for sync. Contact me if
+  AnkiMobile still reports missing masks.
+- **A Gemini 3.5 Flash selection now runs Gemini 3.6 Flash, with no message.**
+  The stored choice is not rewritten. Old AI Costs rows keep the 3.5 name.
+- **Reasoning effort `None` has no effect on four models.** Gemini 3.6 Flash,
+  Gemini 3.8 Flash, Gemini 3.5 Flash-Lite and GLM 5.3 Flash always reason, and
+  reasoning tokens are billed.
+- **GLM 5.3 Flash has no fixed price.** OpenRouter sends each call to the
+  cheapest provider at or under 0.15 USD in and 0.50 USD out per million tokens.
+  The launch price came from a discount that ended on 2026-09-09.
+- **A title the old rule changed stays changed.** The removed characters are
+  gone. An imported code repository keeps its `a > b` titles until you import it
+  again.
+- **Zig highlighting follows Zig 0.8.** It still colors `async` and `await`, and
+  it does not know `addrspace`, `opaque` or `anyopaque`.
+- **Deleting a curriculum cannot be undone.** It removes the curriculum's exams,
+  and generating them again costs credits. The confirm dialog says so.
+- **Some of this has not been driven in a browser or against a real Anki.** That
+  covers cancelling and archiving an exam sitting, `Apply language to all
+  code…`, the Anki controls in the card editor, and `Tag range cards`. Tell me
+  what breaks.
+
+### Technical
+
+- Eleven new tables. `curricula`, `curriculum_blocks`, `curriculum_materials`,
+  `curriculum_exam_forms`, `curriculum_exam_sittings`,
+  `curriculum_grade_revisions` and `curriculum_unlock_overrides` hold the
+  curriculum. `assistant_runs`, `assistant_checkpoints` and `assistant_evidence`
+  hold one row per assistant turn, compaction checkpoint and retained excerpt.
+  `document_summaries` holds Library progress per root.
+- New columns: `assistant_chats.web_search`,
+  `assistant_chats.provider_session_id` (NOT NULL, unique),
+  `assistant_evidence.quoted_html`, and `curriculum_exam_sittings.draft_answers`,
+  `cancelled_at` and `archived_at`. A sitting is a sequence of event stamps, not
+  a status column. `idx_topic_repetitions_user_event_day` bounds the streak
+  query.
+- Statement-level triggers on `topics` and `flashcards` keep
+  `document_summaries` current, and `setup-schema-document-summaries!` rebuilds
+  every root once at boot. The Done and Synced sorts read it instead of running
+  recursive aggregates on navigation.
+- Account export covers 37 tables, up from 27: the seven curriculum tables and
+  the three assistant-run tables.
+- `freememo.page-merge` owns the merge and the split of a PDF's pages, and
+  `merged-page-bridge` owns scroll and restore. A marker is
+  `<h6 id="fm-page-N">`, and no marker reaches a stored row. A split writes only
+  the pages whose slice changed. `dctx/editor-doc-id` names the document the
+  editor holds, apart from the page's `topic-id`.
+- A focus-reader toggle wraps four branch swaps in `e/Reconcile`, which took
+  leaving the mode from 4487ms to 2070ms of long tasks. `DocumentBody` still
+  unmounts once per toggle, because `DocumentViewState` returns the body inside a
+  map. `plans/focus-reader-toggle-cost.md` records the fix.
+- The default OCR prompt drops `<br>` as a general element and adds a reflow
+  rule and a hyphen rule. Only the `:chat` lane sends it.
+- Every structured LLM lane asks for JSON, not EDN. `freememo.llm-json` replaces
+  `llm-edn`, and `structured_llm_contract_test` pins each lane's contract. An EDN
+  reply could reach a lazy JSON fallback whose Jackson error escaped the retry
+  boundary.
+- `openrouter/model-fields` turns a registry entry into `:model` and
+  `:provider`, so an entry can set its own routing. `kg-llm/chat!` takes those
+  fields. The `::call` signal logs the provider that served each call, and
+  `api-error` keeps `Retry-After` and the `X-RateLimit-*` headers in ex-data.
+- A retired registry entry keeps its id, its label and its successor, and
+  `effective-id` maps a stored id onto the successor at six read sites.
+  `:reasoning-mandatory?` drops `reasoning_effort` for entries that refuse
+  `none`.
+- Web Search sends `openrouter:web_search` with engine `auto` and
+  `tool_choice "required"`. Run metadata records `:web-search-requests`.
+- The assistant panel is split across `assistant-composer`, `-transcript`,
+  `-evidence`, `-run-details`, `-panel-data` and more namespaces.
+  `:assistant-rich-render?` (`ASSISTANT_RICH_RENDER`) is an operator switch that
+  shows completed answers as plain text.
+- `POST /api/client-reactor-failure` receives a beacon when the client reactor
+  dies. It carries bounded run identifiers and a content-free interaction trail.
+- Exam form generation is an Activity monitor type. `prod.cljc` installs a
+  shutdown hook that waits for accepted exam work up to its 20-minute timeout.
+  The reporter now closes only activities its own process observed.
+- Titles pass `input-check/sanitize-title`, which strips control characters
+  only. `input-check/content-disposition` writes a folded ASCII `filename` and
+  an RFC 8187 `filename*`.
+- Logs go out as one-line JSON, from the container and the rotated files, so
+  Loki keeps each event whole. Email alerts stay readable.
+- A blank Google OAuth credential now reads as absent. The boot check emits an
+  `:error` signal routed to email instead of a warning in `logs/app.log`, and
+  `auth-url` has a precondition.
+- `deploy.sh` pushes deploy state to a Pushgateway in two job groups. A failed
+  push never fails a deploy.
+- Vendored `highlightjs-zig` 1.0.2 in its own directory. No `deps.edn` change.
+- `/curriculum` is the fourteenth tab. Its exam routes dispatch inside
+  `CurriculumPage`, so they do not move the Routes count.
+- New Playwright probes drive focus reader, merged reading, toggle cost, the
+  schedule end state and the curriculum page. One more drives an assistant run
+  with only the provider stream stubbed.
+- `CLAUDE.md` gains six patterns, each from a defect that shipped. They cover
+  capitalized `e/fn` parameters, an `e/Offload` that reads what it writes,
+  identity keys for a reorderable `e/for`, and a `case` that remounts its
+  branch. They also cover an absent props map, and a nested `(e/server …)`
+  inside `e/for`. `AGENTS.md` carries the same guidance for other coding agents.
+
 ## v20260819-11689b6
 
 ### For users
