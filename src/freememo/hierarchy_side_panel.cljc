@@ -15,6 +15,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
    [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.command-bus :as bus]
@@ -225,7 +226,23 @@
           topic-status (or (:topics/status topic) "active")
           done? (= topic-status "done")
           expanded? expanded-display?
-          badge (side-panel-badge kind)]
+          badge (side-panel-badge kind)
+          open-topic! (fn [_]
+                        (when-not current?
+                          (cond
+                            (and is-page page-num !nav-target)
+                            (reset! !nav-target {:topic-id (:topics/parent_id topic)
+                                                 :page page-num})
+                            navigate!
+                            (navigate! :viewer (nav/nav-topic id nil)))))
+          toggle-children! (fn [e]
+                             (.stopPropagation e)
+                             (when-not current?
+                               (let [sn @!scroll-node
+                                     st (when sn (.-scrollTop sn))]
+                                 (swap! !expanded-set
+                                   (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                                 (util/restore-scroll-after-render! sn st))))]
       (dom/tr
         (dom/props {:style {:--order i}})
         (dom/td
@@ -244,18 +261,9 @@
           ;; draggable). Page stubs are structural — not draggable.
           (tree-dnd/DragDropRow! id (not is-page)
             !drag-src drag-src forbidden !drop-cmd)
-          (dom/On "click"
-            (fn [_]
-              (when-not current?
-                (cond
-                  ;; Same-document page jump (PDF/EPUB sibling pages) — only when caller provided !nav-target
-                  (and is-page page-num !nav-target)
-                  (reset! !nav-target {:topic-id (:topics/parent_id topic)
-                                       :page page-num})
-                  ;; Otherwise navigate to the topic
-                  navigate!
-                  (navigate! :viewer (nav/nav-topic id nil)))))
-            nil)
+          (when-not current?
+            (a11y/KeyActivate {:label (str "Open " title)} open-topic!))
+          (dom/On "click" open-topic! nil)
 
           (if has-children
             (dom/span
@@ -263,20 +271,12 @@
                                   :user-select "none" :text-align "center"
                                   :cursor "pointer"
                                   :color "var(--color-text-secondary)"}})
+              (when-not current?
+                (a11y/KeyActivate
+                  {:role "button" :label (str (if expanded? "Collapse " "Expand ") title)}
+                  toggle-children!))
               (dom/text (if expanded? "▼" "▶"))
-              (dom/On "click"
-                (fn [e]
-                  (.stopPropagation e)
-                  (when-not current?
-                    (let [sn @!scroll-node
-                          st (when sn (.-scrollTop sn))]
-                      (swap! !expanded-set
-                        (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                      ;; Anchor scroll across the async re-render (see
-                      ;; util/restore-scroll-after-render!): a single rAF
-                      ;; resets scrollTop to 0; re-apply over a few frames.
-                      (util/restore-scroll-after-render! sn st))))
-                nil))
+              (dom/On "click" toggle-children! nil))
             (dom/span
               (dom/props {:style {:width "14px" :flex-shrink "0"}})))
 

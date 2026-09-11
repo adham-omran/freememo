@@ -7,6 +7,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
+   [freememo.a11y :as a11y]
    [freememo.logging :as log]
    [freememo.math :as math]
    [freememo.navigation :as nav]
@@ -104,17 +105,20 @@
 (e/defn ResultRow [row i row-height navigate!]
   (e/client
     (let [{:keys [title kind snippet source-title]} row
-          [badge-text badge-color] (kind-badge kind)]
+          [badge-text badge-color] (kind-badge kind)
+          open-result! (fn [_] (click-nav! navigate! row))]
       (dom/tr
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
                             :cursor "pointer"
                             :--order i}})
-        (dom/On "click" (fn [_] (click-nav! navigate! row)) nil)
+        (dom/On "click" open-result! nil)
         ;; Column 1: kind badge + title
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                               :padding "4px 10px" :overflow "hidden"}})
+          (a11y/KeyActivate {:label (str "Open " (or title "untitled result"))}
+            open-result!)
           (dom/span
             (dom/props {:class "type-badge" :style {:background badge-color}})
             (dom/text badge-text))

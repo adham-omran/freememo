@@ -19,6 +19,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.a11y :as a11y]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
@@ -170,7 +171,12 @@
                                 (if (= 1 (:reviews c)) " review · " " reviews · ")
                                 (:date c)))
             (when (pos? (:reviews c))
-              (dom/On "click" (fn [_] (open-day! (:date c))) nil))))))))
+              (let [open! (fn [_] (open-day! (:date c)))]
+                (a11y/KeyActivate
+                  {:role "button"
+                   :label (str "Open " (:reviews c) " reviews for " (:date c))}
+                  open!)
+                (dom/On "click" open! nil)))))))))
 
 (e/defn FooterStat [label value]
   (e/client

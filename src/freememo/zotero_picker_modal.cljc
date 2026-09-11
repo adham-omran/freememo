@@ -14,6 +14,7 @@
      :done                    — navigated away
      :error                   — terminal; retry returns to :loading"
   (:require
+   [freememo.a11y :as a11y]
    [clojure.string :as str]
    [freememo.modal-shell :as modal]
    [hyperfiddle.electric3 :as e]
@@ -177,25 +178,27 @@
 
 (e/defn ItemCell [item i on-pick]
   (e/client
-    (dom/td
-      (dom/props {:style {:padding "6px 12px"
-                          :cursor "pointer"
-                          :display "flex" :flex-direction "column"
-                          :justify-content "center"
-                          :overflow "hidden"}})
-      (dom/On "click" (fn [_] (on-pick item)) nil)
-      (dom/div
-        (dom/props {:style {:font-size "14px" :font-weight "500"
-                            :color "var(--color-text-primary)"
-                            :white-space "nowrap" :overflow "hidden"
-                            :text-overflow "ellipsis"}})
-        (dom/text (or (:title item) "(Untitled)")))
-      (dom/div
-        (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                            :white-space "nowrap" :overflow "hidden"
-                            :text-overflow "ellipsis"
-                            :margin-top "2px"}})
-        (dom/text (format-meta item))))))
+    (let [pick! (fn [_] (on-pick item))]
+      (dom/td
+        (dom/props {:style {:padding "6px 12px"
+                            :cursor "pointer"
+                            :display "flex" :flex-direction "column"
+                            :justify-content "center"
+                            :overflow "hidden"}})
+        (a11y/KeyActivate {:label (str "Select " (or (:title item) "untitled item"))} pick!)
+        (dom/On "click" pick! nil)
+        (dom/div
+          (dom/props {:style {:font-size "14px" :font-weight "500"
+                              :color "var(--color-text-primary)"
+                              :white-space "nowrap" :overflow "hidden"
+                              :text-overflow "ellipsis"}})
+          (dom/text (or (:title item) "(Untitled)")))
+        (dom/div
+          (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
+                              :white-space "nowrap" :overflow "hidden"
+                              :text-overflow "ellipsis"
+                              :margin-top "2px"}})
+          (dom/text (format-meta item)))))))
 
 (e/defn VirtualItemList [filtered on-pick empty-message]
   (e/client

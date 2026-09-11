@@ -15,7 +15,7 @@
    into a drag.
      my-id      this row's topic-id
      draggable? false for structural rows that must not move (e.g. PDF pages);
-                such rows render no grip (they stay drop targets only)
+                such rows show a destination grip only while a move is active
      !drag-src  client atom holding the dragged id (nil when idle); dragstart
                 writes it, dragend clears it
      drag-src   (e/watch !drag-src)
@@ -53,8 +53,8 @@
             (.preventDefault e)
             (reset! !drop-cmd {:src drag-src :dst my-id})))
         nil)
-      ;; Drag-SOURCE side — a dedicated grip handle so the title text stays
-      ;; selectable. Structural rows (draggable? false) render no grip.
+      ;; Drag source and keyboard destination. Structural rows cannot start a
+      ;; move, but they expose a destination button while another move is armed.
       ;; `draggable` is an enumerated attribute: it needs the literal "true"
       ;; (a boolean true renders as draggable="" → "auto" → not draggable).
       ;;
@@ -66,9 +66,9 @@
       ;;   armed, source click again (or Escape) cancels
       ;;   armed, valid  click completes the move via !drop-cmd
       ;; Mouse drag continues to work — buttons are draggable.
-      (when draggable?
+      (when (or draggable? active?)
         (dom/button
-          (dom/props {:class "drag-grip" :draggable "true" :type "button"
+          (dom/props {:class "drag-grip" :draggable (if draggable? "true" "false") :type "button"
                       :aria-pressed (str source?)
                       :aria-label (cond
                                     source? "Cancel move"
@@ -85,7 +85,7 @@
             (fn [e]
               (.stopPropagation e)
               (cond
-                (nil? @!drag-src) (reset! !drag-src my-id)
+                (and draggable? (nil? @!drag-src)) (reset! !drag-src my-id)
                 (= @!drag-src my-id) (reset! !drag-src nil)
                 (and (not (contains? forbidden my-id)))
                 (do (reset! !drop-cmd {:src @!drag-src :dst my-id})

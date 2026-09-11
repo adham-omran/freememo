@@ -23,6 +23,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.a11y :as a11y]
    [freememo.icons :as icons]
    [freememo.question-curation :as curate]
    [freememo.quiz-heatmap :as heatmap]
@@ -357,6 +358,7 @@
         (dom/On "click" (fn [_] (open! id)) nil)
         (dom/td
           (dom/props {:class "tape-cell-click"})
+          (a11y/KeyActivate {:label "Open review details"} (fn [_] (open! id)))
           ;; dir="auto" on the text span only, NOT on the table: the .tape-scroll
           ;; grid is shared by a dozen sites, and one RTL row must not flip every
           ;; other row's columns (plans/quiz-rtl-support.md D5).
@@ -410,13 +412,18 @@
           review-day? (= "review" kind)
           result (if review-day?
                    (retention reviewed again)
-                   (session-score correct partial total))]
+                   (session-score correct partial total))
+          open! (fn [_]
+                  (if review-day?
+                    (open-day! key)
+                    (open-session! (parse-long key))))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
-        (dom/On "click"
-          (fn [_] (if review-day? (open-day! key) (open-session! (parse-long key))))
-          nil)
+        (dom/On "click" open! nil)
         (dom/td (dom/props {:class "tape-cell-click"})
+          (a11y/KeyActivate
+            {:label (if review-day? "Open review day" "Open quiz results")}
+            open!)
           (dom/span
             (dom/props {:class "type-badge"
                         :style {:background (case kind

@@ -6,6 +6,7 @@
    [hyperfiddle.electric-svg3 :as svg]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
    [freememo.bibliography-form :as bibform]
    [freememo.loading :as loading]
@@ -503,15 +504,17 @@
           display-title (or (:display-title item) "")
           id (:id item)
           source-container (:source-container item)
-          [badge-text badge-color] (bibform/topic-badge kind source-container)]
+          [badge-text badge-color] (bibform/topic-badge kind source-container)
+          open! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :role "row"
                     :style {:opacity (if inactive? "0.6" "1")
                             :--order i}})
-        (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-topic id :learn))) nil)
+        (dom/On "click" open! nil)
         (dom/td
           (dom/props {:role "cell" :class "learn-queue-document"})
+          (a11y/KeyActivate {:label (str "Open " display-title)} open!)
           (dom/span
             (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
             (dom/text badge-text))

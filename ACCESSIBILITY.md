@@ -40,10 +40,11 @@ sufficient — the manual checks below cover what axe cannot see.
 | Action | Keys |
 | --- | --- |
 | Skip past navigation | `Tab` (first stop) → `Enter` |
-| Activate a row (open topic / edit card / show diff) | `Tab` to the row cell → `Enter` or `Space` |
+| Activate a row (open topic, search result, transcript segment, review, exam, card, or diff) | `Tab` to the row cell → `Enter` or `Space` |
 | Expand/collapse a tree node | `Tab` to the arrow → `Enter` |
 | Sort a library column | `Tab` to the header → `Enter` |
-| Move (re-nest) a topic without dragging | `Tab` to the ⠿ grip → `Enter` arms the move → `Tab` to the destination row's grip → `Enter` completes; `Enter` on the armed grip or `Escape` cancels |
+| Move (re-nest) a topic without dragging | `Tab` to the ⠿ grip → `Enter` arms the move → `Tab` to any destination grip → `Enter` completes. `Enter` on the armed grip or `Escape` cancels. |
+| Open a review day from the heatmap | `Tab` to an active day → `Enter` or `Space` |
 | Resize panels/panes | `Tab` to the divider (`role=separator`) → arrow keys; double-click still resets the main split |
 | Command palette | `Cmd+K`; `↑`/`↓` or `Ctrl-n`/`Ctrl-p` (also `Cmd-p`) move selection; `Enter` runs; `Escape` closes. `Cmd-n` is browser-reserved (new window) and cannot be bound. |
 | Leave a rich-text editor | `Tab` / `Shift+Tab` move focus like any control (Quill's Tab-to-indent bindings are removed — WCAG 2.1.2); `Escape` also blurs |
@@ -119,8 +120,6 @@ stability across Electric's server-pushed re-renders.
 
 - User-picked **dark** Quill highlight colors defeat the forced-dark-text
   rule (assumes pastel highlights).
-- Click-move re-nesting cannot target rows without grips (PDF page stubs);
-  mouse drag can.
 - Tree rows cost up to 3 Tab stops each (cell, grip, arrow); roving
   tabindex / ARIA tree arrow-navigation is a known follow-up.
 - Responsive breakpoints are inconsistent (600/640/800px) — tracked

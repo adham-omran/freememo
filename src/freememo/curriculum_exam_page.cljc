@@ -20,6 +20,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.a11y :as a11y]
    [freememo.icons :as icons]
    [freememo.page-title :refer [PageTitle]]
    #?(:clj [freememo.curriculum :as curriculum])
@@ -539,17 +540,18 @@
   [navigate! breadcrumb form-id sitting]
   (e/client
     (let [cancelled? (some? (:cancelled_at sitting))
-          submitted? (some? (:submitted_at sitting))]
+          submitted? (some? (:submitted_at sitting))
+          open! (fn [_] (navigate! :curriculum
+                         {:type :curriculum-sitting
+                          :curriculum-id (:curriculum_id breadcrumb)
+                          :form-id form-id :sitting-id (:id sitting)}))]
       (dom/tr
         (dom/props {:class (str "curriculum-sitting-row"
                              (when cancelled? " is-cancelled"))})
-        (dom/On "click"
-          (fn [_] (navigate! :curriculum
-                    {:type :curriculum-sitting
-                     :curriculum-id (:curriculum_id breadcrumb)
-                     :form-id form-id :sitting-id (:id sitting)}))
-          nil)
-        (dom/td (dom/text (str (:started_at sitting))))
+        (dom/On "click" open! nil)
+        (dom/td
+          (a11y/KeyActivate {:label "Open exam sitting"} open!)
+          (dom/text (str (:started_at sitting))))
         (dom/td (dom/text (format-elapsed (:elapsed_seconds sitting))))
         (dom/td (dom/text (cond
                             cancelled? "—"

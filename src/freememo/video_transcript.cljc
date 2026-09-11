@@ -29,6 +29,7 @@
    ;; still comes from the jar — same split as library_cards.
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
+   [freememo.a11y :as a11y]
    [freememo.doc-context :as dctx]
    [freememo.commands :as commands]
    [freememo.video-pane :as vp]
@@ -209,21 +210,23 @@
    segment scrolled into it."
   [i row active?]
   (e/client
-    (dom/tr
-      (dom/props {:class (when active? "transcript-row--active")
-                  :aria-current (when active? "true")
-                  :style {:--order i :cursor "pointer"
-                          :border-bottom "1px solid var(--color-bg-subtle)"}})
-      (dom/On "click" (fn [_] (vp/seek-to! @dctx/!video-el (:start_ms row))) nil)
-      (dom/td
-        (dom/props {:style {:color "var(--color-text-secondary)" :font-size "12px"
-                            :font-variant-numeric "tabular-nums" :padding-inline "6px"
-                            :vertical-align "top" :white-space "nowrap"}})
-        (dom/text (format-ms (:start_ms row))))
-      (dom/td
-        (dom/props {:style {:font-size "13px" :line-height "1.35" :padding-inline "6px"
-                            :vertical-align "top" :overflow "hidden"}})
-        (dom/text (:text row))))))
+    (let [seek! (fn [_] (vp/seek-to! @dctx/!video-el (:start_ms row)))]
+      (dom/tr
+        (dom/props {:class (when active? "transcript-row--active")
+                    :aria-current (when active? "true")
+                    :style {:--order i :cursor "pointer"
+                            :border-bottom "1px solid var(--color-bg-subtle)"}})
+        (dom/On "click" seek! nil)
+        (dom/td
+          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "12px"
+                              :font-variant-numeric "tabular-nums" :padding-inline "6px"
+                              :vertical-align "top" :white-space "nowrap"}})
+          (a11y/KeyActivate {:label (str "Seek to " (format-ms (:start_ms row)))} seek!)
+          (dom/text (format-ms (:start_ms row))))
+        (dom/td
+          (dom/props {:style {:font-size "13px" :line-height "1.35" :padding-inline "6px"
+                              :vertical-align "top" :overflow "hidden"}})
+          (dom/text (:text row)))))))
 
 (e/defn TranscriptToolbar
   "Header row: segment count, the pipeline trigger, and the Copy action.

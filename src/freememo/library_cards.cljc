@@ -9,6 +9,7 @@
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
+   [freememo.a11y :as a11y]
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    [freememo.anki-sync-helpers :as helpers]
@@ -575,6 +576,7 @@
           (let [show-diff! (fn [e]
                              (.stopPropagation e)
                              (reset! !diff-card diff-payload))]
+            (a11y/KeyActivate {:label "Show Anki difference"} show-diff!)
             (dom/On "click" show-diff! nil)))
         (dom/span
           (dom/props {:style {:color (direction-color direction)}})
@@ -603,11 +605,12 @@
 ;; Front + Back cells — span2? kinds (cloze/occlusion/score/overlapping) span
 ;; both content columns with the back cell hidden. front-html/back-html are
 ;; built server-side (card-front-html) so every kind renders one way.
-(e/defn RowContentCells [span2? id front-html back-html]
+(e/defn RowContentCells [span2? id front-html back-html edit-card!]
   (e/client
     (dom/td
       (dom/props {:dir "auto"
                   :class (str "card-row-cell" (when span2? " card-cell-span2"))})
+      (a11y/KeyActivate {:label "Edit card"} edit-card!)
       (e/for-by identity [_k [(str "f-" id)]]
         (dom/div
           (dom/props {:class "card-row-html"})
@@ -629,6 +632,7 @@
       (let [open-document! (fn [e]
                              (.stopPropagation e)
                              (navigate! :viewer (nav/nav-topic topic-id :library)))]
+        (a11y/KeyActivate {:label (str "Open " doc-label)} open-document!)
         (dom/On "click" open-document! nil))
       (dom/span
         (dom/props {:class "card-cell-doc-label"})
@@ -755,7 +759,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
              :cloze cloze :note-id note-id})
           !diff-card)
         (RowKindCell kind)
-        (RowContentCells span2? id front-html back-html)
+        (RowContentCells span2? id front-html back-html edit-card!)
         (RowDocCell doc-label topic-id navigate!)
         (RowAddedCell added)
         (RowStatsCell id kind !stats)
@@ -1352,17 +1356,19 @@ bytecode cap in the :prod build, which dev compilation never emits.
 "
   [label col default-dir extra-class sort-col sort-dir !sort-col !sort-dir tip]
   (e/client
-    (dom/th
-      (dom/props {:class (str "cards-th-sortable" (when extra-class (str " " extra-class)))})
-      (when tip (tooltip/Tooltip! tip))
-      (dom/text (str label (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC"))))
-      (dom/On "click"
-        (fn [_]
-          (if (= col @!sort-col)
-            (swap! !sort-dir #(if (= % :asc) :desc :asc))
-            (do (reset! !sort-col col)
-              (reset! !sort-dir default-dir))))
-        nil))))
+    (let [sort! (fn [_]
+                  (if (= col @!sort-col)
+                    (swap! !sort-dir #(if (= % :asc) :desc :asc))
+                    (do (reset! !sort-col col)
+                      (reset! !sort-dir default-dir))))]
+      (dom/th
+        (dom/props {:class (str "cards-th-sortable" (when extra-class (str " " extra-class)))
+                    :aria-sort (when (= sort-col col)
+                                 (if (= sort-dir :asc) "ascending" "descending"))})
+        (a11y/KeyActivate {} sort!)
+        (when tip (tooltip/Tooltip! tip))
+        (dom/text (str label (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC"))))
+        (dom/On "click" sort! nil)))))
 
 ;; Fixed header table — sortable columns + select-all checkbox.
 ;; Takes COUNTS, not the id vector. Reading :filtered-ids in client scope — via

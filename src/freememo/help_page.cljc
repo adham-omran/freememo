@@ -141,12 +141,24 @@
             ["Use the Library on a phone" "Filters stack above the list, document progress uses a compact row, and the row menu provides a large action target."]
             ["Re-nest topics" "Use Hierarchy, the default left-panel tab. Drag a row by its ⠿ grip to a new parent. Switch to Pins for saved images. Press Esc to cancel a move."]
             ["Review a subset" "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."]]}
-   {:title "Keyboard & command palette"
-    :intro "Reach any action without hunting for its button."
-    :steps [["Command palette ({toggle-palette})" "Open the palette, type to fuzzy-search every action — including ones with no shortcut, like Distill facts or Start quiz — and press Enter to run it."]
-            ["While reading" "{scan} Scan page · {extract} Extract selection · {generate} Generate cards · {add-new} Add card · {done} Mark done."]
-            ["Anki" "{anki-sync} Sync with Anki · {quick-sync} Sync now."]
-            ["Undo" "{undo-newest} undoes your last action."]]}])
+   {:title "Control FreeMemo with the keyboard"
+    :intro "Use focus keys, the command palette, and contextual controls to operate FreeMemo without a pointer."
+    :steps [["Start with focus" "Press Tab to show the Skip to content link. Press Enter to bypass the navigation bar."]
+            ["Move between controls" "Press Tab to move forward. Press Shift+Tab to move backward. A visible ring shows the focused control."]
+            ["Activate controls" "Press Enter or Space to activate a focused button, row, result, card, review, exam, transcript segment, or heatmap day."]
+            ["Open any tab" "Open {toggle-palette}, type “Go to”, select a destination with the arrow keys, and press Enter."]
+            ["Use the command palette ({toggle-palette})" "Type to filter actions. Use ↑ and ↓ or Ctrl+n and Ctrl+p. Press Enter to run an action. Press Escape to close."]
+            ["Read documents" "{prev-page} and {next-page} change pages. {scan} scans a page. {done} marks it done."]
+            ["Make cards" "{extract} extracts selected text. {generate} generates cards. {add-new} opens a new card. {undo-newest} undoes the latest action."]
+            ["Sync Anki" "{anki-sync} opens Anki sync. {quick-sync} runs sync with the saved settings."]
+            ["Use tables and lists" "Focus a row and press Enter or Space. Focus a sortable header and press Enter or Space."]
+            ["Use the topic tree" "Focus an arrow and press Enter or Space to expand it. Focus the row to open the topic."]
+            ["Move a topic" "Activate its ⠿ grip. Tab to a destination grip and activate it. Press Escape to cancel."]
+            ["Use the graph" "Open Filters and use Find a concept. Type a name, use the arrow keys, and press Enter."]
+            ["Use rich-text editors" "Press Tab or Shift+Tab to leave an editor. Press Escape to remove focus from it."]
+            ["Use dialogs" "Press Tab or Shift+Tab to move inside a dialog. Press Escape to close it and restore focus."]
+            ["Resize panes" "Tab to a separator. Use the arrow keys to resize its adjacent panes."]
+            ["Spatial editors" "Score regions and image-occlusion masks require precise pointer input. All other documented workflows support keyboard control."]]}])
 
 (e/defn HelpPage []
   (e/client

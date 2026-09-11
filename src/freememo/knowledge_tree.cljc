@@ -279,6 +279,7 @@
           (dom/props {:role "cell" :class "library-document-main"
                       :style {:--row-indent (str (+ 31 (* depth 20)) "px")
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
+          (a11y/KeyActivate {:label (str "Open " title)} open-topic!)
           ;; Native drag-and-drop re-parenting lives on this cell (the tr is
           ;; display:contents → no box → not draggable). Page stubs are flattened
           ;; away under a root PDF, but a NESTED PDF's pages do render here — gate
@@ -289,6 +290,9 @@
               (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
                                   :font-size "12px" :cursor "pointer"
                                   :user-select "none" :text-align "center" :flex-shrink "0"}})
+              (a11y/KeyActivate
+                {:role "button" :label (str (if expanded? "Collapse " "Expand ") title)}
+                toggle-children!)
               (dom/text (if expanded? "▼" "▶"))
               (dom/On "click" toggle-children! nil))
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))

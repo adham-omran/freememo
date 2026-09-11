@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
    [freememo.bibliography-form :as bibform]
    [freememo.tooltip :as tooltip]
@@ -133,6 +134,8 @@
         (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
                        :font-weight "600" :font-size "13px" :color "var(--color-text-primary)" :cursor "pointer" :user-select "none"}
               arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
+              aria-sort (fn [col] (when (= sort-col col)
+                                    (if (= sort-dir :asc) "ascending" "descending")))
               toggle-sort! (fn [col]
                              (if (= col @!sort-col)
                                (swap! !sort-dir #(if (= % :asc) :desc :asc))
@@ -149,15 +152,21 @@
                 (dom/tr
                   (dom/props {:style {:display "contents"}})
                   (dom/th
-                    (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})})
+                    (dom/props {:aria-sort (aria-sort :document)
+                                :style (merge th-base {:text-align "left" :padding "8px 10px"})})
+                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :document)))
                     (dom/text (str "Document" (arrow :document)))
                     (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
                   (dom/th
-                    (dom/props {:style (merge th-base {:text-align "center"})})
+                    (dom/props {:aria-sort (aria-sort :done)
+                                :style (merge th-base {:text-align "center"})})
+                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :done)))
                     (dom/text (str "Done" (arrow :done)))
                     (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
                   (dom/th
-                    (dom/props {:style (merge th-base {:text-align "center"})})
+                    (dom/props {:aria-sort (aria-sort :synced)
+                                :style (merge th-base {:text-align "center"})})
+                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :synced)))
                     (dom/text (str "Synced" (arrow :synced)))
                     (dom/On "click" (fn [_] (toggle-sort! :synced)) nil)))))
 
@@ -175,18 +184,17 @@
                         (when item
                           (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
                                 [badge-text badge-color] (bibform/topic-badge kind source-container)
-                                is-pdf? (= kind "pdf")]
+                                is-pdf? (= kind "pdf")
+                                open! (fn [_] (navigate! :viewer (nav/nav-topic id :status)))]
                             (dom/tr
                               (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                   :cursor "pointer" :--order i}})
-                              (dom/On "click"
-                                (fn [_]
-                                  (navigate! :viewer (nav/nav-topic id :status)))
-                                nil)
+                              (dom/On "click" open! nil)
                               ;; Document + badge
                               (dom/td
                                 (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
                                                     :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
+                                (a11y/KeyActivate {:label (str "Open " title)} open!)
                                 (dom/span
                                   (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
                                   (dom/text badge-text))

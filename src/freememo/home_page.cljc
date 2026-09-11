@@ -150,10 +150,11 @@
           (dom/p
             (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
             (dom/a
-              (dom/props {:style {:font-weight "600" :color "var(--color-primary-text)" :cursor "pointer"
+              (dom/props {:href "/learn"
+                          :style {:font-weight "600" :color "var(--color-primary-text)" :cursor "pointer"
                                   :text-decoration "none"}})
               (dom/text (str queue-count " topics due"))
-              (dom/On "click" (fn [_] (navigate! :learn)) nil))
+              (dom/On "click" (fn [e] (.preventDefault e) (navigate! :learn)) nil))
             (dom/text (str " across " total-count " total"))))
 
         (dom/button
@@ -179,10 +180,11 @@
           (dom/props {:style {:text-align "center" :margin-bottom "40px"}})
           (when-not new-user?
             (dom/a
-              (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :cursor "pointer"
+              (dom/props {:href "/import"
+                          :style {:font-size "13px" :color "var(--color-text-secondary)" :cursor "pointer"
                                   :text-decoration "underline"}})
               (dom/text "or import more content")
-              (dom/On "click" (fn [_] (navigate! :import)) nil))))
+              (dom/On "click" (fn [e] (.preventDefault e) (navigate! :import)) nil))))
 
         (QuickLinks navigate!)
 

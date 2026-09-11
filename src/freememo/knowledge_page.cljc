@@ -11,6 +11,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.a11y :as a11y]
    [freememo.quiz-item-stats :as stats]
    [freememo.tape-table :refer [TapeTable]]
    [hyperfiddle.router5 :as r]
@@ -931,6 +932,7 @@
                             ;; unsuspend surface — but reads as withheld.
                             :opacity (if suspended "0.55" "1")}})
         (dom/td (dom/props {:class "tape-cell-click"})
+          (a11y/KeyActivate {:label "Edit question"} open!)
           (dom/On "click" open! nil)
           (dom/span (dom/props {:class "tape-cell-text"})
             (tooltip/Tooltip! question)
