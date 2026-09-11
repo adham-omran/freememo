@@ -8,10 +8,11 @@
    lifecycle means closing (unmounting) the modal never tears down an in-flight
    save.
 
-   Two per-SESSION client atoms (freememo.client-state):
+   Three per-SESSION client atoms (freememo.client-state):
      :pending-commands  vector of {:id :type :payload} — this tab's dispatch
                         queue; appended on submit, removed when the command acks.
      :pending-cards     map of tempid -> overlay entry — add-* row display only.
+     :pending-deletions map of command id -> member ids and deletion status.
 
    Per-session (not per-user) is the fix for cross-tab duplication: each tab
    drains its OWN queue, so a command is executed exactly once — by the tab that
@@ -36,7 +37,9 @@
    [freememo.client-state :as cs]
    [freememo.commands :as commands]
    #?(:clj [taoensso.telemere :as tel])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.toasts :as toasts])
+   #?(:clj [freememo.user-state :as us])
+   #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Client queue + overlay ops. Plain cljc; every call site is e/client-sited,
@@ -50,6 +53,40 @@
   (let [command (update command :id #(or % (random-uuid)))]
     (swap! (cs/get-atom :pending-commands) conj command)
     :enqueued))
+
+(defn enqueue-delete-card!
+  "Hide a row and enqueue its deletion outside the row lifecycle."
+  [member-ids]
+  (let [id (random-uuid)]
+    (swap! (cs/get-atom :pending-deletions) assoc id
+      {:member-ids (vec member-ids) :status :pending})
+    (enqueue! {:id id :type :delete-card :payload {:member-ids (vec member-ids)}})))
+
+(defn visible-card-indexes
+  "Hide deletions until this query includes their mutation revision."
+  ([row-member-ids deletions] (visible-card-indexes row-member-ids deletions 0))
+  ([row-member-ids deletions query-revision]
+   (let [hidden (into #{}
+                  (comp
+                    (filter (fn [{:keys [status card-revision]}]
+                              (or (= :pending status)
+                                  (nil? card-revision)
+                                  (< query-revision card-revision))))
+                    (mapcat :member-ids))
+                  (vals deletions))]
+     (into [] (keep-indexed (fn [i ids] (when-not (some hidden ids) i))) row-member-ids))))
+
+(e/defn VisibleCardIndexes [row-member-ids query-revision]
+  (e/client
+    ;; Keep confirmed entries for this session. Each view checks its own query revision.
+    ;; A filtered view cannot clear another view's deletion. A newer query can show an Undo result.
+    (visible-card-indexes row-member-ids (e/watch (cs/get-atom :pending-deletions)) query-revision)))
+
+(defn delete-anki-notes! [note-ids]
+  #?(:cljs (when (seq note-ids)
+             ((anki-call! "deleteNotes" {:notes (vec note-ids)})
+              (fn [_] nil) (fn [_] nil)))
+     :clj nil))
 
 (defn queued-page-done?
   "Return the effective done state for one PDF page. `persisted-done?` is the
@@ -142,6 +179,13 @@
    completion. Idempotent on a missing overlay entry (fire-and-forget commands)."
   [command result]
   (let [id (:id command)]
+    (when (= :delete-card (:type command))
+      (if (:ok? result)
+        (do
+          (swap! (cs/get-atom :pending-deletions) update id assoc
+            :status :confirmed :card-revision (:card-revision result))
+          (delete-anki-notes! (:anki-note-ids result)))
+        (swap! (cs/get-atom :pending-deletions) dissoc id)))
     (swap! (cs/get-atom :pending-cards)
       (fn [m] (if (contains? m id)
                 (update m id merge (if (:ok? result)
@@ -231,7 +275,9 @@
                         {:ok? false :error (.getMessage t)}))]
          (when (commands/command (:type command))
            (commands/bump! user-id (:type command)))
-         result))
+         (cond-> result
+           (= :delete-card (:type command))
+           (assoc :card-revision @(us/get-atom user-id :card-mutations)))))
      :cljs nil))
 
 (e/defn CommandDispatcher

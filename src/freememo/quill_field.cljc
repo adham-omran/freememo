@@ -502,28 +502,36 @@
      :clj nil))
 
 (defn schedule-quill-init!
-  "Schedule Quill init on the next tick (CLJS-only side effect).
-   Wrapper exists so the reader conditional lives in a plain defn — keeps
-   CLJ/CLJS signal counts identical inside the e/defn reactive body
-   (CLAUDE.md frame-mismatch rule)."
+  "Schedule editor initialization and return its cleanup function.
+   Cleanup cancels the timer and ignores a pending KaTeX callback.
+   Keep the reader conditional outside the Electric body to preserve peer signal counts."
   [!ed-state container value-string placeholder on-change !editor-atom cloze? autofocus?]
-  #?(:cljs (js/setTimeout
-             (fn []
-               ;; KaTeX gate INSIDE the existing tick, not replacing it: the tick
-               ;; is what lets Electric finish mounting the container first.
-               (math/on-katex-ready!
-                (fn [math?]
-                 (let [result (init-quill-field! container value-string placeholder on-change cloze? math?)
-                       ^js ed (:editor result)]
-                   ;; !ed-state holds the {:editor :teardowns} map for destroy;
-                   ;; !editor-atom + focus use the raw Quill instance.
-                   (reset! !ed-state result)
-                   (when !editor-atom (reset! !editor-atom ed))
-                   ;; Focus after construction — Quill has no autofocus option and
-                   ;; is built on this deferred tick, so the modal can't focus it at
-                   ;; mount. Focusing here lands the cursor in the editor on open.
-                   (when (and autofocus? ed) (.focus ed))))))
-             0)
+  #?(:cljs
+     (let [!active? (atom true)
+           timer (js/setTimeout
+                   (fn []
+                     (when (and @!active? (.-isConnected container))
+                       (math/on-katex-ready!
+                         (fn [math?]
+                           ;; A type switch can remove this field while KaTeX loads.
+                           (when (and @!active? (.-isConnected container))
+                             (let [result (init-quill-field! container value-string placeholder on-change cloze? math?)
+                                   ^js ed (:editor result)]
+                               (reset! !ed-state result)
+                               (when !editor-atom (reset! !editor-atom ed))
+                               (when (and autofocus? ed (.-isConnected container))
+                                 (.focus ed))))))))
+                   0)]
+       (fn []
+         (reset! !active? false)
+         (js/clearTimeout timer)
+         (let [state @!ed-state
+               ed (:editor state)]
+           (destroy-quill-field! state)
+           (reset! !ed-state nil)
+           ;; An old field must not clear the replacement field's editor.
+           (when (and !editor-atom (identical? ed @!editor-atom))
+             (reset! !editor-atom nil)))))
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
@@ -599,12 +607,7 @@
               ;; content carries across a Basic↔Cloze switch); without the
               ;; snapshot, each keystroke would change value-string and re-run
               ;; schedule-quill-init!, mounting a second Quill instance.
-              seed (e/snapshot value-string)]
-          ;; Schedule init via plain defn — reader conditional lives there,
-          ;; not in this reactive body (avoids CLJ/CLJS signal-count mismatch).
-          (schedule-quill-init! !ed-state dom/node seed placeholder on-change !editor-atom cloze? autofocus?)
-          (e/on-unmount
-            (fn []
-              (destroy-quill-field! @!ed-state)
-              (reset! !ed-state nil)
-              (when !editor-atom (reset! !editor-atom nil)))))))))
+              seed (e/snapshot value-string)
+              ;; Keep the client reader conditional inside the plain function.
+              cleanup! (schedule-quill-init! !ed-state dom/node seed placeholder on-change !editor-atom cloze? autofocus?)]
+          (e/on-unmount cleanup!))))))

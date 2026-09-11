@@ -20,6 +20,7 @@
             overlapping-row-html occlusion-row-html
             score-row-html try-delete-anki-notes!]]
    [freememo.card-rows :as rows]
+   [freememo.optimistic :as opt]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
    [freememo.quiz-item-stats :as stats]
@@ -396,7 +397,8 @@
 (defn query-user-cards* [_rev user-id opts]
   #?(:clj
      (try
-       (let [{:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
+       (let [card-revision @(us/get-atom user-id :card-mutations)
+             {:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
              ;; Collapse BEFORE filtering. Filtering first would leave
              ;; :member-ids holding only the members that matched, and the row
              ;; would then delete a subset of its own group.
@@ -413,7 +415,7 @@
                         (filter-cards-text text))
              sorted (sort-user-cards filtered sort-col sort-dir)
              states (into [] (mapcat :member-states) sorted)]
-         {:success true
+         {:success true :card-revision card-revision
           ;; Only the trimmed summary crosses the wire; counts/ids/manifest
           ;; below still derive from the full `sorted`/`all` rows.
           :cards (mapv card-list-summary sorted)
@@ -1401,7 +1403,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; the rows render nothing, so the differential stays mounted and empty.
 ;; position:relative is inline, not on the shared .tape-scroll class — this is
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
-(e/defn CardsTableBody [cards-vec row-count row-height font-sz filters-active? scroll-reset-key
+(e/defn CardsTableBody [cards-vec query-revision row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
                         user-id anki-overlay !stats]
   (e/client
@@ -1419,7 +1421,10 @@ bytecode cap in the :prod build, which dev compilation never emits.
       (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
                           :max-height (str (* 10 row-height) "px")
                           :scrollbar-gutter "stable" :position "relative"}})
-      (let [[offset limit] (Scroll-window row-height row-count dom/node
+      (let [row-member-ids (e/server (mapv :member-ids cards-vec))
+            visible-indexes (opt/VisibleCardIndexes row-member-ids query-revision)
+            row-count (count visible-indexes)
+            [offset limit] (Scroll-window row-height row-count dom/node
                              {:overquery-factor 1.5 :reset-key scroll-reset-key})]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
@@ -1431,8 +1436,10 @@ bytecode cap in the :prod build, which dev compilation never emits.
                       ;; display:block + column template live in index.css (C1c).
                       :style {:width "100%" :font-size (str font-sz "px")}})
           (e/for [i (Tape offset limit)]
-            (let [card (e/server (nth cards-vec i nil))]
-              (when card
+            (let [source-index (nth visible-indexes i nil)
+                  card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
+                  card (second card-result)]
+              (when (and card (= source-index (first card-result)))
                 (LibraryCardRow card navigate! !editing-card !diff-card !selected
                   selected user-id i anki-overlay !stats)))))
         ;; Sibling overlay — never a branch that unmounts the table above.
@@ -1469,7 +1476,6 @@ bytecode cap in the :prod build, which dev compilation never emits.
                      !editing-card !diff-card !stats]
   (e/client
     (let [cards-vec (e/server (vec (:cards result)))
-          row-count (e/server (or (:count result) 0))
           ;; Counts only. Both of these are ints on the wire; the row vector
           ;; itself never leaves the server on a filter change. `selected-keys`
           ;; crosses server-ward instead — #{} in the common case, and unchanged
@@ -1485,7 +1491,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTableHeader result filtered-count all-filtered-selected? !selected !sort-col !sort-dir)
 
-      (CardsTableBody cards-vec row-count row-height font-sz filters-active? scroll-reset-key
+      (CardsTableBody cards-vec (e/server (:card-revision result)) row-height font-sz filters-active? scroll-reset-key
         navigate! !editing-card !diff-card !selected selected
         user-id anki-overlay !stats))))
 

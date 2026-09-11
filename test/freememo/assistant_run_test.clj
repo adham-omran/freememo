@@ -138,7 +138,7 @@
         !reveal (atom false)
         !revision (atom 0)]
     (card-modals/switch-add-card-kind!
-      !kind !primary !answer !ol-question !ol-items !revision "overlapping")
+      !kind !primary !answer !ol-question !ol-items "overlapping")
     (is (= "overlapping" @!kind))
     (is (= "Question" @!ol-question))
     (is (= "Answer" @!ol-items))
@@ -146,7 +146,7 @@
     (reset! !ol-question "Changed question")
     (reset! !ol-items "Changed answer")
     (card-modals/switch-add-card-kind!
-      !kind !primary !answer !ol-question !ol-items !revision "basic")
+      !kind !primary !answer !ol-question !ol-items "basic")
     (is (= "Changed question" @!primary))
     (is (= "Changed answer" @!answer))
 

@@ -1,6 +1,7 @@
 (ns freememo.optimistic-test
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.optimistic :as optimistic]
+            [freememo.client-state :as cs]
             [freememo.home-page :as home]))
 
 (deftest queued-page-done-prefers-the-last-explicit-request
@@ -55,3 +56,44 @@
            {:id 2 :pages-today 0 :next-page-number 4}
            {:id 3 :pages-today -2 :next-page-number 5}
            {:id 4 :pages-today 1 :next-page-number nil}]))))
+
+(deftest deleting-a-row-hides-it-before-server-completion
+  (let [queue (cs/get-atom :pending-commands)
+        deletions (cs/get-atom :pending-deletions)
+        old-queue @queue
+        old-deletions @deletions
+        rows [[11] [21 22] [31]]]
+    (try
+      (reset! queue [])
+      (reset! deletions {})
+      (optimistic/enqueue-delete-card! [21 22])
+      (let [command (first @queue)]
+        (is (= :delete-card (:type command)))
+        (is (= [21 22] (get-in command [:payload :member-ids])))
+        (is (= [0 2] (optimistic/visible-card-indexes rows @deletions)))
+        (testing "failure restores the row and removes the command"
+          (optimistic/ack-command! command {:ok? false :error "Delete failed"})
+          (is (= [0 1 2] (optimistic/visible-card-indexes rows @deletions)))
+          (is (empty? @queue))))
+      (testing "confirmation keeps the row hidden while the old query remains"
+        (optimistic/enqueue-delete-card! [11])
+        (optimistic/ack-command! (first @queue) {:ok? true :anki-note-ids []})
+        (is (= [1 2] (optimistic/visible-card-indexes rows @deletions)))
+        (is (empty? @queue)))
+      (finally
+        (reset! queue old-queue)
+        (reset! deletions old-deletions)))))
+
+(deftest confirmed-deletions-follow-each-query-revision
+  (let [deletions {:delete-1 {:member-ids [21 22] :status :confirmed :card-revision 5}}
+        old-rows [[11] [21 22] [31]]]
+    (testing "an older query hides the deleted group"
+      (is (= [0 2] (optimistic/visible-card-indexes old-rows deletions 4))))
+    (testing "an unrelated filtered view cannot clear the deletion"
+      (is (= [0] (optimistic/visible-card-indexes [[11]] deletions 5)))
+      (is (= [0 2] (optimistic/visible-card-indexes old-rows deletions 4))))
+    (testing "a query after Undo can show the restored group"
+      (is (= [0 1 2] (optimistic/visible-card-indexes old-rows deletions 6))))
+    (testing "pending deletes hide rows at every query revision"
+      (is (= [0 2] (optimistic/visible-card-indexes old-rows
+                       (assoc-in deletions [:delete-1 :status] :pending) 6))))))

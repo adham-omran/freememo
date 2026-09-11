@@ -17,6 +17,7 @@
    [freememo.score-toolbar :refer [ScoreEditLoader]]
    [freememo.client-state :as cs]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [taoensso.telemere :as tel])
    [freememo.optimistic :as opt]))
 
@@ -35,18 +36,19 @@
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
 ;; For child topics (extracts, pages), fetches cards for that specific topic.
-(defn get-cards-for-topic* [_refresh topic-id]
+(defn get-cards-for-topic* [_refresh topic-id user-id]
   #?(:clj (try
             (if-not topic-id
-              {:success true :cards []}
-              (let [topic (db/get-topic topic-id)
+              {:success true :cards [] :card-revision @(us/get-atom user-id :card-mutations)}
+              (let [card-revision @(us/get-atom user-id :card-mutations)
+                    topic (db/get-topic topic-id)
                     is-root? (nil? (:topics/parent_id topic))
                     cards (if is-root?
                             (db/get-all-flashcards topic-id)
                             (db/get-flashcards topic-id))]
                 ;; One row per authoring group, matching /library/cards — an
                 ;; occlusion group is ONE row here too (freememo.card-rows).
-                {:success true :cards (rows/collapse-groups cards)}))
+                {:success true :cards (rows/collapse-groups cards) :card-revision card-revision}))
             (catch Exception e
               (tel/error! {:id ::get-cards-for-topic :data {:topic-id topic-id}} e)
               {:success false :error (.getMessage e)}))
@@ -56,7 +58,7 @@
   (e/client
     (let [topic-id dctx/page-topic-id card-font-size dctx/card-font-size user-id dctx/user-id
           refresh dctx/card-refresh
-          cards-result (e/server (e/Offload #(get-cards-for-topic* refresh topic-id)))
+          cards-result (e/server (e/Offload #(get-cards-for-topic* refresh topic-id user-id)))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)
           !anki-status (atom :idle)
@@ -87,10 +89,11 @@
       ;; library_cards/CardsResultRegion.
       (if (e/server (:success cards-result))
         (let [cards-vec (e/server (vec (:cards cards-result)))
-              row-count (e/server (count cards-vec))
+              row-member-ids (e/server (mapv :member-ids cards-vec))
+              visible-indexes (opt/VisibleCardIndexes row-member-ids (e/server (:card-revision cards-result)))
+              row-count (count visible-indexes)
               card-count (e/server (rows/card-count cards-vec))
               manifest (e/server (review/pushed-manifest cards-vec))
-              row-member-ids (e/server (mapv :member-ids cards-vec))
               anki-overlay (review-overlay/AnkiOverlay
                              user-id manifest !anki-status !anki-payload !anki-check-tick)
               review-target (e/watch !review-target)
@@ -120,7 +123,9 @@
               ;; alone would leave the pending row up forever.
               present-ids (e/server (set (mapcat :member-ids cards-vec)))
               overlay-entries (opt/visible-pending-cards pending-map topic-id present-ids)
-              landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)]
+              landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)
+              pending-count (count overlay-entries)
+              total-row-count (+ pending-count row-count)]
           ;; Auto-forget confirmed overlay entries once their cards have landed
           ;; in the refetched list (keeps :pending-cards from accumulating). The
           ;; forget mutates the overlay (unmounting this branch), so it fires from
@@ -135,7 +140,7 @@
             (let [scroll-node dom/node
                   find-next! (fn [state]
                                (let [matches (review/matching-row-indexes
-                                               row-member-ids anki-overlay state)
+                                               (mapv #(nth row-member-ids %) visible-indexes) anki-overlay state)
                                      target (review/next-row-index
                                               matches (get @!review-cursors state -1))]
                                  (if (some? target)
@@ -145,7 +150,7 @@
                                      (reset! !review-message
                                        (str (review-state-label state) " card " position
                                          " of " (count matches)))
-                                     (scroll-to-card-row! scroll-node (* target row-height)))
+                                     (scroll-to-card-row! scroll-node (* (+ pending-count target) row-height)))
                                    (do
                                      (reset! !review-target nil)
                                      (reset! !review-message
@@ -172,14 +177,14 @@
                   (dom/span
                     (dom/props {:class "card-review-message"})
                     (dom/text " · " review-message)))))
-            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
+            (let [[offset limit] (Scroll-window row-height total-row-count dom/node {:overquery-factor 2})
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
                                               (:flashcards/cloze first-card))))]
               (dom/props {:class "tape-scroll"
                           ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                           ;; --count → table height (scroll range), --grid-cols → the row grid.
-                          :style {:--count row-count :--row-height (str row-height "px")
+                          :style {:--count total-row-count :--row-height (str row-height "px")
                                   :--grid-cols "24px 1fr 1fr 40px"}})
               (dom/table
                 (dom/props {:dir (if rtl? "rtl" "ltr")
@@ -191,22 +196,23 @@
                                     :table-layout "fixed"
                                     :font-size (str font-sz "px")
                                     :direction (if rtl? "rtl" "ltr")}})
-                ;; Optimistic pending/error rows above the real cards.
-                (e/for [entry (e/diff-by :tempid overlay-entries)]
-                  (PendingCardRow entry user-id))
-                (if (pos? row-count)
-                  (e/for [i (Tape offset limit)]
-                    (let [card (e/server (nth cards-vec i nil))]
-                      (when card
-                        (CardRow card !editing-card user-id i anki-overlay (= i review-target)))))
-                  (when (empty? overlay-entries)
-                    (dom/tr
-                      ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
-                      (dom/props {:style {:height "auto"}})
-                      (dom/td
-                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                            :color "var(--color-text-hint)" :font-size "13px"}})
-                        (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))))))
+                ;; Pending and saved rows share one index space.
+                (e/for [[i entry] (e/diff-by (comp :tempid second) (map-indexed vector overlay-entries))]
+                  (PendingCardRow entry user-id i))
+                (e/for [i (Tape offset limit)]
+                  (let [visible-index (- i pending-count)
+                        source-index (nth visible-indexes visible-index nil)
+                        card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
+                        card (second card-result)]
+                    (when (and card (= source-index (first card-result)))
+                      (CardRow card !editing-card user-id i anki-overlay (= visible-index review-target)))))
+                (when (zero? total-row-count)
+                  (dom/tr
+                    (dom/props {:style {:height "auto"}})
+                    (dom/td
+                      (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                          :color "var(--color-text-hint)" :font-size "13px"}})
+                      (dom/text "No cards yet. Use the Generate button above to create flashcards from this content."))))))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (e/server (:error cards-result))))))))

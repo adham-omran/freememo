@@ -113,12 +113,12 @@
    kind selects here is what lets one shape serve both."
   [kind {:keys [question answer cloze ol-question ol-items-html ol-before ol-reveal]}]
   (case kind
-    "overlapping" {:question ol-question
+    "overlapping" {:kind kind :question ol-question
                    :items (quill-html->items ol-items-html)
                    :before (ol-before-int ol-before)
                    :reveal? (boolean ol-reveal)}
-    "basic" {:primary question :answer answer}
-    {:primary cloze :answer answer}))
+    "basic" {:kind kind :primary question :answer answer}
+    {:kind kind :primary cloze :answer answer}))
 
 (defn copy-prefill
   "What AddCardModal must be seeded with to open a copy of an authored card.
@@ -174,7 +174,7 @@
   "Move one add-modal draft between card-kind layouts.
    Pre: every argument atom belongs to the same modal. Post: Basic and
    Overlapping exchange their raw front/back fields before the target mounts."
-  [!kind !primary !answer !ol-question !ol-items-html !draft-revision next-kind]
+  [!kind !primary !answer !ol-question !ol-items-html next-kind]
   (let [current-kind @!kind]
     (when (not= current-kind next-kind)
       (when (or (= current-kind "overlapping") (= next-kind "overlapping"))
@@ -185,8 +185,7 @@
           (do
             (reset! !primary @!ol-question)
             (reset! !answer @!ol-items-html))))
-      (reset! !kind next-kind)
-      (swap! !draft-revision inc))))
+      (reset! !kind next-kind))))
 
 (defn flip-basic-card-fields!
   "Swap the Basic card's front and back, then remount its editors."
@@ -199,19 +198,22 @@
 (defn clear-add-card-draft!
   "Clear a successful Add & Keep draft according to its frozen side.
    Post: :front retains the first editable field; :back retains the second;
-   :none clears both. Overlapping settings return to their authoring defaults."
+   :both retains both fields and settings. Other modes reset Overlapping settings."
   [freeze-side kind !primary !answer !ol-question !ol-items-html !ol-before !ol-reveal]
   (if (= kind "overlapping")
     (case freeze-side
+      :both nil
       :front (reset! !ol-items-html "")
       :back (reset! !ol-question "")
       (do (reset! !ol-question "") (reset! !ol-items-html "")))
     (case freeze-side
+      :both nil
       :front (reset! !answer "")
       :back (reset! !primary "")
       (do (reset! !primary "") (reset! !answer ""))))
-  (reset! !ol-before "1")
-  (reset! !ol-reveal true))
+  (when (not= :both freeze-side)
+    (reset! !ol-before "1")
+    (reset! !ol-reveal true)))
 
 (defn add-command-card-data
   "Translate one parsed Add-card command into the optimistic card shape."
@@ -786,7 +788,6 @@
                                       :border-bottom "1px solid var(--color-border)"}})
             (dom/text "Edit " (cond (= kind "overlapping") "Overlapping"
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
-          (AnkiNoteActions anki-note-id !save-anki-remarks)
           (cond
             (= kind "overlapping")
             (OverlappingPane !ol-question !ol-question-editor ol-question [:edit-ol-q card-id]
@@ -820,6 +821,9 @@
                 (QuillField init-a
                   (fn [html] (reset! !answer html))
                   "Optional back extra..." [:edit-be card-id] !a-editor nil nil))))
+          (dom/div
+            (dom/props {:style {:margin-top "var(--sp-3)"}})
+            (AnkiNoteActions anki-note-id !save-anki-remarks))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (let [[click-event btn-node]
@@ -976,6 +980,25 @@
       (case (reset! !request (assoc (snapshot!) :id (str (random-uuid))))
         (token)))))
 
+(e/defn FreezeCardField [!freeze-side]
+  (dom/label
+    (dom/props {:style {:display "flex" :align-items "center"
+                        :gap "var(--sp-1)" :font-size "12px"}})
+    (dom/text "Freeze")
+    (dom/select
+      (dom/props {:class "input" :value (name (e/watch !freeze-side))
+                  :aria-label "Freeze card field"})
+      (dom/option (dom/props {:value "none"}) (dom/text "None"))
+      (dom/option (dom/props {:value "front"}) (dom/text "Freeze Front"))
+      (dom/option (dom/props {:value "back"}) (dom/text "Freeze Back"))
+      (dom/option (dom/props {:value "both"}) (dom/text "Freeze Both"))
+      (dom/On "change"
+        (fn [event]
+          (reset! !freeze-side (keyword (.. event -target -value))))
+        nil)))
+  ;; This preference is not a Forms5 edit.
+  (e/amb))
+
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 ;;
 ;; Serves two acts, told apart by `copy-source` alone. nil = compose a card from
@@ -984,7 +1007,7 @@
 ;; that card's `composed-card` shape.
 ;;
 ;; ONE parameter carries the whole difference on purpose. A copy differs in four
-;; ways — its title, its locked kind, its suppressed topic pins, and the Save
+;; ways — its title, its source identity, its suppressed topic pins, and the Save
 ;; guard — and separate flags for each could be set inconsistently (pins on with
 ;; a source set would silently add images the source never had). Derived from one
 ;; value, the four cannot disagree.
@@ -1042,7 +1065,6 @@
           ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
           ol-reveal (e/watch !ol-reveal)
-          freeze-side (e/watch !freeze-side)
           draft-revision (e/watch !draft-revision)
           keep-request (e/watch !keep-request)
           [keep-token keep-error] (e/Token keep-request)
@@ -1098,8 +1120,8 @@
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
             (dom/text modal-title))
-          ;; Copy keeps the source kind and retains its existing Save flow.
-          (when-not copy?
+          ;; Copies can use any supported card type.
+          (do
             (dom/div
               (dom/props {:style {:display "flex" :align-items "center"
                                   :gap "var(--sp-2)" :margin-bottom "var(--sp-4)"}})
@@ -1119,10 +1141,11 @@
                       (dom/text (:label option))))
                   (dom/On "change"
                     (fn [event]
-                      (flush!)
-                      (switch-add-card-kind! !card-kind !primary !answer
-                        !ol-question !ol-items-html !draft-revision
-                        (.. event -target -value)))
+                      ;; Flushing editors can restore the previous DOM selection.
+                      (let [next-kind (.. event -target -value)]
+                        (flush!)
+                        (switch-add-card-kind! !card-kind !primary !answer
+                          !ol-question !ol-items-html next-kind)))
                     nil)))
               (when (= kind "basic")
                 (dom/button
@@ -1190,21 +1213,7 @@
                                 (forms/SubmitButton! :label (if copy? "Save" "Add") :class "btn btn-primary"
                                   :style {:border-radius "var(--radius-sm)" :order "1"})
                                 (when-not copy?
-                                  (dom/label
-                                    (dom/props {:style {:display "flex" :align-items "center"
-                                                        :gap "var(--sp-1)" :font-size "12px"}})
-                                    (dom/text "Freeze")
-                                    (dom/select
-                                      (dom/props {:class "input" :value (name freeze-side)
-                                                  :aria-label "Freeze card field"})
-                                      (dom/option (dom/props {:value "none"}) (dom/text "None"))
-                                      (dom/option (dom/props {:value "front"}) (dom/text "Freeze Front"))
-                                      (dom/option (dom/props {:value "back"}) (dom/text "Freeze Back"))
-                                      (dom/On "change"
-                                        (fn [event]
-                                          (reset! !freeze-side
-                                            (keyword (.. event -target -value))))
-                                        nil))))
+                                  (FreezeCardField !freeze-side))
                                 (when-not copy?
                                   (AddKeepButton keep-snapshot! !keep-request))
                                 (AddCancelButton close!))))

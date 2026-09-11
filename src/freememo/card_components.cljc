@@ -6,7 +6,7 @@
    [freememo.a11y :as a11y]
    [clojure.string :as str]
    [freememo.logging :as log]
-   [freememo.commands :as commands]
+   #?(:clj [freememo.toasts :as toasts])
    [freememo.anki-review :as review]
    [freememo.occlusion-ordinals :as ord]
    [freememo.math :as math]
@@ -63,33 +63,23 @@
         (fn [_] nil)))
      :clj nil))
 
-;; Delete button — bumps per-user :card-mutations on success
-;; Takes a display row's :member-ids, so pressing it on an occlusion or score
-;; row deletes every card that row stands for (freememo.card-rows). A plain
-;; card passes a one-element vector.
+#?(:clj
+   (defmethod opt/run-command! :delete-card [user-id {:keys [payload]}]
+     (let [result (cards/delete-card-row! user-id (:member-ids payload))]
+       (when-not (:success result)
+         (toasts/push! user-id {:level :error :message (or (:error result) "Could not delete card.")}))
+       (assoc result :ok? (:success result)))))
+
 (e/defn DeleteCardButton [member-ids user-id]
   (e/client
     (dom/button
-      (dom/props {:class "btn-delete-x"})
+      (dom/props {:class "btn-delete-x" :title "Delete card"})
       (dom/text "\u00D7")
-      (let [click-event (dom/On "click" (fn [e] (.stopPropagation e) member-ids) nil)
+      (let [click-event (dom/On "click" (fn [event] (.stopPropagation event) member-ids) nil)
             [t ?error] (e/Token click-event)]
-        (dom/props {:disabled (some? t)
-                    :class "btn-delete-x"
-                    :style {:background (if (some? t) "var(--color-text-hint)" "var(--color-danger)")
-                            :cursor (if (some? t) "not-allowed" "pointer")}})
-        (when ?error
-          (dom/div
-            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px"}})
-            (dom/text ?error)))
         (when t
-          (let [result (e/server (e/Offload #(cards/delete-card-row! user-id click-event)))]
-            (when (some? result)
-              (if (:success result)
-                (case (e/server (commands/bump! user-id :delete-card))
-                  (case (e/client (try-delete-anki-notes! (:anki-note-ids result)))
-                    (t)))
-                (t (:error result))))))))))
+          (e/on-unmount #(opt/enqueue-delete-card! click-event))
+          (t))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Staleness — the Clojure restatement of `db/unsynced-sql`
@@ -415,7 +405,7 @@
           (e/on-unmount #(opt/forget-pending! tempid))
           (t))))))
 
-(e/defn PendingCardRow [entry user-id]
+(e/defn PendingCardRow [entry user-id row-index]
   (e/client
     (let [tempid (:tempid entry)
           status (:status entry)
@@ -428,7 +418,7 @@
                "var(--color-success-light)")]   ; pending + confirmed both light-green
       (dom/tr
         (dom/props {:class "pending-card-row"
-                    :style {:--order 0 :background bg
+                    :style {:--order row-index :background bg
                             :transition "background-color 0.3s ease"}})
         ;; Status indicator
         (dom/td
