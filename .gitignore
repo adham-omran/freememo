@@ -38,6 +38,7 @@ logs/
 /playwright/fixtures/out/
 /playwright/reports/
 /playwright/test-results/
+/playwright/probe-out/
 /playwright/playwright-report/
 # Playwright writes its run state beside the invoking directory, which is the
 # repo root whenever a command runs from there.

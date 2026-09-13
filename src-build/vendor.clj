@@ -37,7 +37,7 @@
   {:pdf.js "3.11.174", :highlight.js "11.9.0", :quill "2.0.3",
    :quill-resize-module "2.1.3", :konva "9.3.16", :graphology "0.26.0",
    :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11",
-   :highlightjs-zig "1.0.2"})
+   :highlightjs-zig "1.0.2", :amiri "5.3.0"})
 
 (defn- v [lib] (get versions lib))
 (def ^:private cdnjs "https://cdnjs.cloudflare.com/ajax/libs")
@@ -52,7 +52,7 @@
    production. Nothing to vendor; the behaviour is unchanged."
   (let [pdf (v :pdf.js), hl (v :highlight.js), q (v :quill), rs (v :quill-resize-module)
         kv (v :konva), gr (v :graphology), sg (v :sigma), ws (v :wavesurfer.js)
-        lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig)]
+        lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig), am (v :amiri)]
     [[(str "pdf.js@" pdf "/pdf.min.js")                (str cdnjs "/pdf.js/" pdf "/pdf.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.js")         (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.css")        (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.css")]
@@ -81,7 +81,23 @@
      [(str "lamejs@" lm "/lame.min.js")                (str jsd "/lamejs@" lm "/lame.min.js")]
      [(str "katex@" kx "/katex.min.js")                (str jsd "/katex@" kx "/dist/katex.min.js")]
      [(str "katex@" kx "/katex.min.css")               (str jsd "/katex@" kx "/dist/katex.min.css")]
-     [(str "katex@" kx "/contrib/auto-render.min.js")  (str jsd "/katex@" kx "/dist/contrib/auto-render.min.js")]]))
+     [(str "katex@" kx "/contrib/auto-render.min.js")  (str jsd "/katex@" kx "/dist/contrib/auto-render.min.js")]
+     ;; Amiri — the Naskh face the poem reader sets (spec row 3.4). Two files,
+     ;; not twenty-four: only the `arabic` subset at weights 400 and 700 is
+     ;; reachable, because `.poem-reader` is the one scope that names the family
+     ;; and the text under it is Arabic. A Latin glyph there (a verse number)
+     ;; falls through to the next family in the stack, which is what the
+     ;; latin/latin-ext subsets would otherwise cost 8 more files to serve.
+     ;;
+     ;; Unlike Open Sans, these urls are NOT release-hashed, so there is no
+     ;; @upstream-prefix dance: the version is in the path and the stylesheet
+     ;; (resources/public/freememo/amiri.css) is committed with local url()s.
+     [(str "amiri@" am "/files/amiri-arabic-400-normal.woff2")
+      (str jsd "/@fontsource/amiri@" am "/files/amiri-arabic-400-normal.woff2")]
+     [(str "amiri@" am "/files/amiri-arabic-700-normal.woff2")
+      (str jsd "/@fontsource/amiri@" am "/files/amiri-arabic-700-normal.woff2")]
+     ;; The OFL text, so the vendored tree carries its own licence.
+     [(str "amiri@" am "/LICENSE") (str jsd "/@fontsource/amiri@" am "/LICENSE")]]))
 
 (def ^:private vendor-root "resources/public/freememo/vendor")
 (def ^:private lock-file "vendor-lock.sha256")

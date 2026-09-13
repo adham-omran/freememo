@@ -1,0 +1,36 @@
+/* Amiri, self-hosted. Written by hand, unlike open-sans.css.
+
+   Open Sans needs a generator because Google's css2 endpoint serves
+   release-hashed filenames, so its stylesheet has to freeze both the basenames
+   and the upstream directory. Amiri's urls carry their version in the path and
+   nothing else, so there is nothing to freeze: src-build/vendor.clj names the
+   version, downloads the two woff2 files under vendor/amiri@<version>/, and
+   vendor-lock.sha256 hashes them.
+
+   Upstream: https://cdn.jsdelivr.net/npm/@fontsource/amiri@5.3.0/
+   Amiri is licensed under the SIL Open Font License 1.1; the licence text is
+   vendored beside the fonts as vendor/amiri@5.3.0/LICENSE.
+
+   url()s are relative to this file, which is served at /freememo/amiri.css —
+   so `vendor/...` resolves to /freememo/vendor/..., exactly as in
+   open-sans.css. The woff2 files live in the gitignored vendor tree.
+
+   Only the `arabic` subset is vendored, at the two weights the poem reader
+   uses. A Latin glyph inside .poem-reader falls through to the next family in
+   the stack rather than pulling a second subset over the wire. */
+
+@font-face {
+    font-family: 'Amiri';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url(vendor/amiri@5.3.0/files/amiri-arabic-400-normal.woff2) format('woff2');
+}
+
+@font-face {
+    font-family: 'Amiri';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url(vendor/amiri@5.3.0/files/amiri-arabic-700-normal.woff2) format('woff2');
+}

@@ -174,6 +174,34 @@
   [src]
   (archive/every-entry-name? src sphinx-required-entries))
 
+(def ^:private poem-required-entries
+  "The four files a `freememo-poem/1` package always carries at its ROOT.
+
+   All four are required for the reason `account-required-entries` records:
+   `:repo` claims every unrecognised `.zip`, so a one-name test would hijack an
+   ordinary archive. `manifest.json` alone is the most tempting test and the
+   weakest — it is a filename thousands of projects use.
+
+   Equality, not a suffix test, because `plans/poem-package-format.md` §1 puts
+   every entry at the root: a `docs/notes.json` inside a repository must not
+   contribute to this answer. `every-entry-name?` lower-cases the name it tests
+   and all four are already lower-case, so the comparison is exact.
+
+   Names only, no contents: `classify-archive` decompresses nothing. The
+   package is parsed and validated later, by `freememo.poem-import`."
+  [#(= % "manifest.json")
+   #(= % "verses.json")
+   #(= % "notes.json")
+   #(= % "sources.json")])
+
+(defn poem-archive?
+  "True when an archive holds a FreeMemo poem package.
+   Pre : `src` is a byte[] or a File holding a ZIP or 7z archive.
+   Post: true iff its root holds `manifest.json`, `verses.json`, `notes.json`
+         and `sources.json`. Reads entry names only. Never throws."
+  [src]
+  (archive/every-entry-name? src poem-required-entries))
+
 (defn classify-archive
   "Resolve an archive to its import flow, from the filename plus the container.
 
@@ -183,8 +211,8 @@
    `:supermemo` in one and `:repo` in the other imports as the wrong thing.
 
    Pre : `src` is a byte[] or a File; `filename` is a string or nil.
-   Post: [:account nil] | [:supermemo nil] | [:sphinx nil] | [:repo nil] |
-         [:reject <msg>].
+   Post: [:account nil] | [:supermemo nil] | [:sphinx nil] | [:poem nil] |
+         [:repo nil] | [:reject <msg>].
          `:repo` claims every remaining `.zip`, so every specific flow must be
          tested before it — an account export left to fall through would import
          as a code repository, and a documentation build would import as one
@@ -209,6 +237,7 @@
       (account-archive? src) [:account nil]
       (supermemo-archive? src) [:supermemo nil]
       (sphinx-archive? src) [:sphinx nil]
+      (poem-archive? src) [:poem nil]
       :else [:repo nil])))
 
 (defn classify-multipart

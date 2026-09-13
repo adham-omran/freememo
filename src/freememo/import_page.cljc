@@ -64,13 +64,17 @@
     :desc "Select a PDF from your Zotero library"}
    {:id :code      :group :secondary :key "8" :icon :code      :title "Code"
     :desc "Add a code base as a .zip file"}
+   {:id :poem      :group :secondary :key "9" :icon :book-open :title "Poem"
+    :desc "Import a poem package as a .zip file"}
    {:id :live-doc  :group :secondary          :icon :scan-text :title "Live Document"
     :desc "Photograph pages into a growing PDF"}])
 
 (defn sources-in
-  "The cards of one group, in order. Post: 3 cards for :primary, 6 for
-   :secondary — both counts divide by the three columns §7.3 asks for, so no row
-   is short at any breakpoint."
+  "The cards of one group, in order. Post: 3 cards for :primary, 7 for
+   :secondary. The primary count divides by the three columns §7.3 asks for;
+   the secondary one no longer does, so its last row holds one card. Poem was
+   the seventh (poem-reader-spec row 2.6), and a filler card to square the grid
+   would be a control that does nothing."
   [group]
   (filterv #(= group (:group %)) sources))
 
@@ -124,6 +128,7 @@
        (bus/register-handler! :import-paste (open-import! :paste))
        (bus/register-handler! :new-topic (open-import! :new-topic))
        (bus/register-handler! :import-zotero (open-import! :zotero))
+       (bus/register-handler! :import-poem (open-import! :poem))
        (bus/register-handler! :create-live-doc
          (fn [ctx _payload]
            (when-let [navigate! (:navigate! ctx)]
@@ -484,5 +489,6 @@
           :paste     (ImportModal !open-source user-id :paste navigate! !intake)
           :new-topic (ImportModal !open-source user-id :new-topic navigate! !intake)
           :video     (VideoImportModal !open-source user-id navigate! !intake-files)
+          :poem      (ImportModal !open-source user-id :poem navigate! !intake)
           :zotero    (ZoteroPickerModal !open-source user-id navigate!)
           nil)))))

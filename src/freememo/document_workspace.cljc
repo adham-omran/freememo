@@ -54,5 +54,5 @@
       (dom/div
         (dom/props {:class "document-workspace document-workspace--assistant-full"})
         (DocumentMainColumn false)
-        (RightSidePanel dctx/page-topic-id dctx/root-topic-id dctx/user-id))
+        (RightSidePanel dctx/page-topic-id dctx/root-topic-id dctx/user-id dctx/is-poem?))
       (DocumentMainColumn true))))

@@ -58,8 +58,8 @@
 (def ^:private user-scoped-tables
   "Tables carrying a `user_id` that must point at the importing user.
    An archive's own user id is provenance only and is never trusted."
-  #{:sources :media :topics :topic_repetitions :study_schedules :curricula
-    :curriculum_exam_forms :curriculum_exam_sittings :assistant_chats
+  #{:sources :media :topics :poem_packages :topic_repetitions :study_schedules
+    :curricula :curriculum_exam_forms :curriculum_exam_sittings :assistant_chats
     :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings})
 
 (def ^:private fk-columns
@@ -69,6 +69,7 @@
    `topic_files` and `topic_videos` are absent on purpose: phase 2 builds their
    rows directly and knows its own topic id."
   {:topics {:parent_id :topics :source_id :sources}
+   :poem_packages {:topic_id :topics}
    :topic_pins {:topic_id :topics :media_id :media}
    :neoreader_highlights {:root_topic_id :topics :chapter_topic_id :topics}
    :occlusion_groups {:image_media_id :media}
@@ -116,7 +117,8 @@
   "Foreign keys whose row is worthless without them. A row whose value here does
    not translate is dropped and reported, rather than inserted with a null that
    the schema forbids or a dangling id the schema cannot see."
-  {:topic_pins #{:topic_id :media_id}
+  {:poem_packages #{:topic_id}
+   :topic_pins #{:topic_id :media_id}
    :occlusion_groups #{:image_media_id}
    :score_groups #{:clip_media_id}
    :card_schedules #{:flashcard_id}
@@ -159,6 +161,10 @@
    reason. `entity-scopes` also drops `content_preview` from the exported row
    JSON, so a current archive does not carry it; this entry is what protects the
    import if that `:drop-keys` is ever removed."
+  ;; `poem_packages` has NO entry, so the `#{:id}` default applies. Its other
+  ;; seven columns are all carried: the four JSONB documents ARE the poem, and
+  ;; `created_at` records when the package was imported, which stays true on the
+  ;; target. It holds no generated column and no single-collection state.
   {:topics #{:id :staged_delete_id :content_preview}
    :curricula #{:id :staged_delete_id}
    :neoreader_highlights #{:id :quote_hash}
@@ -257,6 +263,11 @@
   ["last_page_" "pdf_layout_" "pdf_focus_" "extract_style_" "ocr_model_" "card_model_"
    "goal_" "assistant_model_" "anki_preset_" "hierarchy_open_" "pins_open_"
    "assistant_tab_" "left_panel_tab_"
+   ;; `right_panel_tab_<pane-scope-id>` is the poem reader's tab choice, saved
+   ;; the way `left_panel_tab_` already is (settings.clj). Same suffix, same
+   ;; translation — without the entry the restored preference names another
+   ;; user's topic and the tab silently reverts.
+   "right_panel_tab_"
    ;; The per-document Anki header and tags (settings.clj). Each is two rows
    ;; keyed on the root topic id, with no account-wide row behind them, so an
    ;; untranslated suffix does not degrade to a global default — it points at
@@ -621,6 +632,10 @@
   "JSONB columns whose payload holds HTML with media URLs (§5.4.7).
    `io_fields` is a map of six HTML fields; `overlapping` holds `:items` of HTML
    and a materialized `:fields` map."
+  ;; `poem_packages.notes` holds HTML and is deliberately absent (poem-reader-spec
+  ;; row 2.3.4). Poem notes are quoted from Shamela pages and carry no
+  ;; `/api/media/` URL — the package format forbids one (format doc V7) and the
+  ;; importer rejects a package that breaks it, so there is no URL here to rewrite.
   {:flashcards [:io_fields :overlapping]
    :card_versions [:io_fields :overlapping]})
 

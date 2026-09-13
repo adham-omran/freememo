@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-37-in-a-fixed-order
-  (is (= 37 (count fmt/entity-tables)))
-  (is (= 37 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-38-in-a-fixed-order
+  (is (= 38 (count fmt/entity-tables)))
+  (is (= 38 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -67,6 +67,9 @@
   (testing "a referenced table precedes its referrer"
     (doseq [[referrer referenced]
             [[:topics :sources]
+             ;; poem_packages.topic_id is NOT NULL and UNIQUE, so its row cannot
+             ;; be inserted before the poem topic it belongs to.
+             [:poem_packages :topics]
              [:neoreader_highlights :topics]
              [:topic_files :topics]
              [:topic_videos :topics]

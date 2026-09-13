@@ -65,6 +65,7 @@
     "video"      ["Video"   "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
     "supermemo"  ["SuperMemo" "var(--color-badge-supermemo)"]
+    "poem"       ["Poem"    "var(--color-badge-epub)"]
     "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 
@@ -91,6 +92,8 @@
                        (recur (get id->parent id) (conj! acc id))))]
     (letfn [(child-nodes [node depth]
               (let [raw (vec (get children-map (:topics/id node)))]
+                ;; No `poem` (poem-reader-spec row 2.4.2): this flattens a
+                ;; root's `page` children away, and a poem has no children.
                 (if (and (zero? depth)
                       (#{"pdf" "epub" "web" "wikipedia"} (:topics/kind node)))
                   (vec (mapcat (fn [c]

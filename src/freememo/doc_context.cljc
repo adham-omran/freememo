@@ -33,6 +33,7 @@
 ;; ── Flags ────────────────────────────────────────────────────────────────
 (e/declare is-pdf?)
 (e/declare is-score?)
+(e/declare is-poem?)
 (e/declare is-live?)
 (e/declare pdf-root?)
 (e/declare pdf-has-file?)

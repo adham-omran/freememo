@@ -808,6 +808,34 @@
       (tel/error! {:id ::save-left-panel-tab} e)
       {:success false :error "Failed to save the left panel tab"})))
 
+(def right-panel-tabs #{"assistant" "poem"})
+
+(defn get-right-panel-tab
+  "Get the saved right-panel tab. The default is Assistant, which is the only
+   tab a non-poem topic has.
+
+   Mirrors get-left-panel-tab, including its key shape: the prefix
+   \"right_panel_tab_\" is listed in account-import's settings-key-prefixes, so
+   an account transfer remaps the topic id inside it rather than carrying a
+   pointer at another user's topic."
+  [user-id topic-id]
+  (try
+    (let [value (db/get-setting user-id
+                  (str "right_panel_tab_" (pane-scope-id topic-id)))]
+      (if (right-panel-tabs value) value "assistant"))
+    (catch Exception _ "assistant")))
+
+(defn save-right-panel-tab
+  "Save the right-panel tab for a document."
+  [user-id topic-id tab]
+  (try
+    (db/set-setting user-id (str "right_panel_tab_" (pane-scope-id topic-id))
+      (if (right-panel-tabs tab) tab "assistant"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-right-panel-tab} e)
+      {:success false :error "Failed to save the right panel tab"})))
+
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)
     (distinct)

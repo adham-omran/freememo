@@ -263,7 +263,11 @@
 
 (def material-kind-filters
   "The Add-material kind row. `nil` is every kind, and it is the default —
-   the search reaches all imported material before the row is touched."
+   the search reaches all imported material before the row is touched.
+
+   No `poem` row (poem-reader-spec row 2.4.2). `curriculum/add-material!` does
+   not accept the kind, and this row must not offer a filter for material the
+   server would refuse."
   [[nil "All"] ["pdf" "PDF"] ["markdown" "Markdown"]
    ["web" "Web"] ["wikipedia" "Wikipedia"]])
 

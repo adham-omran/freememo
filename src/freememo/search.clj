@@ -65,6 +65,11 @@
     "epub" " AND t.kind = 'basic' AND EXISTS (SELECT 1 FROM topics p WHERE p.id = t.parent_id AND p.kind = 'epub')"
     "markdown" " AND t.kind = 'markdown'"
     "supermemo" " AND t.kind = 'supermemo'"
+    ;; A poem's verses reach `content_text` through the rendered fallback
+    ;; (plans/poem-package-format.md §7), so a full-text search already returns
+    ;; poem rows. Without this clause a reader can see them under "All kinds"
+    ;; and cannot narrow to them.
+    "poem" " AND t.kind = 'poem'"
     ;; "all" or unknown
     ""))
 

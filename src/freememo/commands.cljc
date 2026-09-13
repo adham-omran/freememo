@@ -294,6 +294,13 @@
                       :when #{:viewer} :views #{}}
      :show-pins      {:label "Show Pins" :class :query :exec :client
                       :when #{:viewer} :views #{}}
+     ;; Declared exactly as :show-pins is, and for the same reason: it reveals a
+     ;; side panel on one of its tabs, which changes no route and writes no row.
+     ;; :when is the surface, NOT "this topic is a poem" — a registry entry
+     ;; cannot say that, so the handler answers a non-poem with a toast rather
+     ;; than by going quiet.
+     :show-poem-panel {:label "Show poem panel" :class :query :exec :client
+                       :when #{:viewer} :views #{}}
      :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
                               :when #{:viewer} :views #{}}
      ;; Three components publish this invoker, and exactly one is ever mounted:
@@ -352,6 +359,7 @@
      :import-paste   {:label "Paste content…" :class :nav}
      :new-topic      {:label "New topic…" :class :nav}
      :import-zotero  {:label "Import from Zotero…" :class :nav}
+     :import-poem    {:label "Import poem…" :class :nav}
      :create-live-doc {:label "New live document" :class :mutation :exec :client
                        :table #{:topics}
                        :views #{}}} ; /api/create-live-doc bumps :import-document

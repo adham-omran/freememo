@@ -62,6 +62,10 @@
             :page-number page-number
             :pdf-root-id pdf-root-id
             :is-score? (= kind "score")
+            ;; Read-only poem (spec row 3.1). True for kind "poem" only — a
+            ;; poem is its own root, never a child of one, so there is no
+            ;; root-kind arm here as the PDF page case has.
+            :is-poem? (= kind "poem")
             ;; Video: three scalars read once per topic load. duration and
             ;; last-pos come from topic_videos; has-audio? gates the waveform
             ;; strip, which cannot render before ffmpeg has produced the MP3.
@@ -263,6 +267,7 @@
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
        :is-score? is-score?
+       :is-poem? (boolean (:is-poem? overview))
        :is-video? (boolean (:is-video? overview))
        :video-title (:title overview)
        :video-duration-ms (:video-duration-ms overview)

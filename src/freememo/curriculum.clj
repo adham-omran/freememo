@@ -415,6 +415,11 @@
                         ["SELECT id, kind FROM topics
                           WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
                          topic-id user-id] opts)]
+            ;; `poem` is deliberately absent (poem-reader-spec row 2.4.2). A
+            ;; curriculum material is read start to finish and marked studied;
+            ;; a poem is read one verse at a time and has no such flow in v1.
+            ;; Adding it here also needs a row in
+            ;; `curriculum-page/material-kind-filters`.
             (when-not (contains? #{"pdf" "markdown" "web" "wikipedia"} (:kind topic))
               (throw (ex-info "Pick a PDF, Markdown document, or web article."
                        {:type ::unsupported-material})))

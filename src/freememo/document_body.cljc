@@ -125,6 +125,7 @@
               dctx/set-card-table-open! (:set-card-table-open! m)
               dctx/toggle-card-table! (:toggle-card-table! m)
               dctx/is-score? (:is-score? m) dctx/!score-region (:!score-region m)
+              dctx/is-poem? (:is-poem? m)
               dctx/!score-pages (:!score-pages m) dctx/!score-modal-open? (:!score-modal-open? m)
               dctx/!score-edit (:!score-edit m)
               dctx/is-video? (:is-video? m) dctx/video-title (:video-title m)

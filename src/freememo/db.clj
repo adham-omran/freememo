@@ -2394,11 +2394,45 @@
     WHERE root.parent_id IS NULL
       AND root.user_id IS NOT NULL"]))
 
+(defn- setup-schema-poem!
+  "Install `poem_packages`, the structured body of a kind `poem` topic.
+
+   Preconditions: `setup-schema-topics!` has run — `topic_id` FKs topics — and
+   `setup-schema-core!` has run, because `user_id` FKs users.
+   Postconditions: one row per poem topic, holding the four package documents
+   as JSONB exactly as `plans/poem-package-format.md` §7 states.
+
+   Why a table rather than `topics.content`: the reader addresses a verse by
+   number and a note by `(verse, word)`, and HTML with `data-*` attributes
+   cannot be queried or validated. `topics.content` still holds a rendered
+   fallback, so search and `content_preview` work (§7); the reader never reads
+   it.
+
+   `topic_id` is UNIQUE, so a topic owns at most one package — the reader's
+   `get-poem-package` returns one row or nil, with no ordering to choose.
+   Both foreign keys cascade: a deleted topic and a deleted account each take
+   the package with them, which is what keeps this off every delete path."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS poem_packages (
+      id SERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL UNIQUE REFERENCES topics(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+      verses JSONB NOT NULL DEFAULT '[]'::jsonb,
+      notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_poem_packages_user
+                      ON poem_packages(user_id)"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
   (setup-schema-core!)
   (setup-schema-topics!)
+  (setup-schema-poem!)
   (setup-schema-card-versions!)
   (setup-schema-activity!)
   (setup-schema-assistant!)
@@ -3766,14 +3800,37 @@
   (sanitize-utf8 (cleaner/strip-ql-tokens content)))
 
 (defn update-topic-content!
-  "Update the content of a topic. Filter: `stored-content`."
+  "Update the content of a topic. Filter: `stored-content`.
+
+   Pre : callers do not call this for a kind `poem` topic. A poem is read-only
+         material (`plans/poem-reader-spec.md` row 3.2) and mounts no editor,
+         so every caller named in §6 of that spec addresses another kind.
+   Post: the row's `content` and `content_text` hold the filtered HTML — EXCEPT
+         for a poem, where nothing is written and nil is returned.
+
+   The poem guard sits here rather than at the four call sites because this is
+   the one function every content writer that can reach a poem goes through, and
+   a guard per caller is four places for it to be forgotten. A poem's `content`
+   is a rendered fallback derived from `poem_packages`; a write would replace it
+   with editor output that the package no longer agrees with, and nothing reads
+   `content` to notice.
+
+   It refuses rather than throws: the precondition says this cannot happen, so
+   a call that arrives is a defect to report, not a failure the caller has a
+   branch for. The `:warn` names the topic so the defect is findable."
   [id content]
-  (let [sanitized (stored-content content)]
-    (jdbc/execute-one! ds
-      (sql/format {:update :topics
-                   :set {:content sanitized
-                         :content_text (text/strip-html sanitized)}
-                   :where [:= :id id]}))))
+  (if (= "poem" (:topics/kind (jdbc/execute-one! ds
+                                (sql/format {:select [:kind] :from :topics
+                                             :where [:= :id id]}))))
+    (do (tel/log! {:level :warn :id ::poem-content-write-refused :data {:topic-id id}}
+          "Refused a content write to a poem topic")
+        nil)
+    (let [sanitized (stored-content content)]
+      (jdbc/execute-one! ds
+        (sql/format {:update :topics
+                     :set {:content sanitized
+                           :content_text (text/strip-html sanitized)}
+                     :where [:= :id id]})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Merged page reading (plans/merged-page-reading.md)
@@ -4106,6 +4163,57 @@
     (nil? v) nil
     (instance? PGobject v) (json/parse-string (.getValue ^PGobject v) true)
     :else v))
+
+;; ---------------------------------------------------------------------------
+;; Poem packages — the structured body of a kind `poem` topic
+;; ---------------------------------------------------------------------------
+;; plans/poem-package-format.md §7 and §8. Both fns live here, below `->jsonb`
+;; and `pgobject->clj`, so no caller ever holds a PGobject — the same ownership
+;; rule `insert-source-rows!` applies to `:csl`.
+
+(defn insert-poem-package!
+  "Insert the one `poem_packages` row of a poem topic.
+
+   Pre : `tx` is an open transaction in which `topic-id` was already inserted.
+         `pkg` is `{:manifest M :verses [..] :notes [..] :sources [..]}` of plain
+         Clojure values — `freememo.poem-import` has already validated it.
+   Post: the new row's id. The row is written inside `tx`, so the topic and its
+         package commit together or neither does (spec row 2.2).
+   Invariant: the four documents are stored VERBATIM. Nothing here reshapes the
+         package, because `get-poem-package`'s contract is that the reader sees
+         what the build script wrote."
+  [tx user-id topic-id {:keys [manifest verses notes sources]}]
+  (:poem_packages/id
+   (jdbc/execute-one! tx
+     (sql/format {:insert-into :poem_packages
+                  :values [{:topic_id topic-id
+                            :user_id user-id
+                            :manifest (->jsonb (or manifest {}))
+                            :verses (->jsonb (or verses []))
+                            :notes (->jsonb (or notes []))
+                            :sources (->jsonb (or sources []))}]
+                  :returning [:id]}))))
+
+(defn get-poem-package
+  "The poem package of `topic-id`, or nil when the topic has none.
+
+   Pre : `topic-id` is a topic id, or nil.
+   Post: `{:manifest {…} :verses [{…}] :notes [{…}] :sources [{…}]}` with
+         keyword keys and string values unchanged (format doc §8). `:type` stays
+         a string and `:words` stays a vector of maps with `:i`, `:half`,
+         `:text`, because `pgobject->clj` keywordizes KEYS only.
+   Invariant: reads no other column. A caller wanting the title reads the topic
+         row — this one answers for the package alone."
+  [topic-id]
+  (when topic-id
+    (when-let [row (jdbc/execute-one! ds
+                     (sql/format {:select [:manifest :verses :notes :sources]
+                                  :from :poem_packages
+                                  :where [:= :topic_id topic-id]}))]
+      {:manifest (pgobject->clj (:poem_packages/manifest row))
+       :verses (pgobject->clj (:poem_packages/verses row))
+       :notes (pgobject->clj (:poem_packages/notes row))
+       :sources (pgobject->clj (:poem_packages/sources row))})))
 
 (defn create-source!
   "Insert a sources row. attrs = {:user-id :csl-type :csl :url :title}.
@@ -12042,7 +12150,11 @@
    `video-playlist` roots carry none. Offering them would list a thousand
    documents that can never produce a plan.
 
-   A kind that grows page children later belongs here, and nowhere else."
+   A kind that grows page children later belongs here, and nowhere else.
+
+   `poem` is not one (poem-reader-spec row 2.4.2). A poem is a single topic and
+   carries no `page` children, so a schedule over it would have a denominator of
+   zero. Spec row 6.7 makes it ONE Learn-queue item instead."
   #{"pdf"})
 
 (defn list-schedulable-documents

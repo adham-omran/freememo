@@ -23,6 +23,7 @@
     "video" ["Video" "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
     "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
+    "poem" ["Poem" "var(--color-badge-epub)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)

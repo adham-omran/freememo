@@ -80,6 +80,11 @@
                 (dom/option (dom/props {:value "web"}) (dom/text "Web"))
                 (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
                 (dom/option (dom/props {:value "supermemo"}) (dom/text "SuperMemo"))
+                ;; A poem is a root topic, so the tree lists it under "All types"
+                ;; already; this is how a reader narrows to it.
+                ;; `knowledge-tree/filter-by-kind` compares `:topics/kind` for
+                ;; equality, so the option needs no server change.
+                (dom/option (dom/props {:value "poem"}) (dom/text "Poem"))
                 (dom/On "change" (fn [e] (reset! !kind-filter (-> e .-target .-value))) nil))
 
               (dom/select

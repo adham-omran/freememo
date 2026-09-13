@@ -115,6 +115,11 @@
             (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
             (dom/option (dom/props {:value "web"}) (dom/text "Web"))
             (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
+            ;; No "poem" option, deliberately (poem-reader-spec row 2.4.2). This
+            ;; tab measures per-item reading progress over a document's children,
+            ;; and the list already omits `supermemo`, `audio`, `video` and
+            ;; `score` for that reason. A poem is ONE topic with no children, so
+            ;; an option here would filter to rows with no progress to show.
             (e/for [[t ev] (dom/On-all "change")]
               (when ev (reset! !kind-filter (-> ev .-target .-value)))
               (t)))

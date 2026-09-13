@@ -325,6 +325,15 @@
     (when-let [show! (:show-left-pane! ctx)]
       (show! "pins"))))
 
+;; The poem reader publishes :poem-topic-id while it is mounted, and it mounts
+;; for exactly the topics that have a package — so an absent key IS "this is not
+;; a poem". RightSidePanel owns both outcomes because the toast queue is a
+;; server atom and a handler has no Electric scope to reach it from.
+(register-handler! :show-poem-panel
+  (fn [ctx _payload]
+    (when-let [request! (:request-poem-panel! ctx)]
+      (request! (:poem-topic-id ctx)))))
+
 (register-handler! :toggle-card-table-view
   (fn [ctx _payload]
     (when-let [toggle! (:toggle-card-table! ctx)]

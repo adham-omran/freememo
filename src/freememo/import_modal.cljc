@@ -20,7 +20,8 @@
    [freememo.import-types :as itypes]
    #?(:cljs [freememo.archive-upload :as archive-upload])
    #?(:cljs [freememo.chunked-upload :as cu])
-   #?(:clj [freememo.web-import :as web-import])))
+   #?(:clj [freememo.web-import :as web-import])
+   #?(:clj [freememo.poem-import :as poem-import])))
 
 ;; ── Server helpers ─────────────────────────────────────────────────
 ;; The four upload ceilings come from `import-types/ceilings*`, which reads all
@@ -67,6 +68,7 @@
        "supermemo" "SuperMemo Collection"
        "account" "FreeMemo Account Export"
        "sphinx" "Documentation Site"
+       "poem" "Poem"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -369,10 +371,15 @@
 
          ;; Staged binary — go to confirming
          (.-upload_id data)
+         ;; `:poem` is the staged SUMMARY the poem branch of /api/upload-file
+         ;; returns — title, poet, counts and source chips, built from a package
+         ;; whose rules already hold. Absent for every other flow, and nil then.
          (do (reset! !staged {:upload-id (.-upload_id data)
                               :filename (.-filename data)
                               :size (.-size data)
-                              :flow (.-flow data)})
+                              :flow (.-flow data)
+                              :poem (some-> (.-poem data)
+                                      (js->clj :keywordize-keys true))})
              (reset! !flow (.-flow data))
              (reset! !stage :confirming))
 
@@ -694,6 +701,10 @@
           flow (e/watch !flow)
           filename (:filename staged)
           size (:size staged)
+          ;; The staged summary of a poem package, or nil. Built server-side at
+          ;; upload (api/upload-file-handler), because only a package that has
+          ;; already passed V1 to V8 can be summarized.
+          poem (:poem staged)
           label (flow-label flow)
           advanced-open (e/watch !advanced-open)
           image-mode (e/watch !image-mode)
@@ -717,6 +728,44 @@
                           (dom/div (dom/props {:style {:font-weight "500"}}) (dom/text (or filename "")))
                           (dom/div (dom/props {:style {:color "var(--color-text-secondary)" :margin-top "4px"}})
                             (dom/text (format-bytes size))))
+                        ;; What was actually read out of the package, so the
+                        ;; user confirms the poem rather than the filename. Every
+                        ;; line comes from the manifest and the four documents;
+                        ;; nothing here is derived on the client.
+                        (when (and (= flow "poem") (some? poem))
+                          (dom/div
+                            (dom/props {:style {:padding "12px" :margin-bottom "var(--sp-3)"
+                                                :border "1px solid var(--color-border)"
+                                                :border-radius "var(--radius-sm)"
+                                                :font-size "13px" :display "flex"
+                                                :flex-direction "column" :gap "4px"}})
+                            (dom/div
+                              (dom/props {:style {:font-weight "600" :font-size "15px"}
+                                          :dir "rtl"})
+                              (dom/text (str (:title poem))))
+                            (when (seq (str (:poet poem)))
+                              (dom/div (dom/props {:dir "rtl"}) (dom/text (str (:poet poem)))))
+                            (when (seq (str (:meter poem)))
+                              (dom/div
+                                (dom/props {:style {:color "var(--color-text-secondary)"}
+                                            :dir "rtl"})
+                                (dom/text (str (:meter poem)))))
+                            (dom/div
+                              (dom/props {:style {:color "var(--color-text-secondary)"}})
+                              (dom/text (str (:verse-count poem) " verses, "
+                                          (:note-count poem) " notes")))
+                            (when (seq (:sources poem))
+                              (dom/div
+                                (dom/props {:style {:color "var(--color-text-secondary)"}
+                                            :dir "rtl"})
+                                (dom/text (str/join "، " (:sources poem)))))))
+                        (when (= flow "poem")
+                          (dom/p
+                            (dom/props {:style {:margin "0 0 var(--sp-3) 0" :font-size "12px"
+                                                :color "var(--color-text-secondary)"}})
+                            (dom/text (str "The poem becomes one read-only topic. "
+                                        "Every note keeps the book and page it was "
+                                        "quoted from."))))
                         (when (= flow "epub")
                           (dom/div
                             (dom/props {:style {:margin-bottom "var(--sp-3)"}})
@@ -790,6 +839,13 @@
                                [`Confirm-supermemo-session session-id nil]
                                (and session-id (= flow "sphinx"))
                                [`Confirm-sphinx-session session-id nil]
+                               ;; A poem package reaches a SESSION only when its
+                               ;; .zip was dropped on the intake area or the Code
+                               ;; card, which take the chunked route by
+                               ;; extension. The Poem card uploads multipart, so
+                               ;; its own path is the `upload-id` branch below.
+                               (and session-id (= flow "poem"))
+                               [`Confirm-poem-session session-id nil]
                                ;; nil is the destination parent: the tree root.
                                ;; A picker is not built yet — see
                                ;; plans/user-data-export-import.md §9.
@@ -804,6 +860,7 @@
                                (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
                                (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
                                (= flow "sphinx") [`Confirm-sphinx-upload upload-id nil]
+                               (= flow "poem") [`Confirm-poem-upload upload-id nil]
                                :else [`Confirm-staged-upload upload-id (keyword image-mode)])))]
       ;; Cancel button — local-only reset, not part of the form's commit stream.
       (dom/div
@@ -839,6 +896,10 @@
                                               (web-import/confirm-sphinx-session!* user-id u-id)
                                               (= head `Confirm-sphinx-upload)
                                               (web-import/confirm-sphinx-upload!* user-id u-id)
+                                              (= head `Confirm-poem-session)
+                                              (poem-import/confirm-poem-session!* user-id u-id)
+                                              (= head `Confirm-poem-upload)
+                                              (poem-import/confirm-poem-upload!* user-id u-id)
                                               (= head `Confirm-account-session)
                                               (web-import/confirm-account-session!* user-id u-id arg false)
                                               (= head `Confirm-epub-session)
@@ -1170,6 +1231,21 @@
                               (post-multipart! "/api/upload-file" f {}
                                 handle-resp
                                 handle-fetch-err))))
+          ;; The Poem card posts multipart, where `handle-file` would send any
+          ;; .zip down the chunked archive route. The route has to be multipart
+          ;; because only /api/upload-file returns a BODY, and the staged summary
+          ;; the Poem confirm shows — title, poet, verse and note counts — travels
+          ;; in it. /api/archive/finalize answers with a flow name and nothing
+          ;; else. A package is four JSON files and is small by construction, so
+          ;; it has no need of chunking; an oversized one is refused by the
+          ;; server's own per-upload cap with a 413 this handler already renders.
+          handle-poem-file (fn [^js f]
+                             (reset-error! !error !quota-error?)
+                             (reset! !file f)
+                             (reset! !stage :fetching)
+                             (post-multipart! "/api/upload-file" f {}
+                               handle-resp
+                               handle-fetch-err))
           on-paste-import (fn []
                             (reset-error! !error !quota-error?)
                             (let [format-v @!format
@@ -1250,6 +1326,7 @@
                   :code "Import Code"
                   :audio "Upload Audio"
                   :score "Import Score"
+                  :poem "Import Poem"
                   :paste "Paste"
                   :new-topic "New Topic"
                   "Import")]
@@ -1333,6 +1410,15 @@
               :audio (FilePicker !file !file-input handle-file
                                  (itypes/accept-attr ["Audio"])
                                  "Audio file (mp3, m4a, wav, ogg, flac). Maximum 25 MB.")
+              ;; A poem package, not a document: the file dialog offers .zip
+              ;; and the hint names the four files, because a .zip that is not a
+              ;; package routes to Code or SuperMemo on the server and imports as
+              ;; something the user did not choose.
+              :poem (FilePicker !file !file-input handle-poem-file
+                                ".zip"
+                                (str "A poem package as a .zip, holding manifest.json, "
+                                  "verses.json, notes.json and sources.json at its root. "
+                                  "The poem becomes one read-only topic."))
               :score (ScoreStage user-id navigate-to-viewer! !stage
                                  !score-pdf !score-audio
                                  !error !quota-error? !busy-msg)

@@ -48,6 +48,11 @@
     "web"       "webpage"
     "markdown"  "document"
     "audio"     "song"
+    ;; No `poem` entry (poem-reader-spec row 2.4.2). Both callers resolve a
+    ;; bibliography during a web or PDF import, and a poem import writes no
+    ;; `sources` row at all — its book citations live inside the package's
+    ;; `sources.json`. A bibliography attached to a poem by hand takes its CSL
+    ;; type from `bibliography-form/CslTypeSelect`, never from here.
     "webpage"))
 
 (defn- non-empty-biblio?

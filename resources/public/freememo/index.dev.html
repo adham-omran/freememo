@@ -24,6 +24,10 @@
 	     gitignored vendor tree). A <link> rather than index.css's old @import:
              an @import chained a second request behind our own stylesheet. -->
         <link rel="stylesheet" href="/freememo/open-sans.css">
+        <!-- Amiri, self-hosted. Eager beside Open Sans: a face swapped in after
+             first paint reflows the whole poem, and a stylesheet deferred to a
+             route boundary would flash the fallback on every reader mount. -->
+        <link rel="stylesheet" href="/freememo/amiri.css">
         <link rel="stylesheet" href="/freememo/index.css" type="text/css" />
         <link rel="icon" type="image/svg+xml" href="/freememo/favicon.svg">
         <link rel="apple-touch-icon" sizes="180x180" href="/freememo/favicon.svg">

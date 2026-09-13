@@ -23,6 +23,7 @@
    [freememo.import-staging :as staging]
    [freememo.live-doc :as live-doc]
    [freememo.markdown :as md]
+   [freememo.poem-import :as poem-import]
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
    [freememo.settings :as settings]
@@ -255,6 +256,25 @@
                 (let [upload-id (staging/stage! user-id bytes filename :sphinx)]
                   (json-response 200 {:success true :upload_id upload-id :flow "sphinx"
                                       :filename filename :size size}))
+
+                ;; A poem package is validated HERE, not at confirm. The Import
+                ;; modal shows a staged summary — title, poet, verse and note
+                ;; counts, sources — before the user commits, and that summary
+                ;; can only be built from a package whose rules already hold. A
+                ;; rejection names the rule it broke (V1 to V8), so the message
+                ;; points at a statement in plans/poem-package-format.md §6.
+                ;; `confirm-poem-upload!*` validates again: staging hands back
+                ;; bytes, and a rule that ran only here is a rule a second caller
+                ;; can miss.
+                :poem
+                (let [r (poem-import/read-package bytes)]
+                  (if-not (:ok r)
+                    (json-response 400 {:success false :error (:error r)
+                                        :code "invalid-file-type"})
+                    (let [upload-id (staging/stage! user-id bytes filename :poem)]
+                      (json-response 200 {:success true :upload_id upload-id :flow "poem"
+                                          :filename filename :size size
+                                          :poem (poem-import/summary (:package r))}))))
 
                 :repo
                 (let [upload-id (staging/stage! user-id bytes filename :repo)]

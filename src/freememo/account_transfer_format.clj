@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 37 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 38 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -93,6 +93,7 @@
   [:sources
    :media
    :topics
+   :poem_packages
    :topic_files
    :topic_videos
    :topic_epubs
@@ -148,6 +149,12 @@
                        extraction, so the pages arrive eligible again rather than
                        marked done with no facts"
    :kg_graph_layout "a render cache that a version compare invalidates"
+   :document_summaries "a maintained read model over topics and flashcards, not
+                        content. Statement triggers refresh it on every topic and
+                        flashcard write, so an import rebuilds it row by row as
+                        the rows it summarizes arrive, and `setup-schema` rebuilds
+                        every root at boot. Carrying it would import counts the
+                        target immediately recomputes"
    :anki_card_states "a cache of FSRS state replayed out of Anki, and Anki is
                       the source of truth for it (study-scheduler-spec §3.5).
                       Its keys are one collection's Anki card ids, which the
@@ -250,6 +257,13 @@
    ;; of bytes the importer must drop anyway (account-import/dropped-columns).
    :topics {:where "t.user_id = ? AND t.staged_delete_id IS NULL"
             :params 1 :order "t.id" :drop-keys ["content_preview"]}
+
+   ;; Scoped through the topic alone, not through `user_id` as well. The column
+   ;; exists and is NOT NULL, but `owned-topics` already binds the user, and a
+   ;; second clause binding the same value would only add a placeholder to keep
+   ;; in step with `:params`.
+   :poem_packages {:where (str "t.topic_id IN (" owned-topics ")")
+                   :params 1 :order "t.id"}
 
    :topic_files {:where (str "t.topic_id IN (" owned-topics ")")
                  :params 1 :order "t.id" :drop-keys ["file_data"]}

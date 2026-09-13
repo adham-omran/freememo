@@ -7310,3 +7310,245 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     .graph-minimap { display: none; }
     .graph-scene-hint { max-width: calc(100% - 24px); }
 }
+
+/* ── Poem reader and الشرح panel ────────────────────────────────────
+   Amiri is loaded eagerly from /freememo/amiri.css. The stack names two
+   further Naskh faces before the generic serif, because Amiri is vendored at
+   the `arabic` subset only and the system font is S6's declared fallback. */
+
+.poem-reader {
+    --poem-font: 'Amiri', 'Noto Naskh Arabic', 'Scheherazade New', serif;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 24px clamp(16px, 5vw, 56px) 64px;
+    background: var(--color-bg-card, #fff);
+    font-family: var(--poem-font);
+}
+
+.poem-reader__header {
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.poem-reader__title {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+}
+
+.poem-reader__poet {
+    margin: 4px 0 12px;
+    font-size: 16px;
+    color: var(--color-text-secondary);
+}
+
+.poem-reader__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+}
+
+.poem-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm, 4px);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+    /* The chips are UI, not verse: they read in the app's own face. */
+    font-family: 'Open Sans', Arial, Verdana, sans-serif;
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: nowrap;
+}
+
+.poem-chip--source { align-self: flex-start; }
+
+.poem-reader__empty,
+.poem-panel__empty {
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    padding: 16px 4px;
+    margin: 0;
+}
+
+/* One verse: صدر and عجز side by side, the number trailing at the RTL end.
+   grid rather than flex, so both halves are the same width whatever their
+   word count and every verse's caesura lines up down the page. */
+.poem-verse {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    align-items: baseline;
+    column-gap: clamp(12px, 4vw, 48px);
+    padding: 6px 0;
+    font-size: 22px;
+    line-height: 2.1;
+}
+
+.poem-verse__half { min-width: 0; }
+.poem-verse__half--ajuz { text-align: start; }
+
+.poem-verse__num {
+    font-family: 'Open Sans', Arial, Verdana, sans-serif;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    user-select: none;
+}
+
+/* A word is the tap target. The padding is vertical-only so the inline space
+   between two words is not clickable — 900 words on a page, and a tap that
+   lands between them must do nothing rather than open the neighbour. */
+.poem-word {
+    border-radius: 3px;
+    padding: 2px 0;
+    cursor: pointer;
+    transition: background-color 90ms ease-out;
+}
+
+.poem-word:hover { background: var(--color-bg-subtle); }
+
+.poem-word--active {
+    background: var(--color-primary, #2563eb);
+    color: #fff;
+}
+
+.poem-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+.poem-panel__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.poem-panel__verse {
+    font-family: 'Amiri', 'Noto Naskh Arabic', 'Scheherazade New', serif;
+    font-size: 18px;
+    line-height: 2;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--color-bg-subtle);
+}
+
+.poem-panel__verse strong {
+    background: var(--color-primary, #2563eb);
+    color: #fff;
+    padding: 0 3px;
+    border-radius: 3px;
+}
+
+.poem-panel__word {
+    font-family: 'Amiri', 'Noto Naskh Arabic', 'Scheherazade New', serif;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.poem-panel__notes {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.poem-panel__section { margin: 0; }
+
+.poem-panel__section-title {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+}
+
+.poem-note {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm, 4px);
+}
+
+.poem-note__body {
+    font-family: 'Amiri', 'Noto Naskh Arabic', 'Scheherazade New', serif;
+    font-size: 16px;
+    line-height: 1.9;
+}
+
+.poem-note__body p { margin: 0 0 6px; }
+.poem-note__body p:last-child { margin-bottom: 0; }
+
+.poem-panel__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 4px;
+    border-top: 1px solid var(--color-border);
+}
+
+.poem-panel__back { align-self: flex-start; }
+
+.poem-panel__error {
+    color: var(--color-danger-text);
+    font-size: 12px;
+}
+
+/* Phone (spec row 4.5). The panel anchors to the bottom of the viewport, as
+   .graph-inspector does at 520px, and is capped so the verse the reader tapped
+   stays visible above it. The column tree is a flex row at every width, so the
+   panel is taken out of flow rather than reordered — a reordered panel would
+   still consume the row's width and squeeze the poem to nothing.
+
+   Scoped with :has(.poem-panel) rather than applied to .assistant-side-panel
+   outright, because that class is the ONE right panel: an unscoped rule would
+   move the AI assistant to the bottom of the screen on every phone, on every
+   document, which row 4.5 does not ask for and nobody asked to have changed.
+   The selector matches only while الشرح is the open tab, and SidePanelShell
+   renders no body while collapsed — so the collapsed gutter also keeps today's
+   behaviour with no override of its own. */
+@media (max-width: 600px) {
+    .assistant-side-panel:has(.poem-panel) {
+        /* !important on these two: SidePanelShell writes `position: relative`
+           and `width: <px>` INLINE (hierarchy_side_panel.cljc, for its absolute
+           resize handle and the drag-resized width), and an inline declaration
+           beats any stylesheet rule. Measured at 390px: without them the panel
+           stayed relative, 360px wide, inline beside the poem. */
+        position: fixed !important;
+        z-index: 14;
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: auto !important;
+        max-width: none;
+        max-height: 55vh;
+        border-left: none;
+        border-top: 1px solid var(--color-border);
+        box-shadow: var(--shadow-modal);
+    }
+
+    .poem-reader { padding: 16px; }
+
+    /* The two halves stack, because 1fr 1fr at 390px breaks a hemistich across
+       three lines. The number keeps the trailing column beside the first half. */
+    .poem-verse {
+        grid-template-columns: 1fr auto;
+        row-gap: 0;
+        font-size: 19px;
+    }
+    .poem-verse__half--ajuz { grid-column: 1; }
+    .poem-verse__num { grid-row: 1; grid-column: 2; }
+}

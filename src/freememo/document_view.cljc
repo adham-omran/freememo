@@ -16,6 +16,7 @@
    [freememo.video-pane :refer [VideoPane]]
    [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.editor-pane :refer [EditorPane]]
+   [freememo.poem-pane :refer [PoemPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
    [freememo.navigation :as nav]
@@ -188,7 +189,13 @@
                     (fn [tid]
                       (when navigate!
                         (navigate! :viewer (nav/nav-topic tid nil))))]
-            (EditorPane)))))))
+            ;; A poem gets the read-only reader INSTEAD of the editor, not
+            ;; beside it (spec row 3.2.1). EditorPane owns the Quill instance
+            ;; and the auto-save that writes topics.content on every
+            ;; text-change, so mounting it for a poem would make the poem
+            ;; editable and let one keystroke overwrite the rendered fallback
+            ;; the importer stored. A poem page has no .ql-editor.
+            (if dctx/is-poem? (PoemPane) (EditorPane))))))))
 
 (e/defn DocumentColumns
   "Resizable top region of a document view: left panel, content, and optional
@@ -223,7 +230,7 @@
 
         ;; RIGHT: collapsible assistant panel.
         (when show-assistant?
-          (RightSidePanel page-topic-id root-topic-id user-id))))))
+          (RightSidePanel page-topic-id root-topic-id user-id dctx/is-poem?))))))
 
 
 ;; TopicPage shell

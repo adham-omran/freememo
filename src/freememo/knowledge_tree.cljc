@@ -153,6 +153,9 @@
             kind (:topics/kind topic)
             raw-children (get children-map id)
             ;; For PDFs/EPUBs/web, flatten through page nodes to show extracts directly
+            ;; No `poem` (poem-reader-spec row 2.4.2), for the reason
+            ;; `hierarchy-side-panel/build-rows` records: a poem has no children
+            ;; to flatten.
             children (if (and is-root (#{"pdf" "epub" "web" "wikipedia"} kind))
                        (vec (mapcat (fn [c]
                                       (if (= "page" (:topics/kind c))

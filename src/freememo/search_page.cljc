@@ -45,7 +45,10 @@
    ["articles" "Articles"]
    ["epub" "EPUB"]
    ["markdown" "Markdown"]
-   ["supermemo" "SuperMemo"]])
+   ["supermemo" "SuperMemo"]
+   ;; Paired with `search/kind-clause`'s "poem" branch — an option with no
+   ;; clause silently returns everything.
+   ["poem" "Poems"]])
 
 (defn kind-badge [kind]
   (case kind
@@ -58,6 +61,7 @@
     "video" ["Video" "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
     "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
+    "poem" ["Poem" "var(--color-badge-epub)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 (defn encode-query [q]

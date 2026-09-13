@@ -143,6 +143,7 @@
     (= kind "video-playlist")        ["Playlist"  "var(--color-badge-video)"]
     (= kind "code")                  ["Code"      "var(--color-badge-web)"]
     (= kind "supermemo")             ["SuperMemo" "var(--color-badge-supermemo)"]
+    (= kind "poem")                  ["Poem"      "var(--color-badge-epub)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))
 
 ;; ---------------------------------------------------------------------------

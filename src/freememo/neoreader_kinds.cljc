@@ -27,7 +27,11 @@
 
    That excludes `web`, `wikipedia`, `markdown` and `supermemo`, which are
    single topics, and `video`, `audio` and `score`, which are not books. A
-   single-topic sync mode is a different feature."
+   single-topic sync mode is a different feature.
+
+   `poem` is excluded on both halves of the rule (poem-reader-spec row 2.4.2):
+   it is one topic with no children, and Boox exports no file for it because a
+   poem package never reaches a Boox device."
   #{"epub" "pdf"})
 
 (defn syncable-kind?
