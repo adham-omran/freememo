@@ -17,7 +17,15 @@
 
    Only the `arabic` subset is vendored, at the two weights the poem reader
    uses. A Latin glyph inside .poem-reader falls through to the next family in
-   the stack rather than pulling a second subset over the wire. */
+   the stack rather than pulling a second subset over the wire.
+
+   `unicode-range` is load-bearing, not an optimisation. The subset file does
+   carry glyphs for ASCII `(` and `)`, and Amiri draws BOTH as `)` inside an
+   RTL run in Chromium — measured: «وقوله (قفا) فيه» rendered as «)قفا)»,
+   while Noto Naskh and the system serif mirror the closing paren correctly.
+   The range below is the one @fontsource ships for its `arabic` subset and
+   holds no ASCII, so every paren, digit and Latin letter falls through to the
+   next family, which mirrors them. */
 
 @font-face {
     font-family: 'Amiri';
@@ -25,6 +33,7 @@
     font-weight: 400;
     font-display: swap;
     src: url(vendor/amiri@5.3.0/files/amiri-arabic-400-normal.woff2) format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
 }
 
 @font-face {
@@ -33,4 +42,5 @@
     font-weight: 700;
     font-display: swap;
     src: url(vendor/amiri@5.3.0/files/amiri-arabic-700-normal.woff2) format('woff2');
+    unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
 }
