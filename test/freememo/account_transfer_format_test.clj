@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-38-in-a-fixed-order
-  (is (= 38 (count fmt/entity-tables)))
-  (is (= 38 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-40-in-a-fixed-order
+  (is (= 40 (count fmt/entity-tables)))
+  (is (= 40 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -73,6 +73,8 @@
              [:neoreader_highlights :topics]
              [:topic_files :topics]
              [:topic_videos :topics]
+             [:topic_code :topics]
+             [:repo_selections :topics]
              [:video_transcripts :topics]
              [:video_segments :topics]
              [:topic_pins :topics]

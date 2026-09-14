@@ -75,6 +75,13 @@
             :video-last-pos-ms (:last_pos_ms video-row)
             :video-has-audio? (and (some? video-row)
                                 (db/topic-file-exists? topic-id "audio"))
+            ;; A file imported from a git forge (§4.4 4.1). `repo_path` is what
+            ;; separates it from the older kind='code' topics `kg-code` writes,
+            ;; which keep their source in `content` and have no pane to show.
+            ;; `code-has-source?` is false for an empty leaf; Generate reads it.
+            :is-code? (and (= kind "code") (some? (:topics/repo_path topic)))
+            :code-has-source? (and (= kind "code") (some? (:topics/repo_path topic))
+                                (db/topic-code-exists? topic-id))
             ;; Live Document: drives the viewer's add-photos affordance,
             ;; empty-state, and (via page count) post-append reload.
             :is-live? (boolean (:topics/is_live pdf-root-topic))
@@ -278,6 +285,8 @@
        :video-duration-ms (:video-duration-ms overview)
        :video-last-pos-ms (:video-last-pos-ms overview)
        :video-has-audio? (boolean (:video-has-audio? overview))
+       :is-code? (boolean (:is-code? overview))
+       :code-has-source? (boolean (:code-has-source? overview))
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
        :pdf-page-count pdf-page-count :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content

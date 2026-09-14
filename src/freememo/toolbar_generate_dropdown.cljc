@@ -74,7 +74,8 @@
           !card-count dctx/!card-count
           !open (atom false)
           open (e/watch !open)
-          no-content? (empty? content-text)
+          ;; A forge file's source is content even when its notes are empty.
+          no-content? (and (empty? content-text) (not dctx/code-has-source?))
           ;; idle-label = visible primary text ("Generate N Type"); action-summary
           ;; = full text incl. context, used for tooltip/aria only.
           idle-label (helpers/gen-label card-count-val card-type)

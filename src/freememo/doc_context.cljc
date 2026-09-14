@@ -168,6 +168,12 @@
 (e/declare video-duration-ms)
 (e/declare video-last-pos-ms)   ; resume position, read once at mount
 (e/declare video-has-audio?)    ; extracted MP3 exists ⇒ a waveform can render
+
+;; ── Code state (files imported from a git forge) ───────────────────────────
+;; plans/git-forge-integration.md §4.4. A `code` topic from an older `kg-code`
+;; import is NOT is-code?: it has no repo_path and no pane.
+(e/declare is-code?)            ; mount the read-only code pane beside the editor
+(e/declare code-has-source?)    ; false for an empty leaf — no topic_code row
 (e/declare !video-el)           ; the HTMLVideoElement, or nil before mount
 (e/declare !video-region)       ; {:start-ms N :end-ms N} or nil — marked range
 ;; Playhead, republished by the player on every `timeupdate` (3.6 Hz in Chromium,

@@ -92,6 +92,14 @@
           ;; user, so the set holds a constant rather than an id.
           :exporting-accounts (atom #{})
           :importing-accounts (atom #{})
+          ;; Git forge imports and updates (freememo.repo-import):
+          ;; `host/owner/name` -> phase while the work runs. A map rather than a
+          ;; set because the phase moves — resolving, downloading, extracting,
+          ;; creating topics — while one activity row stays open.
+          :importing-repos  (atom {})
+          ;; `host/owner/name` -> error, written before membership drops so the
+          ;; reporter closes a failed run as failed. A later success clears it.
+          :repo-import-errors (atom {})
           :toasts           (atom []))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;

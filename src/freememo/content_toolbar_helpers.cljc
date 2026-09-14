@@ -83,18 +83,36 @@
 ;; :content = cleaned selection HTML, else the full content-text.
 ;; :context = prior-page (page mode) or parent (extract mode) content, or nil
 ;;            when use-context is false.
+;;
+;; A code topic (`:is-code?`, plans/git-forge-integration.md §4.4 4.6) takes its
+;; subject in this order: a pane or editor selection — the caller has already
+;; picked between the two — else the file's source. Never the notes alone: the
+;; editor of a code topic holds notes ABOUT the file, and generating from them
+;; with nothing selected would make cards about the notes. With the source as
+;; the subject, the notes become its context, the way a selection's context is
+;; the text around it. `user-id` scopes the source read to its owner.
+#?(:clj
+   (defn- code-source-html
+     "Post: the file's source as an escaped code block, or nil for an empty leaf."
+     [user-id topic-id]
+     (when-let [source (:source (db/get-topic-code user-id topic-id))]
+       (str "<pre><code>" (str/escape source {\& "&amp;" \< "&lt;" \> "&gt;"}) "</code></pre>"))))
+
 (defn build-gen-context* [{:keys [selection-html content-text context-mode use-context
-                                  topic-id root-topic-id page-number context-window]}]
+                                  topic-id root-topic-id page-number context-window
+                                  is-code? user-id]}]
   #?(:clj
      (let [sel-html (cleaner/clean-html-fragment selection-html)
+           subject-html (or sel-html
+                          (when (and is-code? user-id) (code-source-html user-id topic-id)))
            context (when use-context
                      (case context-mode
-                       :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
+                       :extract (if subject-html content-text (or (get-parent-content* topic-id) ""))
                        :page (let [prev (get-context-pages* root-topic-id page-number context-window)]
-                               (if sel-html
+                               (if subject-html
                                  (if prev (str prev "\n\n---\n\n" content-text) content-text)
                                  prev))))]
-       {:content (or sel-html content-text) :context context})
+       {:content (or subject-html content-text) :context context})
      :cljs nil))
 
 ;; Create an extract child topic — wrapped in try/catch outside e/defn.

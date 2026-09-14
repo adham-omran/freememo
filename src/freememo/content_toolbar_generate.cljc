@@ -9,6 +9,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [PromptDialog]]
    [freememo.content-toolbar-helpers :as helpers]
+   [freememo.code-pane :as code-pane]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
    [freememo.commands :as commands]
@@ -23,6 +24,9 @@
           card-type dctx/card-type card-count-val dctx/card-count-val use-context dctx/use-context
           context-window dctx/context-window
           gen-active? dctx/gen-active? gen-pending dctx/gen-pending gen-error dctx/gen-error
+          ;; A file from a git forge (plans/git-forge-integration.md §4.4 4.6):
+          ;; its source is content even when the notes are empty.
+          is-code? dctx/is-code? code-has-source? dctx/code-has-source?
 
           ;; All generate/prompt atoms are LOCAL — never passed through a map.
           ;; Passing watched values through a cfg map causes reactive loops:
@@ -57,7 +61,7 @@
 
           ;; Generate button — label and tooltip include the parameters
           ;; (count, type, context) so users see exactly what will happen.
-          (let [no-content? (empty? content-text)
+          (let [no-content? (and (empty? content-text) (not code-has-source?))
                 action-summary (helpers/gen-summary card-count-val card-type use-context context-window)]
             (dom/button
               (dom/props {:class "btn btn-sm btn-primary"
@@ -84,12 +88,15 @@
                 (e/on-unmount (fn [] (bus/retract-invoker! :generate))))
               (dom/On "click"
                 (fn [_]
-                  (let [sel (editor/get-selection-html!)]
-                    (when sel
-                      (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                    (reset! !gen-click {:id (str (random-uuid))
-                                        :selection-html (when (and sel (not (str/blank? (:text sel))))
-                                                          (:html sel))})))
+                  ;; The code pane's selection wins over the editor's (§4.4 4.6).
+                  (if-let [pane-html (code-pane/pane-selection-html)]
+                    (reset! !gen-click {:id (str (random-uuid)) :selection-html pane-html})
+                    (let [sel (editor/get-selection-html!)]
+                      (when sel
+                        (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
+                      (reset! !gen-click {:id (str (random-uuid))
+                                          :selection-html (when (and sel (not (str/blank? (:text sel))))
+                                                            (:html sel))}))))
                 nil)))
 
           ;; Generate with Prompt button
@@ -104,11 +111,13 @@
               (bus/publish-invoker! :gen-prompt (fn [] (.click node)))
               (e/on-unmount (fn [] (bus/retract-invoker! :gen-prompt))))
             (dom/On "click" (fn [_]
-                              (let [sel (editor/get-selection-html!)]
-                                (when sel
-                                  (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                                (reset! !captured-selection (when (and sel (not (str/blank? (:text sel))))
-                                                              (:html sel))))
+                              (if-let [pane-html (code-pane/pane-selection-html)]
+                                (reset! !captured-selection pane-html)
+                                (let [sel (editor/get-selection-html!)]
+                                  (when sel
+                                    (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
+                                  (reset! !captured-selection (when (and sel (not (str/blank? (:text sel))))
+                                                                (:html sel)))))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
               nil))))
@@ -123,7 +132,8 @@
                            :content-text content-text :context-mode context-mode
                            :use-context use-context :topic-id topic-id
                            :root-topic-id root-topic-id :page-number page-number
-                           :context-window context-window})]
+                           :context-window context-window
+                           :is-code? is-code? :user-id user-id})]
                     (helpers/enqueue-card-gen!
                       {:id (:id gen-click)
                        :content content
@@ -166,7 +176,8 @@
                            :content-text content-text :context-mode context-mode
                            :use-context use-context :topic-id topic-id
                            :root-topic-id root-topic-id :page-number page-number
-                           :context-window context-window})]
+                           :context-window context-window
+                           :is-code? is-code? :user-id user-id})]
                     (helpers/enqueue-card-gen!
                       {:id (str (random-uuid))
                        :content content

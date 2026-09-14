@@ -288,6 +288,21 @@
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS sm_rank INTEGER"])
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS sm_element_id INTEGER"])
 
+  ;; Git forge import provenance (plans/git-forge-integration.md §4.1).
+  ;;
+  ;; repo_path is the repository-relative path of a 'commit', 'dir' or 'code'
+  ;; node: '' on the commit node, 'src/db' on a folder, 'src/db/pool.zig' on a
+  ;; file. It is the node's identity under its commit, which is why every one of
+  ;; these kinds is in `structural-kinds` and cannot be re-parented.
+  ;;
+  ;; commit_sha lives on the 'commit' node and repo_url on the 'repo' node, so
+  ;; neither repeats across the thousands of rows beneath them. All three are
+  ;; NULL for every other kind, and no index exists on them yet: nothing queries
+  ;; by path today, and an unused index on a table this size is pure write cost.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_path TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS commit_sha TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_url TEXT"])
+
   ;; Live Document flag — a kind='pdf' root that the user keeps appending
   ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
   ;; boolean only drives the viewer's add-photos affordance and empty-state.
@@ -2427,6 +2442,61 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_poem_packages_user
                       ON poem_packages(user_id)"]))
 
+(defn- setup-schema-code!
+  "Source text and import selection for git-forge repositories.
+
+   `topic_code` holds one file's text for a kind='code' topic. The text lives
+   here rather than in `topics.content` because the editor beside the code pane
+   holds the user's NOTES, and one column cannot be both. Same split as a
+   video's transcript, for the same reason (plans/git-forge-integration.md D3).
+
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_code (
+      topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      byte_size INTEGER NOT NULL,
+      lang TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+
+  ;; Search reads this column, so it carries the trigram GIN index
+  ;; `topics.content_text` carries. NEVER a btree index here: a btree row cannot
+  ;; exceed about 2704 bytes and a source file routinely does, which is why
+  ;; idx_topics_source_content_digest indexes a digest instead of the text.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_code_source_trgm
+                      ON topic_code USING GIN (source gin_trgm_ops)"])
+
+  ;; `|| ''` is load-bearing, for the reason topics.content_preview records:
+  ;; left(col, n) over a TOASTed value takes a byte slice that can end mid
+  ;; character, and the resulting invalid-byte-sequence error aborts the whole
+  ;; statement rather than the one row.
+  (jdbc/execute! ds ["ALTER TABLE topic_code ADD COLUMN IF NOT EXISTS source_preview TEXT
+                      GENERATED ALWAYS AS (left(source || '', 400)) STORED"])
+
+  ;; One row per kind='repo' topic: what an update needs to repeat the first
+  ;; import with no picker. `forge` says which API the URL speaks — a
+  ;; self-hosted host name cannot tell GitLab from Forgejo. `ref` is the branch,
+  ;; tag or sha the user asked for, resolved again on every update. `selection`
+  ;; is the directory decisions and the extension set (freememo.repo-tree).
+  ;; It hangs off the repo node rather than a commit because every commit under
+  ;; the repository reuses it.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS repo_selections (
+      topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      forge TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      selection JSONB NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+
+  ;; The commit a staged forge tree came from ({:forge :origin-url :repo-url
+  ;; :path :ref :sha}). On the session row, not in process memory, so a picker
+  ;; confirmed after a restart still knows what it holds. upload_sessions is
+  ;; excluded from account transfer, so this column needs no transfer decision.
+  (jdbc/execute! ds ["ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS forge_source JSONB"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -2443,6 +2513,7 @@
   (setup-schema-kg!)
   (setup-schema-card-quiz!)
   (setup-schema-video!)
+  (setup-schema-code!)
   (setup-schema-neoreader!)
   (setup-schema-account-transfer!)
   (setup-schema-study-scheduler!)
@@ -2773,6 +2844,16 @@
                      :where [:and
                              [:= :user_id user-id]
                              [:in :key ks]]})))))
+
+(defn setting-keys-with-prefix
+  "Post: every setting key `user-id` holds that starts with `prefix`, sorted.
+   `starts_with` rather than LIKE, because `_` in a prefix is a LIKE wildcard."
+  [user-id prefix]
+  (mapv :key
+    (jdbc/execute! ds
+      ["SELECT key FROM settings WHERE user_id = ? AND starts_with(key, ?) ORDER BY key"
+       user-id prefix]
+      {:builder-fn rs/as-unqualified-maps})))
 
 ;; ---------------------------------------------------------------------------
 ;; Assistant chats (Socratic AI assistant)
@@ -7007,6 +7088,26 @@
 ;; Queue queries (single SELECT, no UNION ALL)
 ;; ---------------------------------------------------------------------------
 
+;; Kinds that scaffold a document tree rather than holding something a user
+;; studies: a PDF page stub, plus the repository, commit and folder nodes a git
+;; forge import creates (plans/git-forge-integration.md §4.1).
+;;
+;; Two readers, and both properties are load-bearing:
+;;   - every review-queue query below excludes them, so a folder never enters
+;;     the Learn queue and never inflates a queue count;
+;;   - reparent-topic! refuses to move one, because their parent_id IS their
+;;     identity — a page stub is (parent_id, page_number), and a repo node's
+;;     descendants are addressed by repo_path under one commit.
+;;
+;; Invariant: `structural-kinds-sql` is derived from this set and never written
+;; by hand, so a kind added here reaches all nine readers at once.
+(def ^:private structural-kinds #{"page" "repo" "commit" "dir"})
+
+(def ^:private structural-kinds-sql
+  "`structural-kinds` as a SQL IN list: \"('commit', 'dir', 'page', 'repo')\".
+   Sorted, so the rendered SQL is stable across JVM runs."
+  (str "(" (str/join ", " (map #(str "'" % "'") (sort structural-kinds))) ")"))
+
 (defn get-learning-queue
   "Due topics for incremental reading. Single query, no UNION.
    Feeds BOTH the Start Learning session and the Learn overview list, so the
@@ -7044,20 +7145,21 @@
   [user-id]
   (try
     {:rows (jdbc/execute! ds
-             ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
+             [(str "SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
                      t.next_review_at, t.interval_days, t.a_factor,
                      t.status, t.content_preview,
                      s.url, s.title, s.csl_type, s.container_title
               FROM topics t
               LEFT JOIN sources s ON s.id = t.source_id
               WHERE t.user_id = ?
-                AND t.kind != 'page'
+                AND t.kind NOT IN " structural-kinds-sql "
                 AND t.staged_delete_id IS NULL
                 AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
                 AND (t.status = 'active' OR t.status IS NULL)
                 AND NOT t.dismissed
               ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
-                       md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
+                       md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC")
+              user-id])
      :error nil}
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
@@ -7067,13 +7169,13 @@
   "Count of due topics."
   [user-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT COUNT(*) AS total FROM topics
+                 [(str "SELECT COUNT(*) AS total FROM topics
                    WHERE user_id = ?
-                     AND kind != 'page'
+                     AND kind NOT IN " structural-kinds-sql "
                      AND staged_delete_id IS NULL
                      AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
                      AND (status = 'active' OR status IS NULL)
-                     AND NOT dismissed"
+                     AND NOT dismissed")
                   user-id])]
     (or (:total result) 0)))
 
@@ -7081,12 +7183,12 @@
   "Count ALL topics (due and not due, excluding done and pages)."
   [user-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT COUNT(*) AS total FROM topics
+                 [(str "SELECT COUNT(*) AS total FROM topics
                    WHERE user_id = ?
-                     AND kind != 'page'
+                     AND kind NOT IN " structural-kinds-sql "
                      AND staged_delete_id IS NULL
                      AND (status = 'active' OR status IS NULL)
-                     AND NOT dismissed"
+                     AND NOT dismissed")
                   user-id])]
     (or (:total result) 0)))
 
@@ -7095,7 +7197,7 @@
   [user-id]
   (try
     (let [result (jdbc/execute-one! ds
-                   ["SELECT COUNT(*) AS total,
+                   [(str "SELECT COUNT(*) AS total,
                            COUNT(*) FILTER (WHERE status = 'done' AND NOT dismissed) AS inactive,
                            COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL)
                                              AND NOT dismissed
@@ -7106,7 +7208,9 @@
                                              AND (next_review_at IS NULL
                                                   OR next_review_at <= CURRENT_TIMESTAMP + INTERVAL '7 days')) AS due_week
                     FROM topics
-                    WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
+                    WHERE user_id = ? AND kind NOT IN " structural-kinds-sql
+                      " AND staged_delete_id IS NULL")
+                    user-id])]
       {:total (or (:total result) 0)
        :inactive (or (:inactive result) 0)
        :due-today (or (:due_today result) 0)
@@ -7121,16 +7225,16 @@
    rather than leaking into the overdue backlog (see get-overdue-count)."
   [user-id days]
   (jdbc/execute! ds
-    ["SELECT DATE(next_review_at) AS review_date, COUNT(*) AS count
+    [(str "SELECT DATE(next_review_at) AS review_date, COUNT(*) AS count
       FROM topics
       WHERE user_id = ?
-        AND kind != 'page'
+        AND kind NOT IN " structural-kinds-sql "
         AND staged_delete_id IS NULL
         AND next_review_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ?::int
         AND (status = 'active' OR status IS NULL)
         AND NOT dismissed
       GROUP BY DATE(next_review_at)
-      ORDER BY review_date"
+      ORDER BY review_date")
      user-id days]))
 
 (defn get-overdue-count
@@ -7138,14 +7242,14 @@
    Charted as the single backlog bar in the Future Due chart."
   [user-id]
   (let [r (jdbc/execute-one! ds
-            ["SELECT COUNT(*) AS n
+            [(str "SELECT COUNT(*) AS n
               FROM topics
               WHERE user_id = ?
-                AND kind != 'page'
+                AND kind NOT IN " structural-kinds-sql "
                 AND staged_delete_id IS NULL
                 AND next_review_at::date < CURRENT_DATE
                 AND (status = 'active' OR status IS NULL)
-                AND NOT dismissed"
+                AND NOT dismissed")
              user-id])]
     (or (:n r) 0)))
 
@@ -7231,11 +7335,13 @@
   [user-id]
   (try
     (let [r (jdbc/execute-one! ds
-              ["SELECT COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL) AND NOT dismissed) AS active,
+              [(str "SELECT COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL) AND NOT dismissed) AS active,
                        COUNT(*) FILTER (WHERE status = 'done' AND NOT dismissed) AS done,
                        COUNT(*) FILTER (WHERE dismissed) AS dismissed
                 FROM topics
-                WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
+                WHERE user_id = ? AND kind NOT IN " structural-kinds-sql
+                  " AND staged_delete_id IS NULL")
+                user-id])]
       {:active (or (:active r) 0)
        :done (or (:done r) 0)
        :dismissed (or (:dismissed r) 0)})
@@ -7249,13 +7355,14 @@
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT id, parent_id, kind, title, created_at, status, dismissed
+      [(str "SELECT id, parent_id, kind, title, created_at, status, dismissed
        FROM topics
        WHERE user_id = ?
-         AND kind != 'page'
+         AND kind NOT IN " structural-kinds-sql "
          AND staged_delete_id IS NULL
          AND (status = 'done' OR dismissed)
-       ORDER BY created_at DESC" user-id])
+       ORDER BY created_at DESC")
+       user-id])
     (catch Exception e
       (tel/error! {:id ::get-inactive-topics} e)
       [])))
@@ -7671,7 +7778,7 @@
         now (java.sql.Timestamp. (System/currentTimeMillis))
         today (java.time.LocalDate/now)]
     (let [active (->> raw
-                   (remove #(= "page" (:topics/kind %)))
+                   (remove #(structural-kinds (:topics/kind %)))
                    (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s)))))
           filtered (if include-reviewed-today?
                      active
@@ -8148,11 +8255,12 @@
 ;; visited check — a cycle would loop them forever, not just corrupt display.
 ;; ---------------------------------------------------------------------------
 
-;; Kinds whose parent_id is structural, not user-arranged: a page stub's
+;; `structural-kinds` is defined above, beside the review queues that share it.
+;; Its members' parent_id is structural, not user-arranged: a page stub's
 ;; identity is (parent_id = pdf-root, page_number), and get-page-text keys the
-;; editor content off that pair — reparenting one orphans its content. These
-;; may never be moved by reparent-topic!.
-(def ^:private structural-kinds #{"page"})
+;; editor content off that pair — reparenting one orphans its content. A repo,
+;; commit or dir node carries the same property through repo_path. These may
+;; never be moved by reparent-topic!.
 
 (defn reparent-topic!
   "Move topic-id under new-parent-id (nil ⇒ promote to root) for user-id.
@@ -8796,6 +8904,26 @@
               WHERE id = ?" new-size session-id])
           {:ok true :received new-size :total (:total_bytes row)})))))
 
+(defn- delete-staged-path!
+  "Best-effort removal of an upload session's `archive_path`.
+
+   The archive flows stage one FILE there. The forge flow stages the extracted
+   DIRECTORY, because its picker reads the tree before any row exists. A plain
+   `.delete` returns false on a non-empty directory and removes nothing, so both
+   owners of the column — release and the reap sweep — go through this.
+   Post: nothing remains at `path`, unless the filesystem refused a delete.
+   Invariant: never throws, and never follows a symbolic link out of `path`."
+  [path]
+  (when path
+    (try
+      (let [root (.toPath (java.io.File. ^String path))]
+        (when (java.nio.file.Files/exists root (make-array java.nio.file.LinkOption 0))
+          (with-open [paths (java.nio.file.Files/walk root
+                              (make-array java.nio.file.FileVisitOption 0))]
+            (doseq [^java.nio.file.Path p (reverse (iterator-seq (.iterator paths)))]
+              (try (java.nio.file.Files/deleteIfExists p) (catch Exception _ nil))))))
+      (catch Exception _ nil))))
+
 (defn release-upload-session!
   "§4.3 3.1.4 — give back everything a session holds: unlink the object, delete
    the materialized archive, refund the reservation, drop the row. Idempotent;
@@ -8826,8 +8954,7 @@
                        WHERE id = ? AND user_id = ? FOR UPDATE" session-id user-id]
                      {:builder-fn rs/as-unqualified-maps})]
       (lo/unlink! tx (:lo_oid row))
-      (when-let [p (:archive_path row)]
-        (try (.delete (java.io.File. ^String p)) (catch Exception _ nil)))
+      (delete-staged-path! (:archive_path row))
       (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" session-id])
       (bump-user-usage! tx user-id (- (:total_bytes row)))
       {:ok true :refunded (:total_bytes row)})))
@@ -8892,6 +9019,155 @@
    paths call this rather than naming their own flow string."
   [user-id session-id]
   (materialize-upload-session! user-id session-id "archive"))
+
+;; ── Git forge imports (plans/git-forge-integration.md) ─────────────────────
+
+(defn open-forge-stage!
+  "Record an extracted forge archive as an upload session (§4.3 3.2).
+
+   The session exists for OWNERSHIP, not transport. `release-upload-session!`
+   and the six-hour reap sweep already remove what a session holds, so a picker
+   the user abandons leaves nothing on disk (§4.3 3.2.3, 3.2.4). No quota is
+   reserved — `total_bytes` is 0 — because an import charges nothing (§4.3 3.7).
+   The large object is empty: `lo_oid` is NOT NULL and every cleanup path unlinks
+   it.
+
+   Pre : this call takes ownership of `dir`, an extracted commit tree.
+         `forge-source` is {:forge :origin-url :repo-url :path :ref :sha}.
+   Post: the new session id; its `flow` is 'forge' and `archive_path` is `dir`."
+  [user-id filename ^java.io.File dir forge-source]
+  (jdbc/with-transaction [tx ds]
+    (let [oid (lo/create! tx)
+          session-id (str (random-uuid))]
+      (jdbc/execute! tx
+        [(str "INSERT INTO upload_sessions
+                 (id, user_id, lo_oid, total_bytes, received_bytes, filename, mime_type,
+                  flow, archive_path, forge_source)
+               VALUES (?, ?, " oid-param ", 0, 0, ?, 'application/zip', 'forge', ?, ?)")
+         session-id user-id oid filename (.getAbsolutePath dir) (->jsonb forge-source)])
+      session-id)))
+
+(defn get-forge-stage
+  "Post: {:dir File :forge-source map} for a forge session `user-id` owns whose
+   directory still exists, else nil. A directory lost to a deploy flip reads as
+   nil, the same as an expired session."
+  [user-id session-id]
+  (when-let [row (jdbc/execute-one! ds
+                   ["SELECT archive_path, forge_source FROM upload_sessions
+                     WHERE id = ? AND user_id = ? AND flow = 'forge'" session-id user-id]
+                   {:builder-fn rs/as-unqualified-maps})]
+    (let [dir (some-> (:archive_path row) (java.io.File.))]
+      (when (and dir (.isDirectory dir))
+        {:dir dir :forge-source (pgobject->clj (:forge_source row))}))))
+
+(defn find-repo-node
+  "Post: the id of `user-id`'s live `repo` topic for `repo-url`, or nil."
+  [user-id repo-url]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM topics
+           WHERE user_id = ? AND kind = 'repo' AND repo_url = ? AND staged_delete_id IS NULL
+           ORDER BY id LIMIT 1" user-id repo-url]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn find-commit-node
+  "Post: the id of the live `commit` child of `repo-id` at `sha`, or nil.
+   The 3-arity reads inside a caller's transaction."
+  ([repo-id sha] (find-commit-node ds repo-id sha))
+  ([connectable repo-id sha]
+   (:id (jdbc/execute-one! connectable
+          ["SELECT id FROM topics
+            WHERE parent_id = ? AND kind = 'commit' AND commit_sha = ? AND staged_delete_id IS NULL
+            LIMIT 1" repo-id sha]
+          {:builder-fn rs/as-unqualified-maps}))))
+
+(defn count-subtree-topics
+  "Post: the topic rows in the subtree rooted at `root-id`, the root included."
+  [root-id]
+  (:n (jdbc/execute-one! ds
+        ["WITH RECURSIVE sub AS (
+            SELECT id FROM topics WHERE id = ?
+            UNION ALL
+            SELECT t.id FROM topics t JOIN sub ON t.parent_id = sub.id)
+          SELECT count(*) AS n FROM sub" root-id]
+        {:builder-fn rs/as-unqualified-maps})))
+
+(defn- selection->jsonb
+  "String keys on purpose: a directory path is not a keyword, and
+   `pgobject->clj` keywordizes."
+  [{:keys [dirs extensions]}]
+  (->jsonb {"dirs" dirs "extensions" (vec (sort extensions))}))
+
+(defn get-repo-import
+  "What repository node `repo-id` was imported with.
+   Post: {:repo-url :forge :ref :selection} for `user-id`'s live repo node, else
+         nil. `:selection` is {:dirs {dir boolean} :extensions #{ext}}."
+  [user-id repo-id]
+  (when-let [row (jdbc/execute-one! ds
+                   ["SELECT t.repo_url, rs.forge, rs.ref, rs.selection
+                     FROM topics t JOIN repo_selections rs ON rs.topic_id = t.id
+                     WHERE t.id = ? AND t.user_id = ? AND t.kind = 'repo'
+                       AND t.staged_delete_id IS NULL" repo-id user-id]
+                   {:builder-fn rs/as-unqualified-maps})]
+    (let [sel (json/parse-string (.getValue ^PGobject (:selection row)))]
+      {:repo-url (:repo_url row)
+       :forge (:forge row)
+       :ref (:ref row)
+       :selection {:dirs (into {} (map (fn [[d v]] [d (boolean v)])) (get sel "dirs"))
+                   :extensions (set (get sel "extensions"))}})))
+
+(defn get-repo-summary
+  "Post: {:repo-url :forge :ref :commits} for `user-id`'s live repo node, else
+   nil. `:commits` counts its live commit children."
+  [user-id repo-id]
+  (jdbc/execute-one! ds
+    ["SELECT t.repo_url, rs.forge, rs.ref,
+             (SELECT count(*) FROM topics c
+              WHERE c.parent_id = t.id AND c.kind = 'commit' AND c.staged_delete_id IS NULL) AS commits
+      FROM topics t JOIN repo_selections rs ON rs.topic_id = t.id
+      WHERE t.id = ? AND t.user_id = ? AND t.kind = 'repo' AND t.staged_delete_id IS NULL"
+     repo-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn insert-repo-selection!
+  "Pre : `tx` is open and `repo-id` is a `repo` topic inserted in it.
+   Post: the repository's forge, ref and selection are stored."
+  [tx repo-id forge ref selection]
+  (jdbc/execute-one! tx
+    ["INSERT INTO repo_selections (topic_id, forge, ref, selection) VALUES (?, ?, ?, ?)"
+     repo-id forge ref (selection->jsonb selection)]))
+
+(defn insert-topic-code-rows!
+  "Batch-insert `topic_code` rows.
+   Pre : `tx` is open; each row carries :topic_id :source :byte_size :lang, and
+         its topic is inserted in `tx`.
+   Post: the number of rows written.
+   Invariant: routed through `param-bounded-batches` (§4.3 3.5). Bounding the
+         BYTES of one statement is the caller's job — 16 000 one-megabyte
+         sources are within the parameter ceiling and far past a sane statement."
+  [tx rows]
+  (if (empty? rows)
+    0
+    (transduce (map (fn [batch]
+                      (::jdbc/update-count
+                        (jdbc/execute-one! tx
+                          (sql/format {:insert-into :topic_code :values (vec batch)})))))
+      + 0 (param-bounded-batches rows))))
+
+(defn get-topic-code
+  "Post: {:source :lang :byte_size :repo_path} for `user-id`'s live code topic,
+   or nil for an empty leaf, another user's topic, or a staged one."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT tc.source, tc.lang, tc.byte_size, t.repo_path
+      FROM topic_code tc JOIN topics t ON t.id = tc.topic_id
+      WHERE tc.topic_id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn topic-code-exists?
+  "Post: true when `topic-id` has stored source, i.e. is not an empty leaf."
+  [topic-id]
+  (some? (jdbc/execute-one! ds ["SELECT 1 FROM topic_code WHERE topic_id = ?" topic-id])))
 
 (defn finalize-epub-session!
   "Turn a completed epub session into an `epub` topic, chapters and all.
@@ -9107,8 +9383,7 @@
                   {:builder-fn rs/as-unqualified-maps})]
       (doseq [{:keys [id user_id lo_oid total_bytes archive_path]} stale]
         (lo/unlink! tx lo_oid)
-        (when archive_path
-          (try (.delete (java.io.File. ^String archive_path)) (catch Exception _ nil)))
+        (delete-staged-path! archive_path)
         (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" id])
         (bump-user-usage! tx user_id (- total_bytes)))
       (when (seq stale)

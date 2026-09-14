@@ -352,7 +352,22 @@
     ;; error before membership drops, and clears it on a later success for the
     ;; same url, so the map holds failures only.
     :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :url-import-errors) work-key))}})
+                (get @(us/get-atom uid :url-import-errors) work-key))}
+
+   ;; A git forge import or update. SERVER tier: it runs on an e/Offload thread
+   ;; that no browser owns. The member is `host/owner/name`, so one repository
+   ;; has one row at a time, and the value is the phase, which moves while the
+   ;; row stays open. A staged import is two rows in history — the download, then
+   ;; the import — because the picker wait between them is not work.
+   ;; `owner-key->args` stays the default: the member IS the work key.
+   :repo-import
+   {:label "Importing repository"
+    :tier :server :subject :none :work-key identity
+    :state-key :importing-repos :key-fn identity
+    :entry->state (fn [phase] {:phase phase})
+    ;; Without this a failed download closes as a success (§4.3 3.8).
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :repo-import-errors) work-key))}})
 
 (def registry
   "`entries`, with each server-tier entry's `:read` derived from its own data."

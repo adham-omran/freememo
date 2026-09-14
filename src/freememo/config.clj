@@ -96,6 +96,21 @@
     (not (or (false? v)
              (= "false" (some-> v str str/lower-case str/trim))))))
 
+(defn forge-private-hosts-allowed?
+  "Whether a git forge import may reach a private, loopback or link-local
+   address (plans/git-forge-integration.md §4.2 2.6).
+
+   FORGE_ALLOW_PRIVATE_HOSTS or :deployment :forge-allow-private-hosts?. The
+   default is false, and no per-user switch exists: on a hosted instance a user
+   who could enable it could probe the network the server sits on. A self-hosted
+   operator whose Forgejo runs on the LAN sets it to true.
+   Post: true only when set to boolean true or the string \"true\"."
+  []
+  (let [v (env-or-config "FORGE_ALLOW_PRIVATE_HOSTS"
+            [:deployment :forge-allow-private-hosts?])]
+    (or (true? v)
+        (= "true" (some-> v str str/lower-case str/trim)))))
+
 ;; Values a deployment MAY add on top of the app itself are not read here — they
 ;; belong to `freememo.deployment-hook` and its optional implementation, which
 ;; resolves them through `env-or-config` above. Keeping their patterns out of

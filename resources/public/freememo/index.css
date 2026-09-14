@@ -2349,61 +2349,61 @@ body .ql-editor pre.ql-syntax {
    intentionally omitted — Quill's `.ql-ui` <select> picker already
    shows the current language in the editor. */
 
-.ql-editor .hljs-keyword,
-.ql-editor .hljs-symbol,
-.ql-editor .hljs-tag,
-.ql-editor .hljs-name,
-.ql-editor .hljs-template-tag,
-.ql-editor .hljs-template-variable { color: #c678dd; }
+:is(.ql-editor, .code-pane-source) .hljs-keyword,
+:is(.ql-editor, .code-pane-source) .hljs-symbol,
+:is(.ql-editor, .code-pane-source) .hljs-tag,
+:is(.ql-editor, .code-pane-source) .hljs-name,
+:is(.ql-editor, .code-pane-source) .hljs-template-tag,
+:is(.ql-editor, .code-pane-source) .hljs-template-variable { color: #c678dd; }
 
-.ql-editor .hljs-string,
-.ql-editor .hljs-regexp             { color: #98c379; }
+:is(.ql-editor, .code-pane-source) .hljs-string,
+:is(.ql-editor, .code-pane-source) .hljs-regexp             { color: #98c379; }
 
-.ql-editor .hljs-comment,
-.ql-editor .hljs-quote {
+:is(.ql-editor, .code-pane-source) .hljs-comment,
+:is(.ql-editor, .code-pane-source) .hljs-quote {
     color: #5c6370;
     font-style: italic;
 }
 
-.ql-editor .hljs-doctag,
-.ql-editor .hljs-meta               { color: #56b6c2; }
+:is(.ql-editor, .code-pane-source) .hljs-doctag,
+:is(.ql-editor, .code-pane-source) .hljs-meta               { color: #56b6c2; }
 
-.ql-editor .hljs-function .hljs-title,
-.ql-editor .hljs-title.function_,
-.ql-editor .hljs-section            { color: #61afef; }
+:is(.ql-editor, .code-pane-source) .hljs-function .hljs-title,
+:is(.ql-editor, .code-pane-source) .hljs-title.function_,
+:is(.ql-editor, .code-pane-source) .hljs-section            { color: #61afef; }
 
-.ql-editor .hljs-variable,
-.ql-editor .hljs-attr,
-.ql-editor .hljs-attribute,
-.ql-editor .hljs-params             { color: #e06c75; }
+:is(.ql-editor, .code-pane-source) .hljs-variable,
+:is(.ql-editor, .code-pane-source) .hljs-attr,
+:is(.ql-editor, .code-pane-source) .hljs-attribute,
+:is(.ql-editor, .code-pane-source) .hljs-params             { color: #e06c75; }
 
-.ql-editor .hljs-number,
-.ql-editor .hljs-literal,
-.ql-editor .hljs-bullet,
-.ql-editor .hljs-link               { color: #d19a66; }
+:is(.ql-editor, .code-pane-source) .hljs-number,
+:is(.ql-editor, .code-pane-source) .hljs-literal,
+:is(.ql-editor, .code-pane-source) .hljs-bullet,
+:is(.ql-editor, .code-pane-source) .hljs-link               { color: #d19a66; }
 
-.ql-editor .hljs-type,
-.ql-editor .hljs-class .hljs-title,
-.ql-editor .hljs-title.class_,
-.ql-editor .hljs-built_in           { color: #e5c07b; }
+:is(.ql-editor, .code-pane-source) .hljs-type,
+:is(.ql-editor, .code-pane-source) .hljs-class .hljs-title,
+:is(.ql-editor, .code-pane-source) .hljs-title.class_,
+:is(.ql-editor, .code-pane-source) .hljs-built_in           { color: #e5c07b; }
 
-.ql-editor .hljs-selector-tag       { color: #e06c75; }
-.ql-editor .hljs-selector-id        { color: #d19a66; }
-.ql-editor .hljs-selector-class,
-.ql-editor .hljs-selector-attr,
-.ql-editor .hljs-selector-pseudo    { color: #e5c07b; }
+:is(.ql-editor, .code-pane-source) .hljs-selector-tag       { color: #e06c75; }
+:is(.ql-editor, .code-pane-source) .hljs-selector-id        { color: #d19a66; }
+:is(.ql-editor, .code-pane-source) .hljs-selector-class,
+:is(.ql-editor, .code-pane-source) .hljs-selector-attr,
+:is(.ql-editor, .code-pane-source) .hljs-selector-pseudo    { color: #e5c07b; }
 
-.ql-editor .hljs-addition {
+:is(.ql-editor, .code-pane-source) .hljs-addition {
     color: #98c379;
     background: rgba(152, 195, 121, 0.12);
 }
-.ql-editor .hljs-deletion {
+:is(.ql-editor, .code-pane-source) .hljs-deletion {
     color: #e06c75;
     background: rgba(224, 108, 117, 0.12);
 }
 
-.ql-editor .hljs-emphasis { font-style: italic; }
-.ql-editor .hljs-strong   { font-weight: bold;  }
+:is(.ql-editor, .code-pane-source) .hljs-emphasis { font-style: italic; }
+:is(.ql-editor, .code-pane-source) .hljs-strong   { font-weight: bold;  }
 
 /* ── Card Table RTL ───────────────────────────────────────────── */
 /* dir="auto" on .card-table handles column flip via CSS Grid.
@@ -7565,3 +7565,96 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     .poem-verse__half--ajuz { grid-column: 1; }
     .poem-verse__num { grid-row: 1; grid-column: 2; }
 }
+
+/* ── Git forge import (plans/git-forge-integration.md) ───────────────────── */
+
+/* Code pane: read-only source beside the notes editor. */
+.code-pane {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    background: var(--color-bg-card);
+    border-right: 1px solid var(--color-border);
+}
+.code-pane__header {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; flex-shrink: 0;
+    padding: 6px 8px; border-bottom: 2px solid var(--color-border);
+}
+.code-pane__path {
+    flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+}
+.code-pane__meta { font-size: 12px; color: var(--color-text-label); }
+.code-pane__notice {
+    padding: 4px 8px; font-size: 12px; color: var(--color-text-secondary);
+    background: var(--color-info-bg);
+}
+.code-pane__empty { padding: 24px 12px; font-size: 13px; color: var(--color-text-secondary); }
+/* `white-space: pre` and no wrapping: indentation is the content (§4.4 4.3).
+   The ground and the font are the editor's code block's, in both themes, because
+   the token palette above is the one `.ql-code-block-container` uses and it is
+   chosen for that dark ground. */
+.code-pane-source {
+    flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 8px 12px;
+    background: #23241f; color: #f8f8f2;
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: var(--code-block-font-size, 13px); line-height: 1.5;
+    white-space: pre; tab-size: 4;
+}
+.code-pane-source code.hljs { display: block; padding: 0; background: transparent; }
+
+/* Repository node: the Update control. */
+.repo-update-bar {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; flex-shrink: 0;
+    padding: 6px 8px; border-bottom: 1px solid var(--color-border);
+    font-size: 13px;
+}
+.repo-update-bar__source {
+    flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--color-text-secondary);
+}
+.repo-update-bar__phase,
+.repo-update-bar__result { color: var(--color-text-secondary); }
+.repo-update-bar__result--error { color: var(--color-danger-text); }
+
+/* Import modal: form and picker. */
+.forge-import { max-height: 85vh; display: flex; flex-direction: column; overflow-y: auto; }
+.forge-import__title { margin: 0 0 16px 0; font-size: 16px; }
+.forge-import__actions { display: flex; gap: var(--sp-2); justify-content: flex-end; margin-top: var(--sp-3); }
+.forge-import__error {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+    margin-top: var(--sp-3); font-size: 13px; color: var(--color-danger-text);
+}
+.forge-import__link {
+    padding: 0; border: none; background: none; cursor: pointer;
+    font: inherit; font-size: 13px; color: var(--color-primary); text-decoration: underline;
+}
+.forge-picker { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
+.forge-picker__source { margin: 0; font-size: 13px; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.forge-picker__heading { display: flex; align-items: baseline; gap: var(--sp-3); font-size: 13px; font-weight: 600; }
+.forge-picker__dirs {
+    position: relative; height: min(40vh, 360px); overflow-y: auto; min-height: 0;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+}
+.forge-picker__dir {
+    display: flex; align-items: center; gap: 6px; width: 100%; height: 100%;
+    font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.forge-picker__name { overflow: hidden; text-overflow: ellipsis; }
+.forge-picker__count { margin-left: auto; padding-right: 8px; font-size: 12px; color: var(--color-text-label); }
+.forge-picker__extensions {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; max-height: 140px; overflow-y: auto;
+    padding: 6px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+}
+.forge-picker__extension { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+.forge-picker__extension .forge-picker__count { margin-left: 0; padding-right: 0; }
+.forge-picker__summary { margin: 0; font-size: 13px; }
+.forge-picker__summary--over { color: var(--color-danger-text); font-weight: 600; }
+
+/* Settings → Git Forges. */
+.forge-tokens { list-style: none; margin: 0 0 var(--sp-3) 0; padding: 0; }
+.forge-tokens__row {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+    padding: 6px 0; border-bottom: 1px solid var(--color-bg-subtle); font-size: 14px;
+}
+.forge-tokens__actions { margin-top: var(--sp-3); }
+.forge-tokens__outcome { margin: var(--sp-2) 0 0 0; font-size: 13px; color: var(--color-text-secondary); }
+.forge-tokens__outcome--error { color: var(--color-danger-text); }

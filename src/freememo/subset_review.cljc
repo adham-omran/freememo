@@ -12,7 +12,9 @@
   #?(:clj (vec (db/get-subset-review-queue user-id root-id))
      :cljs nil))
 
-;; Badge display for topic kinds
+;; Badge display for topic kinds. No 'page', 'repo', 'commit' or 'dir' branch:
+;; get-subset-review-queue drops every structure kind, so such a row cannot
+;; reach this switch.
 (defn kind-badge [kind]
   (case kind
     "pdf" ["PDF" "var(--color-badge-pdf)"]
@@ -24,6 +26,7 @@
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
     "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
     "poem" ["Poem" "var(--color-badge-epub)"]
+    "code" ["Code" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)

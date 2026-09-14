@@ -142,6 +142,9 @@
     (= kind "video")                 ["Video"     "var(--color-badge-video)"]
     (= kind "video-playlist")        ["Playlist"  "var(--color-badge-video)"]
     (= kind "code")                  ["Code"      "var(--color-badge-web)"]
+    (= kind "repo")                  ["Repo"      "var(--color-badge-occlusion)"]
+    (= kind "commit")                ["Commit"    "var(--color-badge-occlusion)"]
+    (= kind "dir")                   ["Folder"    "var(--color-badge-occlusion)"]
     (= kind "supermemo")             ["SuperMemo" "var(--color-badge-supermemo)"]
     (= kind "poem")                  ["Poem"      "var(--color-badge-epub)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))

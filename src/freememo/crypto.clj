@@ -36,6 +36,19 @@
   (let [server-secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
     (derive-key server-secret (str "google-" google-sub))))
 
+(defn derive-key-for-local-user
+  "Derive a key for a password user from the server secret and the user id.
+
+   A password user's session carries no key, because `derive-key` needs the
+   password and the session never holds it. A secret stored for such a user —
+   a git forge token — therefore needs a key the server can derive without the
+   password. Same construction as `derive-key-for-oauth-user`, with a salt that
+   cannot collide with a Google subject.
+   Post: a non-nil base64 key, stable for (`user-id`, ENC_KEY_SECRET)."
+  [user-id]
+  (let [server-secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
+    (derive-key server-secret (str "local-user-" user-id))))
+
 (defn- str->secret-key
   "Parse a base64-encoded key string into an AES SecretKeySpec."
   [enc-key-str]

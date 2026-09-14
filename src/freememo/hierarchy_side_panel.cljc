@@ -66,6 +66,10 @@
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
     "supermemo"  ["SuperMemo" "var(--color-badge-supermemo)"]
     "poem"       ["Poem"    "var(--color-badge-epub)"]
+    "repo"       ["Repo"    "var(--color-badge-occlusion)"]
+    "commit"     ["Commit"  "var(--color-badge-occlusion)"]
+    "dir"        ["Folder"  "var(--color-badge-occlusion)"]
+    "code"       ["Code"    "var(--color-badge-web)"]
     "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 

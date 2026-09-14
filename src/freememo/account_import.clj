@@ -70,6 +70,10 @@
    rows directly and knows its own topic id."
   {:topics {:parent_id :topics :source_id :sources}
    :poem_packages {:topic_id :topics}
+   ;; Both are phase-1 tables, unlike the blob tables above: their rows travel
+   ;; as ordinary JSON, so the topic id in each needs translating like any other.
+   :topic_code {:topic_id :topics}
+   :repo_selections {:topic_id :topics}
    :topic_pins {:topic_id :topics :media_id :media}
    :neoreader_highlights {:root_topic_id :topics :chapter_topic_id :topics}
    :occlusion_groups {:image_media_id :media}
@@ -119,6 +123,10 @@
    the schema forbids or a dangling id the schema cannot see."
   {:poem_packages #{:topic_id}
    :topic_pins #{:topic_id :media_id}
+   ;; topic_id is the PRIMARY KEY of both tables. A row whose topic did not
+   ;; translate has no identity at all, so it is dropped and reported.
+   :topic_code #{:topic_id}
+   :repo_selections #{:topic_id}
    :occlusion_groups #{:image_media_id}
    :score_groups #{:clip_media_id}
    :card_schedules #{:flashcard_id}
@@ -166,6 +174,10 @@
   ;; `created_at` records when the package was imported, which stays true on the
   ;; target. It holds no generated column and no single-collection state.
   {:topics #{:id :staged_delete_id :content_preview}
+   ;; `source_preview` is GENERATED, the same case as content_preview above.
+   ;; `:id` is named because an entry REPLACES the default, even though this
+   ;; table's key is topic_id and it has no id column of its own.
+   :topic_code #{:id :source_preview}
    :curricula #{:id :staged_delete_id}
    :neoreader_highlights #{:id :quote_hash}
    ;; The reconcile baselines and the conflict flag describe ONE Anki

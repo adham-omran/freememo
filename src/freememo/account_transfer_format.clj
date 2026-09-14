@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 38 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 40 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -97,6 +97,8 @@
    :topic_files
    :topic_videos
    :topic_epubs
+   :topic_code
+   :repo_selections
    :video_transcripts
    :video_segments
    :topic_pins
@@ -273,6 +275,16 @@
 
    :topic_epubs {:where (str "t.topic_id IN (" owned-topics ")")
                  :params 1 :order "t.topic_id"}
+
+   ;; source_preview is GENERATED from source, which this archive does carry,
+   ;; so the target recomputes it on insert. Postgres refuses an INSERT that
+   ;; names a generated column, which is why account-import/dropped-columns
+   ;; drops it as well — the same pair topics/content_preview forms.
+   :topic_code {:where (str "t.topic_id IN (" owned-topics ")")
+                :params 1 :order "t.topic_id" :drop-keys ["source_preview"]}
+
+   :repo_selections {:where (str "t.topic_id IN (" owned-topics ")")
+                     :params 1 :order "t.topic_id"}
 
    :video_transcripts {:where (str "t.topic_id IN (" owned-topics ")")
                        :params 1 :order "t.id"}

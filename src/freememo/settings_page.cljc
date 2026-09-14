@@ -12,6 +12,7 @@
    [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.dedup-section :refer [DedupSection]]
+   [freememo.forge-settings-section :refer [ForgeTokensSection]]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
    #?(:clj [freememo.settings :as settings])
@@ -26,6 +27,7 @@
    {:id "settings-appearance" :label "Appearance"}
    {:id "settings-anki" :label "Anki Sync"}
    {:id "settings-zotero" :label "Zotero"}
+   {:id "settings-forges" :label "Git Forges"}
    {:id "settings-extension" :label "Browser Extension"}
    {:id "settings-keyboard" :label "Keyboard Shortcuts"}])
 
@@ -572,6 +574,12 @@
             (dom/props {:id "settings-zotero"
                         :style (tab-style active "settings-zotero")})
             (ZoteroSection user-id))
+
+      ;; ── Git Forges section (plans/git-forge-integration.md §4.2) ──
+          (dom/div
+            (dom/props {:id "settings-forges"
+                        :style (tab-style active "settings-forges")})
+            (ForgeTokensSection user-id))
 
       ;; ── Browser Extension section ──────────────────────────────
           (dom/div

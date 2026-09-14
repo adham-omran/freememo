@@ -132,6 +132,7 @@
               dctx/video-duration-ms (:video-duration-ms m)
               dctx/video-last-pos-ms (:video-last-pos-ms m)
               dctx/video-has-audio? (:video-has-audio? m)
+              dctx/is-code? (:is-code? m) dctx/code-has-source? (:code-has-source? m)
               dctx/!video-el (:!video-el m) dctx/!video-region (:!video-region m)
               dctx/!video-playhead (:!video-playhead m)]
       (DocumentBody)

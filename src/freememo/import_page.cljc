@@ -26,6 +26,7 @@
    [freememo.navigation :as nav]
    [freememo.command-bus :as bus]
    [freememo.import-modal :refer [ImportModal]]
+   [freememo.forge-import-modal :refer [ForgeImportModal]]
    [freememo.video-import-modal :refer [VideoImportModal]]
    [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]
    [freememo.client-errors :as ce]))
@@ -62,8 +63,11 @@
     :desc "Match sheet music to a recording"}
    {:id :zotero    :group :secondary :key "7" :icon :library   :title "Zotero"
     :desc "Select a PDF from your Zotero library"}
+   ;; One card for both code paths. A forge import is what the card opens; the
+   ;; archive upload is one link inside it (`:code-zip`), so the grid gains no
+   ;; card for it (plans/git-forge-integration.md §4.3 3.1).
    {:id :code      :group :secondary :key "8" :icon :code      :title "Code"
-    :desc "Add a code base as a .zip file"}
+    :desc "From GitHub, GitLab, Forgejo or a .zip file"}
    {:id :poem      :group :secondary :key "9" :icon :book-open :title "Poem"
     :desc "Import a poem package as a .zip file"}
    {:id :live-doc  :group :secondary          :icon :scan-text :title "Live Document"
@@ -482,7 +486,10 @@
         ;; the modal opens empty.
         (case open-source
           :upload    (ImportModal !open-source user-id :file navigate! !intake)
-          :code      (ImportModal !open-source user-id :code navigate! !intake)
+          :code      (ForgeImportModal !open-source user-id navigate!)
+          ;; No card of its own: ForgeImportModal's "Upload a .zip file instead"
+          ;; writes it, the way the intake area writes :upload.
+          :code-zip  (ImportModal !open-source user-id :code navigate! !intake)
           :link      (ImportModal !open-source user-id :url navigate! !intake)
           :audio     (ImportModal !open-source user-id :audio navigate! !intake)
           :score     (ImportModal !open-source user-id :score navigate! !intake)

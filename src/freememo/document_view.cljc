@@ -15,6 +15,8 @@
    [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
    [freememo.video-pane :refer [VideoPane]]
    [freememo.video-transcript :refer [VideoTranscriptPane]]
+   [freememo.code-pane :refer [CodePane]]
+   [freememo.repo-update-bar :refer [RepoUpdateBar]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.poem-pane :refer [PoemPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
@@ -148,6 +150,22 @@
       (PaneDragHandle :x dctx/!left-pct dctx/left-pct
         "Resize video and editor panes"))))
 
+(e/defn CodeSplitPane
+  "The code half of a file imported from a git forge: CodePane in a column sized
+   by left-pct, then its handle, with the editor beside it. Renders nothing for
+   any other topic, mirroring PdfSplitPane. Own e/defn for the 64KB method cap
+   (plans/git-forge-integration.md §4.4 4.3)."
+  []
+  (e/client
+    (when dctx/is-code?
+      (dom/div
+        (dom/props {:style {:width (str dctx/left-pct "%")
+                            :display "flex" :flex-direction "column"
+                            :min-width "0" :min-height "0" :overflow "hidden"}})
+        (CodePane))
+      (PaneDragHandle :x dctx/!left-pct dctx/left-pct
+        "Resize code and editor panes"))))
+
 (e/defn ContentColumn
   "Middle content column of a document view: the PdfPane/EditorPane split, laid
    out as a row (left-right) or column (top-bottom). Own e/defn for the 64KB
@@ -164,6 +182,10 @@
         ;; the audio segment picked here pairs with notation rects for cards.
         (when dctx/is-score?
           (ScoreWaveformStrip))
+        ;; Repository nodes: the Update control across the top, the one place it
+        ;; exists (plans/git-forge-integration.md §4.6 6.1).
+        (when (= kind "repo")
+          (RepoUpdateBar))
         (dom/div
           ;; The focus-reader class is the ONLY scope for the centered-column
           ;; CSS. `.ql-editor` also styles card fields and every other Quill
@@ -181,6 +203,8 @@
           ;; usable; only their arrangement changed.
           (binding [dctx/video-topic-id page-topic-id]
             (VideoSplitPane))
+          ;; Files from a git forge: read-only source beside the notes editor.
+          (CodeSplitPane)
           (binding [dctx/topic-id page-topic-id
                     dctx/audio-topic-id (when (= kind "audio") page-topic-id)
                     dctx/is-pdf-page? is-pdf?

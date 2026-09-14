@@ -147,6 +147,42 @@
                (catch clojure.lang.ExceptionInfo e
                  [(:entry (ex-data e)) (:type (ex-data e))]))))))
 
+(deftest escaping-entry-is-refused-when-the-caller-asks
+  ;; The forge import passes :refuse (plans/git-forge-integration.md §4.2 2.4):
+  ;; no forge writes a `../` entry, so an archive holding one is hostile and the
+  ;; whole import stops rather than quietly importing the rest.
+  (let [zb (zip-bytes [["ok.txt" "yes"] ["../escaped.txt" "nope"]])]
+    (is (= [::archive/unsafe-entry "../escaped.txt"]
+          (try (archive/extract-to-temp-dir! zb {:escaping-entry :refuse})
+               (catch clojure.lang.ExceptionInfo e
+                 [(:type (ex-data e)) (:entry (ex-data e))]))))
+    (testing "a traversal hidden inside a path is refused the same way"
+      (is (= ::archive/unsafe-entry
+            (try (archive/extract-to-temp-dir! (zip-bytes [["a/../../escaped.txt" "x"]])
+                   {:escaping-entry :refuse})
+                 (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))
+    (testing "an absolute name is NOT an escape: File(dir, \"/etc/passwd\") is inside dir"
+      (let [dir (archive/extract-to-temp-dir! (zip-bytes [["/etc/passwd" "x"]])
+                  {:escaping-entry :refuse})]
+        (try
+          (is (= ["etc/passwd"] (tree dir)))
+          (finally (archive/delete-dir! dir)))))))
+
+(deftest inflation-ratio-guard-throws-on-a-bomb
+  ;; 4 MB of one repeated byte compresses to a few kilobytes, so its ratio is
+  ;; far past 10 while its total is far below every absolute cap — the case a
+  ;; fixed total cannot tell from an honest archive.
+  (let [zb (zip-bytes [["bomb.bin" (byte-array (* 4 1024 1024) (byte 0))]])]
+    (is (< (alength zb) (* 64 1024)) "the fixture really is a bomb")
+    (is (= ::archive/archive-too-large
+          (try (archive/extract-to-temp-dir! zb {:max-inflation-ratio 10})
+               (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
+    (testing "the same archive extracts with no ratio bound"
+      (let [dir (archive/extract-to-temp-dir! zb {})]
+        (try
+          (is (= (* 4 1024 1024) (.length (io/file dir "bomb.bin"))))
+          (finally (archive/delete-dir! dir)))))))
+
 (deftest unsupported-container-throws
   (is (= ::archive/unsupported-archive
         (try (archive/extract-to-temp-dir! (.getBytes "plain text") {})

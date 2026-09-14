@@ -259,12 +259,19 @@
    Pre : `next-entry!` returns [name directory?] or nil at end;
          `read-chunk!` reads from the entry `next-entry!` last returned.
    Post: returns `dir`."
-  [^File dir {:keys [keep? max-entries max-entry-bytes max-total-bytes]} next-entry! read-chunk!]
+  [^File dir {:keys [keep? max-entries max-entry-bytes max-total-bytes escaping-entry]}
+   next-entry! read-chunk!]
   (loop [n-entries 0, total 0]
     (when (> n-entries (long max-entries))
       (throw (ex-info "Archive has too many entries" {:type ::archive-too-large})))
     (if-let [[nm directory?] (next-entry!)]
       (let [target (when-not directory? (safe-target dir nm))]
+        ;; `:refuse` fails the whole archive on an entry that names a place
+        ;; outside `dir`. `:skip` (the default) drops the entry, which is what
+        ;; the older flows shipped with.
+        (when (and (= :refuse escaping-entry) (nil? (safe-target dir nm)))
+          (throw (ex-info "Archive entry escapes the extraction directory"
+                   {:type ::unsafe-entry :entry nm})))
         (if (or (nil? target) (not (keep? nm)))
           (do (when-not directory? (skip-entry! read-chunk!))
               (recur (inc n-entries) total))
@@ -279,18 +286,30 @@
   "Extract `src` (ZIP or 7z, byte[] or File) into a fresh temp directory.
    Pre : `src` is a ZIP or 7z archive. `opts` may carry :prefix (temp dir name
          prefix), :keep? (predicate on the entry name — only matching entries
-         are written; default: everything), and any of `default-limits`.
+         are written; default: everything), any of `default-limits`,
+         :max-inflation-ratio (the written total may not exceed this many
+         times the archive's own size; absent means no ratio bound), and
+         :escaping-entry (:skip, the default, or :refuse).
    Post: a temp dir File holding the extracted tree. On ANY failure the temp
          dir is removed and the error rethrown, so a caller never inherits a
          half-extracted directory.
    Invariant: the caller owns the returned dir and MUST delete it — this fn
          cannot know when the caller has finished reading from it.
    Invariant: heap high-water is one copy buffer, whatever `src` is.
-   Throws ex-info {:type ::archive-too-large} when a cap is exceeded, and
+   Throws ex-info {:type ::archive-too-large} when a cap is exceeded,
+   {:type ::unsafe-entry} for an escaping entry under :refuse, and
    {:type ::unsupported-archive} when the source is neither ZIP nor 7z."
   [src opts]
-  (let [{:keys [prefix] :as cfg}
+  (let [{:keys [prefix max-inflation-ratio] :as cfg}
         (merge default-limits {:prefix "archive" :keep? (constantly true)} opts)
+        ;; The ratio folds into the total cap: a bomb's defining property is
+        ;; that it inflates far past its own size, which a fixed total cannot
+        ;; tell apart from a large honest archive (`epub/default-limits`).
+        cfg (cond-> cfg
+              max-inflation-ratio
+              (update :max-total-bytes min
+                (* (long max-inflation-ratio)
+                  (if (bytes? src) (alength ^bytes src) (.length ^File src)))))
         kind (archive-kind src)
         _ (when-not kind
             (throw (ex-info "Unsupported archive format (expected ZIP or 7z)"

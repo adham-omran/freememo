@@ -11,6 +11,7 @@
    [clojure.string :as str]
    [freememo.doc-context :as dctx]
    [freememo.rich-text-editor :as editor]
+   [freememo.code-pane :as code-pane]
    [freememo.card-models :as card-models]
    [freememo.math :as math]
    [freememo.command-bus :as bus]
@@ -241,6 +242,7 @@
           content-text dctx/content-text context-mode dctx/context-mode
           use-context dctx/use-context context-window dctx/context-window
           card-type dctx/card-type card-count-val dctx/card-count-val
+          is-code? dctx/is-code?
           !open (atom nil) open (e/watch !open)
           model-ids (e/server (settings/card-model-ids))]
       (dom/button
@@ -254,11 +256,14 @@
           (e/on-unmount (fn [] (bus/retract-invoker! :compare-card-gen))))
         (dom/On "click"
           (fn [_]
-            (let [sel (editor/get-selection-html!)]
-              (when sel
-                (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-              (reset! !open {:selection-html (when (and sel (not (str/blank? (:text sel))))
-                                               (:html sel))})))
+            ;; Same subject order as Generate: the code pane, then the editor.
+            (if-let [pane-html (code-pane/pane-selection-html)]
+              (reset! !open {:selection-html pane-html})
+              (let [sel (editor/get-selection-html!)]
+                (when sel
+                  (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
+                (reset! !open {:selection-html (when (and sel (not (str/blank? (:text sel))))
+                                                 (:html sel))}))))
           nil))
       (when open
         (CardCompareModal
@@ -266,5 +271,5 @@
            :content-text content-text :context-mode context-mode :use-context use-context
            :topic-id topic-id :root-topic-id root-topic-id :page-number page-number
            :context-window context-window :card-type card-type :card-count card-count-val
-           :user-id user-id :enc-key enc-key :pre-prompt nil}
+           :user-id user-id :enc-key enc-key :pre-prompt nil :is-code? is-code?}
           model-ids !open)))))
