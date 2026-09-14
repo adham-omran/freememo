@@ -99,7 +99,8 @@
 (e/defn ForgeForm
   "The first stage: which repository, at which ref.
    Post: a successful download moves `!stage` to :picking with the stage result.
-         A failure shows its message and keeps what the user typed."
+         A failure keeps what the user typed; Forms5 prints its message, and an
+         already-imported repository also gets an Open repository button."
   [user-id !stage close! open-topic! use-zip!]
   (e/client
     (let [!forge (atom "github")
@@ -147,15 +148,16 @@
                                                 :ref (:ref fields)}])
                     :type :command
                     :show-buttons false)]
-      (when failure
+      ;; The failure's MESSAGE is Forms5's to print: the token is spent with it,
+      ;; and the form shows it in `p[data-role=errormessage]`. Only the action a
+      ;; message cannot carry is rendered here.
+      (when-some [topic-id (:topic-id failure)]
         (dom/div
-          (dom/props {:class "forge-import__error" :role "alert"})
-          (dom/span (dom/text (:error failure)))
-          (when-some [topic-id (:topic-id failure)]
-            (dom/button
-              (dom/props {:type "button" :class "btn btn-sm btn-secondary"})
-              (dom/text "Open repository")
-              (dom/On "click" (fn [_] (open-topic! topic-id)) nil)))))
+          (dom/props {:class "forge-import__error"})
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-sm btn-secondary"})
+            (dom/text "Open repository")
+            (dom/On "click" (fn [_] (open-topic! topic-id)) nil))))
       (dom/button
         (dom/props {:type "button" :class "forge-import__link"})
         (dom/text "Upload a .zip file instead")

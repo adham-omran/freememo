@@ -107,7 +107,7 @@
           !outcome (atom nil)
           outcome (e/watch !outcome)]
       (dom/div
-        (dom/props {:class "card"})
+        (dom/props {:class "card forge-tokens-section"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "Git Forges"))
         (dom/p
           (dom/props {:class "hint"})
@@ -156,13 +156,10 @@
                         (t))
                     (t (:error r))))))))
 
-        (when outcome
+        ;; Success only. A failed save spends its token with the error, and
+        ;; Forms5 prints that error inside the form (`p[data-role=errormessage]`)
+        ;; — a second copy here printed every failure twice.
+        (when (:ok outcome)
           (dom/p
-            (dom/props {:class (if (:ok outcome)
-                                 "forge-tokens__outcome"
-                                 "forge-tokens__outcome forge-tokens__outcome--error")
-                        :role "status"})
-            (dom/text (cond
-                        (not (:ok outcome)) (:error outcome)
-                        (:warning outcome) (:warning outcome)
-                        :else "Token saved."))))))))
+            (dom/props {:class "forge-tokens__outcome" :role "status"})
+            (dom/text (or (:warning outcome) "Token saved."))))))))

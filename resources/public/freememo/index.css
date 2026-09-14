@@ -7657,4 +7657,10 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 .forge-tokens__actions { margin-top: var(--sp-3); }
 .forge-tokens__outcome { margin: var(--sp-2) 0 0 0; font-size: 13px; color: var(--color-text-secondary); }
-.forge-tokens__outcome--error { color: var(--color-danger-text); }
+/* Forms5 prints a failed commit's error in `p[data-role="errormessage"]` and
+   styles it not at all, so it rendered at body size. Scoped to the two forge
+   forms: the attribute is Forms5's, and every Form! in the app renders one. */
+.forge-tokens-section p[data-role="errormessage"],
+.forge-import p[data-role="errormessage"] {
+    margin: 6px 0 0 0; font-size: 13px; color: var(--color-danger-text);
+}
