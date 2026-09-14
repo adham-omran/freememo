@@ -1,0 +1,97 @@
+{
+  "dataset_id": "freememo-smoke-test",
+  "version": "1",
+  "smoke_test": true,
+  "sources": [
+    {
+      "source_id": "titan-flight",
+      "source_text": "Titan has a dense atmosphere and surface gravity about one-seventh of Earth's. In a suit with wings, a person could generate enough lift by moving their arms and could fly by flapping them.",
+      "source_meta": {
+        "domain": "general-science",
+        "density": "definitional"
+      },
+      "target_units": [
+        {
+          "unit_id": "titan-flight-main",
+          "highlight": "a person could generate enough lift by moving their arms and could fly by flapping them",
+          "intent": "A human could fly on Titan by flapping winged arms.",
+          "reference_cards": [
+            {
+              "id": "titan-t3",
+              "tier": "T3",
+              "front": "On Titan, a person in a winged suit could fly by doing what?",
+              "back": "Flapping their arms.",
+              "rationale": "The question gives enough context and cues one stable answer."
+            },
+            {
+              "id": "titan-t2",
+              "tier": "T2",
+              "front": "What fanciful ability could a wing-suited human use on Titan because of its dense atmosphere and low gravity?",
+              "back": "The person could fly by flapping their arms.",
+              "rationale": "The card targets the intent but uses unnecessary setup."
+            },
+            {
+              "id": "titan-t1",
+              "tier": "T1",
+              "front": "How would Titan affect human movement?",
+              "back": "A person could fly by flapping winged arms.",
+              "rationale": "The question permits many correct answers."
+            },
+            {
+              "id": "titan-t0",
+              "tier": "T0",
+              "front": "What fraction of Earth gravity exists on Titan?",
+              "back": "About one-seventh.",
+              "rationale": "The fact is correct but does not target the reader intent."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "cache-fragmentation",
+      "source_text": "A paged key-value cache divides token storage into fixed blocks. A sequence can use several blocks, and the last block is often partly empty. This waste is internal fragmentation. External fragmentation does not occur because any free block can serve any sequence.",
+      "source_meta": {
+        "domain": "computer-science",
+        "density": "technical"
+      },
+      "target_units": [
+        {
+          "unit_id": "cache-fragmentation-kind",
+          "highlight": "the last block is often partly empty. This waste is internal fragmentation",
+          "intent": "A paged key-value cache has internal fragmentation in the last block, not external fragmentation.",
+          "reference_cards": [
+            {
+              "id": "cache-t3",
+              "tier": "T3",
+              "front": "In a paged key-value cache, what kind of fragmentation can a partly empty final block cause?",
+              "back": "Internal fragmentation.",
+              "rationale": "The question names the system and cues one answer."
+            },
+            {
+              "id": "cache-t2",
+              "tier": "T2",
+              "front": "What is the name for the memory waste that occurs when the final fixed block of a paged key-value cache is not full?",
+              "back": "Internal fragmentation.",
+              "rationale": "The card is stable but longer than necessary."
+            },
+            {
+              "id": "cache-t1",
+              "tier": "T1",
+              "front": "What problem can the last block have?",
+              "back": "Internal fragmentation.",
+              "rationale": "The question lacks the system context and allows many answers."
+            },
+            {
+              "id": "cache-t0",
+              "tier": "T0",
+              "front": "Why does a paged key-value cache suffer from external fragmentation?",
+              "back": "Free blocks cannot serve every sequence.",
+              "rationale": "The card contradicts the source."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

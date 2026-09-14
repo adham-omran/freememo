@@ -1,0 +1,1525 @@
+{
+  "dataset_id": "laddermedia/srs-highlights/grounded/test",
+  "version": "784fbaad10a241be61d89cb4e2d1f0e1b6bbbb6b",
+  "smoke_test": false,
+  "reference_policy": "at-least-two-v1",
+  "provenance": {
+    "dataset_url": "https://huggingface.co/datasets/laddermedia/srs-highlights",
+    "revision": "784fbaad10a241be61d89cb4e2d1f0e1b6bbbb6b",
+    "configuration": "grounded",
+    "split": "test",
+    "source_file": "grounded-00000-of-00001.parquet",
+    "source_sha256": "b8f2fbca62f575716379a23792600aa3533e632ed8c52ce75f1d2b556b59108e",
+    "context_kind": "source-summary"
+  },
+  "sources": [
+    {
+      "source_id": "source-b3d51a4b35ef4987",
+      "source_text": "This Wikipedia article explains the lump of labour fallacy, which is the misconception that there is a fixed amount of work to be done in an economy. The article describes how this fallacy is often used to argue against automation, immigration, or increased workforce participation, when in reality, the economy and available work tend to grow as more people participate in the workforce or as productivity increases.",
+      "source_meta": {
+        "author": "Wikipedia contributors",
+        "publication_date": "Last edited on 18 February 2025",
+        "summary": "This Wikipedia article explains the lump of labour fallacy, which is the misconception that there is a fixed amount of work to be done in an economy. The article describes how this fallacy is often used to argue against automation, immigration, or increased workforce participation, when in reality, the economy and available work tend to grow as more people participate in the workforce or as productivity increases.",
+        "title": "Lump of labour fallacy",
+        "source_url": "https://en.wikipedia.org/wiki/Lump_of_labour_fallacy",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "154-537",
+          "highlight": "the lump of labour fallacy is the misconception that there is a finite amount of work—a lump of labour—to be done within an economy which can be distributed to create more or fewer jobs",
+          "intent": "The highlighted passage defines the \"lump of labour fallacy\" as the mistaken belief that the total amount of work available in an economy is fixed and limited—a finite \"lump\"—which can be divided up differently to produce either more or fewer jobs. In other words, this fallacy assumes that if some people work less or some jobs disappear, there will necessarily be an equal reduction in total employment, or conversely, that reducing work hours or blocking competition (such as immigration) would create more jobs for others. \n\nThe passage captures the core error in this economic misconception: work and employment are not zero-sum. The economy is dynamic, and the amount of work is not fixed at a set quantity. Rather, work opportunities can expand as the economy grows, technology advances, and new industries emerge. This challenges the idea that labor is a fixed \"pie.\" Instead, labor demand depends on broader economic factors such as productivity, consumption, and innovation, making the total amount of work flexible rather than static.\n\nThus, the author is highlighting that the lump of labour fallacy rests on an oversimplified, static view of labor markets that ignores how economies evolve and create new jobs over time.",
+          "reference_cards": [
+            {
+              "id": "537",
+              "tier": "T0",
+              "front": "In what year was the lump of labour fallacy considered a fallacy?",
+              "back": "1891.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "535",
+              "tier": "T1",
+              "front": "What does the lump of labour fallacy suggest about the amount of work?",
+              "back": "That the amount of work is fixed.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "534",
+              "tier": "T3",
+              "front": "What is the **lump of labour** fallacy?",
+              "back": "The misconception that there is a finite amount of work—a lump of labour—to be done within an economy which can be distributed to create more or fewer jobs",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "539",
+              "tier": "T2",
+              "front": "What is the 'lump of labour fallacy'?",
+              "back": "The misconception that an economy has a fixed amount of work that can be distributed to create more or fewer jobs.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": false
+            },
+            {
+              "id": "536",
+              "tier": "T0",
+              "front": "Who first identified the lump of labour fallacy as a misconception?",
+              "back": "Economist David Frederick Schloss in 1891",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "538",
+              "tier": "T0",
+              "front": "Who considered the lump of labour fallacy a fallacy?",
+              "back": "David Frederick Schloss in 1891.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-34e49329a3088f00",
+      "source_text": "This interview with Arnab Datta and Skanda Amarnath discusses their successful policy advocacy for reforming how the Strategic Petroleum Reserve (SPR) operates. They proposed using the SPR not just as an emergency stockpile but as a strategic tool to stabilize oil markets through fixed-price forward contracts. Their proposal, which was eventually adopted by the Biden administration, allows the government to commit to future oil purchases at set prices, providing certainty to producers and encouraging investment while reducing price volatility.",
+      "source_meta": {
+        "author": "Santi Ruiz",
+        "publication_date": "July 18, 2024",
+        "summary": "This interview with Arnab Datta and Skanda Amarnath discusses their successful policy advocacy for reforming how the Strategic Petroleum Reserve (SPR) operates. They proposed using the SPR not just as an emergency stockpile but as a strategic tool to stabilize oil markets through fixed-price forward contracts. Their proposal, which was eventually adopted by the Biden administration, allows the government to commit to future oil purchases at set prices, providing certainty to producers and encouraging investment while reducing price volatility.",
+        "title": "How to Calm Oil Markets",
+        "source_url": "https://www.statecraft.pub/p/how-to-calm-oil-markets",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "465-1471",
+          "highlight": ". Oil is typically stored for inventory purposes on a short-term basis. Storing oil for a long duration requires specialized capabilities. The SPR has these massive underground salt caverns for storage, but it took time to build those out.",
+          "intent": "The highlighted passage emphasizes a key logistical and infrastructural aspect of oil storage, distinguishing between short-term inventory storage and long-term strategic storage. Typically, oil is stored briefly and rotated through supply chains to meet ongoing demand. However, maintaining oil supplies over long durations—necessary for strategic reserves—requires special facilities that can store oil safely and effectively without degradation or loss of quality over time.\n\nThe Strategic Petroleum Reserve (SPR) possesses this specialized long-term storage capability through its vast underground salt caverns. These salt caverns are uniquely suited for storing crude oil securely for extended periods. The passage also notes that constructing such storage infrastructure is time-intensive, highlighting the significant effort and investment needed to establish this form of reserve capacity.\n\nWithin the broader context of the text, this point reinforces the argument that the SPR’s true value lies not just in the physical barrels of oil it holds at any moment, but in the strategic capacity to store large quantities of oil long-term—something that is not commonly available in the private sector. This capability enables the SPR to act as a flexible tool for market stabilization and emergency supply, beyond the conventional \"break glass in case of emergency\" use. It signals to markets and producers that there is a contingent buyer and storage capacity that can influence oil supply dynamics and investment decisions.",
+          "reference_cards": [
+            {
+              "id": "1471",
+              "tier": "T0",
+              "front": "What is the typical duration of oil storage for inventory purposes?",
+              "back": "Short-term",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "1469",
+              "tier": "T1",
+              "front": "Why is long-duration storage of oil not generally economical for the private sector?",
+              "back": "It requires specialized capabilities.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1468",
+              "tier": "T3",
+              "front": "What type of facilities does the SPR use for long-duration oil storage?",
+              "back": "Massive underground salt caverns",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1470",
+              "tier": "T0",
+              "front": "What was required to make the SPR's long-duration oil storage possible?",
+              "back": "It took time to build out the underground salt caverns.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "467-1478",
+          "highlight": "But oil is fungible. It's a highly globalized market. And oil is highly relevant to macroeconomic outcomes: the most obvious one is inflation. If you think about headline inflation numbers, they tend to be a function of oil prices",
+          "intent": "The highlighted passage emphasizes three key points about oil as a commodity that underpin the broader discussion in the text:\n\n1. **Fungibility of Oil**: The statement \"oil is fungible\" means that oil is interchangeable regardless of its origin. Even though there are different types or grades of crude oil (heavy, light, sweet, sour), they can generally be substituted for one another in the global market. This characteristic simplifies trading and pricing mechanisms, contributing to oil’s role as a globally standardized commodity.\n\n2. **Globalized Market**: The oil market is described as \"highly globalized,\" indicating that oil is traded extensively across national borders. Supply and demand in one region can influence prices worldwide, reflecting an integrated international market rather than isolated local markets. This global interconnection makes oil prices susceptible to international geopolitical events, production decisions by major producers, and global economic trends.\n\n3. **Macroeconomic Significance and Link to Inflation**: The passage asserts that oil has significant macroeconomic consequences, especially as a driver of inflation. Because oil is essential for transportation, manufacturing, and energy production, changes in its price directly influence the cost of goods and services broadly in the economy. Consequently, movements in oil prices frequently manifest visibly in headline inflation figures — the overall rise in prices for consumers — making oil a critical element in understanding and managing economic stability.\n\nIn summary, the author is conveying that oil’s fungibility and global market dynamics make it central to macroeconomic outcomes, with a particularly strong impact on inflation. This contextual understanding helps explain why managing the Strategic Petroleum Reserve's role in stabilizing oil markets is strategically important for overall economic policy.",
+          "reference_cards": [
+            {
+              "id": "1476",
+              "tier": "T0",
+              "front": "Why is oil considered highly relevant to macroeconomic outcomes?",
+              "back": "Oil is highly relevant to macroeconomic outcomes because it influences inflation.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1474",
+              "tier": "T1",
+              "front": "What characteristic of oil makes it interchangeable across different markets?",
+              "back": "Oil is fungible.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1473",
+              "tier": "T3",
+              "front": "What factors result in oil being one of the deepest commodities in the world?",
+              "back": "Fungibility, high globalization, and high relevance to macroeconomic outcomes like inflation.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1475",
+              "tier": "T0",
+              "front": "What is one macroeconomic outcome that oil prices significantly impact?",
+              "back": "Inflation.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1477",
+              "tier": "T1",
+              "front": "How is oil significant in global trade?",
+              "back": "Oil is part of a highly globalized market.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1478",
+              "tier": "T0",
+              "front": "What is the term used to describe the ability of oil to be interchangeable in the market?",
+              "back": "Fungible",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-78f9fd90aeccfb24",
+      "source_text": "Berys Gaut examines the \"paradox of horror\"—the puzzle of why people enjoy horror fiction that evokes intrinsically unpleasant emotions like fear and disgust. He critiques leading solutions, including Noel Carroll's cognitivist account (which appeals to curiosity about monsters) and expressivist theories (which focus on catharsis or emotional expression). Gaut ultimately argues that the paradox dissolves if we adopt an evaluative theory of emotions: negative emotions are not intrinsically unpleasant, but are defined by their negative evaluations of objects or situations. While people typically find these emotions unpleasant, it is conceptually possible (and not paradoxical) for some individuals to enjoy them in certain contexts, such as fiction, due to the holistic and \"typically\" based nature of emotional concepts.",
+      "source_meta": {
+        "author": "Berys Gaut",
+        "publication_date": "Not specified (likely early 1990s, post-1992)",
+        "summary": "Berys Gaut examines the \"paradox of horror\"—the puzzle of why people enjoy horror fiction that evokes intrinsically unpleasant emotions like fear and disgust. He critiques leading solutions, including Noel Carroll's cognitivist account (which appeals to curiosity about monsters) and expressivist theories (which focus on catharsis or emotional expression). Gaut ultimately argues that the paradox dissolves if we adopt an evaluative theory of emotions: negative emotions are not intrinsically unpleasant, but are defined by their negative evaluations of objects or situations. While people typically find these emotions unpleasant, it is conceptually possible (and not paradoxical) for some individuals to enjoy them in certain contexts, such as fiction, due to the holistic and \"typically\" based nature of emotional concepts.",
+        "title": "The Paradox of Horror",
+        "source_url": "https://kirkbyo.com/hosted/paradox-of-horror.pdf",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "214-703",
+          "highlight": "aren't painful in the way that stepping on a thumb-tack is. Instead, hesays, 'In describing an emotion as \"painful\" or \"negative\" or \"unpleasant\", Isuggest, we are in fact saying something about the situations in response towhich we typically experience those emotion",
+          "intent": "The highlighted passage, situated in a discussion about whether negative emotions such as fear, sorrow, or pity are intrinsically unpleasant, unpacks a key conceptual distinction. The author, referencing Alex Neill’s critique, argues that emotions labeled as \"painful,\" \"negative,\" or \"unpleasant\" are not inherently so in their feeling or phenomenology—it’s not that the emotion itself feels like a sharp physical pain (e.g., stepping on a thumb-tack). Instead, these descriptors reflect something about the situations or contexts that typically elicit such emotions.\n\nIn other words, when we say an emotion is unpleasant, we are indirectly referring to the fact that the circumstances that cause these emotions are generally undesirable or distressing. The emotion is a response to such situations, not necessarily itself an unpleasant experience in isolation. This challenges the traditional or \"intrinsicality\" view that negative emotions must inherently feel bad or unpleasant by focusing instead on the evaluative content or triggers of the emotion.\n\nThis insight is central to the broader argument in the passage and the text: it destabilizes the assumption that experiencing emotions like fear or sorrow is always inherently painful. Recognizing that unpleasantness might be a feature of what the emotion is about rather than the feeling itself opens the door to explaining how people can paradoxically enjoy negative emotions (like those evoked by horror films or tragedies). The unpleasantness is tied to the negatively evaluated object or situation, not necessarily the emotion’s felt experience, which may sometimes be enjoyed or at least tolerated.\n\nThus, this passage supports a more nuanced, evaluative theory of emotions, where emotions are essentially cognitive judgments about situations, and their negative quality lies in these evaluations rather than in a fixed, unpleasant phenomenological quality. This theoretical move helps to dissolve the paradox of why people enjoy horror or tragedy, by showing that the \"negative\" emotions involved are not necessarily intrinsically unpleasant in the way often assumed.",
+          "reference_cards": [
+            {
+              "id": "703",
+              "tier": "T1",
+              "front": "How do emotional responses differ from physical pain (like stepping on a thumbtack)?",
+              "back": "Unlike physical pain, emotional responses aren't inherently painful - it's the situations they respond to that are unpleasant, not the emotions themselves.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "702",
+              "tier": "T3",
+              "front": "According to Neill's theory, when we describe emotions as 'painful' or 'negative', what are we actually describing?",
+              "back": "Situations that trigger those emotions, not the emotions themselves.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "219-710",
+          "highlight": "argues that such violations are seen as threatening andimpure, and this is Carroll's explanation of why works of horror generate fearand disgust. But because monsters are categorial violations, being physicallyimpossible according to our conceptual scheme, we are also curious aboutthem, and find them fascinating",
+          "intent": "The highlighted passage explains a key part of Noz̈l Carroll's cognitivist theory for why horror fiction elicits both fear and fascination in its audience. Carroll, drawing on anthropologist Mary Douglas's idea of \"categorial violations,\" argues that monsters in horror stories—like werewolves or human-insect hybrids—violate our fundamental conceptual categories. Because these beings do not fit into any coherent category of existing creatures, they are perceived as impure and threatening, provoking negative emotions such as fear and disgust.\n\nHowever, the same categorial violation that causes these emotions also makes such monsters objects of curiosity and fascination. Their impossible and anomalous nature triggers a kind of cognitive intrigue, compelling us to wonder about their existence and to engage with the narrative processes that reveal them. Thus, Carroll's explanation simultaneously accounts for the paradoxical emotional response to horror fiction: monsters generate unpleasant feelings because they threaten our conceptual order and sense of purity, but they also provoke fascination precisely because of this conceptual strangeness.\n\nIn context, this forms Carroll’s solution to the 'paradox of horror'—why people enjoy experiencing fear and disgust in response to horror. The enjoyment arises not in spite of the monsters’ disturbing qualities but exactly because those qualities stimulate both negative emotions and an intense curiosity about the impossible beings.",
+          "reference_cards": [
+            {
+              "id": "709",
+              "tier": "T3",
+              "front": "According to Carroll's theory, why do monsters in horror generate both fear/disgust AND fascination?",
+              "back": "Monsters represent violations of our categorial schemes, which makes them threatening and impure (causing fear/disgust), but their physical impossibility also makes them objects of curiosity and fascination.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "710",
+              "tier": "T1",
+              "front": "What dual response do categorial violations in horror produce in viewers?",
+              "back": "They produce both fear/disgust (due to their threatening/impure nature) and curiosity/fascination (due to their physical impossibility).",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            }
+          ]
+        },
+        {
+          "unit_id": "215-704",
+          "highlight": "It is peculiarly easy to enjoy negative emotions in the case of fiction,since the fiction has no practical consequences for its audience",
+          "intent": "The author, Berys Gaut, is discussing the paradox of horror, which centers on why people enjoy experiencing negative emotions—like fear and disgust—when engaging with horror fiction, despite these emotions being intrinsically unpleasant. In this context, the highlighted statement asserts that it is especially easy for audiences to enjoy negative emotions within fictional contexts precisely because these experiences carry no real-world consequences for them.\n\nThis means that when people watch horror films, read scary stories, or engage with other forms of fictional horror, their fear and disgust do not translate into actual danger or harm. The audience understands intellectually that what they are experiencing isn't real, which allows them to safely experience these negative emotions without genuine threat. This buffer—knowing the fiction is imagination—permits a kind of emotional “play” where the unpleasant feelings can be enjoyed as part of entertainment, rather than endured as genuine suffering.\n\nThis insight supports the broader claim that enjoyment of negative emotions in horror fiction is possible not because these negative emotions cease to be unpleasant in themselves, but because the fictional context modulates their intensity and impact. In real life, negative emotions tied to real threats are unpleasant and aversive; in fiction, their effects are attenuated by the audience's awareness of the non-reality, thus allowing the \"pleasure\" or enjoyment tied to curiosity, suspense, or thrill to outweigh the discomfort. Consequently, engaging with fiction offers a safe arena for exploring intense emotions, contributing to the paradox's resolution that people can enjoy fear and disgust in horror because the fictional nature means there are no practical, harmful consequences.",
+          "reference_cards": [
+            {
+              "id": "704",
+              "tier": "T1",
+              "front": "Why is it particularly easy to enjoy negative emotions when experiencing fiction?",
+              "back": "Because fiction has no practical consequences for its audience",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "705",
+              "tier": "T3",
+              "front": "Why is it easier to enjoy negative emotions in fiction than in real life?",
+              "back": "Because fiction presents no real danger, allowing fear or disgust to be safely experienced. The audience’s awareness that the threat isn’t real modulates the emotions, making them tolerable—and even enjoyable.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-a206d16e92edf8e0",
+      "source_text": "This guest post critiques Substack as a publishing platform, arguing that its structural mechanics lead to homogeneous, risk-averse content that lacks the diversity and intellectual boldness found in traditional blogs. The author contends that Substack's subscription model, regular publishing schedule, and global leaderboard create incentives for writers to produce safe, timely content rather than taking creative risks or developing deep, evergreen ideas.",
+      "source_meta": {
+        "author": "Applied Divinity Studies (Guest post on Nintil)",
+        "publication_date": "2020-10-17",
+        "summary": "This guest post critiques Substack as a publishing platform, arguing that its structural mechanics lead to homogeneous, risk-averse content that lacks the diversity and intellectual boldness found in traditional blogs. The author contends that Substack's subscription model, regular publishing schedule, and global leaderboard create incentives for writers to produce safe, timely content rather than taking creative risks or developing deep, evergreen ideas.",
+        "title": "How Substack Became Milquetoast",
+        "source_url": "https://nintil.com/substack-milquetoast",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "282-920",
+          "highlight": "The difference is that status on Twiter comes from who follows, likes and retweets you, not just how many of them there are. On an unpaid platform, no one cares about pumping their follower count with random strangers and bots",
+          "intent": "The author is contrasting the nature of social status and popularity metrics on Twitter versus Substack. They argue that on Twitter, an individual's status is not merely about the number of followers (a raw number) but more importantly about engagement from meaningful interactions—such as who follows you, who likes your posts, and who retweets your content. This creates a form of social validation rooted in recognition by peers or respected individuals, rather than just accumulating a large audience indiscriminately.\n\nFurthermore, because Twitter is an unpaid platform, users generally do not seek to artificially inflate their follower counts using bots or random strangers since followers don't translate directly into monetary gain. Instead, status is more organically linked to legitimate social interactions and endorsements.\n\nThis distinction is significant in the larger argument which critiques Substack’s model where success or \"status\" is measured mainly by raw subscriber numbers on a global leaderboard. Such a numeric ranking incentivizes imitation and safe, bland content aimed at retaining subscribers rather than encouraging originality or quality. By comparison, Twitter's engagement-based status system supports more vibrant subcultures, diverse expressions, and more genuine recognition among users.",
+          "reference_cards": [
+            {
+              "id": "919",
+              "tier": "T3",
+              "front": "(How Substack Became Milquetoast) How does Twitter's status system differ from typical paid platforms?",
+              "back": "Twitter status can depend on WHO engages instead of a single metric",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "920",
+              "tier": "T1",
+              "front": "How does Twitter's status system differ from typical paid platforms?",
+              "back": "Twitter status depends on WHO follows/engages, while paid platforms focus primarily on HOW MANY followers one has.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            }
+          ]
+        },
+        {
+          "unit_id": "280-912",
+          "highlight": "Limited Sampling\nAs a reader, you used to be able to sample an endless buffet of diverse and wacky creations. You might read a single post from a hundred different blogs, never stopping long enough to get bogged down in one author’s pattern of thought.\nToday, once you subscribe to an author, you’re in for life, or until you sever the relationship entirely. There’s no more intellectual fling or extended flirting, it’s a binary choice.\nOrganic sharing, growth and virality exposes readers to a wide variety of authors, serving up the best of each one’s writing. On Substack, instead of getting the best 1% of posts from 100 authors, you get 100% from each one. Instead of getting the cream of the crop, you’re left with low fat milk, mostly water",
+          "intent": "The highlighted passage critiques how Substack's subscription model fundamentally changes the reader’s experience compared to traditional blog reading and content discovery. \n\nPreviously, readers could casually sample an extensive range of blogs, picking and choosing individual posts that caught their interest without committing to following any single author consistently. This approach allowed for intellectual variety and exposure to diverse, sometimes unconventional, ideas—the \"endless buffet\" described. Readers could enjoy a high signal-to-noise ratio by stumbling upon standout posts amid a broad, eclectic mix, thus getting the \"cream of the crop.\"\n\nIn contrast, Substack transforms reading into a binary, all-or-nothing subscription relationship: if you subscribe to an author, you receive everything they publish (100% of their content) rather than just a carefully curated selection. This lack of filtering dilutes the overall quality of what you read because not every post will be exceptional. The model eliminates the occasional, spontaneous \"intellectual fling\" where readers could briefly indulge in diverse perspectives and then move on.\n\nMoreover, this structure reduces organic sharing and virality, which previously helped surface the best writing across many authors. Instead of benefiting from the highlights across many sources, readers must wade through the full output of fewer authors, often filled with mediocre or unremarkable content (\"low fat milk, mostly water\"). This results in a more homogenized, less stimulating intellectual diet, limiting exposure to novel or challenging ideas.\n\nImplicitly, the author suggests that Substack’s paid, subscription-centric format imposes pressures and incentives that reduce quality and diversity, fostering a milquetoast (bland, unadventurous) reading experience compared to the more vibrant traditional blogosphere ecosystem.",
+          "reference_cards": [
+            {
+              "id": "912",
+              "tier": "T2",
+              "front": "What is the 'cream of the crop' problem in modern content platforms like Substack?",
+              "back": "Instead of accessing the best 1% from many authors, readers receive 100% of content from subscribed authors, potentially lowering average quality of consumed content.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "911",
+              "tier": "T3",
+              "front": "What is the 'cream of the crop' problem in modern content platforms like Substack?",
+              "back": "Instead of accessing the best 1% from many authors, readers receive 100% of content from subscribed authors",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "281-914",
+          "highlight": "In contrast, Substack totally violates Social Fog of War by instituting a global leader board.",
+          "intent": "The highlighted passage, \"In contrast, Substack totally violates Social Fog of War by instituting a global leader board,\" conveys a key critique about how Substack operates in the social dynamics and competitive environment of online writing platforms.\n\nTo understand the significance of this statement, consider the concept of \"Social Fog of War.\" This term is borrowed from military strategy and adapted to social contexts, meaning that individuals typically operate without full knowledge of others' status, capabilities, or success—in essence, some uncertainty or 'fog' exists. Such fog allows diverse subcultures and communities to thrive independently, as people focus on their own niches or corners of the social landscape without constant pressure to compete on a single, visible ranking.\n\nThe author argues that Substack eliminates this \"fog\" by implementing a transparent, global leaderboard system that publicly ranks writers by metrics like subscriber counts or popularity. This contrasts with previous blogging ecosystems where individual success was less publicly quantified and more localized. Because the leaderboard clearly reveals who is popular, emerging writers and content creators are incentivized to mimic what is already successful to climb the ranks. This leads to a homogenization of content as writers try to appeal to the broadest or most lucrative audiences to improve their standing. The pressure imposed by the leaderboard reduces the space for creative risk-taking or heterogeneity since deviating too far from popular themes or styles risks losing subscribers and falling in rank.\n\nTherefore, the passage highlights a critical structural effect of Substack's design: by removing the \"fog,\" it centralizes social visibility and competition, which in turn encourages conformity, diminishes niche diversity, and fosters \"milquetoast\" or bland content aimed at the largest common denominator rather than bold originality. Essentially, the leaderboard transforms the social environment from one that supports diverse, heterogeneous intellectual communities into one dominated by standardized, safe, and commercially driven content.",
+          "reference_cards": [
+            {
+              "id": "913",
+              "tier": "T3",
+              "front": "[How Substack Became Milquetoast] How does 'Social Fog of War' traditionally protect content diversity in blogging?",
+              "back": "It prevents direct status comparison.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "915",
+              "tier": "T3",
+              "front": "What distinguishes Substack's approach to content ranking from traditional blogging platforms?",
+              "back": "Substack has a global ranking across all niches",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "916",
+              "tier": "T1",
+              "front": "What distinguishes Substack's approach to content ranking from traditional blogging platforms?",
+              "back": "Substack implements a global ranking system, creating direct status comparisons across different content niches.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "914",
+              "tier": "T3",
+              "front": "How can centralized ranking systems impact content diversity on platforms like Substack?",
+              "back": "It encourages homogeny through mimicry of the visibly popular.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": true
+            },
+            {
+              "id": "918",
+              "tier": "T1",
+              "front": "How can centralized ranking systems impact content diversity on platforms like Substack?",
+              "back": "They encourage homogenization by making creators more aware of relative status, potentially influencing content decisions to appeal to broader audiences.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "917",
+              "tier": "T1",
+              "front": "How does the concept of 'Social Fog of War' traditionally protect content diversity in blogging?",
+              "back": "It prevents direct status comparisons between different communities, allowing distinct subcultures to thrive independently.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-dbfb579d35a4f011",
+      "source_text": "D. Anthony Storm provides an in-depth commentary on Søren Kierkegaard's \"The Sickness Unto Death,\" written under the pseudonym Anti-Climacus in 1849. The work explores the nature of the self, despair, and sin from a Christian psychological perspective, emphasizing the individual's relationship to God. Kierkegaard defines the self as a dynamic relation and identifies despair as a misrelation within the self, which becomes sin when understood in relation to God. The commentary highlights Kierkegaard's novel approach to despair, the paradoxical nature of the self, and the intensification of sin as a state rather than merely a series of acts.",
+      "source_meta": {
+        "author": "D. Anthony Storm",
+        "publication_date": "1996-2011 (commentary); original work 1849",
+        "summary": "D. Anthony Storm provides an in-depth commentary on Søren Kierkegaard's \"The Sickness Unto Death,\" written under the pseudonym Anti-Climacus in 1849. The work explores the nature of the self, despair, and sin from a Christian psychological perspective, emphasizing the individual's relationship to God. Kierkegaard defines the self as a dynamic relation and identifies despair as a misrelation within the self, which becomes sin when understood in relation to God. The commentary highlights Kierkegaard's novel approach to despair, the paradoxical nature of the self, and the intensification of sin as a state rather than merely a series of acts.",
+        "title": "Commentary on Kierkegaard's The Sickness Unto Death",
+        "source_url": "https://sorenkierkegaard.org/sickness-unto-death.html",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "344-1105",
+          "highlight": "The self is a relation that relates itself to itself or is the relation's relating itself to itself in the relation; the self is not the relation but is the relation's relating itself to itself.",
+          "intent": "The highlighted passage from Kierkegaard, as interpreted in Storm's commentary, expresses a core and rather complex idea about the nature of the self. Kierkegaard defines the self not simply as a static relation or synthesis between elements (such as the infinite and finite, or temporal and eternal), but as the active process of that relation relating to itself. In other words, the self is dynamic and characterized by self-reflection or self-relation—the \"relation's relating itself to itself\"—rather than the mere existence of a relation between opposites.\n\nStorm clarifies that this self is not the mere composite or synthesis of opposing elements—that would resemble a Hegelian view, which Kierkegaard rejects. Instead, the self is the *activity* or *process* (the kinetic aspect) within this relation that mediates these opposites and maintains the tension between them. This mediating activity is what constitutes the self.\n\nImplicit here is that the self is fundamentally a movement or an ongoing task, involving self-awareness and self-relationship, rather than a fixed entity or a simple set of characteristics. This dynamic is necessary for the self’s freedom and ability to engage in inner dialogue and to relate to God. The self’s \"relating itself to itself\" suggests an existential and spiritual condition—it is a self that is aware, active, and capable of self-transcendence.\n\nThus, the passage encapsulates Kierkegaard’s view of the self as a process of becoming and relating, rooted in the tension between various existential poles, and fundamentally defined by an ongoing, self-referential activity rather than by static attributes or external relations alone.",
+          "reference_cards": [
+            {
+              "id": "1103",
+              "tier": "T1",
+              "front": "How does Kierkegaard define the self in \"The Sickness Unto Death,\" and what distinguishes his view from seeing the self as a static synthesis of opposites?",
+              "back": "Kierkegaard defines the self as the dynamic process of a relation relating itself to itself, emphasizing ongoing self-reflection and self-relation rather than a fixed synthesis of opposites. The self is constituted by the active mediation and maintenance of internal tensions, not by merely being a composite of opposing elements.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1105",
+              "tier": "T3",
+              "front": "[Kierkegaard — Self as Dynamic Relation vs. Static Synthesis] How does Kierkegaard’s view of the self differ from seeing it as a static synthesis of opposites?",
+              "back": "Unlike a static synthesis, Kierkegaard views the self as a dynamic process — the ongoing act of relating to oneself, not just a balance of opposing elements.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": true
+            },
+            {
+              "id": "1104",
+              "tier": "T3",
+              "front": "[Kierkegaard — Definition of the Self] According to Kierkegaard in *The Sickness Unto Death*, how is the self defined?",
+              "back": "The self as a relation that relates itself to itself — a dynamic and reflective process, rather than a fixed entity.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-5243ba2816dbaea0",
+      "source_text": "Feynman introduces the kinetic theory of gases, explaining how the microscopic motion of atoms leads to macroscopic properties like pressure, volume, and temperature. He derives the ideal gas law from first principles using Newton's laws of mechanics, explains the concept of temperature as related to average kinetic energy, and demonstrates why equal volumes of gases at the same temperature and pressure contain equal numbers of molecules.",
+      "source_meta": {
+        "author": "Richard P. Feynman",
+        "publication_date": "Unknown (from The Feynman Lectures on Physics)",
+        "summary": "Feynman introduces the kinetic theory of gases, explaining how the microscopic motion of atoms leads to macroscopic properties like pressure, volume, and temperature. He derives the ideal gas law from first principles using Newton's laws of mechanics, explains the concept of temperature as related to average kinetic energy, and demonstrates why equal volumes of gases at the same temperature and pressure contain equal numbers of molecules.",
+        "title": "The Kinetic Theory of Gases",
+        "source_url": "https://www.feynmanlectures.caltech.edu/I_39.html",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "441-1413",
+          "highlight": "We define the\npressure, then, as equal to the force that we have to apply on a piston",
+          "intent": "The highlighted passage—\"We define the pressure, then, as equal to the force that we have to apply on a piston\"—is situated within a broader explanation of what pressure physically means in the context of gases and their molecular behavior.\n\nIn the passage, the author begins from a physical and mechanical viewpoint: imagine a box containing gas molecules that constantly collide with a piston (a movable boundary). Because the gas molecules are bouncing and pushing against the piston, the piston experiences a force from these collisions. If the outside of the piston is a vacuum (no opposing force), the piston would be pushed outward by these momentum transfers.\n\nTo keep the piston in place, an external force \\( F \\) must be applied that balances this pushing force. Since the force exerted by the gas is related to the area \\( A \\) of the piston (bigger area means more molecules hitting it), the force per unit area is introduced. This ratio of force over the piston’s surface area is what we call pressure:\n\\[\nP = \\frac{F}{A}.\n\\]\n\nUnpacking this idea:\n\n- Pressure is not just an abstract idea; it is concretely the external force per unit area that counters the microscopic impacts of countless gas molecules on a surface.\n- Introducing pressure in this way connects the macroscopic observable (force on the piston) with the microscopic origins (molecular collisions transferring momentum).\n- The definition is foundational for further quantitative analysis: by relating molecular speeds and counts to force, the text advances toward deriving the gas laws from Newtonian mechanics.\n\nThus, the author uses a tangible mechanical setup—a piston pressing against gas molecules—to rigorously ground the concept of pressure as a measurable force per unit area required to hold the piston stationary against the gas pressure caused by molecular impacts. This sets the stage for deriving relationships between pressure, volume, temperature, and energy in gases.",
+          "reference_cards": [
+            {
+              "id": "1409",
+              "tier": "T3",
+              "front": "Define pressure in the context of a gas being held in a box by a frictionless piston.",
+              "back": "Pressure is the force per unit area which must be exerted on the piston to counteract collisions from the gas, i.e. $P = F/A$.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1412",
+              "tier": "T0",
+              "front": "What do atoms in a box do to a piston?",
+              "back": "They bang against the piston.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1410",
+              "tier": "T1",
+              "front": "What is the definition of pressure in this context?",
+              "back": "Pressure is equal to the force applied on a piston divided by the area of the piston.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1413",
+              "tier": "T0",
+              "front": "What variable represents the area of the piston?",
+              "back": "A",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "1411",
+              "tier": "T0",
+              "front": "What must be exerted to prevent the piston from moving in the gas-filled box?",
+              "back": "Force",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "439-1398",
+          "highlight": "when we have a cold, inflammation closes the tube\nwhich connects the air on the inside of the eardrum with the outside\nair through the throat",
+          "intent": "The highlighted passage discusses a physiological detail related to how pressure differences across the eardrum are equalized in everyday experience. Specifically, it notes that when a person has a cold, inflammation can cause the Eustachian tube—the small passage that connects the middle ear (the air space inside the eardrum) to the back of the throat—to become blocked. This blockage prevents air from freely moving between the middle ear and the external environment.\n\nIn the broader context of the text, which explains how gases exert pressure (such as air molecules constantly bouncing against surfaces like the eardrum), this passage clarifies why we usually don't feel pressure differences on our eardrums despite the constant microscopic \"bombardment\" by air molecules. Normally, the Eustachian tube allows air pressure to equalize on both sides of the eardrum, resulting in no net force and no sensation of discomfort. But when the tube is blocked due to inflammation from a cold, this pressure equalization is hindered. Consequently, the difference in pressure on the two sides of the eardrum can cause it to be pushed inward or outward, leading to discomfort—such as that experienced when rapidly changing altitude in airplanes or elevators is combined with a cold.\n\nTherefore, the passage uses this medical example to illustrate the concept of gas pressure and to show how biological structures normally maintain pressure balance, while inflammation can disturb this balance, resulting in physical sensations tied to pressure changes.",
+          "reference_cards": [
+            {
+              "id": "1401",
+              "tier": "T1",
+              "front": "Where does the tube connect the air on the inside of the eardrum to?",
+              "back": "Outside air through the throat.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1398",
+              "tier": "T3",
+              "front": "How does a pressure differential form on the ears?",
+              "back": "The forces on the internal side of the eardrum exert a force equal to atmospheric pressure. When there is a differential (e.g., by going up an elevator), the eardrum is applying a greater force internally than the environment is providing.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": true
+            },
+            {
+              "id": "1402",
+              "tier": "T1",
+              "front": "What happens to the tube when we have a cold?",
+              "back": "Inflammation closes the tube.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1399",
+              "tier": "T3",
+              "front": "Why do our ears sometimes feel uncomfortable when we fly while sick?",
+              "back": "Inflammation obstructs the tube which connects air on the inside of the eardrum with outside air through the throat, so the inside and outside pressures on the eardrum aren't equal—there's a net force.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1400",
+              "tier": "T1",
+              "front": "What happens to the tube connecting the inside and outside of the eardrum when we have a cold?",
+              "back": "Inflammation closes the tube.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "442-1416",
+          "highlight": "which is equal to minus the pressure times the\nchange in the volume:",
+          "intent": "The highlighted phrase, \"which is equal to minus the pressure times the change in the volume,\" appears in the context of discussing the work done on a gas when it is compressed by moving a piston. The author explains how to quantify the work done during a small compression of the gas.\n\nTo unpack this:\n\n- When the piston compresses the gas by a small amount \\(dx\\), the force applied on the piston is \\(F\\).\n- The work \\(dW\\) done on the gas by this force is the force multiplied by the distance over which it acts, here expressed as \\(dW = F(-dx)\\).\n- The negative sign arises because the volume decreases when the piston moves inward (compression), so \\(dx\\) is a positive movement away from the piston’s relaxed position but volume change \\(dV\\) is negative.\n- Because the pressure \\(P\\) is defined as force per unit area (\\(P = \\frac{F}{A}\\)), and the volume change \\(dV = A\\,dx\\), the work done is re-expressed as:\n  \n  \\[\n  dW = -P\\, dV\n  \\]\n  \n- Here, the minus sign indicates that when the volume decreases (\\(dV < 0\\)), the work done on the gas is positive (energy is transferred into the gas).\n\nIn summary, the phrase captures the fundamental thermodynamic expression for the infinitesimal work done on or by a gas during compression or expansion. Work done on the gas is the negative product of the pressure and the change in volume. This negative sign is essential for correctly expressing the direction of energy transfer in compression and expansion processes and sets the foundation for later discussions of gas laws and energy changes within gases.",
+          "reference_cards": [
+            {
+              "id": "1415",
+              "tier": "T3",
+              "front": "How is the differential work characterized for a piston compressing a gas?",
+              "back": "Work is Force times Distance. If the piston compresses by a $-dx$, then the differential work is $dW = F(-dx) = -PAdx$.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1416",
+              "tier": "T2",
+              "front": "What is the work done on a gas when a piston changes its volume by some $dV$?",
+              "back": "$dW = -P dV$, where $P$ is the gas's pressure. ($dW = F(-dx) = -PAdx)",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "1414",
+              "tier": "T3",
+              "front": "What is the infinitesimal work done on a gas when its volume changes by $dV$ at pressure $P$?",
+              "back": "The infinitesimal work done is given by $dW = -P dV$, where $P$ is the gas pressure.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "440-1406",
+          "highlight": "we find the momentum delivered to the piston by one\nparticular atom in a collision with the piston",
+          "intent": "The highlighted passage \"we find the momentum delivered to the piston by one particular atom in a collision with the piston\" appears within a section where the author is developing a kinetic theory explanation of gas pressure on a piston.\n\nIn context, the author is analyzing the microscopic origins of the macroscopic pressure exerted by a gas confined in a container with a movable piston. The key idea is that gas pressure results from countless collisions of rapidly moving atoms (or molecules) against the piston surface. To quantify this, the author breaks down the problem:\n\n1. Calculate the momentum transferred in a single collision between one atom and the piston.\n2. Determine the number of such collisions occurring per unit time.\n3. Multiply these to find the total momentum per second delivered to the piston, which equals the force exerted on it.\n4. Finally, relate this force to pressure (force per unit area) on the piston.\n\nSpecifically, by isolating the momentum delivered per collision (\"by one particular atom\") the author sets the foundation for computing the total force from all collisions. The momentum transfer depends on the atom's velocity component normal to the piston and assumes the piston acts as a perfect reflector, so the momentum change equals twice the incoming momentum component.\n\nThis micro-level calculation is crucial because it provides a mechanistic link between atomistic motion (individual velocities and collisions) and macroscopic thermodynamic quantities like pressure. It is the starting point to derive the familiar ideal gas law relations and further thermodynamic properties.\n\nIn short, the highlighted passage emphasizes the fundamental step in deriving gas pressure from Newtonian mechanics: quantifying the momentum imparted to the piston by a single atom in a collision, which can then be summed statistically over all atoms. This underpins the kinetic theory of gases and bridges microscopic behavior with bulk observables.",
+          "reference_cards": [
+            {
+              "id": "1405",
+              "tier": "T1",
+              "front": "In the context of calculating momentum per second, what is the first step described?",
+              "back": "Find the momentum delivered to the piston by one particular atom in a collision",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1407",
+              "tier": "T0",
+              "front": "What must the piston be to apply the theory correctly?",
+              "back": "A perfect reflector.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1403",
+              "tier": "T3",
+              "front": "What is the trick to calculate the momentum-per-second for atoms bombarding a piston's handle?",
+              "back": "Find the momentum for a single atom and then multiply it by the number of collisions per second.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1404",
+              "tier": "T1",
+              "front": "In this theory, how does a particle's speed change after hitting the piston?",
+              "back": "It comes out with the same speed.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1406",
+              "tier": "T0",
+              "front": "What happens if the piston is not a perfect reflector?",
+              "back": "The piston will heat up and alter the conditions.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "1408",
+              "tier": "T0",
+              "front": "What type of collisions are presumed with the piston?",
+              "back": "Perfectly elastic collisions",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-455e1c141fafc825",
+      "source_text": "Victor argues that most software should be designed as information software rather than manipulation software, and that information software design is fundamentally a graphic design problem, not an interactive one. He critiques the overreliance on interactivity in modern software and proposes a new approach focused on context-sensitive information graphics that infer user needs from environment and history. The paper presents a vision for software that requires minimal interaction, instead presenting relevant information through thoughtful graphic design.",
+      "source_meta": {
+        "author": "Bret Victor",
+        "publication_date": "March 15, 2006 (draft)",
+        "summary": "Victor argues that most software should be designed as information software rather than manipulation software, and that information software design is fundamentally a graphic design problem, not an interactive one. He critiques the overreliance on interactivity in modern software and proposes a new approach focused on context-sensitive information graphics that infer user needs from environment and history. The paper presents a vision for software that requires minimal interaction, instead presenting relevant information through thoughtful graphic design.",
+        "title": "Magic Ink: Information Software and the Graphical Interface",
+        "source_url": "https://worrydream.com/MagicInk/",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "392-1240",
+          "highlight": "interactivity has even worse problems",
+          "intent": "The highlight \"interactivity has even worse problems\" refers to a critical observation made within the context of software design, particularly for information software. In the broader discussion, the author emphasizes that designing software which primarily focuses on presenting information is essentially an exercise in graphic design—arranging and showing data effectively. However, \"interactivity\" introduces additional, more severe challenges beyond those involved in simply displaying information.\n\nUnpacking this, the author likely means that while software that displays static or dynamic data needs good graphic design to be effective, the introduction of user interaction complicates matters significantly. Interactivity demands that software not only present data but also respond to user input in context-sensitive ways, requiring navigation, state management, prediction, and responsiveness. These factors make software design exponentially more difficult because the designer must consider usability, user goals, feedback loops, correctness, and preventing user confusion or errors.\n\nFurthermore, the phrase hints at the author's stance that interactivity is a “number-one problem” or even worse than other common software design challenges. Interaction can easily become a source of frustration, inefficiency, or cognitive overload if not managed carefully—a situation described by terms like “interactivity considered harmful” in the text. The problems exacerbate because interaction is not just mechanical input but involves navigating complex data spaces and contexts that vary over time.\n\nIn summary, the author is communicating that while presenting information visually is challenging but manageable (akin to graphic design), layering interactivity on top of that creates a suite of more severe problems that make software design much harder, often leading to poor user experiences if not thoughtfully addressed.",
+          "reference_cards": [
+            {
+              "id": "1239",
+              "tier": "T1",
+              "front": "How does the text describe the problems of interactivity compared to navigation?",
+              "back": "Even worse",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1241",
+              "tier": "T1",
+              "front": "What has even worse problems than being a frustrating waste of time?",
+              "back": "Interactivity",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1240",
+              "tier": "T0",
+              "front": "What is considered the number-one software problem according to the text?",
+              "back": "Navigation",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "1238",
+              "tier": "T1",
+              "front": "What makes current software interaction models fundamentally challenging?",
+              "back": "They fail to address the complex contextual needs of users beyond simple task completion.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1237",
+              "tier": "T3",
+              "front": "Besides wasting time, what three cognitive problems does Bret Victor list with interactivity in information software?",
+              "back": "1) you have to know what you want to ask for it; 2) you have to learn how to ask; 3) navigation implies statefulness",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "391-1236",
+          "highlight": "Examples.",
+          "intent": "The highlighted passage \"Examples.\" appears in the section discussing the challenges of teaching software design and the rarity of educational resources on the topic. In context, the author is emphasizing the difficulty of finding well-documented examples that illustrate good software design practices, especially within engineering education. The author notes that engineering studies often focus on how things should be done rather than how they have been done historically, leading to a lack of collected, recognized, and explicated design examples. This absence of concrete examples hinders the development of a culture of good design among software engineers. Therefore, the mention of \"Examples.\" underscores a critical gap in software design education: the scarcity of instructive, well-analyzed case studies that demonstrate effective software design in practice.",
+          "reference_cards": [
+            {
+              "id": "1235",
+              "tier": "T0",
+              "front": "What must be recognized, collected, and explicated?",
+              "back": "Outstanding designs",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1236",
+              "tier": "T1",
+              "front": "What is lacking in software engineering schools according to the text?",
+              "back": "Examples of great works",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "1231",
+              "tier": "T3",
+              "front": "Bret Victor's criticism of the state of examples in software design education?",
+              "back": "We don't recognize, collect, and explicate great designs, or suggest that great designers teach. Students need to study great work, as they do in other artistic fields.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1234",
+              "tier": "T0",
+              "front": "What should be done for outstanding designs and designers?",
+              "back": "They should be recognized, collected, and explicated",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1233",
+              "tier": "T0",
+              "front": "In what fields do students study the works of the masters?",
+              "back": "Painting, writing, music, and architecture",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1232",
+              "tier": "T1",
+              "front": "What is crucial for the development of any artistic field?",
+              "back": "A corpus",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "383-1208",
+          "highlight": "shortage of good books on user interface design is more understandable, since pedagogy requires a working paradigm—the status quo must be at least acceptable",
+          "intent": "The highlighted passage—\"shortage of good books on user interface design is more understandable, since pedagogy requires a working paradigm—the status quo must be at least acceptable\"—comments on why there is a scarcity of quality literature on user interface (UI) design.\n\nWithin the context of the broader text, which discusses software design challenges, especially in information software and interactive design, this passage implies that effective pedagogy (teaching and learning methods) depends on having an established, functional framework or consensus—a working paradigm—about how things should be done. UI design is a relatively young discipline, still evolving and lacking a broadly accepted paradigm or \"best practices\" that are clearly effective and demonstrably improve user experience.\n\nBecause such a consensus or status quo in UI design is not firmly established or widely agreed upon as \"good enough,\" it is difficult to build teaching materials, textbooks, or canonical literature around it. Without such a stable paradigm, educational efforts struggle to present clear, reliable principles or guidelines, which in turn explains the observed shortage of good books on UI design.\n\nThus, the core idea is that the scarcity of quality UI design books is not merely a failure to write or publish them but is tied deeply to the infancy and unsettled nature of UI design as a discipline. For pedagogy to progress, the community first needs a working, acceptable status quo—a set of design principles and methods that can be taught effectively—something UI design has yet to fully establish.",
+          "reference_cards": [
+            {
+              "id": "1206",
+              "tier": "T3",
+              "front": "How does Bret Victor explain the shortage of good books on user interface design?",
+              "back": "\"Pedagogy requires a working paradigm\"",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1207",
+              "tier": "T1",
+              "front": "Why is there a shortage of good books on user interface design?",
+              "back": "Pedagogy requires a working paradigm that is at least acceptable.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1208",
+              "tier": "T0",
+              "front": "What must the status quo be for pedagogy to be effective?",
+              "back": "At least acceptable.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            }
+          ]
+        },
+        {
+          "unit_id": "388-1221",
+          "highlight": "Most of the time, a person sits down at her personal computer not to create, but to read, observe, study, explore, make cognitive connections, and ultimately come to an understanding.  This person is not seeking to make her mark upon the world, but to rearrange her own neurons.  The computer becomes a medium for asking questions, making comparisons, and drawing conclusions—that is, for learning.",
+          "intent": "The highlighted passage emphasizes a fundamental purpose of personal computer use that often goes unacknowledged: most users primarily engage with their computers to process information and understand the world, rather than to produce or create new content. The author points out that when a person sits at a computer, their goal is frequently cognitive—reading, observing, exploring, synthesizing data, and ultimately achieving understanding. This underscores the computer’s role as a tool for learning, where interaction is aimed at internal mental restructuring (\"rearranging her own neurons\") rather than external impact or creation.\n\nWithin the broader context of the source, which discusses software design and the types of software (information, manipulation, communication), this passage clarifies the importance of information software—software designed to present, arrange, and facilitate the comprehension of data—over manipulation or creation software. The author implicitly asserts that the essence of many users’ needs is cognitive: they want to inquire, compare, and conclude. Thus, software should prioritize supporting these learning-oriented activities, treating the computer as a medium for intellectual engagement rather than merely a tool for making or changing things in the external world.\n\nThis distinction helps surface the implicit claim that much software design fails to fully recognize or serve this predominant mode of computer use. Instead of focusing exclusively on creation or interaction, software should emphasize clarity, presentation, and understanding—to better align with the user’s real aims: learning and cognition first and foremost.",
+          "reference_cards": [
+            {
+              "id": "1221",
+              "tier": "T0",
+              "front": "How does a person use a computer according to the text?",
+              "back": "As a medium for asking questions, making comparisons, and drawing conclusions.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": true
+            },
+            {
+              "id": "1219",
+              "tier": "T0",
+              "front": "Why do most people sit at their personal computer?",
+              "back": "To read, observe, study, explore, and make cognitive connections.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1217",
+              "tier": "T3",
+              "front": "Which of Bret Victor's three classes of software does he argue is most commonly used?",
+              "back": "Information software: people usually aren't creating; they're trying to come to some understanding.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1220",
+              "tier": "T0",
+              "front": "What is the primary activity a person engages in when sitting down at her personal computer?",
+              "back": "Read, observe, study, explore, make cognitive connections, and ultimately come to an understanding.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1218",
+              "tier": "T1",
+              "front": "How does the computer serve the person in this context?",
+              "back": "As a medium for learning—asking questions, making comparisons, and drawing conclusions.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "387-1215",
+          "highlight": "excise",
+          "intent": "The highlighted word is \"excise,\" which appears isolated in the text with no immediate surrounding explanation or context. Given the broader thematic focus on software design and especially on reducing and simplifying interaction within information software, the use of \"excise\" likely refers to the action of removing or cutting out unnecessary elements or interactions within the user interface or data navigation processes.\n\nIn context, the author discusses interactivity in software and aims to reduce it where possible, viewing excessive interactivity as \"considered harmful.\" In this light, \"excise\" suggests the deliberate pruning or elimination of unnecessary steps, options, or data elements to streamline the user’s experience—minimizing cognitive load and interaction overhead. It is about refining software design by cutting out nonessential parts (\"excising\" them) so that users can more efficiently navigate and understand information without getting bogged down by clutter or excessive controls.\n\nThus, \"excise\" here encodes the design principle of reducing complexity by removal, supporting the broader argument that effective information software should minimize unnecessary interaction and focus user attention on contextually relevant, essential data.",
+          "reference_cards": [
+            {
+              "id": "1216",
+              "tier": "T0",
+              "front": "Does excise contribute directly to achieving a goal?",
+              "back": "No.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1215",
+              "tier": "T1",
+              "front": "What does excise involve?",
+              "back": "Effort not directly in pursuit of a goal.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "1214",
+              "tier": "T3",
+              "front": "What is excise according to Alan Cooper?",
+              "back": "A cognitive or physical penalty for using a tool.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "389-1224",
+          "highlight": "There are, in fact, three sources from which software can infer context",
+          "intent": "The highlighted statement, \"There are, in fact, three sources from which software can infer context,\" is situated within a broader discussion about context-sensitivity in information software design. In the full text, the author explores how information software differs from manipulation software and emphasizes the importance of designing software that responds intelligently to its user's context.\n\nUnpacking this idea:\n\n- The author stresses that for information software to be effective and user-friendly, it must infer and adapt to context rather than relying on explicit user input. This reduces unnecessary interaction and helps surface the most relevant information automatically.\n\n- The \"three sources\" from which software can infer context are elaborated elsewhere in the text as:  \n  1. **The Environment**: The physical or situational conditions around the user, such as location, time, or device state (e.g., GPS coordinates or date/time).  \n  2. **History**: Past interactions, behaviors, or data that can provide insight into user preferences or patterns over time.  \n  3. **Interaction**: The current ongoing interactions or inputs from the user that can help the system understand user goals or dissatisfaction with previous results.\n\n- By leveraging these three sources, software can create \"context-sensitive information graphics\" that better anticipate the user's needs. For example, a train schedule app might infer the nearest station from your GPS (environment), remember regular routes you've viewed (history), and detect if you repeatedly click \"next\" to see later departures (interaction).\n\n- This approach, as opposed to static or manual interfaces, improves usability by streamlining navigation and reducing cognitive load.\n\nIn summary, the author is emphasizing a foundational principle for designing effective information software: it should dynamically infer and integrate context from environment, history, and user interaction to present the most relevant, personalized information with minimal explicit input. This principle distinguishes advanced context-sensitive software from traditional, static interfaces.",
+          "reference_cards": [
+            {
+              "id": "1222",
+              "tier": "T3",
+              "front": "In Bret Victor's Magic Ink, what are the three sources used to surface context?",
+              "back": "Environment, interactions, and history",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1225",
+              "tier": "T1",
+              "front": "What is the second source from which software can infer context?",
+              "back": "History",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1223",
+              "tier": "T3",
+              "front": "Three sources Bret Victor proposes for surfacing context?",
+              "back": "environment, interactions, history (of environments / interactions)",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1224",
+              "tier": "T1",
+              "front": "What does the history source involve for software context inference?",
+              "back": "Remembering the past",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "1226",
+              "tier": "T0",
+              "front": "What does the environment source involve for software context inference?",
+              "back": "Sensing the current state of the world",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-ccf10d821f241b3c",
+      "source_text": "Jon Udell outlines the components needed for a coherent software development kit (SDK) for web annotation, drawing from his experience working with Hypothesis across various domains. He describes core operations, tools, and techniques for creating and anchoring annotations to web documents, and demonstrates how annotation can be integrated into diverse document workflows beyond the standard Hypothesis client.",
+      "source_meta": {
+        "author": "Jon Udell",
+        "publication_date": "3 Sep 2021",
+        "summary": "Jon Udell outlines the components needed for a coherent software development kit (SDK) for web annotation, drawing from his experience working with Hypothesis across various domains. He describes core operations, tools, and techniques for creating and anchoring annotations to web documents, and demonstrates how annotation can be integrated into diverse document workflows beyond the standard Hypothesis client.",
+        "title": "Notes for an Annotation SDK",
+        "source_url": "https://blog.jonudell.net/2021/09/03/notes-for-an-annotation-sdk/",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "81-273",
+          "highlight": "It records the start and end of the selection in the visible text of an HTML document. Here’s the HTML source of that web page.",
+          "intent": "In the highlighted passage, the author explains the purpose and function of the TextPositionSelector, which is a component used in web annotation systems to precisely anchor annotations to specific parts of a document. Specifically, the TextPositionSelector works by recording the numerical start and end positions of a text selection within the visible text of an HTML document. This approach provides a way to specify exactly where an annotation should be anchored, particularly useful in situations where the same text appears multiple times in a document and simple text matching (like with TextQuoteSelector) is insufficient to disambiguate which occurrence is meant.\n\nBy providing the actual snippet of the HTML source following this statement, the author illustrates how the visible text is structured in the document, thus grounding the explanation of how start and end positions correspond to particular locations within this visible content. This contextualizes how the TextPositionSelector functions under the hood, anchoring annotations by a numeric range within the specific visible text extracted from the HTML, rather than relying solely on the exact string content. This is important because it highlights the limitations of text-only selectors and the necessity of combining them with positional information to robustly link annotations to the correct part of a document.",
+          "reference_cards": [
+            {
+              "id": "273",
+              "tier": "T2",
+              "front": "What two mechanisms do Hypothesis annotations use to match annotations to dynamically evolving source text?",
+              "back": "TextQuoteSelector to capture the text of the annotation and the text that surrounds it, and TextPositionSelector which records the position of the annotation in the visible document.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "272",
+              "tier": "T3",
+              "front": "What two selectors do Hypothesis annotations use to identify text in dynamically changing documents?",
+              "back": "(1) TextQuoteSelector, which captures the exact quoted text plus surrounding context\n(2) TextPositionSelector, which records the annotation's position within the visible document.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "274",
+              "tier": "T0",
+              "front": "How does TextPositionSelector's text selection differ from HTML source code?",
+              "back": "It counts positions in the visible rendered text, not the HTML source code.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "82-276",
+          "highlight": "Two core operations lie at the heart of any annotation system: creating a note that will bind to a selection in a document, and binding (anchoring) that note to its place in the document. A tool that creates an annotation reacts to a selection in a document by forming one or more selectors that describe the selection.",
+          "intent": "The highlighted passage identifies the fundamental mechanics of how annotation systems work. The author explains that any annotation system fundamentally relies on two key operations: \n\n1. **Creating a note linked to a selection in the document** — This means producing the actual annotation content (like a comment or label) related to a specific piece of text or content chosen by the user.\n  \n2. **Binding or anchoring that note to the exact place in the document that was selected** — This involves identifying and linking the note precisely to the portion of content it refers to, so the annotation stays correctly associated even as the document is viewed or shared.\n\nTo achieve this, the annotation tool reacts to the user's selection by generating one or more “selectors.” These selectors are data structures that mathematically or structurally describe the chosen text segment, allowing the system to find that same selection later and attach the note to it. Thus, selectors serve as the “address” or “handle” for the annotation target within the document. This careful two-step process ensures annotations are created with precise references and can be reliably displayed and managed within document workflows.",
+          "reference_cards": [
+            {
+              "id": "278",
+              "tier": "T0",
+              "front": "What is the primary purpose of selectors in web annotation systems?",
+              "back": "To describe and identify the specific location of a user's selection within a document",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "276",
+              "tier": "T2",
+              "front": "What are the two core operations in any annotation system?",
+              "back": "1\\. Creating a note that binds to a document selection 2. Binding (anchoring) that note to its place in the document",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "277",
+              "tier": "T0",
+              "front": "When a user makes a selection in a document, how does an annotation system respond?",
+              "back": "It forms one or more selectors that describe the selected content.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "275",
+              "tier": "T3",
+              "front": "What are the two core operations in any annotation system?",
+              "back": "1. Creating a note attached to a selected part of the document\n2. Anchoring the note to its place in the document",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-b37e1473b5b3eddd",
+      "source_text": "DreamCoder is a machine learning system that learns to solve problems by writing programs, growing its own domain-specific languages and neural search strategies through a \"wake-sleep\" cycle inspired by human learning and memory consolidation. It demonstrates the ability to rediscover foundational concepts in programming, mathematics, and physics, and to generalize across diverse domains with data efficiency and interpretability, offering a step toward more human-like, compositional, and scalable AI.",
+      "source_meta": {
+        "author": "Kevin Ellis, Catherine Wong, Maxwell Nye, Mathias Sablé-Meyer, Luc Cary, Lucas Morales, Luke Hewitt, Armando Solar-Lezama, Joshua B. Tenenbaum",
+        "publication_date": "2021 (exact date not specified in the excerpt, but the work is from 2021)",
+        "summary": "DreamCoder is a machine learning system that learns to solve problems by writing programs, growing its own domain-specific languages and neural search strategies through a \"wake-sleep\" cycle inspired by human learning and memory consolidation. It demonstrates the ability to rediscover foundational concepts in programming, mathematics, and physics, and to generalize across diverse domains with data efficiency and interpretability, offering a step toward more human-like, compositional, and scalable AI.",
+        "title": "DreamCoder: Growing Languages for Generative World Models",
+        "source_url": "https://arxiv.org/pdf/2006.08381",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "18-47",
+          "highlight": "Even with a carefully tuned prior, though, search for the best program has almost always beenintractable for general-purpose algorithms, because of the combinatorial nature of the search space.Hence most practical applications of program induction require not only a hand-designed DSL but alsoa search algorithm hand-designed to exploit that DSL for fast inference. Both these requirements limitthe scalability and broad applicability of program induction.",
+          "intent": "The highlighted passage emphasizes a fundamental challenge in program induction: despite having a well-designed prior (i.e., a programming language or domain-specific language—DSL—tailored to a problem domain, which biases search towards simpler or more plausible programs), the search for the best program solution remains computationally intractable for general-purpose algorithms. This intractability arises because the space of possible programs is combinatorially large—there are exponentially many candidate programs to consider.\n\nAs a consequence, practical program induction systems typically need *two* handcrafted components: \n\n1. **A hand-engineered DSL:** This defines the possible building blocks and structures for programs in the domain, providing a strong inductive bias that limits the search space to manageable regions. Without this, programs tend to be too long or complex, making them effectively impossible to find within reasonable search time.\n\n2. **A hand-engineered search algorithm:** This is specifically designed to exploit the structure of the given DSL, enabling more efficient exploration of the program space to find acceptable solutions quickly.\n\nThe passage states that needing both a hand-designed DSL *and* a specialized search method restricts program induction’s scalability and generality. In other words, because both aspects require human expertise and manual tuning, program induction systems tend to be brittle and less broadly applicable—each new domain often calls for new DSLs and accompanying search heuristics crafted by experts.\n\nThis discussion sets the motivation for DreamCoder’s approach, which seeks to overcome these bottlenecks by *automatically* learning both the DSL (domain-specific language / library of reusable abstractions) and the search strategy (via a neural recognition model) from experience. Rather than relying on hand-designed priors and search procedures, DreamCoder iteratively builds its own domain expertise to make program induction scalable and more widely applicable. Thus, this passage elucidates the key impediments in classic program induction and frames the need for systems like DreamCoder that can learn to *learn* better languages and inference strategies, rather than depending on manual design.",
+          "reference_cards": [
+            {
+              "id": "46",
+              "tier": "T3",
+              "front": "Why is general-purpose program induction considered computationally intractable?",
+              "back": "The search space of possible programs is combinatorially large, making it too complex to explore efficiently with general-purpose methods.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "48",
+              "tier": "T0",
+              "front": "What is the significance of the search space complexity in general-purpose program induction for making practical applications feasible?",
+              "back": "Hand-designed DSLs and specialized search algorithms are required to overcome the search space complexity and make practical applications feasible.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "47",
+              "tier": "T2",
+              "front": "What is the main reason general-purpose program induction search spaces are computationally intractable?",
+              "back": "The search space is too large or complex due to its combinatorial nature.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "50",
+              "tier": "T0",
+              "front": "What two constraints limit the applicability of general-purpose program induction?",
+              "back": "Hand-designed DSLs and specialized search algorithms",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "49",
+              "tier": "T0",
+              "front": "What two essential elements are required for general-purpose program induction to be practical?",
+              "back": "Hand-designed domain-specific languages and specialized search algorithms.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "22-65",
+          "highlight": "Duringeach sleep cycle the next library bootstraps off the concepts learned during earlier cycles, growing anincreasingly deep learned library. Simultaneously the generative and recognition models bootstrap eachother: A more specialized library yields richer dreams for the recognition model to learn from, whilea more accurate recognition model solves more tasks during waking which then feed into the nextlibrary. Both sleep phases also serve to mitigate the combinatorial explosion accompanying programsynthesis",
+          "intent": "The highlighted passage explains a key part of DreamCoder's learning mechanism that occurs during its iterative \"wake-sleep\" cycles, particularly focusing on how the system progressively improves its internal knowledge representations and problem-solving efficiency over time.\n\n**Core ideas unpacked:**\n\n1. **Library Bootstrapping and Growth Over Sleep Cycles:**  \n   During each sleep phase (particularly the abstraction phase), DreamCoder updates and extends its internal library of domain-specific programming abstractions—essentially building a richer set of reusable conceptual building blocks. This process is cumulative: the library built in one sleep cycle forms the foundation for learning in the next cycle. In other words, the system \"bootstraps\" its knowledge, gradually growing a deeper, more powerful set of concepts by abstracting common patterns from the programs it has found so far.\n\n2. **Mutual Bootstrapping Between Generative and Recognition Models:**  \n   DreamCoder simultaneously maintains and improves two intertwined components:\n   - The **generative model**, which encodes the current library, essentially representing prior knowledge about what programs look like in the domain.\n   - The **recognition model**, a neural network guiding program search during waking by predicting plausible program components for new tasks.\n\n   These two models enhance each other:  \n   - A richer, more specialized library (generative model) enables DreamCoder to create more structured and meaningful \"dreams\" (imagined programs and tasks) to train the recognition model. This makes the recognition model better at predicting programs for new tasks.  \n   - A more accurate recognition model, in turn, finds better and more programs during waking hours, which supply new data to improve the library in the next sleep cycles.\n\n   This forms a virtuous cycle where the symbolic knowledge and neural procedural skill improve hand-in-hand.\n\n3. **Mitigating the Combinatorial Explosion in Program Synthesis:**  \n   Program synthesis involves searching through an enormous space of possible programs, growing combinatorially with program size and complexity. The combined learning during the sleep phases curtails this explosion by:  \n   - Learning **higher-level abstractions** reduces the effective search depth, making solutions more succinct.  \n   - Improving the recognition model reduces the search breadth, focusing attention on the most promising program candidates.\n\nIn sum, the passage highlights how DreamCoder's cyclical learning approach enables it to build increasingly sophisticated domain knowledge and efficient search capabilities—symbolized by progressive library growth and recognition model training—that work together to tame the otherwise intractable search problem of program synthesis. This mutual bootstrapping underlies the system's ability to become a more expert solver as it accumulates experience.",
+          "reference_cards": [
+            {
+              "id": "66",
+              "tier": "T0",
+              "front": "According to DreamCoder's authors, in what direction does mutual enhancement occur between the generative and recognition models in wake-sleep cycles?",
+              "back": "The generative model influences the recognition model, and the recognition model's output influences the generative model",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "62",
+              "tier": "T1",
+              "front": "How does DreamCoder mitigate the combinatorial explosion during sleep cycles?",
+              "back": "It bootstraps on previously learned concepts.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "63",
+              "tier": "T0",
+              "front": "According to DreamCoder authors, how do generative and recognition models interact?",
+              "back": "They mutually enhance each other to mitigate the combinatorial explosion in program synthesis.",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "61",
+              "tier": "T3",
+              "front": "[DreamCoder: Sleep Phase] How does the _abstraction step_ affect the combinatorics of program synthesis?",
+              "back": "Reduces depth by creating higher-level functions that simplify programs.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "65",
+              "tier": "T3",
+              "front": "[DreamCoder: Sleep Phase] How does the _dreaming step_ affect the combinatorics of program synthesis?",
+              "back": "Reduces breadth by training a neural model to prioritize promising program paths. Together, they shrink the search space dramatically.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": true
+            },
+            {
+              "id": "64",
+              "tier": "T0",
+              "front": "In DreamCoder's sleep cycles, how does the learned library grow?",
+              "back": "By building on concepts learned in earlier cycles",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "21-59",
+          "highlight": "The recognition network is trained on ‘Fantasies’ (programs sampled fromlibrary) and ‘Replays’ (programs found during waking).",
+          "intent": "The highlighted passage states: \"The recognition network is trained on ‘Fantasies’ (programs sampled from library) and ‘Replays’ (programs found during waking).\"\n\nIn context, this describes a key mechanism in DreamCoder’s \"dreaming\" sleep phase, where the system improves its procedural skill—the neural network component that guides efficient program search. The recognition network is a neural model trained to predict which programs are likely to solve new tasks given observed data.\n\nTraining data for this network comes from two complementary sources:\n\n1. **Replays**: These are real programs discovered during the waking phase when DreamCoder attempts to solve actual training tasks. Replays help ensure the recognition model learns from the actual problems it faces, reinforcing solutions it has found and preventing forgetting.\n\n2. **Fantasies**: These are random programs generated by sampling from the current learned library (the generative model of DreamCoder’s language). Fantasies create imagined or hypothetical tasks and corresponding programs, enabling the recognition network to learn from a much broader, more varied dataset than just the training tasks. This broad and diverse \"dream\" data is critical because the actual number of training tasks is relatively small (often on the order of 100–200), insufficient alone to train a high-capacity neural network effectively.\n\nTogether, replays and fantasies provide a balanced training regimen for the recognition network: replays ground learning in empirical experience, while fantasies expand the network’s generalization capacity by exposing it to a wide variety of synthetic problems and solutions drawn from the generative model.\n\nThis dual training approach supports DreamCoder’s goal of efficient, scalable program induction by enabling the neural search guidance to generalize beyond previously seen tasks, helping the system to find promising programs more quickly and effectively when tackling new problems.",
+          "reference_cards": [
+            {
+              "id": "60",
+              "tier": "T0",
+              "front": "What are the two learning phases where the DreamCoder recognition network is trained?",
+              "back": "Fantasies and Replays",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "58",
+              "tier": "T3",
+              "front": "[DreamCoder: Dreaming Phase] During the \"dreaming\" phase of sleep, what is the data that the recognition model is trained on?",
+              "back": "_‘Fantasies’_ (programs sampled from library) and _‘Replays’_ (programs found during waking).",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "59",
+              "tier": "T1",
+              "front": "What are the two types of inputs used to train DreamCoder's recognition network?",
+              "back": "Programs sampled from the library, and programs found during waking.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-5d4029194b55714a",
+      "source_text": "Vitalik Buterin introduces quadratic payments as a novel social technology that could transform public decision-making. He explains three variants: quadratic voting, quadratic funding, and quadratic attention payments. These mechanisms aim to balance influence in proportion to how much people care about an issue, avoiding the pitfalls of both one-person-one-vote systems (which ignore preference strength) and one-dollar-one-vote systems (which give too much power to the wealthy). Early implementations have shown promise in various contexts including hackathons, public goods funding, and political decision-making.",
+      "source_meta": {
+        "author": "Vitalik Buterin",
+        "publication_date": "2019 Dec 07",
+        "summary": "Vitalik Buterin introduces quadratic payments as a novel social technology that could transform public decision-making. He explains three variants: quadratic voting, quadratic funding, and quadratic attention payments. These mechanisms aim to balance influence in proportion to how much people care about an issue, avoiding the pitfalls of both one-person-one-vote systems (which ignore preference strength) and one-dollar-one-vote systems (which give too much power to the wealthy). Early implementations have shown promise in various contexts including hackathons, public goods funding, and political decision-making.",
+        "title": "Quadratic Payments: A Primer",
+        "source_url": "https://vitalik.eth.limo/general/2019/12/07/quadratic.html",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "347-1108",
+          "highlight": "But one weakness of quadratic voting is that it doesn't come with a built-in mechanism for deciding what goes on the ballot in the first place",
+          "intent": "The author points out a key limitation of quadratic voting: while it is an effective mechanism for aggregating preferences and balancing influence among voters during a decision-making process, it does not address how the options or issues to be voted on are initially selected or proposed. In other words, quadratic voting assumes that the set of choices already exists, but it offers no inherent system for determining which questions or proposals should be placed \"on the ballot\" for voters to decide upon. This gap is significant because the power to decide what issues are considered can heavily influence outcomes and potentially be manipulated. The author highlights this as a weakness that needs to be addressed, implying that the process of agenda-setting—deciding which decisions get to be voted on—requires additional mechanisms beyond quadratic voting itself.",
+          "reference_cards": [
+            {
+              "id": "1108",
+              "tier": "T1",
+              "front": "Why is the lack of a ballot-setting mechanism considered a weakness of quadratic voting?",
+              "back": "It creates a potential source of concentrated power outside the voting process",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "1109",
+              "tier": "T3",
+              "front": "Why is the lack of a ballot-setting mechanism considered a weakness of quadratic voting?",
+              "back": "Because it lets whoever sets the agenda concentrate power by deciding what issues can be voted on, outside the quadratic voting process.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "348-1110",
+          "highlight": "Within the context of the organization, the choice made is a public good (or public bad, depending on whom you talk to): everyone \"consumes\" the results of the same decision, they just have different opinions about how much they like the result.",
+          "intent": "The highlighted passage explains that decisions made within an organization—such as a company, nonprofit, or government—represent public goods (or sometimes public bads) because their outcomes affect all members collectively. Everyone experiences the consequences of the decision (\"consumes\" it), but individuals differ in how much they value the outcome. This sets the stage for justifying quadratic voting as an appropriate mechanism since it aims to aggregate these differing intensities of preferences over a collective, shared decision. Unlike private goods where benefits and costs apply individually, here the decision’s impact is shared, and people's preferences vary in strength, making usual voting or market methods insufficient to capture these nuances. This passage thus frames the problem quadratic voting seeks to solve: how to fairly aggregate everyone’s preferences over a shared outcome.",
+          "reference_cards": [
+            {
+              "id": "1112",
+              "tier": "T3",
+              "front": "What distinguishes an organizational public good from an individual choice?",
+              "back": "They produce a single outcome that everyone in the organization must share, *regardless of individual preference*.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1110",
+              "tier": "T2",
+              "front": "What distinguishes organizational public goods from individual choices?",
+              "back": "Everyone in the organization must accept and live with the same outcome, regardless of their personal preferences.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            },
+            {
+              "id": "1111",
+              "tier": "T1",
+              "front": "What defines a public good in an organizational context?",
+              "back": "A decision outcome that affects all members of the organization, regardless of their individual preferences.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            }
+          ]
+        },
+        {
+          "unit_id": "350-1115",
+          "highlight": "ow much influence you \"buy\" is proportional to how much you care",
+          "intent": "The highlighted phrase \"how much influence you 'buy' is proportional to how much you care\" encapsulates a central principle behind quadratic voting and related quadratic payment mechanisms discussed in the passage. In context, the author argues that conventional voting or market mechanisms either over-privilege those with concentrated wealth/interests or treat all voters as equal regardless of their intensity of preference—both extremes leading to suboptimal collective decisions.\n\nQuadratic voting introduces a system where the cost of acquiring additional votes grows quadratically (the nth vote costs n dollars), which means that individuals with stronger preferences (\"care\" more about the outcome) can buy more influence, but at escalating marginal prices. This design balances influence: those who care more end up with proportionally more voting power, but it is costly to dominate decisions outright. Hence, influence aligns with the intensity of preference.\n\nThis proportionality contrasts with \"one person, one vote\" systems, where all voters have equal influence regardless of preference intensity, and simple markets, where the wealthiest can dominate outcomes. The quadratic cost function ensures that the influence bought by each individual reflects how much they value the decision, maintaining fairness and efficiency in public collective decision-making. Thus, the highlighted point is foundational—it explains the mechanism's objective to match influence to genuine care, improving on traditional voting and funding mechanisms.",
+          "reference_cards": [
+            {
+              "id": "1116",
+              "tier": "T1",
+              "front": "How does proportional influence address the 'wolves and sheep' voting dilemma?",
+              "back": "It allows minorities with strong interests to have meaningful influence against majorities with weaker preferences.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1114",
+              "tier": "T3",
+              "front": "What is the main advantage of proportional influence over one-person-one-vote systems?",
+              "back": "It reflects the intensity of voters’ preferences instead of treating all votes as equally weighted regardless of their stake.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "1117",
+              "tier": "T1",
+              "front": "In voting systems, what is the key principle of proportional influence?",
+              "back": "The amount of influence a voter can exercise is proportional to how much they care about the outcome.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": false
+            },
+            {
+              "id": "1118",
+              "tier": "T0",
+              "front": "What is the mathematical symbol used to represent 'how much you care' in the source excerpt?",
+              "back": "k",
+              "rationale": "Memory Machines human rating: off-target.",
+              "source_task_type": "off-target",
+              "source_test_target": false
+            },
+            {
+              "id": "1115",
+              "tier": "T2",
+              "front": "What advantage does proportional influence have over one-person-one-vote systems?",
+              "back": "It accounts for intensity of preference rather than treating all votes as equally weighted regardless of stake in the outcome.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            }
+          ]
+        },
+        {
+          "unit_id": "351-1120",
+          "highlight": "how do we aggregate together people's preferences? Some private and public goods are worth producing, others are not. In the case of private goods, the question is easy, because we can just decompose it into a series of decisions for each individual. Whatever amount each person is willing to pay for, that much gets produced for them; the economics is not especially complex. In the case of public goods, however, you cannot \"decompose\", and so we need to add up people's preferences in a different way.",
+          "intent": "The author is addressing the fundamental challenge of collectively deciding which goods and projects deserve to be produced or funded based on people's preferences. For private goods (like apples), aggregation of preferences is straightforward because individual demands can be separated—each person decides independently how much to pay, and producers supply accordingly. This decomposability allows traditional market mechanisms to work effectively. \n\nHowever, with public goods (such as public parks, clean air, or this article), the situation is different because the good is non-excludable and non-rivalrous: it benefits everyone simultaneously, and producing it for one person is effectively producing it for all. This means preferences cannot be simply broken down into individual, isolated decisions. Instead, preferences must be aggregated as a whole, since the provision decision is collective and indivisible—either the good is produced for all or for none. Consequently, a distinct approach is required to sum up and interpret people’s preferences over public goods in order to decide whether these goods should be produced. This sets the stage for exploring new mechanisms like quadratic voting and quadratic funding, which aim to aggregate preferences in ways that fairly balance individual intensity of support and collective benefit.",
+          "reference_cards": [
+            {
+              "id": "1120",
+              "tier": "T1",
+              "front": "What fundamental difference exists between private and public goods in terms of preference aggregation?",
+              "back": "Private goods can be decomposed into individual decisions, while public goods require collective preference aggregation and cannot be decomposed.",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "1119",
+              "tier": "T3",
+              "front": "In the context of private goods, what does 'decomposition' of economic decisions mean?",
+              "back": "Breaking down production decisions into separate choices for each individual, where each person's consumption can be handled independently.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-c18e8832f7e9cba5",
+      "source_text": "Abi Olvera examines why the United States has far higher road fatality rates than peer nations, arguing that this is not inevitable but the result of policy choices. The article traces the origins and global spread of the Safe System approach—a philosophy and set of urban planning practices that dramatically reduced road deaths in countries like the Netherlands, Sweden, and Spain. Olvera contends that the U.S. has failed to adopt these proven strategies due to fragmented governance, outdated standards, and lack of political will, and calls for a national vision, comprehensive design reforms, and a cultural shift to treat road safety as a fundamental priority.",
+      "source_meta": {
+        "author": "Abi Olvera",
+        "publication_date": "April 2025",
+        "summary": "Abi Olvera examines why the United States has far higher road fatality rates than peer nations, arguing that this is not inevitable but the result of policy choices. The article traces the origins and global spread of the Safe System approach—a philosophy and set of urban planning practices that dramatically reduced road deaths in countries like the Netherlands, Sweden, and Spain. Olvera contends that the U.S. has failed to adopt these proven strategies due to fragmented governance, outdated standards, and lack of political will, and calls for a national vision, comprehensive design reforms, and a cultural shift to treat road safety as a fundamental priority.",
+        "title": "Vision vs. action",
+        "source_url": "https://asteriskmag.com/issues/10/traffic-fatalities-are-a-choice",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "80-271",
+          "highlight": "Sweden developed 2+1 roads, a three lane road where two lanes run in one direction and one in the other, alternating every few kilometers, separated by a cable barrier.",
+          "intent": "The highlighted passage describes one of Sweden's key innovations in road safety infrastructure that supports its Vision Zero goal to eliminate serious injuries and deaths on its roads. The \"2+1 road\" design involves a three-lane configuration where two lanes are dedicated to traffic in one direction and one lane to traffic in the opposite direction, with the two-lane direction and one-lane direction alternating every few kilometers. A cable barrier physically separates the opposing flows of traffic. \n\nThis design addresses high-speed risks on rural highways by preventing head-on collisions—a common and particularly deadly type of crash—while still allowing safer overtaking opportunities. Drivers can use the two-lane section to pass slower vehicles without needing a full multi-lane highway, making it a cost-effective safety intervention. The passage situates this technical innovation within broader systemic changes in Sweden’s road safety policies that provide proof of the effectiveness of the Safe System approach internationally. The 2+1 road exemplifies how physical road engineering can substantially reduce fatal crashes and facilitate safer driving behaviors, contributing to Sweden’s significant reduction in traffic deaths.",
+          "reference_cards": [
+            {
+              "id": "270",
+              "tier": "T2",
+              "front": "According to Sweden's Safe System approach, what fundamental truth about crashes is accepted?",
+              "back": "Human error is inevitable and crash prevention focuses on designing roads to avoid fatal outcomes.",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": false
+            },
+            {
+              "id": "269",
+              "tier": "T3",
+              "front": "In Sweden's Safe System approach, what is explicitly acknowledged about crashes?",
+              "back": "Human error is inevitable and crash prevention focuses on designing roads to avoid fatal outcomes.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "271",
+              "tier": "T3",
+              "front": "What is the 2+1 Roadway design?",
+              "back": "Specific category of three-lane road, consisting of two lanes in one direction and one lane in the other, alternating every few kilometres, and usually separated with a steel cable barrier.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-e1bbd20b79dea7fb",
+      "source_text": "The article explores the Stoic concept of \"premeditatio malorum\" (premeditation of evils), clarifying that while Stoicism encourages mentally preparing for adversity, it does not advocate for unnecessary suffering through worry. The key is to be realistic and prepared, not pessimistic or anxious, and to focus on what is within one's control.",
+      "source_meta": {
+        "author": "Daily Stoic (author not individually specified)",
+        "publication_date": "Not explicitly specified; likely 2021 based on site footer",
+        "summary": "The article explores the Stoic concept of \"premeditatio malorum\" (premeditation of evils), clarifying that while Stoicism encourages mentally preparing for adversity, it does not advocate for unnecessary suffering through worry. The key is to be realistic and prepared, not pessimistic or anxious, and to focus on what is within one's control.",
+        "title": "We Suffer More in Imagination Than in Reality: The Stoic Practice of Premeditatio Malorum",
+        "source_url": "https://dailystoic.com/dont-borrow-suffering/",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "90-302",
+          "highlight": "Don’t Borrow Suffering",
+          "intent": "The highlighted phrase \"Don’t Borrow Suffering\" encapsulates a core Stoic teaching emphasized in the passage: while it is important to mentally prepare for potential difficulties (the Stoic practice of premeditatio malorum), one should avoid unnecessary suffering caused by excessive worry about future events that may never occur. The author clarifies a common misunderstanding about this practice by distinguishing realistic preparation from anxious rumination. \n\nSeneca’s advice to \"rehearse\" all possible hardships is about cultivating awareness and readiness, not about inflicting mental pain on oneself prematurely. The passage stresses that Stoicism encourages acknowledging the possibility of misfortune without letting fear or worry dominate one’s present focus and peace of mind. In other words, the Stoic ideal balances sober anticipation of challenges (\"being prepared\") with a grounded focus on the present and on controlling one’s responses, rather than \"borrowing\" or pre-experiencing the emotional pain of potential future suffering.\n\nThus, \"Don’t Borrow Suffering\" serves as a concise reminder to avoid self-generated anxiety by overthinking or dreading hardships before they occur, highlighting the balance between rational foresight and emotional resilience.",
+          "reference_cards": [
+            {
+              "id": "303",
+              "tier": "T3",
+              "front": "[Stoicism — Anticipation Without Anxiety] In Stoicism, what phrase warns against emotionally anticipating pain from future hardships that haven't happened yet?",
+              "back": "\"Don’t borrow suffering\" — a reminder to prepare rationally for difficulties without letting imagined pain disrupt present peace.",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            },
+            {
+              "id": "302",
+              "tier": "T2",
+              "front": "[Stoicism — Don’t Borrow Suffering] In Stoic practice, we’re reminded to prepare for hardship without pre-living its pain: […].",
+              "back": "Don’t borrow suffering",
+              "rationale": "Memory Machines human rating: needs-polish.",
+              "source_task_type": "needs-polish",
+              "source_test_target": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source-1c77e80b313634ef",
+      "source_text": "This text examines the Soviet Union's launch of Sputnik 1 on October 4, 1957, which shocked the American public and government, triggering the Space Age and a crisis of confidence in American technological superiority. The author details the American response to this Soviet achievement, including the eventual creation of NASA in 1958, and analyzes how this event transformed Cold War competition and American space policy.",
+      "source_meta": {
+        "author": "Roger D. Launius",
+        "publication_date": "Not specified",
+        "summary": "This text examines the Soviet Union's launch of Sputnik 1 on October 4, 1957, which shocked the American public and government, triggering the Space Age and a crisis of confidence in American technological superiority. The author details the American response to this Soviet achievement, including the eventual creation of NASA in 1958, and analyzes how this event transformed Cold War competition and American space policy.",
+        "title": "Sputnik and the Origins of the Space Age",
+        "source_url": "https://history2.nasa.gov/sputnik/sputorig.html",
+        "context_kind": "source-summary",
+        "original_split": "test"
+      },
+      "target_units": [
+        {
+          "unit_id": "184-617",
+          "highlight": "NACA also enjoyed a close\n\n\n\nworking relationship with the military services, helping to solve\n\n\n\nresearch problems associated with aeronautics and also finding\n\n\n\napplication for them in the civilian sector. Its civilian character;\n\n\n\nits recognized excellence in technical activities; and its quiet,\n\n\n\nresearch-focused image all made it an attractive choice. It could\n\n\n\nfill the requirements of the constrained job Eisenhower envisioned\n\n\n\nwithout exacerbating Cold War tensions with the Soviet Union.",
+          "intent": "This highlighted passage explains why the National Advisory Committee for Aeronautics (NACA) was chosen as the foundation for the new space agency, NASA. The author emphasizes that NACA, though a civilian organization, maintained a close collaborative relationship with the military, particularly in solving aeronautics research problems that benefited both defense and civilian applications. Importantly, NACA was known for its strong technical expertise and a culture focused on quiet, apolitical research rather than political or military posturing.\n\nThese qualities made NACA particularly well suited for President Eisenhower's vision of a new civilian space agency. Eisenhower wanted to create a space organization that could operate effectively in advancing aeronautical and space technologies while avoiding actions that might escalate Cold War tensions. By building on NACA's existing capabilities and reputation, the administration could establish NASA as a credible, scientifically-driven agency that would not be perceived as a purely military or confrontational tool. Thus, NACA's civilian nature, technical excellence, and low-key image made it an attractive and strategically prudent choice to lead America's peaceful space exploration efforts during a politically sensitive era.",
+          "reference_cards": [
+            {
+              "id": "617",
+              "tier": "T1",
+              "front": "What three characteristics of NACA made it an attractive choice for leading civilian space efforts?",
+              "back": "Its civilian character, recognized excellence in technical activities, and quiet research-focused image",
+              "rationale": "Memory Machines human rating: needs-refactor.",
+              "source_task_type": "needs-refactor",
+              "source_test_target": true
+            },
+            {
+              "id": "616",
+              "tier": "T3",
+              "front": "How did NACA's characteristics align with Eisenhower's goals regarding Cold War relations?",
+              "back": "NACA could fulfill space research requirements while maintaining a low profile that wouldn't escalate tensions with the Soviet Union",
+              "rationale": "Memory Machines human rating: ready-to-review.",
+              "source_task_type": "ready-to-review",
+              "source_test_target": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

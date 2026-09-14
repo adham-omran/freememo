@@ -1,0 +1,40 @@
+{
+  "dataset_id": "laddermedia/srs-highlights",
+  "source_url": "https://huggingface.co/datasets/laddermedia/srs-highlights",
+  "revision": "784fbaad10a241be61d89cb4e2d1f0e1b6bbbb6b",
+  "downloaded_at": "2026-09-12",
+  "license": "apache-2.0",
+  "files": [
+    {
+      "path": "grounded-00000-of-00001.parquet",
+      "sha256": "b8f2fbca62f575716379a23792600aa3533e632ed8c52ce75f1d2b556b59108e",
+      "rows": 212,
+      "split_counts": {
+        "train": 180,
+        "test": 32
+      }
+    },
+    {
+      "path": "overflow-00000-of-00001.parquet",
+      "sha256": "9711a1196f4203d793a1a10db18d041eefe802fa93d4ae03d04c04af2d8127e3",
+      "rows": 61,
+      "split_counts": {
+        "train": 58,
+        "test": 3
+      }
+    },
+    {
+      "path": "underspecified-00000-of-00001.parquet",
+      "sha256": "7c736f2d4ff52205087a1edf6ee13675cf76739549551f2e020b36162ea43f41",
+      "rows": 202,
+      "split_counts": {
+        "train": 168,
+        "test": 34
+      }
+    },
+    {
+      "path": "UPSTREAM_README.md",
+      "sha256": "f43876804c42c6cc1be592e5c1d1bf7ecbf569882c2cd08ba9d66ec4d87b7563"
+    }
+  ]
+}
