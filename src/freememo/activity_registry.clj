@@ -341,12 +341,14 @@
    ;; been navigated or toasted. A subject that is null for the row's whole
    ;; life is worse than declaring none.
    ;;
-   ;; The member is the URL, so two links to the same page share one row.
+   ;; The member is the URL, so two links to the same page share one row. The
+   ;; member IS the work key, so the default `vector` hands it to `identity`
+   ;; unchanged — `(constantly [])` here called `identity` with no arguments.
    :url-import
    {:label "Importing page"
     :tier :server :subject :none :work-key identity
     :state-key :importing-urls :phase "fetching"
-    :key-fn identity :owner-key->args (constantly [])
+    :key-fn identity
     ;; Without this a failed fetch closes as a success, because the reporter
     ;; reads outcomes here and nowhere else. `start-url-import!*` records the
     ;; error before membership drops, and clears it on a later success for the
