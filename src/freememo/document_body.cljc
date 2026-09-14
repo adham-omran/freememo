@@ -22,6 +22,7 @@
   (e/client
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id pdf-root-id dctx/pdf-root-id
           is-pdf? dctx/is-pdf? reading-mode? dctx/reading-mode?
+          focus-available? dctx/focus-available? focus-scope-id dctx/focus-scope-id
           card-font-size dctx/card-font-size card-refresh dctx/card-refresh
           t-layout dctx/t-layout layout-save dctx/layout-save
           t-focus dctx/t-focus focus-save dctx/focus-save
@@ -44,14 +45,12 @@
             (if (:success r) (case r (t-layout)) (t-layout (:error r)))))
         (t-layout))))
 
-    ;; Persist the focus-reader flag on toggle. Same shape as the layout
-    ;; persist above: a non-PDF has no per-root key, so the token is spent
-    ;; without a server call.
+    ;; Persist the focus-reader flag for the supported document scope.
     ;; Size-0 sibling, as above.
     (e/drain
      (when t-focus
-      (if (and is-pdf? pdf-root-id)
-        (let [r (e/server (e/Offload #(settings/save-pdf-focus user-id pdf-root-id focus-save)))]
+      (if (and focus-available? focus-scope-id)
+        (let [r (e/server (e/Offload #(settings/save-focus-reader user-id focus-scope-id focus-save)))]
           (when (some? r)
             (if (:success r) (case r (t-focus)) (t-focus (:error r)))))
         (t-focus))))
@@ -116,6 +115,7 @@
               dctx/!left-pct (:!left-pct m) dctx/card-font-size (:card-font-size m) dctx/t-layout (:t-layout m)
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
               dctx/focus? (:focus? m) dctx/set-focus! (:set-focus! m)
+              dctx/focus-available? (:focus-available? m) dctx/focus-scope-id (:focus-scope-id m)
               dctx/merged? (:merged? m) dctx/merged-page-numbers (:merged-page-numbers m)
               dctx/editor-doc-id (:editor-doc-id m)
               dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)

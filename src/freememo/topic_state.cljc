@@ -15,6 +15,7 @@
    [freememo.viewport :as viewport]
    [freememo.bibliography-form :as bibform]
    [freememo.page-merge :as page-merge]
+   [freememo.focus-reader :as focus-reader]
    [clojure.string :as str]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
@@ -200,6 +201,8 @@
           pdf-root-id (:pdf-root-id overview)
           is-pdf? (some? pdf-root-id)
           is-score? (boolean (:is-score? overview))
+          focus-available? (focus-reader/available? kind is-pdf?)
+          focus-scope-id (when focus-available? (or pdf-root-id topic-id))
           ;; The document's page count, bound once. It bounds `initial-page`
           ;; below and seeds DocumentViewState's `!total`, which bounds every
           ;; later page change — one quantity, named once.
@@ -241,10 +244,11 @@
           initial-layout (e/server
                            (when is-pdf?
                              (e/Offload #(or (settings/get-pdf-layout user-id pdf-root-id) "left-right"))))
-          ;; Focus reader — per PDF root, separate from the split orientation.
+          ;; Each supported document stores its own focus-reader preference.
+          ;; PDF pages share the PDF root preference.
           initial-focus? (e/server
-                           (boolean (when is-pdf?
-                                      (e/Offload #(settings/get-pdf-focus user-id pdf-root-id)))))
+                           (boolean (when focus-scope-id
+                                      (e/Offload #(settings/get-focus-reader user-id focus-scope-id)))))
           initial-top-pct (e/server (e/Offload #(settings/get-card-split user-id)))
           initial-card-table-open? (e/server
                                      (e/Offload #(settings/get-card-table-open user-id)))
@@ -266,6 +270,7 @@
        :refresh refresh :meta-refresh meta-refresh :card-refresh card-refresh
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
+       :focus-available? focus-available? :focus-scope-id focus-scope-id
        :is-score? is-score?
        :is-poem? (boolean (:is-poem? overview))
        :is-video? (boolean (:is-video? overview))
@@ -294,7 +299,7 @@
    Post: returns the layout/split prop slice for DocumentBody."
   [resolved]
   (e/client
-    (let [{:keys [user-id initial-layout initial-focus? initial-top-pct
+    (let [{:keys [user-id initial-layout initial-focus? focus-available? initial-top-pct
                   initial-card-table-open?]} resolved
           ;; Content↕card-table split (global per-user, persisted). Seeded from
           ;; settings; nil → client default. Manual drag + double-click persist
@@ -340,16 +345,15 @@
                              (reset! !layout new-l)
                              (reset! !layout-save new-l)
                              (reset! !top-pct new-top-pct)))
-          ;; Focus reader (persisted per-doc, same shape as !layout). The PDF
-          ;; pane unmounts and the editor column centers. Kept apart from
-          ;; !layout so the stored orientation survives the mode untouched.
-          !focus? (atom (boolean initial-focus?))
+          ;; The focus reader is available only for the standard text view and
+          ;; real PDFs. Its state stays separate from the PDF split layout.
+          !focus? (atom (boolean (and focus-available? initial-focus?)))
           focus? (e/watch !focus?)
           !focus-save (atom nil)
           focus-save (e/watch !focus-save)
           [t-focus _] (e/Token focus-save)
           set-focus! (fn [v]
-                       (let [v (boolean v)]
+                       (let [v (boolean (and focus-available? v))]
                          (reset! !focus? v)
                          (reset! !focus-save v)))
           !left-pct (atom 50)

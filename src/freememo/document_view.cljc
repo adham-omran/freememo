@@ -168,7 +168,7 @@
           ;; The focus-reader class is the ONLY scope for the centered-column
           ;; CSS. `.ql-editor` also styles card fields and every other Quill
           ;; surface, so an unscoped padding rule would reach a card modal.
-          (dom/props {:class (if (and is-pdf? dctx/focus?) "focus-reader-column" "")
+          (dom/props {:class (if (and dctx/focus-available? dctx/focus?) "focus-reader-column" "")
                       :style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)
                                                 "column"

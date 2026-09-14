@@ -44,6 +44,7 @@
    [freememo.score-toolbar :refer [ScoreRectButton]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.tooltip :as tooltip]
+   [freememo.focus-reader :refer [FocusReaderToggle]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.toasts :as toasts])))
@@ -172,38 +173,6 @@
             (dom/On "click"
               (fn [_] (when (and (< page-number total) (> total 0))
                         (nav! (inc page-number) :next))) nil)))))))
-
-(e/defn PdfFocusToggle
-  "Focus reader on/off. Hides the PDF pane and centers the editor column
-   (plans/focus-reader.md). Mounts inline on desktop and inside the phone
-   overflow panel, so it owns nothing but the click.
-
-   Pre : dctx/focus? and dctx/set-focus! are bound (topic-state's
-         DocumentLayoutState owns both). The write is persisted by
-         DocumentBody's t-focus, not here.
-   Post: one click flips the mode with no server round trip."
-  []
-  (e/client
-    (let [focus? dctx/focus? set-focus! dctx/set-focus!
-          label (if focus? "Exit focus reader" "Focus reader")]
-      (dom/div
-        (dom/props {:class "toolbar-group"
-                    :style {:padding-left "12px"
-                            :border-left "1px solid var(--color-border)"}})
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label label
-                      :aria-pressed (str (boolean focus?))
-                      :style {:outline (when focus? "1px solid currentColor")}})
-          (tooltip/Tooltip! (if focus?
-                              "Show the PDF pane again"
-                              "Hide the PDF and read the text in a centered column"))
-          (icons/Icon :book-open :size 16)
-          (dom/span (dom/props {:class "icon-label"}) (dom/text label))
-          (let [node dom/node]
-            (bus/publish-invoker! :toggle-focus-reader node (fn [] (.click node)))
-            (e/on-unmount (fn [] (bus/retract-invoker! :toggle-focus-reader node))))
-          (dom/On "click" (fn [_] (set-focus! (not focus?))) nil))))))
 
 (e/defn PdfOverflowTrigger
   "The ⋮ button that opens a PDF-bar overflow panel. Shared by the phone arm
@@ -451,9 +420,9 @@
               ;; Score topics have no page children — done/scan/copy all
               ;; target page topics. They get the notation rect tool.
               (if dctx/is-score?
-                (e/amb (PdfFocusToggle) (ScoreRectButton))
+                (ScoreRectButton)
                 (e/amb
-                  (PdfFocusToggle)
+                  (FocusReaderToggle nil)
                   (binding [dctx/extract-style extract-style dctx/is-live? false]
                     (PdfScanCopy))
                   (PdfMarkDone)))))
@@ -491,7 +460,7 @@
                             container-node toolbar-node !tier !overflow-open)]
               (e/on-unmount cleanup)
               (PdfPageNav)
-              (PdfFocusToggle)
+              (FocusReaderToggle nil)
               ;; Score topics have no page children — Mark Done targets a page
               ;; topic. They get the notation rect tool instead, and their
               ;; overflow panel would be empty, so they get no ⋮ either.
@@ -531,7 +500,7 @@
                             container-node toolbar-node !tier !overflow-open)]
               (e/on-unmount cleanup)
               (PdfViewerToolbar)
-              (PdfFocusToggle)
+              (FocusReaderToggle nil)
               ;; Score topics have no page children — done/scan/copy all
               ;; target page topics. They get the notation rect tool.
               (if dctx/is-score?

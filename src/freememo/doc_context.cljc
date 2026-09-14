@@ -83,9 +83,11 @@
 
 ;; ── Layout / display ─────────────────────────────────────────────────────
 (e/declare layout)
-;; Focus reader — the PDF pane is unmounted and the editor column is centered.
-;; Independent of `layout`: the stored split orientation survives the mode.
+;; Focus reader. PDF views remove the PDF pane. Supported text topics center
+;; their editor. Special topic views do not offer this mode.
 (e/declare focus?)
+(e/declare focus-available?)
+(e/declare focus-scope-id)
 ;; Merged reading: the whole PDF as one document with a boundary marker per page
 ;; (plans/merged-page-reading.md). True only in focus mode on a real PDF.
 ;; `merged-page-numbers` is what the split needs — the editor cannot report a

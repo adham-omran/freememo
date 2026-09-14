@@ -107,7 +107,8 @@
   ;; One case per dynamic family in settings.clj. A family missing from
   ;; settings-key-prefixes silently keeps a foreign topic id, and the only symptom
   ;; is a preference that applies to somebody else's document.
-  (doseq [prefix ["last_page_" "pdf_layout_" "extract_style_" "ocr_model_"
+  (doseq [prefix ["last_page_" "pdf_layout_" "pdf_focus_" "focus_reader_"
+                  "extract_style_" "ocr_model_"
                   "card_model_" "goal_" "assistant_model_" "anki_preset_"
                   "hierarchy_open_" "pins_open_" "assistant_tab_"
                   "left_panel_tab_"]]

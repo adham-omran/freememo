@@ -526,21 +526,20 @@
       (tel/error! {:id ::save-pdf-layout} e)
       {:success false})))
 
-;; Focus reader — per PDF root. The mode hides the PDF pane and centers the
-;; editor column. It is a separate key from `pdf_layout_`, so the stored split
-;; orientation survives untouched while the mode is on
-;; (plans/focus-reader.md §1.7).
-(defn get-pdf-focus [user-id doc-id]
+;; Each supported document stores one focus-reader flag. Read the old PDF key
+;; as a fallback so existing PDF preferences continue to work.
+(defn get-focus-reader [user-id doc-id]
   (try
-    (= "true" (db/get-setting user-id (str "pdf_focus_" doc-id)))
+    (= "true" (or (db/get-setting user-id (str "focus_reader_" doc-id))
+                   (db/get-setting user-id (str "pdf_focus_" doc-id))))
     (catch Exception _ false)))
 
-(defn save-pdf-focus [user-id doc-id focus?]
+(defn save-focus-reader [user-id doc-id focus?]
   (try
-    (db/set-setting user-id (str "pdf_focus_" doc-id) (str (boolean focus?)))
+    (db/set-setting user-id (str "focus_reader_" doc-id) (str (boolean focus?)))
     {:success true}
     (catch Exception e
-      (tel/error! {:id ::save-pdf-focus} e)
+      (tel/error! {:id ::save-focus-reader} e)
       {:success false})))
 
 ;; Per-PDF quick-text-extraction engine: "client" (PDF.js) | "remote" (PDFBox).

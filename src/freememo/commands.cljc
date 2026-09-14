@@ -315,10 +315,8 @@
                       :when #{:viewer :library} :views #{}}
      :export         {:label "Export cards…" :class :query :exec :ui-button
                       :when #{:viewer} :views #{}}
-     ;; Focus reader (plans/focus-reader.md). The flag is a per-root settings
-     ;; row, so :table names #{:settings}; :views is empty because nothing
-     ;; re-queries it — it is read once at resolve time and held on the client
-     ;; after that, like :initial-layout.
+     ;; The focus-reader flag is one settings row per supported document.
+     ;; Nothing re-queries it after the initial read, so :views stays empty.
      :toggle-focus-reader {:label "Focus reader" :class :mutation :exec :ui-button
                            :when #{:viewer} :table #{:settings} :views #{}}
      ;; Page flip. :query, not :mutation — the flip writes a client atom and

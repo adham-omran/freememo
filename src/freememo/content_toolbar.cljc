@@ -25,7 +25,8 @@
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
-   [freememo.tooltip :as tooltip]))
+   [freememo.tooltip :as tooltip]
+   [freememo.focus-reader :refer [FocusReaderToggle]]))
 
 ;; State map keys:
 ;; {:user-id       — user identifier
@@ -71,6 +72,17 @@
       (dom/div
         (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
         (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
+
+      (when (and dctx/focus-available? (not is-pdf?))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-bib"
+                      :aria-label (if dctx/focus? "Exit focus reader" "Focus reader")})
+          (icons/Icon :book-open :size 16)
+          (dom/span (dom/props {:class "icon-label"})
+            (dom/text (if dctx/focus? "Exit focus reader" "Focus reader")))
+          (dom/On "click" (fn [_]
+                            (bus/dispatch! :toggle-focus-reader)
+                            (reset! !overflow-open false)) nil)))
 
       ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
       ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
@@ -324,6 +336,9 @@
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
                 (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
+
+              (when (and dctx/focus-available? (not is-pdf?))
+                (FocusReaderToggle "toolbar-collapse-bib"))
 
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))
