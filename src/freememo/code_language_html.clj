@@ -1,12 +1,10 @@
 (ns freememo.code-language-html
   "Set the syntax language of every code block in a piece of stored HTML.
 
-   NO DATABASE DEPENDENCY, deliberately. `freememo.db` builds its HikariCP pool
-   at namespace load, so a namespace that reaches it cannot be unit tested
-   without PostgreSQL running — and loading it with the database down blocks
-   with no output and no error. This namespace holds the whole transform so
-   `test/freememo/code_language_html_test.clj` can run against it with nothing
-   started. The database work lives in `freememo.apply-code-language`.
+   NO DATABASE DEPENDENCY, deliberately. This namespace holds the whole
+   transform, so `test/freememo/code_language_html_test.clj` runs against it
+   with nothing started. The database work lives in
+   `freememo.apply-code-language`.
 
    WHERE THE LANGUAGE LIVES. Quill 2.0.3 writes `data-language` on each
    `div.ql-code-block` — one per LINE, not one per block — and that per-line

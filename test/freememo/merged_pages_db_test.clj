@@ -2,8 +2,9 @@
   "The database half of merged page reading (plans/merged-page-reading.md
    items 1.1, 3.2, 3.3, 3.6, 4.1 and 4.2).
 
-   NEEDS POSTGRESQL. `freememo.db` builds its HikariCP pool at namespace load,
-   so with the database down this namespace blocks with no output.
+   NEEDS POSTGRESQL. The `:each` fixture below writes rows. With the database
+   port refusing connections, that fixture throws `ConnectException`.
+   `clojure.test` does not catch it, so `run-tests` for this namespace throws.
 
    It creates its own PDF root and page rows, and deletes them afterwards. It
    touches no existing document.

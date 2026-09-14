@@ -2,8 +2,7 @@
   "Tests for the poem word panel's card HTML builders.
 
    NEEDS NO DATABASE. `freememo.poem-cards` requires nothing but clojure.string,
-   so loading this namespace never reaches `freememo.db`, whose HikariCP pool is
-   built at namespace load and blocks with no output when PostgreSQL is down.
+   so loading this namespace never reaches `freememo.db`.
 
    Run:
      clj -M:test -e \"(require 'freememo.poem-cards-test) (clojure.test/run-tests 'freememo.poem-cards-test)\""

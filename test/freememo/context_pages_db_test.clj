@@ -1,7 +1,8 @@
 (ns freememo.context-pages-db-test
   "Database coverage for page-context reads used by card generation and the assistant.
 
-   NEEDS POSTGRESQL. `freememo.db` creates its connection pool at namespace load."
+   NEEDS POSTGRESQL. Its test queries the database. With the port refusing
+   connections, that test errors with `PSQLException`."
   (:require [clojure.test :refer [deftest is]]
             [next.jdbc :as jdbc]
             [freememo.db :as db]))

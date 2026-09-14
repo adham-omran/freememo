@@ -3,9 +3,8 @@
    source-chip label the cards and the panel both render.
 
    No requires beyond clojure.string, deliberately. `test/freememo/poem_cards_test.clj`
-   loads this namespace, and a test that reached `freememo.db` would build its
-   HikariCP pool at namespace load and block with no output when PostgreSQL is
-   down (CLAUDE.md, Tests). Everything here is a string in, a string out.
+   loads this namespace and needs nothing started. Everything here is a string
+   in, a string out.
 
    Every block element carries `dir=\"rtl\"` (spec row 6.5). The Anki basic and
    cloze templates set no `dir`, so a card's own markup is the only thing that

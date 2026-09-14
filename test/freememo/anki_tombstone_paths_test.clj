@@ -1,10 +1,8 @@
 (ns freememo.anki-tombstone-paths-test
   "Every path that hard-deletes a flashcard must record an Anki tombstone.
 
-   Reads `db.clj` as TEXT rather than exercising the paths, for the reason
-   `account_transfer_format_test` reads it as text: loading `freememo.db` builds
-   its HikariCP pool at namespace load, so a test that required it could not run
-   without PostgreSQL. This one runs with the database down.
+   Reads `db.clj` as TEXT rather than exercising the paths. Exercising them
+   would query the database, and this suite runs with the database down.
 
    What it protects: `card-components/try-delete-anki-notes!` deletes the Anki
    note from the client on every local-delete path, and it is fire-and-forget.

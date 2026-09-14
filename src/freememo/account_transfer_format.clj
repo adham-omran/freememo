@@ -11,8 +11,7 @@
    It also owns `entity-scopes`, which only the export half reads. That is a
    deliberate departure from \"both halves\": the scope map is a set of SQL
    strings keyed by `entity-tables`, and the two are one fact split in two. They
-   sit together so a test can assert that coverage with the database down. See
-   the Export scope section for why that matters.
+   sit together, and `every-exported-table-has-a-scope` reads both from here.
 
    Named after `freememo.supermemo-format`, which plays the same role for a
    SuperMemo collection.
@@ -180,13 +179,12 @@
 ;; ── Export scope ───────────────────────────────────────────────────
 ;;
 ;; These are SQL strings, not queries — nothing here executes anything, and
-;; only `freememo.account-export` reads them. They live here rather than beside
-;; the writer because `account_export.clj` requires `freememo.db`, whose pool
-;; is built at namespace load (db.clj:63), so a test that loaded the writer
-;; could not run without PostgreSQL. `every-exported-table-has-a-scope` is that
-;; test, and keeping the scope map next to `entity-tables` is what lets it run
-;; with the database down. Moving it back beside the writer silently disarms
-;; that guard.
+;; only `freememo.account-export` reads them. They live here beside
+;; `entity-tables`, and `every-exported-table-has-a-scope` checks the two
+;; against each other. Loading the writer does not need a database either:
+;; `freememo.db` starts its pool at the first query, and
+;; `freememo.account-export` loads with the port refusing connections (measured
+;; 2026-09-14). So if the scope map moves, move the test's require with it.
 
 (def owned-topics
   "Subquery for the topics an export covers: the user's own, minus anything

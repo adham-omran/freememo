@@ -4,10 +4,10 @@
 
    The validation tests are pure and run with the database down. The import tests
    are marked `^:db` and skip with a printed line when no PostgreSQL is up, which
-   is the shape `document_summary_test` already uses — loading this namespace
-   reaches `freememo.db`, whose pool is built at namespace load, so a missing
-   database is a hang rather than a failure and the skip has to be inside the
-   test.
+   is the shape `document_summary_test` already uses. Loading this namespace
+   reaches `freememo.db` but does not connect, because the pool starts at the
+   first query. So the skip sits inside each import test, and the pure tests
+   still run.
 
    The package is built here rather than committed. Its rules are stated as
    verse and note shapes in `plans/poem-package-format.md`, and a binary fixture

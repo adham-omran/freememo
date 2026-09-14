@@ -41,10 +41,9 @@
 ;; ── Scope ──────────────────────────────────────────────────────────
 ;;
 ;; `fmt/owned-topics` and `fmt/entity-scopes` live in
-;; `freememo.account-transfer-format`, not here: this namespace requires
-;; `freememo.db`, whose pool is built at namespace load, so a scope-coverage
-;; test that loaded this file could not run without PostgreSQL. This namespace
-;; owns everything that touches the database.
+;; `freememo.account-transfer-format`, beside `entity-tables`, not here. This
+;; namespace owns everything that touches the database. Loading it does not
+;; connect, because `freememo.db` starts its pool at the first query.
 
 (defn- scope-of
   "The scope entry for `table`.

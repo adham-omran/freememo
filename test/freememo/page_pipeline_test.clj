@@ -1,7 +1,7 @@
 (ns freememo.page-pipeline-test
   "Needs no database. `freememo.page-pipeline` requires only Jsoup, the
    sanitizer and the biblio harvester, so this namespace loads with PostgreSQL
-   down — unlike most of `test/freememo/`."
+   down."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [freememo.page-pipeline :as pp]))

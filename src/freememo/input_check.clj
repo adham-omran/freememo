@@ -4,7 +4,7 @@
    stripping on what reaches a title, and quoting on what reaches a
    Content-Disposition header.
 
-   Requires nothing that opens a database pool, so `input_check_test` runs
+   Requires nothing that reaches `freememo.db`, so `input_check_test` runs
    with PostgreSQL down."
   (:require [clojure.string :as str])
   (:import (java.text Normalizer Normalizer$Form)))

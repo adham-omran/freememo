@@ -14,8 +14,8 @@
 
    pre : the working directory is the repo root — t10 reads the push source as
          text, the way account_transfer_format_test reads db.clj.
-   post: needs no database. freememo.anki-sync-helpers reaches no namespace that
-         builds a connection pool at load."
+   post: needs no database. freememo.anki-sync-helpers does not reach
+         freememo.db."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.anki-sync-helpers :as helpers]))

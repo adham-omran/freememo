@@ -60,12 +60,15 @@
    :password (or (System/getenv "DB_PASSWORD") "dev")
    :maximumPoolSize 10})
 
-;; HikariCP connection pool. Fail-fast init (HikariCP default
-;; initializationFailTimeout): probes one connection at construction and throws if
-;; the DB is unreachable, so a down/misconfigured DB surfaces at boot rather than
-;; on first query. Tradeoff: requiring this namespace now needs a live DB
-;; (no lazy load) — dev tooling / compile-checks that loaded db.clj without a DB
-;; will no longer work.
+;; HikariCP connection pool. Loading this namespace does not connect.
+;; `->pool` builds the data source through `clojure.java.data/to-java` and its
+;; setters, and Hikari starts that pool at the first connection. So a down or
+;; misconfigured database surfaces at the first query, not at load.
+;;
+;; Measured on 2026-09-14 with `clj -M:test`. The require returned in about 3 s
+;; with `(.isRunning ds)` false. With the port refusing connections, the first
+;; query threw `PSQLException` after about 1 s. Against a port that accepts TCP
+;; and never answers, the first query blocked with no output.
 (defonce ds (connection/->pool HikariDataSource db-config))
 
 ;; ---------------------------------------------------------------------------
