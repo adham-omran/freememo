@@ -132,6 +132,22 @@
        roots
        (filterv #(= (:topics/kind %) kind-filter) roots))))
 
+(def document-kind-options
+  [["all" "All types"]
+   ["basic" "Topic"]
+   ["pdf" "PDF"]
+   ["epub" "EPUB"]
+   ["web" "Web"]
+   ["wikipedia" "Wikipedia"]
+   ["markdown" "Markdown"]
+   ["audio" "Audio"]
+   ["score" "Score"]
+   ["video" "Video"]
+   ["video-playlist" "Video playlist"]
+   ["code" "Code"]
+   ["supermemo" "SuperMemo"]
+   ["poem" "Poem"]])
+
 #?(:clj
    (defn filter-by-status [roots status-filter]
      (case status-filter

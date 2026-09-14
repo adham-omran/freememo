@@ -6,7 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.router5 :as r]
-   [freememo.knowledge-tree :refer [DocumentTreeView]]
+   [freememo.knowledge-tree :refer [DocumentTreeView document-kind-options]]
    [freememo.library-cards :refer [LibraryCardsView LibraryViewToggle]]
    [freememo.math :as math]
    #?(:clj [freememo.user-state :as us])))
@@ -74,17 +74,8 @@
 
               (dom/select
                 (dom/props {:class "input library-document-filter" :aria-label "Filter by document type"})
-                (dom/option (dom/props {:value "all"}) (dom/text "All types"))
-                (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
-                (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
-                (dom/option (dom/props {:value "web"}) (dom/text "Web"))
-                (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
-                (dom/option (dom/props {:value "supermemo"}) (dom/text "SuperMemo"))
-                ;; A poem is a root topic, so the tree lists it under "All types"
-                ;; already; this is how a reader narrows to it.
-                ;; `knowledge-tree/filter-by-kind` compares `:topics/kind` for
-                ;; equality, so the option needs no server change.
-                (dom/option (dom/props {:value "poem"}) (dom/text "Poem"))
+                (e/for [[value label] (e/diff-by first document-kind-options)]
+                  (dom/option (dom/props {:value value}) (dom/text label)))
                 (dom/On "change" (fn [e] (reset! !kind-filter (-> e .-target .-value))) nil))
 
               (dom/select

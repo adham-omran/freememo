@@ -36,3 +36,9 @@
       (is (= 1 (:id dto)))
       (is (nil? (:topic dto)))
       (is (= 2 (:total-items dto))))))
+
+(deftest document-kind-filter-covers-root-kinds
+  (is (= ["all" "basic" "pdf" "epub" "web" "wikipedia" "markdown"
+          "audio" "score" "video" "video-playlist" "code" "supermemo"
+          "poem"]
+         (mapv first tree/document-kind-options))))
