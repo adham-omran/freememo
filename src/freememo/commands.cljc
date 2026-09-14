@@ -445,7 +445,11 @@
      :neoreader-sync  {:label "Sync with NeoReader" :class :mutation :palette-hidden true
                        :table #{:topics :settings} :views #{:refresh :settings-refresh}}
      :credits-granted {:label "Credits granted" :class :mutation :palette-hidden true
-                       :table #{:credit_orders :credit_transactions} :views #{:credits-refresh}}}))
+                       :table #{:credit_orders :credit_transactions} :views #{:credits-refresh}}
+     ;; A completed AI action's charge. credits/debit-with-retry! bumps it once,
+     ;; after the ledger write commits, so the balance and AI Costs re-query.
+     :debit-credits   {:label "Debit credits" :class :mutation :palette-hidden true
+                       :table #{:users :credit_transactions} :views #{:credits-refresh}}}))
 
 (def registry
   (merge

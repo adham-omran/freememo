@@ -7,9 +7,9 @@
    creates a Wayl top-up link."
   (:require
    [clojure.string :as str]
+   [freememo.commands :as commands]
    [freememo.config :as config]
    [freememo.db :as db]
-   [freememo.user-state :as us]
    [freememo.wayl :as wayl]
    [taoensso.telemere :as tel]))
 
@@ -104,7 +104,7 @@
                   (recur (inc attempt)))
               (throw e)) ; outer catch logs ::credit-charge-failed
             (let [new-bal (:balance result)]
-              (swap! (us/get-atom user-id :credits-refresh) inc)
+              (commands/bump! user-id :debit-credits)
               (tel/log! {:level :info :id ::credit-debit
                          :data {:user-id user-id :endpoint endpoint :model model
                                 :cost-iqd cost :balance-after new-bal :debit-attempt attempt}}
