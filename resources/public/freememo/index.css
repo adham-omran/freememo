@@ -3007,33 +3007,42 @@ body:not(:has(> *))::before {
 }
 
 /* Documents: after the region's first value, the row count and each row are
-   separate server reads. The cold skeleton was already gone, and the list
-   painted blank until the first row mounted. This striped skeleton matches
-   the row pitch and holds until a row, the empty message, or the failure
-   notice exists. */
+   separate server reads. The cold skeleton is already gone, and the list has
+   no rows until the first row read resolves. Keep this placeholder out of the
+   flex layout. A normal-flow ::after adds six rows below the scroll body, which
+   leaves the body blank and puts the placeholder at its bottom. The absolute
+   overlay starts below the desktop header and stays visible at any scrollTop. */
 .table-frame[aria-label="Library documents"] {
     --pending-rows: 6;
     --pending-pitch: 36px;
     --pending-gap: 1px;
+    --pending-header-height: 36px;
+    position: relative;
 }
 .table-frame[aria-label="Library documents"]:not(:has(tr.library-document-row, .library-document-empty, .library-document-loading, .library-document-failed))::after {
     content: "";
     display: block;
-    flex: none;
-    height: calc(var(--pending-rows) * var(--pending-pitch));
+    position: absolute;
+    z-index: 1;
+    top: var(--pending-header-height);
+    left: 0;
+    right: 0;
+    height: min(calc(var(--pending-rows) * var(--pending-pitch)), calc(100% - var(--pending-header-height)));
+    pointer-events: none;
     background:
         repeating-linear-gradient(to bottom,
             transparent 0 calc(var(--pending-pitch) - var(--pending-gap)),
             var(--color-bg-page) calc(var(--pending-pitch) - var(--pending-gap)) var(--pending-pitch)),
         linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
     background-size: auto, 200% 100%;
-    animation: skeleton-pulse 1.5s ease-in-out 150ms infinite;
+    animation: fade-in 0.2s ease 150ms both, skeleton-pulse 1.5s ease-in-out 150ms infinite;
 }
 @media (max-width: 600px) {
     .table-frame[aria-label="Library documents"] {
         --pending-rows: 3;
         --pending-pitch: 88px;
         --pending-gap: 8px;
+        --pending-header-height: 0px;
     }
 }
 
