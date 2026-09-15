@@ -23,6 +23,11 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **Contents** — Hierarchical knowledge tree with virtual scrolling
 - **Knowledge graph** — Obsidian-style graph view of the knowledge tree (server-side Graphviz layout)
 
+## Specification
+
+The [FreeMemo specification](spec/README.md) defines behavior, format compatibility, and conformance fixtures without prescribing an implementation language.
+It includes source evidence, acceptance cases, and open decisions.
+
 ## Quick Start
 
 ### Prerequisites
