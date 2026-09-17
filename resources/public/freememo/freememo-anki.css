@@ -62,9 +62,18 @@ img {
    ================================================================ */
 
 /* ── Code Block Container ─────────────────────────────────────── */
+/* Every code frame (this container and the `pre` rule below) is as wide
+   as its longest line and centered in its parent, whatever that parent's
+   text-align — auto margins place a block without reading it. A line
+   wider than the parent does not wrap: the frame stops at the parent's
+   width (border-box, so padding and border stay inside) and scrolls
+   sideways. The lines themselves stay left-aligned, so indentation holds. */
 
 .ql-code-block-container {
     position: relative;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: 100%;
     font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;
     line-height: 1.45;
@@ -72,17 +81,17 @@ img {
     border: 1px solid #d4d4d4;
     border-radius: 4px;
     padding: 0.6em 0.9em;
-    margin: 1em 0;
+    margin: 1em auto;
     text-align: left;
     direction: ltr;
-    white-space: pre-wrap;
+    white-space: pre;
     overflow-x: auto;
     color: #24292e;
 }
 
 .ql-code-block {
     display: block;
-    white-space: pre-wrap;
+    white-space: pre;
 }
 
 /* Plain `<pre>` (LLM-generated, never opened in editor) and Quill 1.x
@@ -92,6 +101,9 @@ img {
    rule. */
 pre,
 pre.ql-syntax {
+    box-sizing: border-box;
+    width: max-content;
+    max-width: 100%;
     font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;
     line-height: 1.45;
@@ -99,9 +111,10 @@ pre.ql-syntax {
     border: 1px solid #d4d4d4;
     border-radius: 4px;
     padding: 0.6em 0.9em;
-    margin: 1em 0;
+    margin: 1em auto;
     text-align: left;
-    white-space: pre-wrap;
+    direction: ltr;
+    white-space: pre;
     overflow-x: auto;
     color: #24292e;
 }
@@ -118,7 +131,20 @@ pre > code {
 /* ── Language Badge (top-right of container) ─────────────────── */
 /* Quill 2 places `data-language` on the line div, not the container.
    The first child's ::before is positioned absolutely so it sits on
-   the container border without shifting code layout. */
+   the container border without shifting code layout.
+
+   A frame that fits its code puts this corner above the end of the
+   longest line, so a labelled frame reserves the label's height as top
+   padding (the label is ~1.23em of the frame's font: 0.7em x 1.45 line
+   height plus 0.105em padding each side) and never narrows below the
+   longest label, JAVASCRIPT or MARKDOWN. The label is positioned in the
+   scroll container, so it scrolls out of view with a wide frame's
+   content — accepted, since field HTML cannot carry a fixed wrapper. */
+
+.ql-code-block-container:has(> .ql-code-block:first-child:not([data-language="plain"])) {
+    padding-top: 1.4em;
+    min-width: 6em;
+}
 
 .ql-code-block-container > .ql-code-block:first-child::before {
     content: attr(data-language);
