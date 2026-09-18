@@ -240,16 +240,6 @@
   [^js container]
   (.-color (js/getComputedStyle container)))
 
-(defn- container-surface-colour
-  "The container's computed CSS `background-color`. graph-page paints
-   --color-bg-page there for exactly this read — canvas chrome cannot inherit a
-   background, so the colour has to be fetched as a value.
-   Pre: `container` carries an OPAQUE background-color; a transparent one
-   resolves to rgba(0,0,0,0), which parse-rgb rejects and the caller answers
-   with fallback-colours. Post: a colour string, never nil."
-  [^js container]
-  (.-backgroundColor (js/getComputedStyle container)))
-
 (defn- parse-rgb
   "[r g b] from a computed colour string (`rgb(r, g, b)`, `rgba(r, g, b, a)`,
    or the space/slash notation), or nil when it is fully transparent or in any
@@ -259,6 +249,28 @@
     (let [[_ r g b a] m]
       (when-not (contains? #{"0" "0%" "0.0"} a)
         (mapv #(js/parseFloat %) [r g b])))))
+
+(defn- surface-colour
+  "The computed `background-color` of the nearest element at or above `el` that
+   parse-rgb can read — the surface the canvas is painted over. Canvas chrome
+   cannot inherit a background, so the colour has to be fetched as a value.
+
+   The walk is what keeps this correct. graph-page leaves the render container
+   transparent so the scene's dot grid shows through, and a read of the
+   container alone resolved to rgba(0,0,0,0). Every canvas colour then fell to
+   fallback-colours, which are light-theme constants, so dark mode drew
+   #e5e7eb labels on a #FFF hover pill.
+
+   An element in a notation parse-rgb rejects is skipped like a transparent
+   one: its ancestor's colour is a closer guess than fallback-colours.
+   Post: a colour string, or nil when `el` is detached and no ancestor paints."
+  [^js el]
+  (loop [^js node el]
+    (when node
+      (let [bg (.-backgroundColor (js/getComputedStyle node))]
+        (if (parse-rgb bg)
+          bg
+          (recur (.-parentElement node)))))))
 
 (defn- blend-colour
   "Opaque mix of `fg` into `bg` — t 0 → bg, 1 → fg. Both are computed colour
@@ -279,19 +291,19 @@
 (def ^:private hover-stroke-mix 0.4)
 
 (def ^:private fallback-colours
-  "Answer when the container's background is not an opaque colour — its
-   precondition is violated, so degrade to sigma's own light-theme constants
-   rather than to a colour derived from a wrong surface. Caller's bug: whoever
-   dropped the container background."
+  "Answer when no element at or above the container paints a readable
+   background. index.css paints html and body, so an attached container never
+   reaches this. Degrade to sigma's own light-theme constants rather than to a
+   colour derived from a wrong surface."
   {:dim "#c8ccd4" :edge "#dbe0e8" :hover-fill "#FFF" :hover-stroke "rgba(0, 0, 0, 0.25)"})
 
 (defn- theme-colours
   "Every canvas colour the active theme implies, all derived from the
-   container's own computed `color` and `background-color` so this file holds no
+   container's computed `color` and the surface under it, so this file holds no
    second palette. Post: every value is a colour string, never nil."
   [^js container]
   (let [text (inherited-text-colour container)
-        surface (container-surface-colour container)]
+        surface (surface-colour container)]
     (merge {:label text}
       (if-let [dim (blend-colour text surface dim-mix)]
         {:dim dim
