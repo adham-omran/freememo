@@ -34,6 +34,15 @@ img {
     height: auto;
 }
 
+/* A table is a block box, so the card's `text-align: center` centers the
+   text in its cells but not the table itself. Auto inline margins center
+   it in its parent, whatever that parent's text-align. Only the inline
+   margins are set, so the table keeps its normal vertical spacing. */
+table {
+    margin-left: auto;
+    margin-right: auto;
+}
+
 /* The Links paragraph build-links-field emits, on every owned note type.
 
    ALIGNMENT ONLY. The four per-type wrappers (.fm-extra, .fm-ol-extra,
