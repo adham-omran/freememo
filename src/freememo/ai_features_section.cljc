@@ -17,6 +17,7 @@
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
    [freememo.ai-tier-views :as views]
+   [freememo.dedup-section :refer [DedupSection]]
    [freememo.assistant-panel-setting :refer [AssistantPanelLayoutField]]
    [freememo.segmented :as seg]
    [freememo.pre-prompt-mode :as ppm]
@@ -734,7 +735,8 @@
     (dom/section
       (dom/props {:class "ai-group"})
       (views/GroupHeading "Knowledge graph" level)
-      (KgModelsField user-id card-model-ids card-label-of))))
+      (KgModelsField user-id card-model-ids card-label-of)
+      (DedupSection user-id))))
 
 (e/defn AdvancedView
   "Every setting, grouped by task. A group's label shows its task's level; an

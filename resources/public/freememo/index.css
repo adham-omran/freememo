@@ -984,6 +984,9 @@ html:has(> body > .app-shell) > body {
 }
 .setting-row__unit { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
 .ai-group .settings-accordion { margin-top: var(--sp-3); }
+.ai-subgroup { margin-top: var(--sp-5); }
+.ai-subgroup__title { margin: 0 0 var(--sp-1); font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.ai-subgroup__lead { margin: 0 0 var(--sp-2); font-size: 12px; line-height: 1.5; color: var(--color-text-hint); }
 
 /* A checkbox drawn as a switch. It stays an <input type=checkbox> with
    role=switch, so keyboard, form state and forms/Checkbox! work unchanged. */

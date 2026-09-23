@@ -1,6 +1,8 @@
 (ns freememo.dedup-section
-  "Settings → Duplicate detection. The three h3 thresholds and the on/off switch
-   for freememo.kg-dedup.
+  "Settings → AI Features → Advanced → Knowledge graph → Duplicate facts. The
+   three h3 thresholds and the on/off switch for freememo.kg-dedup. It was a card
+   of its own under AI Features until 2026-09-23; it tunes what distillation
+   produces, so it now sits with the other knowledge-graph settings.
 
    Its own namespace rather than another field in settings_page.cljc for the
    reason the other sections were split out: each Electric e/defn compiles to one
@@ -75,22 +77,22 @@
    unchanged and no remount happens there."
   [user-id k value]
   (e/client
-    (let [{:keys [label hint]} (field-hints k)]
+    (let [{:keys [label hint]} (field-hints k)
+          id (str "ai-dedup-" (name k))]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
-          (dom/span (dom/props {:class "label" :style {:margin-bottom "0" :flex "1"}})
-            (dom/text label))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for id}) (dom/text label))
+          (dom/div (dom/props {:class "hint"}) (dom/text hint)))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
           (e/for-by identity [server-value [value]]
             (let [!v (atom (str server-value))
                   v (e/watch !v)]
               (dom/input
                 (dom/props {:type "number" :min "0" :max "1" :step "0.05"
-                            :aria-label label
-                            :style {:width "72px" :font-size "13px" :padding "4px 6px"
-                                    :border "1px solid var(--color-border)"
-                                    :border-radius "var(--radius-sm)"}})
+                            :id id :class "setting-row__number"})
                 (when-not (dom/Focused?) (set! (.-value dom/node) v))
                 (let [committed (dom/On "change" #(-> % .-target .-value) nil)
                       [t ?error] (e/Token committed)]
@@ -107,8 +109,7 @@
                           (case r
                             (if (:success r)
                               (do (reset! !v (str (:value r))) (t))
-                              (t (:error r)))))))))))))
-        (dom/div (dom/props {:class "hint"}) (dom/text hint))))))
+                              (t (:error r)))))))))))))))))
 
 (e/defn DedupEnabledToggle
   "Master switch. Off stops the automatic post-distill sweep AND the two manual
@@ -117,13 +118,21 @@
   (e/client
     (let [!on (atom enabled) on (e/watch !on)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                              :cursor "pointer"}})
+        (dom/props {:class "field setting-row setting-row--switch"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-dedup-enabled"})
+            (dom/text "Detect duplicate facts"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text (str "After each distillation, mark facts that restate one the "
+                        "document already has. Marked facts leave the graph, quizzes "
+                        "and Anki, and stay reversible under Knowledge → Facts → "
+                        "Duplicates."))))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
           (dom/input
-            (dom/props {:type "checkbox" :aria-label "Detect duplicate facts"
-                        :style {:cursor "pointer"}})
+            (dom/props {:type "checkbox" :id "ai-dedup-enabled"
+                        :class "switch" :role "switch"})
             (set! (.-checked dom/node) on)
             (let [changed (dom/On "change" #(-> % .-target .-checked) nil)
                   [t ?error] (e/Token changed)]
@@ -132,14 +141,7 @@
                 (let [r (e/server (e/Offload #(settings/save-kg-dedup-enabled
                                                 user-id changed)))]
                   (case r
-                    (if (:success r) (do (reset! !on changed) (t)) (t (:error r))))))))
-          (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
-            (dom/text "Detect duplicate facts")))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text (str "After each distillation, mark facts that restate one the "
-                      "document already has. Marked facts leave the graph, quizzes "
-                      "and Anki, and stay reversible under Knowledge → Facts → "
-                      "Duplicates.")))))))
+                    (if (:success r) (do (reset! !on changed) (t)) (t (:error r)))))))))))))
 
 (e/defn ResetThresholdsButton
   "Delete the three stored thresholds so every read returns the measured
@@ -160,7 +162,7 @@
               (if (:success r) (t) (t (:error r))))))))))
 
 (e/defn DedupSection
-  "Settings → AI Features → Duplicate detection.
+  "Settings → AI Features → Advanced → Knowledge graph → Duplicate facts.
 
    Reads all four values in ONE query (settings/get-kg-dedup-thresholds) and
    passes them down; four separate reads would be four round trips for one panel.
@@ -175,12 +177,10 @@
           {:keys [enabled flat-trigram object-trigram containment]}
           (e/server (get-thresholds* settings-refresh user-id))]
       (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"})
-          (dom/text "Duplicate detection"))
+        (dom/props {:class "ai-subgroup"})
+        (dom/h5 (dom/props {:class "ai-subgroup__title"}) (dom/text "Duplicate facts"))
         (dom/p
-          (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
-                              :margin "0 0 12px"}})
+          (dom/props {:class "ai-subgroup__lead"})
           (dom/text (str "Re-distilling a document produces facts that restate ones "
                       "it already has, because the model rewords them. The defaults "
                       "below were fitted against 234 hand-checked fact pairs and "
@@ -191,5 +191,13 @@
         (ThresholdField user-id :flat-trigram flat-trigram)
         (ThresholdField user-id :object-trigram object-trigram)
         (ThresholdField user-id :containment containment)
-        (dom/div (dom/props {:style {:margin-top "8px"}})
-          (ResetThresholdsButton user-id))))))
+        (dom/div
+          (dom/props {:class "field setting-row"})
+          (dom/div
+            (dom/props {:class "setting-row__text"})
+            (dom/div (dom/props {:class "label"}) (dom/text "Reset thresholds"))
+            (dom/div (dom/props {:class "hint"})
+              (dom/text "Restore the measured defaults: 0.55, 0.50 and 0.80.")))
+          (dom/div
+            (dom/props {:class "setting-row__control"})
+            (ResetThresholdsButton user-id)))))))

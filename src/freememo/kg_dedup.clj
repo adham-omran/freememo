@@ -177,7 +177,7 @@
   [user-id]
   (toasts/push! user-id
     {:level :info :dedup? false
-     :message "Duplicate detection is off — turn it on in Settings → AI Features"
+     :message "Duplicate detection is off — turn it on in Settings → AI Features → Advanced → Knowledge graph"
      :actions [{:label "Settings" :nav :settings}]})
   {:success true :marked 0 :disabled? true})
 
