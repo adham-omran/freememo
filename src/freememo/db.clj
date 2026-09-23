@@ -10,6 +10,7 @@
    [cheshire.core :as json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
+   [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-digest :as digest]
    [freememo.cloze :as cloze]
    [freememo.csl-util :as csl]
@@ -34,6 +35,8 @@
 (declare backfill-sources!)
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
+(declare run-once!)
+(declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
 (declare start-purge-scheduler!)
 (declare unsynced-sql)
@@ -167,6 +170,15 @@
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (user_id, key)
         )"])))
+
+  ;; One row per one-time data migration this database has run (run-once!).
+  ;; Global, not per user: a per-user marker would re-run a migration for a user
+  ;; who signed up after it, and overwrite what that user chose since.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS app_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
 )
 
 (defn- setup-schema-topics!
@@ -2527,6 +2539,9 @@
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
 
+  ;; AI levels: every existing user moves to Best, once per database.
+  (run-once! "2026-09-23-ai-levels-best" move-everyone-to-best-level!)
+
   ;; Card-history precondition: inline base64 images out of card fields, so no
   ;; version row can ever duplicate an image payload. Idempotent; must run
   ;; before any save can version (plans/card-edit-history.md §3).
@@ -3567,6 +3582,40 @@
       (grant-credits! user-id amount)
       (tel/log! {:level :info :id ::signup-grant :data {:user-id user-id :amount amount}}
         "Signup credit grant"))))
+
+(defn run-once!
+  "Run data migration `f` at most once per database, under the name `id`.
+   `f` receives the transaction. The marker row and `f`'s writes commit together,
+   so a failure leaves no marker and the next boot tries again. During a deploy
+   both colors boot: the second one's INSERT waits on the first's key, then
+   conflicts, and skips.
+   Post: true when `f` ran now, nil when it had already run."
+  [id f]
+  (jdbc/with-transaction [tx ds]
+    (when (jdbc/execute-one! tx
+            ["INSERT INTO app_migrations (id) VALUES (?) ON CONFLICT DO NOTHING RETURNING id" id])
+      (f tx)
+      true)))
+
+(defn move-everyone-to-best-level!
+  "Set every AI task of every existing user to the Best level (product decision,
+   2026-09-23). The rows a user chose before stay in the table, unread while the
+   task is on a named level. Users who sign up later read Best as the default
+   (ai-tiers/default-level). Run through run-once!, never directly.
+   Post: every user has an ai_tier_<task> row holding \"best\" for each task."
+  [tx]
+  (let [ks (mapv ai-tiers/level-key ai-tiers/tasks)
+        r (jdbc/execute-one! tx
+            (into [(str "INSERT INTO settings (user_id, key, value)
+                         SELECT u.id, k.key, ? FROM users u
+                         CROSS JOIN (VALUES " (str/join ", " (repeat (count ks) "(?)")) ") AS k(key)
+                         ON CONFLICT (user_id, key)
+                         DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
+                   "best"]
+              ks))]
+    (tel/log! {:level :info :id ::moved-everyone-to-best-level
+               :data {:rows (:next.jdbc/update-count r)}}
+      "Moved every user's AI tasks to the Best level")))
 
 (defn run-grandfather-migration!
   "One-time grant to every pre-existing user without a grant. Idempotent (the

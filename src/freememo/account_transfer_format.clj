@@ -137,6 +137,9 @@
    `db.clj` with no entry in either list is data silently dropped from every
    export, and `account_transfer_format_test` is what catches that."
   {:users "account identity — the target instance owns its own user row"
+   :app_migrations "deployment state: the one-time data migrations this database
+                    has run. It is global, not per user, and the target keeps its
+                    own list"
    :user_events "analytics of the source deployment"
    :credit_orders "billing of the source deployment"
    :credit_transactions "billing of the source deployment"
