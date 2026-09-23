@@ -25,8 +25,10 @@
   "custom")
 
 (def default-level
-  "The level of a task that has no level row and no settings rows of its own."
-  "balanced")
+  "The level of a task that has no level row and no settings rows of its own.
+   Best by product decision (2026-09-23): a new user gets the most careful
+   results, and chooses a cheaper level in Settings."
+  "best")
 
 (def tasks
   "Every AI task that has a level. Display order."
