@@ -146,9 +146,10 @@
    (let [thresholds (or thresholds (settings/get-kg-dedup-thresholds user-id))]
      (if-not (:enabled thresholds)
        {:marked 0 :undo-id nil :pairs 0 :skipped-pages []}
-       (let [skipped (db/kg-oversized-page-keys user-id graph-topic-id max-facts-per-page)
+       (let [skipped (db/kg-oversized-page-keys user-id graph-topic-id
+                       max-facts-per-page db/sweep-statuses)
              pairs (db/kg-duplicate-candidate-pairs user-id graph-topic-id
-                     new-ids max-facts-per-page)
+                     new-ids max-facts-per-page db/sweep-statuses)
              ids (duplicate-ids pairs thresholds)
              {:keys [marked undo-id]} (if (seq ids)
                                         (db/mark-kg-facts-duplicate! user-id (vec ids))

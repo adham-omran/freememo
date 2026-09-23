@@ -10522,23 +10522,48 @@
        user-id]
       {:builder-fn rs/as-unqualified-maps})))
 
+(def sweep-statuses
+  "The `kg_facts.status` values the shipped duplicate sweep compares.
+
+   One definition, because kg-oversized-page-keys and
+   kg-duplicate-candidate-pairs MUST read the same population: the first reports
+   which pages the second refused to expand, and a page counted against one
+   status set and expanded against another makes that report wrong rather than
+   merely incomplete.
+
+   A measurement that rebuilds the labelled benchmark passes
+   #{\"approved\" \"duplicate\"} instead, because the sweep's own marks removed
+   its true positives from the approved set (plans/jev-dedup-benchmark-and-gate-waste.md
+   §1.1). Nothing in src/ passes anything but this."
+  #{"approved"})
+
 (defn kg-oversized-page-keys
-  "Page keys in this document holding more than `max-facts` approved facts — the
-   keys kg-duplicate-candidate-pairs refuses to expand. Reported so a bounded
+  "Page keys in this document holding more than `max-facts` facts in `statuses` —
+   the keys kg-duplicate-candidate-pairs refuses to expand. Reported so a bounded
    sweep can say what it skipped instead of reading as complete coverage.
+   Pre:  `statuses` is a non-empty collection of kg_facts.status values.
    Post: vector of page keys (-1 for the page_number IS NULL group)."
-  [user-id graph-topic-id max-facts]
-  (mapv :pk
-    (jdbc/execute! ds
-      ["SELECT coalesce(page_number, -1) AS pk FROM kg_facts
-        WHERE user_id = ? AND graph_topic_id = ? AND status = 'approved'
-        GROUP BY 1 HAVING count(*) > ?"
-       user-id graph-topic-id max-facts]
-      {:builder-fn rs/as-unqualified-maps})))
+  [user-id graph-topic-id max-facts statuses]
+  (let [statuses (vec statuses)
+        sph (str/join ", " (repeat (count statuses) "?"))]
+    (mapv :pk
+      (jdbc/execute! ds
+        (into [(str "SELECT coalesce(page_number, -1) AS pk FROM kg_facts
+                     WHERE user_id = ? AND graph_topic_id = ? AND status IN (" sph ")
+                     GROUP BY 1 HAVING count(*) > ?")
+               user-id graph-topic-id]
+          (conj statuses max-facts))
+        {:builder-fn rs/as-unqualified-maps}))))
 
 (defn kg-duplicate-candidate-pairs
-  "Every approved-fact pair sharing a page within one document, with the trigram
-   scores freememo.kg-dedup needs. The SQL half of the hybrid detector.
+  "Every pair of facts in `statuses` sharing a page within one document, with the
+   trigram scores freememo.kg-dedup needs. The SQL half of the hybrid detector.
+
+   `statuses` is `sweep-statuses` at every call site in src/. It is a parameter
+   because the sweep's own marks move a fact out of 'approved', so the labelled
+   benchmark cannot be rebuilt from the approved set alone — and a copy of this
+   CTE in a test would drift from the page-keying rule below, which 43 of the 49
+   labelled duplicates depend on.
 
    Returns ALL pairs on a page and applies NO similarity threshold. That is
    deliberate: h3 is a three-branch disjunction and its containment branch fires
@@ -10564,16 +10589,21 @@
    kg_facts.id is SERIAL and the join is `a.id < b.id`. Callers mark `dup_id` and
    keep `keep_id`, so the earlier provenance and any questions already grounded on
    it survive.
-   Pre:  graph-topic-id owned by user-id; max-facts-per-page > 0.
+   Pre:  graph-topic-id owned by user-id; max-facts-per-page > 0; `statuses` is a
+         non-empty collection of kg_facts.status values, and the SAME collection
+         kg-oversized-page-keys was called with — the two read one population and
+         the second reports what the first refused to expand.
    Post: rows of {:keep_id :dup_id :page_key :flat_sim :obj_sim :subj_eq :obj_eq
          :keep_flat :dup_flat}, excluding page keys over max-facts-per-page."
-  [user-id graph-topic-id new-ids max-facts-per-page]
+  [user-id graph-topic-id new-ids max-facts-per-page statuses]
   (if (and (some? new-ids) (empty? new-ids))
     []
     (let [restrict (when (seq new-ids)
                      (let [ph (str/join ", " (repeat (count new-ids) "?"))]
                        (str " AND b.id IN (" ph ") AND a.id NOT IN (" ph ")")))
-          ids (vec new-ids)]
+          ids (vec new-ids)
+          statuses (vec statuses)
+          sph (str/join ", " (repeat (count statuses) "?"))]
       (jdbc/execute! ds
         (into [(str
                  "WITH base AS (
@@ -10586,7 +10616,7 @@
                     JOIN kg_entities s ON s.id = f.subject_entity_id
                     JOIN kg_predicates p ON p.id = f.predicate_id
                     LEFT JOIN kg_entities o ON o.id = f.object_entity_id
-                    WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status = 'approved'
+                    WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status IN (" sph ")
                   ),
                   sized AS (SELECT *, count(*) OVER (PARTITION BY pk) AS pk_n FROM base),
                   ok AS (SELECT * FROM sized WHERE pk_n <= ?)
@@ -10598,8 +10628,8 @@
                          a.flat AS keep_flat, b.flat AS dup_flat
                   FROM ok a JOIN ok b ON a.pk = b.pk AND a.id < b.id"
                  restrict)
-               user-id graph-topic-id max-facts-per-page]
-          (concat ids ids))
+               user-id graph-topic-id]
+          (concat statuses [max-facts-per-page] ids ids))
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn get-kg-facts-context
