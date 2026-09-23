@@ -34,6 +34,14 @@
     :label "OpenAI · GPT-5.6 Sol"
     :shape :chat
     :openrouter-model "openai/gpt-5.6-sol"}
+   {:id "openai-gpt-6-sol"
+    :label "OpenAI · GPT-6 Sol"
+    :shape :chat
+    :openrouter-model "openai/gpt-6-sol"}
+   {:id "openai-gpt-6-luna"
+    :label "OpenAI · GPT-6 Luna"
+    :shape :chat
+    :openrouter-model "openai/gpt-6-luna"}
    {:id "gemini-3-flash"
     :label "Google · Gemini 3 Flash"
     :shape :chat

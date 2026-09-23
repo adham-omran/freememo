@@ -49,6 +49,19 @@
     :label "OpenAI · GPT-5.6 Sol"
     :openrouter-model "openai/gpt-5.6-sol"
     :supported-parameters json-and-reasoning-parameters}
+   ;; GPT-6 Sol and Luna, added 2026-09-23. On OpenRouter that day Sol cost
+   ;; $2 / $10 per million tokens, the same as GPT-5.6 Sol, and Luna cost
+   ;; $0.10 / $0.50, half of GPT-5.6 Luna. Neither is marked as a successor in
+   ;; `retired`, because the vendor statement could not be read (HTTP 403).
+   ;; Both accepted `openrouter:web_search` with engine "native" on 2026-09-23.
+   {:id "gpt-6-sol"
+    :label "OpenAI · GPT-6 Sol"
+    :openrouter-model "openai/gpt-6-sol"
+    :supported-parameters json-and-reasoning-parameters}
+   {:id "gpt-6-luna"
+    :label "OpenAI · GPT-6 Luna"
+    :openrouter-model "openai/gpt-6-luna"
+    :supported-parameters json-and-reasoning-parameters}
    {:id "gemini-3-flash"
     :label "Google · Gemini 3 Flash"
     :openrouter-model "google/gemini-3-flash-preview"
@@ -219,6 +232,8 @@
     "gpt-5.6-luna"
     "gpt-5.6-terra"
     "gpt-5.6-sol"
+    "gpt-6-sol"
+    "gpt-6-luna"
     "gemini-3-flash"
     "gemini-3.6-flash"
     "gemini-3.8-flash"

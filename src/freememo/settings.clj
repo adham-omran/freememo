@@ -2,6 +2,7 @@
   "Business logic for application settings."
   (:require
    [freememo.db :as db]
+   [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-sync-helpers :as anki-helpers]
    [freememo.card-models :as card-models]
    [freememo.config :as config]
@@ -61,6 +62,7 @@
 (def CARD_SPLIT "card_split")
 (def CARD_TABLE_OPEN "card_table_open")
 (def ASSISTANT_MODEL "assistant_model")
+(def ASSISTANT_REASONING "assistant_reasoning")
 (def ASSISTANT_FULL_HEIGHT "assistant_full_height")
 (def FSRS_RETENTION "fsrs_retention")
 (def FSRS_NEW_PER_DAY "fsrs_new_per_day")
@@ -93,6 +95,91 @@
 
 (def ^:private kg-step->setting
   (into {} (map (juxt :step :setting)) kg-model-steps))
+
+;; ── AI levels ────────────────────────────────────────────────────────────────
+;;
+;; freememo.ai-tiers owns the data. These fns read and write the rows. Every
+;; getter below that a level controls asks `level-value` first, and falls back
+;; to the task's own row only when the task is `custom` (or the preset names a
+;; model this deployment does not allow).
+
+(defn get-ai-tiers
+  "{task level} for every AI task, from one query.
+   Post: every task in ai-tiers/tasks maps to a named level or \"custom\"."
+  [user-id]
+  (let [rows (db/get-settings user-id (ai-tiers/all-keys))]
+    (into {} (map (juxt identity #(ai-tiers/task-level rows %))) ai-tiers/tasks)))
+
+(defn get-ai-tier
+  "`task`'s level. Post: a named level or \"custom\"."
+  [user-id task]
+  (let [rows (db/get-settings user-id
+               (vec (concat [(ai-tiers/level-key task)]
+                       (ai-tiers/task-settings task)
+                       (ai-tiers/legacy-settings task))))]
+    (ai-tiers/task-level rows task)))
+
+(defn- level-value
+  "The value `task`'s named level gives settings key `k`, or nil when the task
+   is custom."
+  [user-id task k]
+  (ai-tiers/preset-value task (get-ai-tier user-id task) k))
+
+(defn save-ai-tier
+  "Set one task's level.
+   Pre: `task` ∈ ai-tiers/tasks and `level` a named level (else rejected —
+   caller bug). Post: {:success true} or {:success false :error}."
+  [user-id task level]
+  (if-not (and (some #{task} ai-tiers/tasks) (ai-tiers/level? level))
+    {:success false :error (str "Unknown level " level " for " task)}
+    (try
+      (db/set-setting user-id (ai-tiers/level-key task) level)
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-ai-tier} e)
+        {:success false :error "Failed to save the level"}))))
+
+(defn save-ai-tier-all
+  "Set every task to one level, in one transaction — Simple's single choice.
+   Pre: `level` a named level. Post: {:success true} or {:success false :error}."
+  [user-id level]
+  (if-not (ai-tiers/level? level)
+    {:success false :error (str "Unknown level " level)}
+    (try
+      (db/set-settings! user-id
+        (into {} (map (fn [task] [(ai-tiers/level-key task) level])) ai-tiers/tasks))
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-ai-tier-all} e)
+        {:success false :error "Failed to save the level"}))))
+
+(defn- write-setting!
+  "Write settings key `k`. When a level controls `k` and the task is on a named
+   level, first copy that level's values into the task's rows and mark the task
+   custom, all in one transaction. So an edit in Advanced changes the one value
+   the user touched: every other setting of the task keeps the value the level
+   was giving it, rather than falling back to whatever row it held before.
+
+   The same write also stores every level that was only implied — a task with no
+   level row reads the default, or custom from its rows. Without that, writing
+   the shared `reasoning` row for cards would turn a default assistant custom
+   (see ai-tiers/legacy-settings)."
+  [user-id k v]
+  (if-let [task (ai-tiers/task-of-setting k)]
+    (let [rows (db/get-settings user-id (ai-tiers/all-keys))
+          implied (into {}
+                    (keep (fn [t]
+                            (let [lk (ai-tiers/level-key t)]
+                              (when-not (get rows lk)
+                                [lk (ai-tiers/task-level rows t)]))))
+                    ai-tiers/tasks)
+          level (ai-tiers/task-level rows task)]
+      (db/set-settings! user-id
+        (merge implied
+               (get-in ai-tiers/presets [task level])
+               {(ai-tiers/level-key task) ai-tiers/custom
+                k v})))
+    (db/set-setting user-id k v)))
 
 (defn get-email-updates [user-id]
   (= "true" (db/get-setting user-id EMAIL_UPDATES)))
@@ -167,17 +254,20 @@
 
 (defn get-model
   "Effective card-generation model :id for a user.
-   Precedence among allowed ids: per-user saved id → prod default (!prod-model in
+   Precedence among allowed ids: the Flashcards level's model → per-user saved
+   id → prod default (!prod-model in
    credits mode) or registry default → first allowed. Mirrors
    `ocr/effective-ocr-model`; !prod-model is now the default, not a hard pin.
    Post: an :id present in (card-model-ids)."
   [user-id]
   (let [allowed (card-model-ids)
+        level-id (level-value user-id :cards MODEL)
         saved (card-models/effective-id (db/get-setting user-id MODEL))
         default (if (config/credits-enabled?)
                   (or @config/!prod-model card-models/default-id)
                   card-models/default-id)]
     (cond
+      (some #{level-id} allowed) level-id
       (some #{saved} allowed) saved
       (some #{default} allowed) default
       :else (first allowed))))
@@ -188,13 +278,16 @@
   "gemini-3-flash")
 
 (defn get-assistant-model
-  "Effective assistant-chat model :id for a user: saved id if allowed, else
+  "Effective assistant-chat model :id for a user: the Reading assistant level's
+   model if allowed, else saved id if allowed, else
    gemini-3-flash if allowed, else the first allowed id.
    Post: an :id present in (card-model-ids)."
   [user-id]
   (let [allowed (card-model-ids)
+        level-id (level-value user-id :assistant ASSISTANT_MODEL)
         saved (card-models/effective-id (db/get-setting user-id ASSISTANT_MODEL))]
     (cond
+      (some #{level-id} allowed) level-id
       (some #{saved} allowed) saved
       (some #{assistant-default-model-id} allowed) assistant-default-model-id
       :else (first allowed))))
@@ -208,7 +301,9 @@
     (mapv (fn [id] [id (labels id id)]) (card-model-ids))))
 
 (defn get-kg-model
-  "Effective model :id for KG pipeline `step`. Saved id if ∈ (card-model-ids),
+  "Effective model :id for KG pipeline `step`. The level's model if allowed
+   (:grade belongs to Quiz grading, the other steps to Knowledge graph), else
+   saved id if ∈ (card-model-ids),
    else kg-default-model-id if allowed, else first allowed.
    Pre:  step ∈ (map :step kg-model-steps) — else caller bug.
    Post: an :id ∈ (card-model-ids); never nil."
@@ -216,8 +311,11 @@
   (let [setting (or (kg-step->setting step)
                     (throw (ex-info (str "Unknown KG model step: " step) {:step step})))
         allowed (card-model-ids)
+        level-id (level-value user-id
+                   (ai-tiers/task-of-setting setting) setting)
         saved (card-models/effective-id (db/get-setting user-id setting))]
     (cond
+      (some #{level-id} allowed) level-id
       (some #{saved} allowed) saved
       (some #{kg-default-model-id} allowed) kg-default-model-id
       :else (first allowed))))
@@ -235,8 +333,22 @@
       (tel/error! {:id ::get-card-count} e)
       2)))
 
-(defn get-reasoning [user-id]
-  (or (db/get-setting user-id REASONING) "low"))
+(defn get-reasoning
+  "Reasoning effort for card generation."
+  [user-id]
+  (or (level-value user-id :cards REASONING)
+      (db/get-setting user-id REASONING)
+      "low"))
+
+(defn get-assistant-reasoning
+  "Reasoning effort for the reading assistant. A custom assistant with no row of
+   its own reads the card setting, because both lanes shared that one setting
+   before levels existed."
+  [user-id]
+  (or (level-value user-id :assistant ASSISTANT_REASONING)
+      (db/get-setting user-id ASSISTANT_REASONING)
+      (db/get-setting user-id REASONING)
+      "low"))
 
 (defn get-verbosity [user-id]
   (or (db/get-setting user-id VERBOSITY) "low"))
@@ -359,7 +471,7 @@
   (if-not (card-models/resolve-model value)
     {:success false :error (str "Unknown card model: " value)}
     (try
-      (db/set-setting user-id MODEL value)
+      (write-setting! user-id MODEL value)
       {:success true}
       (catch Exception e
         (tel/error! {:id ::save-model} e)
@@ -372,7 +484,7 @@
   (if-not (card-models/resolve-model value)
     {:success false :error (str "Unknown assistant model: " value)}
     (try
-      (db/set-setting user-id ASSISTANT_MODEL value)
+      (write-setting! user-id ASSISTANT_MODEL value)
       {:success true}
       (catch Exception e
         (tel/error! {:id ::save-assistant-model} e)
@@ -406,7 +518,7 @@
       {:success false :error (str "Unknown model: " value)}
       :else
       (try
-        (db/set-setting user-id setting value)
+        (write-setting! user-id setting value)
         {:success true}
         (catch Exception e
           (tel/error! {:id ::save-kg-model} e)
@@ -414,10 +526,18 @@
 
 (defn save-reasoning [user-id value]
   (try
-    (db/set-setting user-id REASONING value)
+    (write-setting! user-id REASONING value)
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-reasoning} e)
+      {:success false :error "Failed to save reasoning"})))
+
+(defn save-assistant-reasoning [user-id value]
+  (try
+    (write-setting! user-id ASSISTANT_REASONING value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-assistant-reasoning} e)
       {:success false :error "Failed to save reasoning"})))
 
 (defn save-verbosity [user-id value]
@@ -683,12 +803,15 @@
 
 ;; User's global default OCR model (an :id from freememo.ocr-models/registry),
 ;; used when a document has no per-document selection. nil = unset → registry default.
-(defn get-ocr-model-default [user-id]
-  (db/get-setting user-id "ocr_model_default"))
+(defn get-ocr-model-default
+  "The Page scanning level's OCR model, else the user's own row, else nil."
+  [user-id]
+  (or (level-value user-id :scan "ocr_model_default")
+      (db/get-setting user-id "ocr_model_default")))
 
 (defn save-ocr-model-default [user-id model-id]
   (try
-    (db/set-setting user-id "ocr_model_default" model-id)
+    (write-setting! user-id "ocr_model_default" model-id)
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-ocr-model-default} e)
@@ -1039,14 +1162,16 @@
 
 (defn get-scan-dpi [user-id]
   (try
-    (Integer/parseInt (or (db/get-setting user-id SCAN_DPI) "150"))
+    (Integer/parseInt (or (level-value user-id :scan SCAN_DPI)
+                          (db/get-setting user-id SCAN_DPI)
+                          "150"))
     (catch Exception _ 150)))
 
 (defn save-scan-dpi [user-id value]
   (try
     (let [parsed (Integer/parseInt (str value))
           clamped (max 72 (min 300 parsed))]
-      (db/set-setting user-id SCAN_DPI (str clamped))
+      (write-setting! user-id SCAN_DPI (str clamped))
       {:success true})
     (catch Exception e
       (tel/error! {:id ::save-scan-dpi} e)

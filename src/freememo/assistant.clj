@@ -690,7 +690,7 @@
                          (model-entry user-id (:assistant_chats/root_topic_id chat)))
                  run-model-id (or exact-model-id (:id entry))
                  model-fields (openrouter/chat-completion-fields entry
-                                {:reasoning_effort (settings/get-reasoning user-id)})
+                                {:reasoning_effort (settings/get-assistant-reasoning user-id)})
                  rendered (if exact-request
                             {:provider-request exact-request
                              :source-snapshot exact-evidence
@@ -760,7 +760,7 @@
           :else
           (let [entry (model-entry user-id (:assistant_chats/root_topic_id chat))
                 model-fields (openrouter/chat-completion-fields entry
-                               {:reasoning_effort (settings/get-reasoning user-id)})
+                               {:reasoning_effort (settings/get-assistant-reasoning user-id)})
                 checkpoint (db/latest-assistant-checkpoint user-id chat-id)
                 later (transcript-messages-after-checkpoint chat-id checkpoint)
                 summary-input (cond-> []

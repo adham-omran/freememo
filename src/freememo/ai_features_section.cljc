@@ -16,6 +16,7 @@
    [freememo.ocr-models :as ocr-models]
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
+   [freememo.ai-tier-views :as views]
    [freememo.assistant-panel-setting :refer [AssistantPanelLayoutField]]
    [freememo.segmented :as seg]
    [freememo.pre-prompt-mode :as ppm]
@@ -51,7 +52,12 @@
             (when t
               (let [r (e/server (e/Offload #(settings/save-kg-model user-id step change-event)))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))))))
+                  (if (:success r)
+                    ;; :settings-refresh re-reads the levels, so the group's
+                    ;; label turns Custom.
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Field sub-components (split per the JVM 64KB method-limit convention) —
@@ -84,12 +90,12 @@
         (dom/div
           (dom/span
             (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
-            (dom/text "Enable LLM features"))
+            (dom/text "Use AI features"))
           (dom/div
             (dom/props {:class "hint"})
             (dom/text (if credits-enabled?
-                        "OCR text extraction and flashcard generation. Uses platform credits — see the Account tab."
-                        "OCR text extraction and flashcard generation. Requires an OpenRouter API key."))))))))
+                        "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Account tab."
+                        "Scanning, card generation, the assistant, quiz grading and the knowledge graph call OpenRouter, which needs an API key. Reading and Anki sync work without one."))))))))
 
 (e/defn ProviderKeyStatusField
   "Self-host mode's OpenRouter API-key status card. Credits mode has no
@@ -139,7 +145,12 @@
             (when t
               (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))
+                  (if (:success r)
+                    ;; :settings-refresh re-reads the levels, so the group's
+                    ;; label turns Custom.
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Model used for flashcard generation."))))))
 
@@ -243,7 +254,12 @@
             (when t
               (let [r (e/server (e/Offload #(settings/save-assistant-model user-id change-event)))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))
+                  (if (:success r)
+                    ;; :settings-refresh re-reads the levels, so the group's
+                    ;; label turns Custom.
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Model used by the Socratic AI assistant in the reading view."))))))
 
@@ -253,26 +269,30 @@
    card generation; each defaults to Gemini 3 Flash."
   [user-id card-model-ids card-label-of]
   (e/client
-    (let [kg-steps (e/server (settings/kg-model-step-choices))]
+    (let [kg-steps (e/server (filterv (fn [[step _]] (not= step :grade))
+                               (settings/kg-model-step-choices)))]
       (dom/div
         (dom/props {:class "field"})
         (dom/label (dom/props {:class "label"}) (dom/text "Knowledge-graph models"))
         (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
-          (dom/text "Model used for each knowledge-graph step. Defaults to Gemini 3 Flash."))
+          (dom/text "The model for each step of building the knowledge graph. Answer grading is under Quiz."))
         (e/for [pair (e/diff-by first kg-steps)]
           (let [[step label] pair]
             (KgModelField user-id step label card-model-ids card-label-of)))))))
 
 (e/defn ReasoningField
-  "Reasoning-effort select for flashcard generation."
-  [user-id]
+  "Reasoning-effort select for one lane: `lane` is :cards or :assistant. Each
+   lane has its own setting, because each task has its own level."
+  [user-id lane]
   (e/client
-    (let [server-reasoning (e/server (settings/get-reasoning user-id))
+    (let [server-reasoning (e/server (if (= lane :assistant)
+                                       (settings/get-assistant-reasoning user-id)
+                                       (settings/get-reasoning user-id)))
           !reasoning (atom server-reasoning)
           reasoning (e/watch !reasoning)]
       (dom/div
         (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Reasoning Effort"))
+        (dom/label (dom/props {:class "label"}) (dom/text "Reasoning effort"))
         (dom/select
           (dom/props {:value reasoning :class "select"})
           (dom/option (dom/props {:value "none"}) (dom/text "None"))
@@ -287,11 +307,16 @@
             (when (some? change-event)
               (reset! !reasoning change-event))
             (when t
-              (let [r (e/server (e/Offload #(settings/save-reasoning user-id change-event)))]
+              (let [r (e/server (e/Offload #(if (= lane :assistant)
+                                              (settings/save-assistant-reasoning user-id change-event)
+                                              (settings/save-reasoning user-id change-event))))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))
+                  (if (:success r)
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
-          (dom/text "Higher = better quality but slower and more expensive"))))))
+          (dom/text "More effort costs more and takes longer. GLM 5.3 Flash gives the same result for Low and High."))))))
 
 (e/defn VerbosityField
   "Verbosity select for flashcard generation."
@@ -302,7 +327,7 @@
           verbosity (e/watch !verbosity)]
       (dom/div
         (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Verbosity"))
+        (dom/label (dom/props {:class "label"}) (dom/text "Detail level"))
         (dom/select
           (dom/props {:value verbosity :class "select"})
           (dom/option (dom/props {:value "low"}) (dom/text "Low"))
@@ -319,7 +344,7 @@
                 (case r
                   (if (:success r) (t) (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
-          (dom/text "Controls detail level of generated flashcards"))))))
+          (dom/text "How much detail generated cards carry. Only Claude Sonnet 5 uses this setting."))))))
 
 (e/defn ScanDpiField
   "Scan-quality (DPI) used for Scan Page OCR — preset select (Low/Standard/High);
@@ -346,7 +371,12 @@
             (when t
               (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))
+                  (if (:success r)
+                    ;; :settings-refresh re-reads the levels, so the group's
+                    ;; label turns Custom.
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
 
@@ -456,7 +486,12 @@
             (when t
               (let [r (e/server (e/Offload #(settings/save-ocr-model-default user-id change-event)))]
                 (case r
-                  (if (:success r) (t) (t (:error r))))))))
+                  (if (:success r)
+                    ;; :settings-refresh re-reads the levels, so the group's
+                    ;; label turns Custom.
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Used for Scan Page unless a document overrides it in Document options"))))))
 
@@ -623,6 +658,72 @@
                     (do (reset! !ocr-prompt default-ocr) (t))
                     (t (:error r))))))))))))
 
+(e/defn AdvancedCards [user-id level card-model-ids card-label-of]
+  (e/client
+    (dom/section
+      (dom/props {:class "ai-group"})
+      (views/GroupHeading "Flashcards" level)
+      (CardModelField user-id card-model-ids card-label-of)
+      (ReasoningField user-id :cards)
+      (VerbosityField user-id)
+      (UseFactsForCardsField user-id)
+      (PrePromptModeField user-id)
+      (CardGenRetriesField user-id)
+      (SystemPromptField user-id))))
+
+(e/defn AdvancedScan [user-id level]
+  (e/client
+    (dom/section
+      (dom/props {:class "ai-group"})
+      (views/GroupHeading "Page scanning" level)
+      (DefaultOcrModelField user-id)
+      (ScanDpiField user-id)
+      (OcrPromptField user-id))))
+
+(e/defn AdvancedAssistant [user-id level card-model-ids card-label-of]
+  (e/client
+    (dom/section
+      (dom/props {:class "ai-group"})
+      (views/GroupHeading "Reading assistant" level)
+      (AssistantModelField user-id card-model-ids card-label-of)
+      (ReasoningField user-id :assistant)
+      (AssistantPdfContextField user-id)
+      (AssistantPanelLayoutField user-id))))
+
+(e/defn AdvancedQuiz [user-id level credits-enabled? card-model-ids card-label-of]
+  (e/client
+    (dom/section
+      (dom/props {:class "ai-group"})
+      (views/GroupHeading "Quiz grading" level)
+      (KgModelField user-id :grade "Answer grading model" card-model-ids card-label-of)
+      (CardQuizGradingField user-id credits-enabled?))))
+
+(e/defn AdvancedKg [user-id level card-model-ids card-label-of]
+  (e/client
+    (dom/section
+      (dom/props {:class "ai-group"})
+      (views/GroupHeading "Knowledge graph" level)
+      (KgModelsField user-id card-model-ids card-label-of))))
+
+(e/defn AdvancedView
+  "Every setting, grouped by task. A group's label shows its task's level; an
+   edit here sets that task to Custom (settings/write-setting!)."
+  [user-id tiers credits-enabled? card-model-ids card-label-of]
+  (e/client
+    (dom/div
+      (dom/props {:class "ai-advanced"})
+      (dom/p (dom/props {:class "ai-advanced__note"})
+        (dom/text "Each task starts on the level you chose in Simple or By task. Changing a setting here sets that task to Custom."))
+      (AdvancedCards user-id (get tiers :cards) card-model-ids card-label-of)
+      (AdvancedScan user-id (get tiers :scan))
+      (AdvancedAssistant user-id (get tiers :assistant) card-model-ids card-label-of)
+      (AdvancedQuiz user-id (get tiers :quiz) credits-enabled? card-model-ids card-label-of)
+      (AdvancedKg user-id (get tiers :kg) card-model-ids card-label-of)
+      (dom/section
+        (dom/props {:class "ai-group"})
+        (views/GroupHeading "Transcription" nil)
+        (TranscribeLanguageField user-id)))))
+
 (e/defn AIFeaturesSection [user-id enc-key]
   (e/client
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
@@ -633,20 +734,14 @@
           api-key-configured? (:configured? api-key-status)
           credits-enabled? (e/server (config/credits-enabled?))
           card-model-ids (e/server (settings/card-model-ids))
-          card-label-of (into {} (map (juxt :id :label)) card-models/registry)]
+          card-label-of (into {} (map (juxt :id :label)) card-models/registry)
+          tiers (e/server (views/get-ai-tiers* settings-refresh user-id))
+          !view (atom (views/load-view))
+          view (e/watch !view)]
 
       (dom/div
         (dom/props {:class "card"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI Features"))
-
-        ;; BYOK explainer
-        (dom/div
-          (dom/props {:style {:padding "12px 14px" :background "var(--color-info-bg)" :border-radius "var(--radius-md)"
-                              :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
-                              :color "var(--color-text-secondary)"}})
-          (dom/text (if credits-enabled?
-                      "Incremental reading and Anki sync are always free. OCR and flashcard generation spend credits — your balance and top-up are in the Account tab."
-                      "Incremental reading and Anki sync are always free. AI features (OCR, flashcard generation, transcription) use OpenRouter and require an OpenRouter API key set by the operator.")))
 
         (LlmToggleField user-id credits-enabled? !llm-enabled llm-enabled)
 
@@ -657,33 +752,11 @@
           (when-not credits-enabled?
             (ProviderKeyStatusField api-key-configured?))
 
-          (CardModelField user-id card-model-ids card-label-of)
+          (views/ViewPicker !view view)
 
-          (UseFactsForCardsField user-id)
-
-          (CardQuizGradingField user-id credits-enabled?)
-
-          (AssistantModelField user-id card-model-ids card-label-of)
-
-          (AssistantPanelLayoutField user-id)
-
-          (KgModelsField user-id card-model-ids card-label-of)
-
-          (ReasoningField user-id)
-
-          (VerbosityField user-id)
-
-          (ScanDpiField user-id)
-
-          (TranscribeLanguageField user-id)
-
-          (AssistantPdfContextField user-id)
-
-          (DefaultOcrModelField user-id)
-
-          (CardGenRetriesField user-id)
-
-          ;; ── Prompts (inside when llm-enabled) ──
-          (PrePromptModeField user-id)
-          (SystemPromptField user-id)
-          (OcrPromptField user-id))))))
+          ;; The case gates each view's DOM: switching views is meant to
+          ;; remount it.
+          (case view
+            "simple" (views/SimpleView user-id tiers !view)
+            "by-task" (views/ByTaskView user-id tiers)
+            (AdvancedView user-id tiers credits-enabled? card-model-ids card-label-of)))))))

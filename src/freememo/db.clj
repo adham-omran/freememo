@@ -2821,6 +2821,24 @@
                  :entity :setting :entity-id key})
     r))
 
+(defn set-settings!
+  "Upsert several per-user settings in ONE transaction, so a reader never sees
+   some of them written and the rest not. Audits each key, as set-setting does.
+   Pre: `kvs` is a {key value} map of strings. Post: nil."
+  [user-id kvs]
+  (jdbc/with-transaction [tx ds]
+    (doseq [[k v] kvs]
+      (jdbc/execute! tx
+        (sql/format {:insert-into :settings
+                     :values [{:user_id user-id :key k :value v}]
+                     :on-conflict [:user_id :key]
+                     :do-update-set {:value v
+                                     :updated_at [:now]}}))))
+  (doseq [k (keys kvs)]
+    (log/audit! {:id ::setting-changed :user-id user-id :action :update
+                 :entity :setting :entity-id k}))
+  nil)
+
 (defn delete-setting
   "Delete a per-user setting (settings reset path). Audits here (§3.4)."
   [user-id key]

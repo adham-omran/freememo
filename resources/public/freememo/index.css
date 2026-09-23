@@ -852,6 +852,115 @@ html:has(> body > .app-shell) > body {
 .segmented-option--selected:hover { background: var(--color-primary-hover); }
 .segmented-option:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .segmented-description { font-size: 11px; color: var(--color-text-secondary); line-height: 1.3; }
+
+/* ── AI Features: views and levels (freememo.ai-tier-views) ─────────────────
+   Simple, By task and Advanced. Every colour is a token, so dark mode follows.
+   A level is a role=radio button; --selected marks the chosen one, and
+   aria-busy marks one whose write is in flight. */
+.ai-view-picker { margin: var(--sp-1) 0 var(--sp-5); }
+.ai-view-picker .segmented-option { height: 32px; padding: 4px 14px; }
+
+.ai-levels__lead { font-size: 13px; color: var(--color-text-secondary); margin: 0 0 var(--sp-3); }
+.ai-levels__mixed {
+    font-size: 13px; line-height: 1.5; margin: var(--sp-3) 0 0;
+    padding: 10px 14px; border-radius: var(--radius-md);
+    background: var(--color-remark-tint); color: var(--color-remark-tint-text);
+}
+.ai-levels__mixed .link-button { color: inherit; font-weight: 600; text-decoration: underline; }
+
+.ai-level-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-3);
+}
+.ai-level-card {
+    appearance: none;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+    min-height: 124px; padding: var(--sp-4);
+    text-align: left; font: inherit; cursor: pointer;
+    color: var(--color-text-primary);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-lg);
+}
+.ai-level-card:hover:not(.ai-level-card--selected) { background: var(--color-bg-hover); }
+.ai-level-card--selected {
+    background: var(--color-primary-tint);
+    border-color: var(--color-primary);
+    box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+.ai-level-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.ai-level-card[aria-busy="true"] { cursor: progress; }
+.ai-level-card__head { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.ai-level-card__name { font-size: 15px; font-weight: 600; }
+.ai-level-card__desc { font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); }
+.ai-level-card--selected .ai-level-card__desc { color: var(--color-primary-tint-text); }
+
+.ai-price { font-size: 14px; font-weight: 700; letter-spacing: 1px; color: var(--color-success-dark); }
+
+/* The radio mark: an empty ring, filled when its button is selected. */
+.ai-radio {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; flex-shrink: 0; box-sizing: border-box;
+    border: 2px solid var(--color-text-hint); border-radius: 50%;
+}
+.ai-level-card--selected .ai-radio,
+.ai-radio-button--selected .ai-radio { border-color: var(--color-primary); }
+.ai-level-card--selected .ai-radio::after,
+.ai-radio-button--selected .ai-radio::after {
+    content: ""; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--color-primary);
+}
+
+.ai-task-grid { display: flex; flex-direction: column; }
+.ai-task-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, 112px);
+    align-items: center;
+    min-height: 64px;
+    border-top: 1px solid var(--color-bg-hover);
+}
+.ai-task-row--head { min-height: 0; padding-bottom: var(--sp-2); border-top: none; align-items: end; }
+.ai-task-row--head .ai-levels__lead { margin: 0; }
+.ai-task-row__label { padding: var(--sp-2) var(--sp-4) var(--sp-2) 0; }
+.ai-task-row__name { display: flex; align-items: center; gap: var(--sp-2); font-size: 14px; font-weight: 600; }
+.ai-task-row__label .hint { margin-top: 2px; }
+.ai-task-row__cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ai-level-head { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.ai-radio-button {
+    appearance: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; padding: 0;
+    border: none; border-radius: 50%; background: transparent; cursor: pointer;
+}
+.ai-radio-button:hover:not(.ai-radio-button--selected) { background: var(--color-bg-hover); }
+.ai-radio-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.ai-radio-button[aria-busy="true"] { cursor: progress; }
+
+.ai-level-chip {
+    font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: var(--radius-pill);
+    background: var(--color-primary-tint); color: var(--color-primary-tint-text);
+}
+.ai-level-chip--custom { background: var(--color-remark-tint); color: var(--color-remark-tint-text); }
+
+.ai-advanced__note {
+    font-size: 13px; line-height: 1.5; margin: 0 0 var(--sp-5);
+    padding: 10px 14px; border-radius: var(--radius-md);
+    background: var(--color-info-bg); color: var(--color-text-label);
+}
+.ai-group { margin-bottom: var(--sp-6); }
+.ai-group__heading {
+    display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
+    padding-bottom: var(--sp-2); margin-bottom: var(--sp-4);
+    border-bottom: 2px solid var(--color-border);
+}
+.ai-group__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
+
+@media (max-width: 640px) {
+    .ai-level-cards { grid-template-columns: minmax(0, 1fr); }
+    .ai-level-card { min-height: 0; }
+    .ai-task-row { grid-template-columns: minmax(0, 1fr) repeat(3, 60px); }
+    .ai-level-head { font-size: 12px; }
+}
 .toolbar-generate-group { margin-left: auto; }
 
 /* Toolbar groups — flat flex runs separated by .toolbar-group-divider
