@@ -38,6 +38,7 @@
 (declare run-once!)
 (declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
+(declare record-anki-tombstones!)
 (declare start-purge-scheduler!)
 (declare unsynced-sql)
 (declare ->jsonb)
@@ -538,7 +539,7 @@
   (when (old-tables-exist?)
     (migrate-to-topics!))
 
-  ;; After migration: drop legacy columns if they still exist and add new unique constraint
+  ;; After migration: drop legacy columns if they still exist
   (when (and (topics-table-exists?)
           (not (old-tables-exist?)))
     ;; Drop legacy flashcard columns (safe — migration already moved data)
@@ -546,41 +547,11 @@
       (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS document_id"])
       (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS page_number"])
       (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS content_item_id"])
-      (catch Exception _ nil))
-    ;; Unique constraints — two partial indexes to handle NULLs correctly
-    ;; (PostgreSQL treats NULL != NULL in B-tree indexes, so a single index with
-    ;; nullable columns can't prevent duplicates).
-    ;;
-    ;; They index md5(question) / md5(cloze), NOT the text itself. A B-tree index
-    ;; row cannot exceed 1/3 of an 8 KB page (~2704 bytes), while input-check/
-    ;; card-max permits 10 000 characters — so indexing the text made any card
-    ;; past ~2704 bytes UNINSERTABLE, with the driver reporting "index row size
-    ;; N exceeds btree version 4 maximum 2704" and no hint that two layers
-    ;; disagreed. A SuperMemo item carries full HTML plus appended <img> tags and
-    ;; clears that ceiling routinely; it was the first path to expose it.
-    ;;
-    ;; The digest preserves the constraint exactly — a collision is what would
-    ;; weaken it, and md5 collisions on same-topic card text are not a practical
-    ;; concern — while a `left(question, N)` prefix would NOT: two cards
-    ;; differing only past N would collide and `insert-flashcards!`'s
-    ;; ON CONFLICT DO NOTHING would silently drop one.
-    (try
-      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_topic"])
-      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_basic_digest
-                          ON flashcards(topic_id, kind, md5(question)) WHERE cloze IS NULL"])
-      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze_digest
-                          ON flashcards(topic_id, kind, md5(cloze)) WHERE question IS NULL"])
-      ;; Only after the replacements exist, so a failed CREATE never leaves the
-      ;; table with no uniqueness at all.
-      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_basic"])
-      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_cloze"])
-      (catch Exception e
-        ;; Never silent: without these indexes `insert-flashcards!` still runs
-        ;; (a bare ON CONFLICT DO NOTHING needs no arbiter) but stops deduping,
-        ;; so a swallowed failure here shows up later as duplicate cards.
-        (tel/log! {:level :error :id ::flashcard-unique-index-migration
-                   :data {:error (.getMessage e)}}
-          "Could not install the flashcard uniqueness indexes — card dedupe is OFF"))))
+      (catch Exception _ nil)))
+  ;; The flashcard uniqueness indexes are NOT created here. Removing the
+  ;; duplicates that block them re-points card_schedules, kg_reviews and
+  ;; anki_card_states, and on a fresh database those tables do not exist yet.
+  ;; See setup-schema-flashcard-uniqueness!, the last step of setup-schema.
 
   ;; Fill `local_current_digest` for rows that predate the column (idempotent).
   ;; Baselines are deliberately left alone — see the fn's docstring for why the
@@ -2517,6 +2488,272 @@
   ;; excluded from account transfer, so this column needs no transfer decision.
   (jdbc/execute! ds ["ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS forge_source JSONB"]))
 
+;; ---------------------------------------------------------------------------
+;; Flashcard uniqueness — plans/flashcard-dedupe-index-repair.md
+;; ---------------------------------------------------------------------------
+
+(def ^:private flashcard-unique-index-ddl
+  "[name ddl] for the two indexes that make `insert-flashcards!`'s arbiter-less
+   ON CONFLICT DO NOTHING a dedupe.
+
+   Two partial indexes, not one, because a B-tree index treats NULL as distinct:
+   one index over both nullable columns could not stop a duplicate. The same
+   rule is why occlusion, score and overlapping cards never meet here — they
+   carry NULL in both question and cloze.
+
+   They index md5(question) / md5(cloze), NOT the text itself. A B-tree index
+   row cannot exceed 1/3 of an 8 KB page (~2704 bytes), while input-check/
+   card-max permits 10 000 characters — so indexing the text made any card
+   past ~2704 bytes UNINSERTABLE, with the driver reporting \"index row size
+   N exceeds btree version 4 maximum 2704\" and no hint that two layers
+   disagreed. A SuperMemo item carries full HTML plus appended <img> tags and
+   clears that ceiling routinely; it was the first path to expose it.
+
+   The digest preserves the constraint exactly — a collision is what would
+   weaken it, and md5 collisions on same-topic card text are not a practical
+   concern — while a `left(question, N)` prefix would NOT: two cards
+   differing only past N would collide and `insert-flashcards!`'s
+   ON CONFLICT DO NOTHING would silently drop one."
+  [["idx_flashcards_unique_basic_digest"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_basic_digest
+     ON flashcards(topic_id, kind, md5(question)) WHERE cloze IS NULL"]
+   ["idx_flashcards_unique_cloze_digest"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze_digest
+     ON flashcards(topic_id, kind, md5(cloze)) WHERE question IS NULL"]])
+
+(defn- flashcard-unique-indexes-valid?
+  "True when both uniqueness indexes exist on flashcards and are valid. That is
+   the steady state, and in it setup-schema-flashcard-uniqueness! takes no lock."
+  [conn]
+  (let [names (mapv first flashcard-unique-index-ddl)]
+    (= (count names)
+      (:n (jdbc/execute-one! conn
+            (into [(str "SELECT count(*) AS n FROM pg_index i
+                          JOIN pg_class c ON c.oid = i.indexrelid
+                         WHERE i.indrelid = 'flashcards'::regclass AND i.indisvalid
+                           AND c.relname IN (" (str/join ", " (repeat (count names) "?")) ")")]
+              names)
+            {:builder-fn rs/as-unqualified-maps})))))
+
+(def ^:private flashcard-dedupe-pairs-sql
+  "Build flashcard_dedupe(loser_id, survivor_id): one row per flashcard that
+   shares a key of `flashcard-unique-index-ddl` with a row that ranks higher.
+
+   The keys and predicates MUST stay the index's. Two filters are added on
+   top, because GROUP BY and PARTITION BY put all NULL keys together while the
+   index keeps each NULL distinct: a NULL topic_id or a NULL text never
+   conflicts, so it must never be grouped.
+
+   The survivor is the member with the most that cannot be moved. In order:
+     1. an Anki link — deleting the linked row would orphan its note;
+     2. the most Anki reviews, read through the note id, because nothing
+        writes anki_card_states.flashcard_id;
+     3. the most local reviews — card_schedules reps plus kg_reviews rows;
+     4. the most edit history;
+     5. the latest edit, then the lowest id.
+   `plans/flashcard-dedupe-audit.sql` repeats this ranking so its preview
+   matches what this migration deletes. A change here is a change there."
+  "CREATE TEMP TABLE flashcard_dedupe ON COMMIT DROP AS
+   WITH keyed AS (
+     SELECT id, 1 AS idx, topic_id, kind, md5(question) AS digest
+       FROM flashcards
+      WHERE cloze IS NULL AND question IS NOT NULL AND topic_id IS NOT NULL
+     UNION ALL
+     SELECT id, 2, topic_id, kind, md5(cloze)
+       FROM flashcards
+      WHERE question IS NULL AND cloze IS NOT NULL AND topic_id IS NOT NULL
+   ), dup AS (
+     SELECT * FROM (SELECT k.*, count(*) OVER (PARTITION BY idx, topic_id, kind, digest) AS n
+                      FROM keyed k) x
+      WHERE n > 1
+   ), valued AS (
+     SELECT d.id, d.idx, d.topic_id, d.kind, d.digest, f.anki_note_id, f.updated_at,
+            COALESCE((SELECT sum(s.reps) FROM anki_card_states s
+                       WHERE s.user_id = t.user_id
+                         AND s.anki_note_id = f.anki_note_id), 0) AS anki_reps,
+            COALESCE((SELECT sum(c.reps) FROM card_schedules c
+                       WHERE c.flashcard_id = d.id), 0)
+            + (SELECT count(*) FROM kg_reviews r WHERE r.flashcard_id = d.id) AS local_reviews,
+            (SELECT count(*) FROM card_versions v
+              WHERE v.scope_type = 'card' AND v.scope_id = d.id) AS versions
+       FROM dup d
+       JOIN flashcards f ON f.id = d.id
+       LEFT JOIN topics t ON t.id = d.topic_id
+   ), ranked AS (
+     SELECT id, idx, topic_id, kind, digest,
+            row_number() OVER (PARTITION BY idx, topic_id, kind, digest
+                               ORDER BY (anki_note_id IS NOT NULL) DESC, anki_reps DESC,
+                                        local_reviews DESC, versions DESC,
+                                        updated_at DESC NULLS LAST, id ASC) AS rank
+       FROM valued
+   )
+   SELECT l.id AS loser_id, s.id AS survivor_id
+     FROM ranked l
+     JOIN ranked s ON s.idx = l.idx AND s.topic_id = l.topic_id AND s.kind = l.kind
+                  AND s.digest = l.digest AND s.rank = 1
+    WHERE l.rank > 1")
+
+(defn- dedupe-flashcards-for-unique-indexes!
+  "Delete every flashcard that duplicates another under a key of
+   `flashcard-unique-index-ddl`. One survivor stays per key, and what each
+   deleted row carried moves onto it:
+     - its content, as a card_versions row on the survivor when it differs, so
+       the History modal can restore it;
+     - its card_versions history, re-pointed;
+     - its card_schedules, one per ord: the most reps wins, then the latest
+       review, then the survivor's own row;
+     - its kg_reviews log, re-pointed;
+     - its anki_card_states, re-pointed when they describe the survivor's note;
+     - its Anki note, as a tombstone when no remaining card holds that note,
+       as every hard-delete path owes (see `record-anki-tombstones!`).
+
+   Pre : `tx` is an open transaction that holds the locks
+         setup-schema-flashcard-uniqueness! takes, and card_versions,
+         card_schedules, kg_reviews and anki_card_states exist.
+   Post: no two flashcards share a key of either index, so `tx` can build both.
+         Returns {:deleted n …counts :pairs [[loser survivor] …]}.
+   Idempotent: with no duplicates it writes nothing and returns {:deleted 0}."
+  [tx]
+  (let [written #(or (:next.jdbc/update-count %) 0)
+        exec! (fn [stmt] (written (jdbc/execute-one! tx [stmt])))
+        plain {:builder-fn rs/as-unqualified-maps}]
+    ;; ON COMMIT DROP clears the table at commit only, so a second call inside
+    ;; one transaction would find it still there.
+    (jdbc/execute-one! tx ["DROP TABLE IF EXISTS pg_temp.flashcard_dedupe"])
+    (jdbc/execute-one! tx [flashcard-dedupe-pairs-sql])
+    (let [pairs (jdbc/execute! tx
+                  ["SELECT loser_id, survivor_id FROM flashcard_dedupe
+                    ORDER BY survivor_id, loser_id"] plain)]
+      (if (empty? pairs)
+        {:deleted 0}
+        (let [versions-written
+              (exec! "INSERT INTO card_versions (root_topic_id, scope_type, scope_id, kind,
+                                                question, answer, cloze, overlapping)
+                     SELECT DISTINCT ON (d.survivor_id, l.question, l.answer, l.cloze, l.overlapping)
+                            COALESCE(s.root_topic_id, l.root_topic_id), 'card', d.survivor_id,
+                            l.kind, l.question, l.answer, l.cloze, l.overlapping
+                       FROM flashcard_dedupe d
+                       JOIN flashcards l ON l.id = d.loser_id
+                       JOIN flashcards s ON s.id = d.survivor_id
+                      WHERE COALESCE(s.root_topic_id, l.root_topic_id) IS NOT NULL
+                        AND (l.question    IS DISTINCT FROM s.question
+                          OR l.answer      IS DISTINCT FROM s.answer
+                          OR l.cloze       IS DISTINCT FROM s.cloze
+                          OR l.overlapping IS DISTINCT FROM s.overlapping)")
+              versions-moved
+              (exec! "UPDATE card_versions v SET scope_id = d.survivor_id
+                       FROM flashcard_dedupe d
+                      WHERE v.scope_type = 'card' AND v.scope_id = d.loser_id")
+              ;; card_schedules is keyed (flashcard_id, ord), so a survivor can
+              ;; hold one schedule per ord. Drop every losing schedule first,
+              ;; which leaves at most one per (survivor, ord) and lets the move
+              ;; below touch the primary key without a collision.
+              schedules-dropped
+              (exec! "DELETE FROM card_schedules c
+                      USING (SELECT cs.flashcard_id, cs.ord,
+                                    row_number() OVER (
+                                      PARTITION BY m.survivor_id, cs.ord
+                                      ORDER BY cs.reps DESC, cs.last_review DESC NULLS LAST,
+                                               (cs.flashcard_id = m.survivor_id) DESC,
+                                               cs.flashcard_id) AS rank
+                               FROM (SELECT loser_id AS member_id, survivor_id FROM flashcard_dedupe
+                                     UNION
+                                     SELECT survivor_id, survivor_id FROM flashcard_dedupe) m
+                               JOIN card_schedules cs ON cs.flashcard_id = m.member_id) r
+                     WHERE c.flashcard_id = r.flashcard_id AND c.ord = r.ord AND r.rank > 1")
+              schedules-moved
+              (exec! "UPDATE card_schedules c SET flashcard_id = d.survivor_id
+                       FROM flashcard_dedupe d WHERE c.flashcard_id = d.loser_id")
+              reviews-moved
+              (exec! "UPDATE kg_reviews r SET flashcard_id = d.survivor_id
+                       FROM flashcard_dedupe d WHERE r.flashcard_id = d.loser_id")
+              ;; A state of any other note belongs to a note the tombstone below
+              ;; retires, so the delete's cascade removes it, as a user delete would.
+              states-moved
+              (exec! "UPDATE anki_card_states a SET flashcard_id = d.survivor_id
+                       FROM flashcard_dedupe d JOIN flashcards s ON s.id = d.survivor_id
+                      WHERE a.flashcard_id = d.loser_id AND a.anki_note_id = s.anki_note_id")
+              ;; Read BEFORE the delete: afterwards the rows are gone. A note that
+              ;; a remaining card still holds is NOT orphaned — a tombstone for it
+              ;; would make the next reconcile delete a live card's note.
+              orphaned-notes
+              (jdbc/execute! tx
+                ["SELECT DISTINCT t.user_id, l.anki_note_id, l.anki_baseline_digest
+                    FROM flashcard_dedupe d
+                    JOIN flashcards l ON l.id = d.loser_id
+                    JOIN topics t ON t.id = l.topic_id
+                   WHERE l.anki_note_id IS NOT NULL
+                     AND NOT EXISTS (SELECT 1 FROM flashcards k
+                                      WHERE k.anki_note_id = l.anki_note_id
+                                        AND NOT EXISTS (SELECT 1 FROM flashcard_dedupe x
+                                                         WHERE x.loser_id = k.id))"]
+                plain)
+              deleted
+              (exec! "DELETE FROM flashcards f USING flashcard_dedupe d WHERE f.id = d.loser_id")
+              tombstones
+              (reduce-kv (fn [n user-id rows] (+ n (record-anki-tombstones! tx user-id rows)))
+                0 (group-by :user_id orphaned-notes))]
+          {:deleted deleted
+           :survivors (count (distinct (map :survivor_id pairs)))
+           :versions-written versions-written
+           :versions-moved versions-moved
+           :schedules-dropped schedules-dropped
+           :schedules-moved schedules-moved
+           :reviews-moved reviews-moved
+           :states-moved states-moved
+           :tombstones tombstones
+           :pairs (mapv (juxt :loser_id :survivor_id) pairs)})))))
+
+(defn- setup-schema-flashcard-uniqueness!
+  "Remove duplicate flashcards and install `flashcard-unique-index-ddl`, in ONE
+   transaction, so no duplicate can arrive between the cleanup and the build.
+
+   The last step of setup-schema, because the cleanup re-points tables that
+   earlier steps create. Idempotent: once both indexes are valid it only reads
+   pg_index, and takes no lock.
+
+   The lock blocks writers on the five tables the cleanup touches, for the
+   seconds the repair takes. It matters under blue/green: the old color keeps
+   writing cards while this one boots. The order puts card_versions first,
+   because update-flashcard-versioned! writes it before flashcards, and a
+   cascade from flashcards reaches the other three after flashcards. A lock
+   wait past lock_timeout aborts the repair, which the next boot retries.
+
+   Never silent on failure: without these indexes `insert-flashcards!` still
+   runs (a bare ON CONFLICT DO NOTHING needs no arbiter) but stops deduping,
+   and duplicates collect. From 2026-08-03 to this fix, production logged
+   ::flashcard-unique-index-migration on every boot for exactly that reason.
+   See plans/flashcard-dedupe-index-repair.md."
+  []
+  (when (and (topics-table-exists?) (not (old-tables-exist?))
+          (not (flashcard-unique-indexes-valid? ds)))
+    (try
+      (let [result (jdbc/with-transaction [tx ds]
+                     (jdbc/execute! tx ["SET LOCAL lock_timeout = '15s'"])
+                     (jdbc/execute! tx ["LOCK TABLE card_versions, flashcards, card_schedules,
+                                                   kg_reviews, anki_card_states
+                                         IN SHARE ROW EXCLUSIVE MODE"])
+                     (let [result (dedupe-flashcards-for-unique-indexes! tx)]
+                       (jdbc/execute! tx ["DROP INDEX IF EXISTS idx_flashcards_unique_topic"])
+                       (doseq [[_ ddl] flashcard-unique-index-ddl]
+                         (jdbc/execute! tx [ddl]))
+                       ;; The text-keyed predecessors. Only after the replacements
+                       ;; exist, so the table never goes without uniqueness.
+                       (jdbc/execute! tx ["DROP INDEX IF EXISTS idx_flashcards_unique_basic"])
+                       (jdbc/execute! tx ["DROP INDEX IF EXISTS idx_flashcards_unique_cloze"])
+                       result))]
+        (when (pos? (:deleted result))
+          (tel/log! {:level :warn :id ::flashcard-dedupe
+                     :data (-> result
+                             (assoc :pair-count (count (:pairs result)))
+                             (update :pairs #(vec (take 200 %))))}
+            (str "Deleted " (:deleted result) " duplicate flashcard(s) so the uniqueness "
+              "indexes could be built"))))
+      (catch Exception e
+        (tel/log! {:level :error :id ::flashcard-unique-index-migration
+                   :data {:error (.getMessage e)}}
+          "Could not install the flashcard uniqueness indexes — card dedupe is OFF")))))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -2540,6 +2777,8 @@
   (setup-schema-curriculum!)
   (setup-schema-activity-monitor!)
   (setup-schema-document-summaries!)
+  ;; Last: it re-points tables that the steps above create.
+  (setup-schema-flashcard-uniqueness!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -8033,7 +8272,15 @@
 
 (defn restore-flashcards-tx!
   "Re-insert deleted flashcards on the given connectable, preserving original
-   ids. ON CONFLICT (id) DO NOTHING — a card still present is left untouched.
+   ids. ON CONFLICT DO NOTHING — a card still present is left untouched, and so
+   is a card whose question or cloze a live card in its topic already holds.
+
+   The arbiter is deliberately absent. `ON CONFLICT (id)` absorbs only the id,
+   so a digest clash with `flashcard-unique-index-ddl` failed the WHOLE restore,
+   and undo.clj reports that to nobody. Two shapes reach it: the user re-created
+   a deleted card before undoing, or the snapshot predates the duplicate repair
+   and holds both copies of a pair.
+
    Clears each card's Anki association (anki_note_id, anki_synced_at): the delete
    path removed the Anki notes, so a restored card must come back UNSYNCED rather
    than falsely rendering as pushed/synced."
@@ -8049,7 +8296,7 @@
                                       (some? (:io_fields row))
                                       (update :io_fields ->jsonb)))
                                   snapshot-rows)
-                   :on-conflict [:id]
+                   :on-conflict []
                    :do-nothing true}))))
 
 (defn restore-flashcards!
