@@ -1991,7 +1991,9 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     pointer-events: none;
 }
 
-/* Sticky header for the cost-history table (.tx-head). It's a grid sharing the
+/* Sticky header for a table inside its scroll box (.tx-head), used by
+   schedule_detail. The cost-history table that introduced it now uses
+   freememo.tape-table instead. It's a grid sharing the
    body's --grid-cols, so header and body are ONE track set and cannot drift.
    Higher specificity than the shared `.tape-scroll table` / `tr` rules above
    overrides their block layout + absolute/transform virtual-scroll positioning
@@ -5038,6 +5040,21 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .type-badge-overlapping { background: var(--color-badge-web, #7c5cbf); }
 .type-badge-occlusion { background: var(--color-badge-occlusion); }
 .type-badge-score { background: var(--color-badge-score); }
+/* Cost history on a phone: seven columns do not fit, so it keeps Date, Feature
+   and Amount. TapeTable sets --grid-cols inline, and only !important in a
+   stylesheet outranks an inline declaration. Header and body take the same
+   tracks, so their columns still agree. */
+@media (max-width: 640px) {
+    .cost-history-table .tape-table-header,
+    .cost-history-table .tape-scroll { --grid-cols: 136px minmax(0, 1fr) 64px !important; }
+    .cost-history-table .tape-table-body td:nth-child(2) { white-space: nowrap; }
+    .cost-history-table .tape-table-header th:is(:nth-child(1), :nth-child(4), :nth-child(6), :nth-child(7)),
+    .cost-history-table .tape-table-body td:is(:nth-child(1), :nth-child(4), :nth-child(6), :nth-child(7)) { display: none; }
+}
+/* Credit ledger kinds (freememo.cost-history). */
+.type-badge-debit { background: var(--color-badge-pdf); }
+.type-badge-grant { background: var(--color-badge-epub); }
+.type-badge-purchase { background: var(--color-badge-web); }
 
 .card-row-html {
     overflow: hidden;

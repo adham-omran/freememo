@@ -1,18 +1,18 @@
 (ns freememo.cost-history
   "Settings → Account 'AI costs' card: the user's credit ledger as a searchable,
    filterable, virtual-scrolled table. Read-only view over credit_transactions,
-   scoped to the current user. Mirrors search-page's Scroll-window + Tape
-   windowing — the full filtered result set stays server-side; only the visible
-   window rows + the count cross the wire. Extracted into its own file (like
+   scoped to the current user. The table is freememo.tape-table/TapeTable, the
+   shared component: a header table above a capped scroll box, 15 mounted rows,
+   and an empty-state overlay. The full filtered result stays server-side; only
+   the count and each window row cross the wire. Extracted into its own file (like
    storage-section / ai-features-section) to keep each e/defn under the JVM 64KB
    bytecode limit."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
-   [freememo.scroll :refer [Scroll-window]]
    [freememo.card-models :as card-models]
    [freememo.ocr-models :as ocr-models]
+   [freememo.tape-table :as tape]
    [freememo.util :as util]
    [clojure.string :as str]
    #?(:clj [freememo.db :as db])
@@ -55,14 +55,16 @@
 (defn model-label [m] (get model-labels m (or m "—")))
 
 (defn kind-badge
-  "[label bg-color-var] for a ledger kind."
+  "[label badge-class] for a ledger kind. A class, not an inline colour: the
+   badge mounts in every window row, and a class is one prop (CLAUDE.md,
+   \"Cell styling belongs in CSS\")."
   [kind]
   (case kind
-    "debit"      ["Debit"    "var(--color-badge-pdf)"]
-    "grant"      ["Grant"    "var(--color-badge-epub)"]
-    "purchase"   ["Purchase" "var(--color-badge-web)"]
-    "adjustment" ["Adjust"   "var(--color-badge-web)"]
-    [(or kind "—") "var(--color-badge-web)"]))
+    "debit"      ["Debit"    "type-badge type-badge-debit"]
+    "grant"      ["Grant"    "type-badge type-badge-grant"]
+    "purchase"   ["Purchase" "type-badge type-badge-purchase"]
+    "adjustment" ["Adjust"   "type-badge type-badge-purchase"]
+    [(or kind "—") "type-badge type-badge-purchase"]))
 
 (def date-presets
   "Ordered [value label days] for the date filter; days nil = all time."
@@ -107,49 +109,48 @@
 
 ;; ── Row + section ───────────────────────────────────────────────────────────
 
-(defn- cell-style
-  "Shared td style: left-aligned, vertically centered, single line. `numeric?`
-   turns on tabular figures so digits stay column-aligned even when left-aligned.
-   `min-width:0` lets the grid item shrink below its content so an inner
-   `ellipsis-cell` span can ellipsize — grid items default to min-width:auto
-   (= min-content), which otherwise defeats text-overflow."
-  [numeric?]
-  {:padding "4px 10px" :min-width "0" :overflow "hidden"
-   :display "flex" :align-items "center" :justify-content "flex-start"
-   :font-size "13px" :color "var(--color-text-primary)"
-   :font-variant-numeric (when numeric? "tabular-nums")})
+(def ^:private headers
+  ["Kind" "Date" "Feature" "Model" "Amount" "Balance" "Tokens"])
 
-(def ^:private ellipsis-cell
-  "Style for the inner span wrapping overflow-prone cell text. text-overflow is
-   inert on the flex td itself; on this block-level flex child it fires."
-  {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :min-width "0"})
+(def ^:private grid-cols
+  "Fixed tracks for the short columns, shares of the rest for the two text
+   columns. No min-width: the table fits the card, and Feature and Model ellipsize
+   with their full text in a tooltip, rather than the table scrolling sideways.
+   Below 640 px, index.css replaces this with three columns (`.cost-history-table`)."
+  "84px 132px minmax(0,1fr) minmax(0,1.3fr) 76px 80px 120px")
 
-(e/defn TxRow [row i row-height]
+(e/defn TxRow
+  "One ledger row. Layout is in `.tape-table-body` classes; only the amount's
+   colour and the tooltips are data."
+  [row i]
   (e/client
     (let [{:keys [kind endpoint model amount_iqd balance_after
                   input_tokens output_tokens cached_tokens when-str usd-str]} row
-          [badge-text badge-color] (kind-badge kind)
+          [badge-text badge-class] (kind-badge kind)
           debit? (neg? (or amount_iqd 0))
           toks (str (or input_tokens 0) "/" (or output_tokens 0) "/" (or cached_tokens 0))]
       (dom/tr
-        (dom/props {:class (when (odd? i) "row-alt")
-                    :style {:height (str row-height "px") :--order i}})
-        (dom/td (dom/props {:style {:display "flex" :align-items "center" :padding "4px 10px"}})
-          (dom/span (dom/props {:class "type-badge" :style {:background badge-color}})
-            (dom/text badge-text)))
-        (dom/td (dom/props {:style (cell-style false)}) (dom/text (or when-str "")))
-        (dom/td (dom/props {:style (cell-style false) :title (or endpoint "")})
-          (dom/span (dom/props {:style ellipsis-cell}) (dom/text (endpoint-label endpoint))))
-        (dom/td (dom/props {:style (cell-style false) :title (or model "")})
-          (dom/span (dom/props {:style ellipsis-cell}) (dom/text (model-label model))))
-        (dom/td (dom/props {:style (assoc (cell-style true)
-                                     :color (if debit? "var(--color-danger)" "var(--color-success)"))
-                            :title (or usd-str "")})
-          (dom/text (str amount_iqd)))
-        (dom/td (dom/props {:style (cell-style true)}) (dom/text (str balance_after)))
-        (dom/td (dom/props {:style (cell-style true) :title "input / output / cached tokens"})
-          (dom/text (if (= toks "0/0/0") "—" toks)))))))
-
+        (dom/props {:class (when (odd? i) "row-alt") :style {:--order i}})
+        (dom/td
+          (dom/span (dom/props {:class badge-class}) (dom/text badge-text)))
+        (dom/td (dom/props {:class "tape-cell-meta"}) (dom/text (or when-str "")))
+        (dom/td
+          (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (or endpoint "")})
+            (dom/text (endpoint-label endpoint))))
+        (dom/td
+          (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (or model "")})
+            (dom/text (model-label model))))
+        (dom/td (dom/props {:class "tape-cell-num tape-cell-strong"
+                            :style {:color (if debit? "var(--color-danger-text)"
+                                                      "var(--color-success-dark)")}})
+          (dom/span (dom/props {:data-tooltip (or usd-str "")})
+            (dom/text (str amount_iqd))))
+        (dom/td (dom/props {:class "tape-cell-num"}) (dom/text (str balance_after)))
+        (dom/td (dom/props {:class "tape-cell-num tape-cell-meta"})
+          (if (= toks "0/0/0")
+            (dom/span (dom/props {:class "tape-cell-absent"}) (dom/text "—"))
+            (dom/span (dom/props {:data-tooltip "input / output / cached tokens"})
+              (dom/text toks))))))))
 (e/defn CostHistorySection
   "AI costs card for the Account settings tab. Read-only; user-scoped."
   [user-id]
@@ -179,10 +180,7 @@
           result-count (e/server (count results))
           loading? (nil? result-count)
           rc (or result-count 0)
-          reset-key [kind endpoint model preset min-amount-debounced q-debounced]
-          row-height 36
-          min-width "910px"
-          grid-cols "90px 150px minmax(120px,1fr) minmax(200px,1.4fr) 110px 110px 130px"]
+          reset-key [kind endpoint model preset min-amount-debounced q-debounced]]
       (dom/div
         (dom/props {:class "card"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI costs"))
@@ -244,44 +242,15 @@
               (dom/span (dom/props {:class "spinner"}))
               (dom/text "Loading…"))))
 
-        ;; ── Table: header + virtual-scrolled body in ONE both-axis scroll box.
-        ;;    Both tables are grids driven by the same --grid-cols and sized in the
-        ;;    same width context (identical scrollbar gutter), so their columns
-        ;;    cannot drift; the header is pinned via .tx-head (see index.css). ──
+        ;; ── Table: the shared TapeTable. It owns the header, the capped scroll
+        ;;    box, the row window and the empty overlay; the caller owes it a flex
+        ;;    column with min-height 0. ──
         (dom/div
-          (dom/props {:class "tape-scroll"
-                      :style {:max-height "480px" :overflow "auto"
-                              :scrollbar-gutter "stable"
-                              :--count rc :--grid-cols grid-cols
-                              :--row-height (str row-height "px")}})
-          (dom/table
-            (dom/props {:class "tx-head"
-                        :style {:width "100%" :min-width min-width
-                                :grid-template-columns grid-cols}})
-            (dom/thead (dom/props {:style {:display "contents"}})
-              (dom/tr (dom/props {:style {:display "contents"}})
-                (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)"
-                                :font-weight "600" :font-size "12px"
-                                :color "var(--color-text-primary)" :text-align "left"}]
-                  (dom/th (dom/props {:style th-style}) (dom/text "Kind"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Date"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Feature"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Model"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Amount"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Balance"))
-                  (dom/th (dom/props {:style th-style}) (dom/text "Tokens"))))))
-          (let [[offset limit] (Scroll-window row-height rc dom/node
-                                 {:overquery-factor 2 :reset-key reset-key})]
-            (dom/table
-              (dom/props {:style {:width "100%" :min-width min-width :font-size "13px"}})
-              (e/for [i (Tape offset limit)]
-                (let [row (e/server (nth results i nil))]
-                  (when row
-                    (TxRow row i row-height)))))))
-
-        ;; ── Empty state (table stays mounted; message is a sibling) ──
-        (when (and (not loading?) (= rc 0))
-          (dom/div
-            (dom/props {:style {:padding "24px" :text-align "center"
-                                :color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text "No transactions match these filters.")))))))
+          (dom/props {:class "cost-history-table"
+                      :style {:display "flex" :flex-direction "column" :min-height "0"}})
+          (tape/TapeTable headers grid-cols rc reset-key
+            (if loading? "" "No transactions match these filters.")
+            (e/fn [i]
+              ;; One window row crosses the wire, never the whole result.
+              (when-let [row (e/server (nth results i nil))]
+                (TxRow row i)))))))))
