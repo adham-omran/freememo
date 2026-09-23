@@ -50,14 +50,14 @@
     :label "Google · Gemini 3.5 Flash-Lite"
     :shape :chat
     :openrouter-model "google/gemini-3.5-flash-lite"}
-   ;; Routed cheapest-first under a price ceiling — same reasoning as the
-   ;; card-models entry, including why the ceiling sits at the undiscounted rate
-   ;; and why the key must be :max_price and not :max-price.
+   ;; Routed fastest-first under a price ceiling — same reasoning as the
+   ;; card-models entry, including why the sort is "throughput", why the ceiling
+   ;; sits at the undiscounted rate and why the key must be :max_price.
    {:id "glm-5.3-flash"
     :label "Z.ai · GLM 5.3 Flash"
     :shape :chat
     :openrouter-model "z-ai/glm-5.3-flash"
-    :provider {:sort "price"
+    :provider {:sort "throughput"
                :max_price {:prompt 0.15 :completion 0.50}}}
    {:id "mistral-ocr-4"
     :label "Mistral · OCR 4"

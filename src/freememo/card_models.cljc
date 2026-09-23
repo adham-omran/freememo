@@ -99,10 +99,10 @@
     :label "DeepSeek · V4 Flash"
     :openrouter-model "deepseek/deepseek-v4-flash-0731"
     :supported-parameters json-and-reasoning-parameters}
-   ;; Routed cheapest-first under a price ceiling, NOT pinned to Z.ai. `:sort`
-   ;; is the mechanism and `:max_price` is only a backstop. Together they say
-   ;; what the pin they replace was standing in for — never overpay for this
-   ;; model — without naming a provider, which is how the pin went stale.
+   ;; Routed fastest-first under a price ceiling, NOT pinned to Z.ai. The
+   ;; ceiling says what the pin it replaces was standing in for — never overpay
+   ;; for this model — without naming a provider, which is how the pin went
+   ;; stale.
    ;;
    ;; The pin read {:only ["z-ai"]}, leaving one allowed provider, so
    ;; `allow_fallbacks` had nowhere to route and a Z.ai throttle failed the call.
@@ -118,9 +118,12 @@
    ;; endpoint. A ceiling at the discounted price would therefore have left one
    ;; qualifying provider the next day (Relace, the only one with no discount
    ;; field), rebuilding the single point of failure this change removes.
-   ;; `:sort "price"` is what keeps the ceiling from becoming the price paid: the
-   ;; cheapest endpoint is tried first and the ceiling is reached only where a
-   ;; tighter cap would have failed the call outright.
+   ;;
+   ;; `:sort` is "throughput", not "price". Cheapest-first sent every call to
+   ;; the most-discounted endpoint — on 2026-09-23 DeepInfra's fp4 build at 50%
+   ;; off — and the cheap endpoints are the crowded ones, so card generation was
+   ;; slow at times. About twenty endpoints sit at or under the ceiling, so the
+   ;; ceiling alone stops an overpay; the cost of this sort is the discount only.
    ;;
    ;; The key MUST be :max_price. `openrouter/model-fields` sends this map
    ;; verbatim and cheshire writes the keyword name as-is, so :max-price reaches
@@ -136,7 +139,7 @@
     :openrouter-model "z-ai/glm-5.3-flash"
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true
-    :provider {:sort "price"
+    :provider {:sort "throughput"
                :max_price {:prompt 0.15 :completion 0.50}}}
    ;; A 124B MoE model with 5.1B active parameters. It reads text only, so the
    ;; OCR registry has no entry for it. The one vision variant,

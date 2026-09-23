@@ -162,7 +162,7 @@
     (is (= {:model "z-ai/glm-5.3-flash"
             :reasoning_effort "low"
             :response_format {:type "json_object"}
-            :provider {:sort "price"
+            :provider {:sort "throughput"
                        :max_price {:prompt 0.15 :completion 0.50}
                        :require_parameters true}}
           (openrouter/structured-chat-completion-fields
@@ -330,7 +330,7 @@
   (testing "the cap is the reason the entry exists at its price"
     (doseq [resolve [card-models/resolve-model ocr-models/resolve-model]]
       (is (= {:model "z-ai/glm-5.3-flash"
-              :provider {:sort "price"
+              :provider {:sort "throughput"
                          :max_price {:prompt 0.15 :completion 0.50}}}
             (openrouter/model-fields (resolve "glm-5.3-flash"))))))
   (testing "the cap reaches the wire as max_price, not max-price"
