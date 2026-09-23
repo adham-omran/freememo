@@ -12,35 +12,39 @@
           !layout (atom (if saved-value "full" "content"))
           layout (e/watch !layout)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:class "label"})
-          (dom/text "Assistant panel height"))
-        (dom/select
-          (dom/props {:class "select" :value layout})
-          (dom/option
-            (dom/props {:value "content" :selected (= layout "content")})
-            (dom/text "Content area"))
-          (dom/option
-            (dom/props {:value "full" :selected (= layout "full")})
-            (dom/text "Full workspace"))
-          (let [change (dom/On "change" #(-> % .-target .-value) nil)
-                [token ?error] (e/Token change)]
-            (dom/props {:disabled (some? token)
-                        :aria-busy (some? token)
-                        :aria-invalid (some? ?error)})
-            (when (some? change)
-              (reset! !layout change))
-            (when token
-              (let [result (e/server
-                             (e/Offload
-                               #(settings/save-assistant-full-height
-                                  user-id (= change "full"))))]
-                (case result
-                  (if (:success result)
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (token))
-                    (token (:error result))))))))
+        (dom/props {:class "field setting-row"})
         (dom/div
-          (dom/props {:class "hint"})
-          (dom/text "Full workspace extends the assistant beside the card table in the Viewer."))))))
+          (dom/props {:class "setting-row__text"})
+          (dom/label
+          (dom/props {:class "label" :for "ai-assistant-height"})
+          (dom/text "Assistant panel height"))
+          (dom/div
+            (dom/props {:class "hint"})
+            (dom/text "Full workspace extends the assistant beside the card table in the Viewer.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:class "select" :id "ai-assistant-height" :value layout})
+            (dom/option
+              (dom/props {:value "content" :selected (= layout "content")})
+              (dom/text "Content area"))
+            (dom/option
+              (dom/props {:value "full" :selected (= layout "full")})
+              (dom/text "Full workspace"))
+            (let [change (dom/On "change" #(-> % .-target .-value) nil)
+                  [token ?error] (e/Token change)]
+              (dom/props {:disabled (some? token)
+                          :aria-busy (some? token)
+                          :aria-invalid (some? ?error)})
+              (when (some? change)
+                (reset! !layout change))
+              (when token
+                (let [result (e/server
+                               (e/Offload
+                                 #(settings/save-assistant-full-height
+                                    user-id (= change "full"))))]
+                  (case result
+                    (if (:success result)
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (token))
+                      (token (:error result)))))))))))))

@@ -955,6 +955,68 @@ html:has(> body > .app-shell) > body {
 }
 .ai-group__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
 
+/* Two-column setting rows: what the setting is on the left, its control on the
+   right. The label carries `for`, so clicking the words focuses the control. */
+.setting-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 280px);
+    column-gap: var(--sp-6);
+    align-items: center;
+    margin: 0;
+    padding: var(--sp-3) 0;
+    border-top: 1px solid var(--color-bg-hover);
+}
+.ai-group__heading + .setting-row,
+.ai-group__heading + .setting-rows > .setting-row:first-child,
+.card > .setting-row:first-of-type { border-top: none; }
+.setting-row--switch { grid-template-columns: minmax(0, 1fr) auto; }
+.setting-row__text .label { margin-bottom: 2px; font-weight: 600; color: var(--color-text-primary); }
+.setting-row__text .hint { margin-top: 2px; line-height: 1.45; }
+.setting-row__control {
+    display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2);
+    min-width: 0;
+}
+.setting-row__control .select { width: 100%; min-width: 0; }
+.setting-row__number {
+    width: 64px; font-size: 14px; padding: 6px 8px;
+    border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    background: var(--color-bg-input); color: var(--color-text-primary);
+}
+.setting-row__unit { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+.ai-group .settings-accordion { margin-top: var(--sp-3); }
+
+/* A checkbox drawn as a switch. It stays an <input type=checkbox> with
+   role=switch, so keyboard, form state and forms/Checkbox! work unchanged. */
+input[type="checkbox"].switch {
+    appearance: none;
+    position: relative; flex-shrink: 0;
+    width: 40px; height: 24px; margin: 0;
+    border-radius: 12px;
+    background: var(--color-text-hint);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+input[type="checkbox"].switch::before {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s;
+}
+input[type="checkbox"].switch:checked { background: var(--color-primary); }
+input[type="checkbox"].switch:checked::before { transform: translateX(16px); }
+input[type="checkbox"].switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7; }
+@media (prefers-reduced-motion: reduce) {
+    input[type="checkbox"].switch, input[type="checkbox"].switch::before { transition: none; }
+}
+
+@media (max-width: 640px) {
+    .setting-row { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); }
+    .setting-row--switch { grid-template-columns: minmax(0, 1fr) auto; }
+    .setting-row__control { justify-content: flex-start; }
+    .setting-row--switch .setting-row__control { justify-content: flex-end; }
+}
+
 @media (max-width: 640px) {
     .ai-level-cards { grid-template-columns: minmax(0, 1fr); }
     .ai-level-card { min-height: 0; }

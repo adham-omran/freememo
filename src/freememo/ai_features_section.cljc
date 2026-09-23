@@ -37,27 +37,32 @@
           !val (atom server-val)
           val (e/watch !val)]
       (dom/div
-        (dom/props {:class "field" :style {:margin-left "12px"}})
-        (dom/label (dom/props {:class "label"}) (dom/text label))
-        (dom/select
-          (dom/props {:value val :class "select"})
-          (e/for [id (e/diff-by identity card-model-ids)]
-            (dom/option (dom/props {:value id :selected (= id val)}) (dom/text (get card-label-of id id))))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !val change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-kg-model user-id step change-event)))]
-                (case r
-                  (if (:success r)
-                    ;; :settings-refresh re-reads the levels, so the group's
-                    ;; label turns Custom.
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for (str "ai-kg-model-" (name step))})
+            (dom/text label)))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value val :class "select" :id (str "ai-kg-model-" (name step))})
+            (e/for [id (e/diff-by identity card-model-ids)]
+              (dom/option (dom/props {:value id :selected (= id val)}) (dom/text (get card-label-of id id))))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !val change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-kg-model user-id step change-event)))]
+                  (case r
+                    (if (:success r)
+                      ;; :settings-refresh re-reads the levels, so the group's
+                      ;; label turns Custom.
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Field sub-components (split per the JVM 64KB method-limit convention) —
@@ -75,27 +80,26 @@
   [user-id credits-enabled? !llm-enabled llm-enabled]
   (e/client
     (dom/div
-      (dom/props {:class "field"})
-      (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+      (dom/props {:class "field setting-row setting-row--switch"})
+      (dom/div
+        (dom/props {:class "setting-row__text"})
+        (dom/label (dom/props {:class "label" :for "ai-enabled"}) (dom/text "Use AI features"))
+        (dom/div
+          (dom/props {:class "hint"})
+          (dom/text (if credits-enabled?
+                      "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Account tab."
+                      "Scanning, card generation, the assistant, quiz grading and the knowledge graph call OpenRouter, which needs an API key. Reading and Anki sync work without one."))))
+      (dom/div
+        (dom/props {:class "setting-row__control"})
         (e/for [[t {:keys [llm-enabled]}] (forms/Checkbox! :llm-enabled llm-enabled
-                                             :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"})]
+                  :id "ai-enabled" :class "switch" :role "switch")]
           (reset! !llm-enabled llm-enabled)
           (let [r (e/server (e/Offload #(settings/save-llm-enabled user-id llm-enabled)))]
             (case r
               (if (:success r)
                 (case (e/server (commands/bump! user-id :set-setting))
                   (t))
-                (t (:error r))))))
-        (dom/div
-          (dom/span
-            (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
-            (dom/text "Use AI features"))
-          (dom/div
-            (dom/props {:class "hint"})
-            (dom/text (if credits-enabled?
-                        "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Account tab."
-                        "Scanning, card generation, the assistant, quiz grading and the knowledge graph call OpenRouter, which needs an API key. Reading and Anki sync work without one."))))))))
+                (t (:error r))))))))))
 
 (e/defn ProviderKeyStatusField
   "Self-host mode's OpenRouter API-key status card. Credits mode has no
@@ -130,29 +134,33 @@
           !model (atom server-model)
           model (e/watch !model)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Card Model"))
-        (dom/select
-          (dom/props {:value model :class "select"})
-          (e/for [id (e/diff-by identity card-model-ids)]
-            (dom/option (dom/props {:value id :selected (= id model)}) (dom/text (get card-label-of id id))))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !model change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
-                (case r
-                  (if (:success r)
-                    ;; :settings-refresh re-reads the levels, so the group's
-                    ;; label turns Custom.
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Model used for flashcard generation."))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-card-model"}) (dom/text "Card model"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "The model that writes flashcards.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value model :class "select" :id "ai-card-model"})
+            (e/for [id (e/diff-by identity card-model-ids)]
+              (dom/option (dom/props {:value id :selected (= id model)}) (dom/text (get card-label-of id id))))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !model change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
+                  (case r
+                    (if (:success r)
+                      ;; :settings-refresh re-reads the levels, so the group's
+                      ;; label turns Custom.
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 (e/defn UseFactsForCardsField
   "Account default for using approved document facts during card generation."
@@ -162,14 +170,18 @@
           !on? (atom server-on?)
           on? (e/watch !on?)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
-                              :cursor "pointer"}})
+        (dom/props {:class "field setting-row setting-row--switch"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-use-facts"}) (dom/text "Use approved facts"))
+          (dom/div
+            (dom/props {:class "hint"})
+            (dom/text "When a document has approved facts, write cards from them. A document can override this.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
           (e/for [[t {:keys [use-facts]}]
                   (forms/Checkbox! :use-facts on?
-                    :style {:width "18px" :height "18px"
-                            :accent-color "var(--color-primary)"})]
+                    :id "ai-use-facts" :class "switch" :role "switch")]
             (reset! !on? use-facts)
             (let [r (e/server (e/Offload
                                 #(settings/save-use-facts-for-card-generation user-id use-facts)))]
@@ -177,15 +189,7 @@
                 (if (:success r)
                   (case (e/server (commands/bump! user-id :set-setting))
                     (t))
-                  (t (:error r))))))
-          (dom/div
-            (dom/span
-              (dom/props {:style {:font-size "14px" :font-weight "500"
-                                  :color "var(--color-text-primary)"}})
-              (dom/text "Use facts for card generation"))
-            (dom/div
-              (dom/props {:class "hint"})
-              (dom/text "When approved facts exist, generate cards from relevant facts. Each document can override this default."))))))))
+                  (t (:error r)))))))))))
 
 (e/defn CardQuizGradingField
   "Whether the Quiz grades CARD items with the LLM, or the learner rates them 1-4.
@@ -204,13 +208,19 @@
           !on? (atom server-on?)
           on? (e/watch !on?)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
-                              :cursor "pointer"}})
+        (dom/props {:class "field setting-row setting-row--switch"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-quiz-grading"}) (dom/text "Grade generated cards with AI"))
+          (dom/div
+            (dom/props {:class "hint"})
+            (dom/text (if credits-enabled?
+                          "Grades your answer against the card, which spends credits on each review. When off, you see the answer and rate it yourself."
+                          "Grades your answer against the card, one model call per review. When off, you see the answer and rate it yourself."))))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
           (e/for [[t {:keys [card-quiz-llm]}] (forms/Checkbox! :card-quiz-llm on?
-                                                :style {:width "18px" :height "18px"
-                                                        :accent-color "var(--color-primary)"})]
+                    :id "ai-quiz-grading" :class "switch" :role "switch")]
             (reset! !on? card-quiz-llm)
             (let [r (e/server (e/Offload #(settings/save-card-quiz-llm-grading
                                             user-id card-quiz-llm)))]
@@ -218,17 +228,7 @@
                 (if (:success r)
                   (case (e/server (commands/bump! user-id :set-setting))
                     (t))
-                  (t (:error r))))))
-          (dom/div
-            (dom/span
-              (dom/props {:style {:font-size "14px" :font-weight "500"
-                                  :color "var(--color-text-primary)"}})
-              (dom/text "Use LLM for Generated Cards in Quiz"))
-            (dom/div
-              (dom/props {:class "hint"})
-              (dom/text (if credits-enabled?
-                          "Cards are graded against their own answer, which spends credits per review. Off: reveal the answer and rate it yourself, Again to Easy."
-                          "Cards are graded against their own answer, one model call per review. Off: reveal the answer and rate it yourself, Again to Easy.")))))))))
+                  (t (:error r)))))))))))
 
 (e/defn AssistantModelField
   "Assistant model — Socratic reading-view chatbot. Same registry as card
@@ -239,43 +239,44 @@
           !assistant-model (atom server-assistant-model)
           assistant-model (e/watch !assistant-model)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Assistant Model"))
-        (dom/select
-          (dom/props {:value assistant-model :class "select"})
-          (e/for [id (e/diff-by identity card-model-ids)]
-            (dom/option (dom/props {:value id :selected (= id assistant-model)}) (dom/text (get card-label-of id id))))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !assistant-model change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-assistant-model user-id change-event)))]
-                (case r
-                  (if (:success r)
-                    ;; :settings-refresh re-reads the levels, so the group's
-                    ;; label turns Custom.
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Model used by the Socratic AI assistant in the reading view."))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-assistant-model"}) (dom/text "Assistant model"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "The model that answers in the reading assistant.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value assistant-model :class "select" :id "ai-assistant-model"})
+            (e/for [id (e/diff-by identity card-model-ids)]
+              (dom/option (dom/props {:value id :selected (= id assistant-model)}) (dom/text (get card-label-of id id))))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !assistant-model change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-assistant-model user-id change-event)))]
+                  (case r
+                    (if (:success r)
+                      ;; :settings-refresh re-reads the levels, so the group's
+                      ;; label turns Custom.
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 (e/defn KgModelsField
   "Knowledge-graph models — one KgModelField per KG pipeline step, rendered
-   from the step registry (settings/kg-model-step-choices). Same registry as
-   card generation; each defaults to Gemini 3 Flash."
+   from the step registry (settings/kg-model-step-choices), except :grade,
+   which Quiz grading owns. Same registry as card generation."
   [user-id card-model-ids card-label-of]
   (e/client
     (let [kg-steps (e/server (filterv (fn [[step _]] (not= step :grade))
                                (settings/kg-model-step-choices)))]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Knowledge-graph models"))
-        (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
-          (dom/text "The model for each step of building the knowledge graph. Answer grading is under Quiz."))
+        (dom/props {:class "setting-rows"})
         (e/for [pair (e/diff-by first kg-steps)]
           (let [[step label] pair]
             (KgModelField user-id step label card-model-ids card-label-of)))))))
@@ -291,32 +292,36 @@
           !reasoning (atom server-reasoning)
           reasoning (e/watch !reasoning)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Reasoning effort"))
-        (dom/select
-          (dom/props {:value reasoning :class "select"})
-          (dom/option (dom/props {:value "none"}) (dom/text "None"))
-          (dom/option (dom/props {:value "minimal"}) (dom/text "Minimal"))
-          (dom/option (dom/props {:value "low"}) (dom/text "Low"))
-          (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
-          (dom/option (dom/props {:value "high"}) (dom/text "High"))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !reasoning change-event))
-            (when t
-              (let [r (e/server (e/Offload #(if (= lane :assistant)
-                                              (settings/save-assistant-reasoning user-id change-event)
-                                              (settings/save-reasoning user-id change-event))))]
-                (case r
-                  (if (:success r)
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "More effort costs more and takes longer. GLM 5.3 Flash gives the same result for Low and High."))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for (str "ai-reasoning-" (name lane))}) (dom/text "Reasoning effort"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "More effort costs more and takes longer. GLM 5.3 Flash gives the same result for Low and High.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value reasoning :class "select" :id (str "ai-reasoning-" (name lane))})
+            (dom/option (dom/props {:value "none"}) (dom/text "None"))
+            (dom/option (dom/props {:value "minimal"}) (dom/text "Minimal"))
+            (dom/option (dom/props {:value "low"}) (dom/text "Low"))
+            (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
+            (dom/option (dom/props {:value "high"}) (dom/text "High"))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !reasoning change-event))
+              (when t
+                (let [r (e/server (e/Offload #(if (= lane :assistant)
+                                                (settings/save-assistant-reasoning user-id change-event)
+                                                (settings/save-reasoning user-id change-event))))]
+                  (case r
+                    (if (:success r)
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 (e/defn VerbosityField
   "Verbosity select for flashcard generation."
@@ -326,25 +331,29 @@
           !verbosity (atom server-verbosity)
           verbosity (e/watch !verbosity)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Detail level"))
-        (dom/select
-          (dom/props {:value verbosity :class "select"})
-          (dom/option (dom/props {:value "low"}) (dom/text "Low"))
-          (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
-          (dom/option (dom/props {:value "high"}) (dom/text "High"))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !verbosity change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-verbosity user-id change-event)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "How much detail generated cards carry. Only Claude Sonnet 5 uses this setting."))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-verbosity"}) (dom/text "Detail level"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "How much detail generated cards carry. Only Claude Sonnet 5 uses this setting.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value verbosity :class "select" :id "ai-verbosity"})
+            (dom/option (dom/props {:value "low"}) (dom/text "Low"))
+            (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
+            (dom/option (dom/props {:value "high"}) (dom/text "High"))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !verbosity change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-verbosity user-id change-event)))]
+                  (case r
+                    (if (:success r) (t) (t (:error r)))))))))))))
 
 (e/defn ScanDpiField
   "Scan-quality (DPI) used for Scan Page OCR — preset select (Low/Standard/High);
@@ -355,30 +364,34 @@
           !dpi (atom (str server-dpi))
           dpi (e/watch !dpi)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Scan Quality (DPI)"))
-        (dom/select
-          (dom/props {:value dpi :class "select"})
-          (dom/option (dom/props {:value "72"}) (dom/text "Low (72 DPI)"))
-          (dom/option (dom/props {:value "150"}) (dom/text "Standard (150 DPI)"))
-          (dom/option (dom/props {:value "300"}) (dom/text "High (300 DPI)"))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !dpi change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
-                (case r
-                  (if (:success r)
-                    ;; :settings-refresh re-reads the levels, so the group's
-                    ;; label turns Custom.
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-scan-dpi"}) (dom/text "Scan quality"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "Higher quality reads small print better. It takes longer and costs more.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value dpi :class "select" :id "ai-scan-dpi"})
+            (dom/option (dom/props {:value "72"}) (dom/text "Low (72 DPI)"))
+            (dom/option (dom/props {:value "150"}) (dom/text "Standard (150 DPI)"))
+            (dom/option (dom/props {:value "300"}) (dom/text "High (300 DPI)"))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !dpi change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
+                  (case r
+                    (if (:success r)
+                      ;; :settings-refresh re-reads the levels, so the group's
+                      ;; label turns Custom.
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 (e/defn TranscribeLanguageField
   "Spoken language forced on audio and video transcription, or auto-detect.
@@ -395,29 +408,33 @@
           !lang (atom server-lang)
           lang (e/watch !lang)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Transcription Language"))
-        (dom/select
-          (dom/props {:value lang :class "select"})
-          ;; tlang/options is .cljc, so these are CLIENT literals — the same
-          ;; shape as ScanDpiField above. Reading the list from the CLJ-only
-          ;; `settings` ns instead crashed the page: the peers emitted different
-          ;; frame shapes and the mismatch surfaced in runtime3/socket-transfer.
-          (e/for [[code label] (e/diff-by second tlang/options)]
-            (dom/option (dom/props {:value (or code "")}) (dom/text label)))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !lang change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-transcribe-language user-id change-event)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text (str "Auto-detect can pick the wrong language on short or quiet audio "
-                      "and then transcribe in it. Set the language explicitly if that happens.")))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-transcribe-language"}) (dom/text "Transcription language"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text (str "Auto-detect can pick the wrong language on short or quiet audio "
+                        "and then transcribe in it. Set the language explicitly if that happens."))))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value lang :class "select" :id "ai-transcribe-language"})
+            ;; tlang/options is .cljc, so these are CLIENT literals — the same
+            ;; shape as ScanDpiField above. Reading the list from the CLJ-only
+            ;; `settings` ns instead crashed the page: the peers emitted different
+            ;; frame shapes and the mismatch surfaced in runtime3/socket-transfer.
+            (e/for [[code label] (e/diff-by second tlang/options)]
+              (dom/option (dom/props {:value (or code "")}) (dom/text label)))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !lang change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-transcribe-language user-id change-event)))]
+                  (case r
+                    (if (:success r) (t) (t (:error r)))))))))))))
 
 (e/defn AssistantPdfContextField
   "Pages before AND after the current page the Socratic assistant reads
@@ -429,20 +446,22 @@
           !window (atom server-window)
           window (e/watch !window)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
-          (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
-            (dom/text "Assistant PDF context"))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-pdf-context"}) (dom/text "PDF context"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "Pages before and after the current page that the assistant reads, from 0 to 50.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
           ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
           ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
           ;; don't clobber the user's draft mid-edit), committed once on "change"
           ;; (blur); clamped to [0,50] client-side before saving so the field
           ;; snaps to the clamped value immediately, not just after a refresh.
           (dom/input
-            (dom/props {:type "number" :min "0" :max "50"
-                        :style {:width "56px" :font-size "13px" :padding "4px 6px"
-                                :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+            (dom/props {:type "number" :min "0" :max "50" :id "ai-pdf-context"
+                        :class "setting-row__number"})
             (when-not (dom/Focused?) (set! (.-value dom/node) (str window)))
             (let [committed (dom/On "change" #(-> % .-target .-value) nil)
                   [t _] (e/Token committed)]
@@ -455,10 +474,8 @@
                           r (e/server (e/Offload #(settings/save-assistant-pdf-window user-id clamped)))]
                       (case r
                         (if (:success r) (do (reset! !window clamped) (t)) (t (:error r))))))))))
-          (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-            (dom/text "pages")))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Pages before and after the current page the assistant reads (0-50)"))))))
+          (dom/span (dom/props {:class "setting-row__unit"})
+            (dom/text "pages each side")))))))
 
 (e/defn DefaultOcrModelField
   "Default OCR model (Scan Page) — a document may override it in Document
@@ -471,29 +488,33 @@
           !ocr-model (atom (or server-ocr-model ocr-models/default-id))
           ocr-model (e/watch !ocr-model)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Default OCR Model"))
-        (dom/select
-          (dom/props {:value ocr-model :class "select"})
-          (e/for [id (e/diff-by identity allowed-ids)]
-            (dom/option (dom/props {:value id :selected (= id ocr-model)}) (dom/text (get label-of id id))))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !ocr-model change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-ocr-model-default user-id change-event)))]
-                (case r
-                  (if (:success r)
-                    ;; :settings-refresh re-reads the levels, so the group's
-                    ;; label turns Custom.
-                    (case (e/server (commands/bump! user-id :set-setting))
-                      (t))
-                    (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Used for Scan Page unless a document overrides it in Document options"))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-ocr-model"}) (dom/text "Scanning model"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "Reads scanned pages. A document can use its own model in Document options.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value ocr-model :class "select" :id "ai-ocr-model"})
+            (e/for [id (e/diff-by identity allowed-ids)]
+              (dom/option (dom/props {:value id :selected (= id ocr-model)}) (dom/text (get label-of id id))))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !ocr-model change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-ocr-model-default user-id change-event)))]
+                  (case r
+                    (if (:success r)
+                      ;; :settings-refresh re-reads the levels, so the group's
+                      ;; label turns Custom.
+                      (case (e/server (commands/bump! user-id :set-setting))
+                        (t))
+                      (t (:error r)))))))))))))
 
 (e/defn CardGenRetriesField
   "Card generation retries — all attempts are billed (§5.4.5). Preset select
@@ -504,25 +525,29 @@
           !retries (atom (str server-retries))
           retries (e/watch !retries)]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Card Generation Retries"))
-        (dom/select
-          (dom/props {:value retries :class "select"})
-          (dom/option (dom/props {:value "1"}) (dom/text "1 (no retry)"))
-          (dom/option (dom/props {:value "2"}) (dom/text "2"))
-          (dom/option (dom/props {:value "3"}) (dom/text "3"))
-          ;; A1-fallback: Forms5 has no tracked select
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t ?error] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !retries change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-card-gen-max-retries user-id change-event)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "If the model returns the wrong number of cards, retry up to N times. Each attempt uses tokens and is billed."))))))
+        (dom/props {:class "field setting-row"})
+        (dom/div
+          (dom/props {:class "setting-row__text"})
+          (dom/label (dom/props {:class "label" :for "ai-card-retries"}) (dom/text "Retries"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "Try again when the model returns the wrong number of cards. Each attempt is billed.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/select
+            (dom/props {:value retries :class "select" :id "ai-card-retries"})
+            (dom/option (dom/props {:value "1"}) (dom/text "1 (no retry)"))
+            (dom/option (dom/props {:value "2"}) (dom/text "2"))
+            (dom/option (dom/props {:value "3"}) (dom/text "3"))
+            ;; A1-fallback: Forms5 has no tracked select
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [t ?error] (e/Token change-event)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when (some? change-event)
+                (reset! !retries change-event))
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-card-gen-max-retries user-id change-event)))]
+                  (case r
+                    (if (:success r) (t) (t (:error r)))))))))))))
 
 (e/defn PrePromptModeField
   "Pre-prompt strictness — how literally card generation reads the text typed in
@@ -544,17 +569,23 @@
                          (when (some? r)
                            (if (:success r) (t) (t (:error r)))))))]
       (dom/div
-        (dom/props {:class "field"})
-        (dom/label (dom/props {:class "label"}) (dom/text "Pre-prompt Strictness"))
+        (dom/props {:class "field setting-row"})
         (dom/div
-          (dom/props {:class "segmented" :role "radiogroup" :aria-label "Pre-prompt strictness"})
-          (seg/Segment mode ppm/guide (ppm/label ppm/guide) SaveMode)
-          (seg/Segment mode ppm/clarify (ppm/label ppm/clarify) SaveMode)
-          (seg/Segment mode ppm/verbatim (ppm/label ppm/verbatim) SaveMode))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text (ppm/description mode)))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Clarify and Verbatim generate a single card. Cloze has no question field, so it is bounded to the prompt's topic instead."))))))
+          (dom/props {:class "setting-row__text"})
+          ;; A div, not a label: a radiogroup is not a labelable element. The
+          ;; group carries its own aria-label.
+          (dom/div (dom/props {:class "label"}) (dom/text "Pre-prompt strictness"))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text (ppm/description mode)))
+          (dom/div (dom/props {:class "hint"})
+            (dom/text "Clarify and Verbatim generate a single card. Cloze has no question field, so it is bounded to the prompt's topic instead.")))
+        (dom/div
+          (dom/props {:class "setting-row__control"})
+          (dom/div
+            (dom/props {:class "segmented" :role "radiogroup" :aria-label "Pre-prompt strictness"})
+            (seg/Segment mode ppm/guide (ppm/label ppm/guide) SaveMode)
+            (seg/Segment mode ppm/clarify (ppm/label ppm/clarify) SaveMode)
+            (seg/Segment mode ppm/verbatim (ppm/label ppm/verbatim) SaveMode)))))))
 
 (e/defn SystemPromptField
   "Card Generation System Prompt — collapsed accordion. Controls the persona,
