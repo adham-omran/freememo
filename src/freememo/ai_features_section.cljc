@@ -479,8 +479,8 @@
             (dom/text "pages each side")))))))
 
 (e/defn DefaultOcrModelField
-  "Default OCR model (Scan Page) — a document may override it in Document
-   options."
+  "Default OCR model (Scan Page). Every document uses it; per-document overrides
+   were removed on 2026-09-23."
   [user-id]
   (e/client
     (let [server-ocr-model (e/server (settings/get-ocr-model-default user-id))
@@ -494,7 +494,7 @@
           (dom/props {:class "setting-row__text"})
           (dom/label (dom/props {:class "label" :for "ai-ocr-model"}) (dom/text "Scanning model"))
           (dom/div (dom/props {:class "hint"})
-            (dom/text "Reads scanned pages. A document can use its own model in Document options.")))
+            (dom/text "Reads scanned pages, in every document.")))
         (dom/div
           (dom/props {:class "setting-row__control"})
           (dom/select

@@ -1,20 +1,20 @@
 (ns freememo.document-options
   "\"Document options\" — per-content processing preferences (Forms5).
-   PDF: quick-text-extraction Style (Client = PDF.js / Remote = PDFBox), per-document
-   OCR model, and a per-item Custom Prompt. Other kinds: only the Custom Prompt.
-   Style/OCR persist per-PDF (keyed by root-topic-id); the Custom Prompt persists
+   PDF: quick-text-extraction Style (Client = PDF.js / Remote = PDFBox) and a
+   per-item Custom Prompt. Other kinds: only the Custom Prompt. The per-document
+   OCR and card-generation model pickers were removed on 2026-09-23: the AI level,
+   or the user's own Advanced setting, decides the model for every document.
+   Style persists per-PDF (keyed by root-topic-id); the Custom Prompt persists
    per-item (keyed by item-topic-id) via settings/save-custom-prompt and is appended
    to the effective system prompt at card-generation time, inherited nearest-first
    down the topic tree. Style persists via copy-text/save-style!* (bumps
    :settings-refresh so Copy-text re-reads)."
   (:require
-   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.icons :as icons]
    [freememo.copy-text :as copy]
-   [freememo.ocr-models :as ocr-models]
    [freememo.modal-shell :as modal]
    [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.bibliography-button :as bib-btn]
@@ -46,65 +46,10 @@
           (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
     (e/amb)))
 
-;; A1-fallback: Forms5 has no tracked select.
-(e/defn OcrModelSelect
-  "Per-document OCR model for \"Scan Page\". \"\" = use my global default.
-   Atom is the truth; the Form's :Parse reads (e/watch !model)."
-  [!model]
-  (let [current (e/watch !model)
-        options (into [["" "Use my default"]]
-                  (map (juxt :id :label) ocr-models/registry))]
-    (dom/div
-      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-        (dom/text "OCR model (Scan Page)"))
-      (dom/select
-        (dom/props {:class "input" :style {:width "100%"}})
-        (dom/On "change" (fn [e] (reset! !model (-> e .-target .-value))) nil)
-        (e/for [[v label] (e/diff-by first options)]
-          (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
-    (e/amb)))
-
-;; A1-fallback: Forms5 has no tracked select.
-(e/defn DocCardModelSelect
-  "Per-document card-generation model. \"\" = use my global default. Document-scoped
-   (keyed by root-topic-id), applies to every kind. Autosaves on change — sits in
-   the modal's shared section beside the priority stepper, which also autosaves,
-   so it is not part of the PDF/non-PDF Forms."
-  [user-id root-topic-id]
-  (e/client
-    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          current (e/server (do settings-refresh (e/Offload #(settings/get-card-model user-id root-topic-id))))
-          default-id (e/server (e/Offload #(settings/get-model user-id)))
-          choices (e/server (settings/card-model-choices))
-          ;; Name the global default that "" resolves to, minus the
-          ;; "Provider · " prefix (registry labels are "OpenAI · GPT-5.1").
-          default-name (str/trim (last (str/split (get (into {} choices) default-id default-id) #"·")))
-          options (into [["" (str "Use my default (" default-name ")")]] choices)
-          !model (atom (e/snapshot (or current "")))
-          model (e/watch !model)]
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-          (dom/text "Card generation model"))
-        (dom/select
-          (dom/props {:class "input" :style {:width "100%"}})
-          (e/for [[v label] (e/diff-by first options)]
-            (dom/option (dom/props {:value v :selected (= v model)}) (dom/text label)))
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !model change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-card-model user-id root-topic-id change-event)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))))))
-
 (e/defn DocLearningGoalField
   "Per-document learning goal (root-topic-id): the learner's reason for studying
    this document. Grounds the Socratic assistant's questions and card generation.
-   Document-scoped, autosaves on blur (textarea 'change') like DocCardModelSelect,
+   Document-scoped, autosaves on blur (textarea 'change'),
    so it sits outside the PDF/non-PDF Forms. Blank = no goal."
   [user-id root-topic-id]
   (e/client
@@ -296,19 +241,17 @@
           (PushToChildrenButton user-id bib-topic-id eff-source?))))))
 
 (e/defn DocumentOptionsDialog
-  "PDF: Forms5 Style select + OCR-model select + per-item Custom Prompt + Submit.
-   Style and OCR model are document-scoped (keyed by root-topic-id); the prompt is
-   item-scoped (keyed by item-topic-id), tracked via Input! and read back from the
-   merged form fields. A save that fails the prompt length check surfaces the
-   error and leaves style/OCR untouched."
-  [user-id root-topic-id item-topic-id current-style current-ocr-model current-prompt !open]
+  "PDF: Forms5 Style select + per-item Custom Prompt + Submit.
+   Style is document-scoped (keyed by root-topic-id); the prompt is item-scoped
+   (keyed by item-topic-id), tracked via Input! and read back from the merged form
+   fields. A save that fails the prompt length check surfaces the error and leaves
+   the style untouched."
+  [user-id root-topic-id item-topic-id current-style current-prompt !open]
   (let [!style (atom (e/snapshot (or current-style "ask")))
-        !ocr-model (atom (e/snapshot (or current-ocr-model "")))
         commits (forms/Form! {:prompt (or current-prompt "")}
                   (e/fn Fields [{:keys [prompt]}]
                     (e/amb
                       (StyleSelect !style)
-                      (OcrModelSelect !ocr-model)
                       (CustomPromptField prompt)
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
@@ -320,19 +263,15 @@
                             (dom/On "click" (fn [_] (reset! !open false)) nil))))))
                   :Parse (e/fn [merged _tempid]
                            [`SaveDocOptions {:style (e/watch !style)
-                                             :ocr-model (e/watch !ocr-model)
                                              :prompt (:prompt merged)}])
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [{:keys [style ocr-model prompt]} (nth cmd 1)
+      (let [{:keys [style prompt]} (nth cmd 1)
             r (e/server (e/Offload #(let [pr (settings/save-custom-prompt user-id item-topic-id prompt)]
                                       (if-not (:success pr)
                                         pr
-                                        (let [sr (copy/save-style!* user-id root-topic-id style)]
-                                          (if-not (:success sr)
-                                            sr
-                                            (settings/save-ocr-model user-id root-topic-id ocr-model)))))))]
+                                        (copy/save-style!* user-id root-topic-id style)))))]
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
@@ -431,9 +370,6 @@
           ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
           (BibliographySection user-id bib-topic-id !open !show-bib show-edit?)
 
-          ;; Card-generation model — document-scoped (root-topic-id), all kinds.
-          (DocCardModelSelect user-id root-topic-id)
-
           ;; Fact-aware generation — document-scoped override of the account default.
           (DocUseFactsSelect user-id root-topic-id)
 
@@ -444,9 +380,8 @@
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   current (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id root-topic-id)))
-                  current-ocr (e/server (do settings-refresh (e/Offload #(settings/get-ocr-model user-id root-topic-id))))
                   current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]
-              (DocumentOptionsDialog user-id root-topic-id item-topic-id current current-ocr current-prompt !open))
+              (DocumentOptionsDialog user-id root-topic-id item-topic-id current current-prompt !open))
             ;; non-PDF: per-item Custom Prompt only, in its own Forms5 form.
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]

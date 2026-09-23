@@ -216,9 +216,9 @@
              ;; to 1. Forced here, where opts is owned — never written back to
              ;; the user's saved count, which still governs plain Generate.
              one-card? (ppm/single-card? pre-prompt-mode card-type pre-prompt)
-             ;; Per-document model override; falls back to the user's global
-             ;; default when the document has no selection (effective-card-model).
-             model (settings/effective-card-model user-id root-topic-id)
+             ;; The Flashcards level's model, or the user's own setting. Documents
+             ;; do not override it (removed 2026-09-23).
+             model (settings/get-model user-id)
              ;; Per-document learning goal (root-topic); nil/"" leaves gen unchanged.
              goal (settings/get-learning-goal user-id root-topic-id)
              resolved (resolve-gen-content content user-id root-topic-id)]

@@ -443,7 +443,7 @@
               {:type ::foreign-chat-document :user-id user-id
                :root-topic-id root-topic-id})))
    (let [entry (or (card-models/resolve-model
-                     (settings/effective-assistant-model user-id root-topic-id))
+                     (settings/get-assistant-model user-id))
                    (card-models/resolve-model settings/assistant-default-model-id))
          web-search? (and web-search?
                           (card-models/web-search-supported? (:id entry)))
@@ -486,7 +486,7 @@
   (if-let [chat (db/get-assistant-chat user-id chat-id)]
     (let [root-topic-id (:assistant_chats/root_topic_id chat)
           entry (or (card-models/resolve-model
-                      (settings/effective-assistant-model user-id root-topic-id))
+                      (settings/get-assistant-model user-id))
                     (card-models/resolve-model settings/assistant-default-model-id))]
       (if (and web-search?
                (not (card-models/web-search-supported? (:id entry))))
@@ -506,9 +506,10 @@
   (Executors/newFixedThreadPool 4))
 
 (defn- model-entry
-  "Resolve the effective assistant model for one document."
-  [user-id root-topic-id]
-  (let [model-id (settings/effective-assistant-model user-id root-topic-id)]
+  "Resolve the user's assistant model. `root-topic-id` is unused since documents
+   stopped overriding the model (2026-09-23); callers still pass it."
+  [user-id _root-topic-id]
+  (let [model-id (settings/get-assistant-model user-id)]
     (or (card-models/resolve-model model-id)
       (card-models/resolve-model settings/assistant-default-model-id))))
 
@@ -893,7 +894,7 @@
                  (let [gen (cards/generate-basic-cards
                              {:content capture
                               :card-count (settings/get-card-count user-id)
-                              :model (settings/effective-card-model user-id root-topic-id)
+                              :model (settings/get-model user-id)
                               :user-id user-id
                               :topic-id page-topic-id})]
                    (if-not (:success gen)

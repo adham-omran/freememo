@@ -677,40 +677,11 @@
       (tel/error! {:id ::save-extract-style} e)
       {:success false :error "Failed to save extraction style"})))
 
-;; Per-document OCR model for "Scan Page". Value is an :id from
-;; freememo.ocr-models/registry. nil = unset → use the global default (get-model).
-(defn get-ocr-model [user-id doc-id]
-  (db/get-setting user-id (str "ocr_model_" doc-id)))
-
-(defn save-ocr-model [user-id doc-id model-id]
-  (try
-    (db/set-setting user-id (str "ocr_model_" doc-id) model-id)
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-ocr-model} e)
-      {:success false :error "Failed to save OCR model"})))
-
-;; Per-document card-generation model. Value is an :id from
-;; freememo.card-models/registry. nil/"" = unset → global default (get-model).
-(defn get-card-model
-  "Raw per-document card-model selection; nil/\"\" when unset."
-  [user-id root-topic-id]
-  (db/get-setting user-id (str "card_model_" root-topic-id)))
-
-(defn save-card-model
-  "Persist a per-document card-model selection.
-   Pre:  `value` is \"\" (clear the override) or a card-models :id (else rejected —
-         caller bug: pickers only emit allowed ids).
-   Post: setting stored, or {:success false :error}."
-  [user-id root-topic-id value]
-  (if (and (seq value) (not (card-models/resolve-model value)))
-    {:success false :error (str "Unknown card model: " value)}
-    (try
-      (db/set-setting user-id (str "card_model_" root-topic-id) value)
-      {:success true}
-      (catch Exception e
-        (tel/error! {:id ::save-card-model} e)
-        {:success false :error "Failed to save card model"}))))
+;; Per-document model overrides (card_model_<root>, assistant_model_<root>,
+;; ocr_model_<root>) were removed on 2026-09-23: a task's level, or the user's
+;; own Advanced setting, now decides the model for every document. Rows written
+;; before stay in the table, unread. account-import still remaps their keys, so
+;; an archive that carries them imports cleanly.
 
 (defn get-learning-goal
   "Per-document learning goal — the learner's reason for studying this document,
@@ -734,16 +705,6 @@
         (catch Exception e
           (tel/error! {:id ::save-learning-goal} e)
           {:success false :error "Failed to save learning goal"})))))
-
-(defn effective-card-model
-  "Card-model :id used when generating cards under `root-topic-id`: the
-   per-document selection when set and still allowed, else the user's global
-   default. Post: an :id present in (card-model-ids)."
-  [user-id root-topic-id]
-  (let [per-doc (card-models/effective-id (get-card-model user-id root-topic-id))]
-    (if (some #{per-doc} (card-model-ids))
-      per-doc
-      (get-model user-id))))
 
 (defn get-use-facts-for-document
   "Return the raw per-document override: true, false, or nil for the account default."
@@ -772,39 +733,8 @@
       per-doc
       (get-use-facts-for-card-generation user-id))))
 
-;; Per-document assistant-chat model. Value is an :id from card-models/registry.
-;; nil/"" = unset → global default (get-assistant-model).
-(defn get-assistant-model-for
-  "Raw per-document assistant-model selection; nil/\"\" when unset."
-  [user-id root-topic-id]
-  (db/get-setting user-id (str "assistant_model_" root-topic-id)))
-
-(defn save-assistant-model-for
-  "Persist a per-document assistant-model selection.
-   Pre:  `value` is \"\" (clear) or a card-models :id (else rejected — caller bug).
-   Post: setting stored, or {:success false :error}."
-  [user-id root-topic-id value]
-  (if (and (seq value) (not (card-models/resolve-model value)))
-    {:success false :error (str "Unknown assistant model: " value)}
-    (try
-      (db/set-setting user-id (str "assistant_model_" root-topic-id) value)
-      {:success true}
-      (catch Exception e
-        (tel/error! {:id ::save-assistant-model-for} e)
-        {:success false :error "Failed to save assistant model"}))))
-
-(defn effective-assistant-model
-  "Assistant-model :id for chatting about `root-topic-id`: the per-document
-   selection when set and still allowed, else the user's global assistant model.
-   Post: an :id present in (card-model-ids)."
-  [user-id root-topic-id]
-  (let [per-doc (card-models/effective-id (get-assistant-model-for user-id root-topic-id))]
-    (if (some #{per-doc} (card-model-ids))
-      per-doc
-      (get-assistant-model user-id))))
-
-;; User's global default OCR model (an :id from freememo.ocr-models/registry),
-;; used when a document has no per-document selection. nil = unset → registry default.
+;; User's global default OCR model (an :id from freememo.ocr-models/registry).
+;; nil = unset → registry default.
 (defn get-ocr-model-default
   "The Page scanning level's OCR model, else the user's own row, else nil."
   [user-id]

@@ -12,7 +12,6 @@
    Atoms arrive as positional parameters, never inside a map: Electric serializes
    a map as data and an atom is not serializable."
   (:require
-   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
@@ -21,8 +20,7 @@
    [freememo.typeahead :refer [Typeahead]]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
-   #?(:clj [freememo.assistant :as assistant])
-   #?(:clj [freememo.settings :as settings])))
+   #?(:clj [freememo.assistant :as assistant])))
 
 (e/defn ChatRow
   "`＋ New` plus the chat picker.
@@ -110,52 +108,6 @@
                     (token)
                     (token (:error result)))))))
           )))))
-
-(e/defn ModelRow
-  "Select the model for this document. An empty value uses the global default."
-  [user-id root-topic-id !model-revision]
-  (e/client
-    (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
-          default-id (e/server (settings/get-assistant-model user-id))
-          choices (e/server (settings/card-model-choices))
-          ;; Name the global default that "" resolves to, minus the
-          ;; "Provider · " prefix (registry labels are "Google · Gemini 3 Flash").
-          default-name (str/trim (last (str/split (get (into {} choices) default-id default-id) #"·")))
-          options (into [{:id "" :label (str "Use my default (" default-name ")")}]
-                    (map (fn [[v label]] {:id v :label label}))
-                    choices)
-          !amodel (atom (e/snapshot (or current "")))
-          amodel (e/watch !amodel)
-          selected (or amodel "")]
-      (dom/label
-        (dom/props {:class "assistant-panel__footer-field assistant-panel__footer-field--model"})
-        (dom/span (dom/text "Model"))
-        (dom/select
-          (dom/props {:class "assistant-panel__select"
-                      :value selected :aria-label "Assistant model"})
-          (e/for [option (e/diff-by :id options)]
-            (dom/option
-              (dom/props {:value (:id option)
-                          :selected (= (:id option) selected)})
-              (dom/text (:label option))))
-          (let [change (dom/On "change"
-                         (fn [event]
-                           (let [model-id (-> event .-target .-value)]
-                             (reset! !amodel model-id)
-                             model-id))
-                         nil)
-                [token _] (e/Token change)]
-            (dom/props {:disabled (some? token) :aria-busy (some? token)})
-            (when token
-              (let [result (e/server (e/Offload
-                                      #(settings/save-assistant-model-for
-                                         user-id root-topic-id change)))]
-                (case result
-                  (if (:success result)
-                    (case (reset! !model-revision (str (random-uuid)))
-                      (token))
-                    (token (:error result))))))
-            ))))))
 
 (e/defn WebSearchRow
   "Toggle native web search for the open chat or the next chat.

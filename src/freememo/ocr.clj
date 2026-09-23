@@ -89,15 +89,14 @@
       all)))
 
 (defn effective-ocr-model
-  "Registry entry to use for OCR of `topic-id` by `user-id`.
-   Precedence among allowed models: per-document selection → user's global default
-   → registry default → first allowed.
-   Pre:  user-id; topic-id may be nil (→ no per-doc lookup).
+  "Registry entry to use for OCR by `user-id`.
+   Precedence among allowed models: the Page scanning level's model, or the
+   user's own default (settings/get-ocr-model-default) → registry default →
+   first allowed. `_topic-id` is unused since documents stopped overriding the
+   model (2026-09-23); callers still pass it.
    Post: a non-nil registry entry (design invariant: allowed list is non-empty)."
-  [user-id topic-id]
-  (let [picked (models/effective-id
-                 (or (when topic-id (settings/get-ocr-model user-id topic-id))
-                     (settings/get-ocr-model-default user-id)))
+  [user-id _topic-id]
+  (let [picked (models/effective-id (settings/get-ocr-model-default user-id))
         allowed (allowed-ocr-model-ids)
         id (cond
              (some #{picked} allowed) picked

@@ -1,7 +1,8 @@
 (ns freememo.ocr-compare
   "OCR compare: pick which OCR models to run on the current page, show their
-   results side-by-side, and let the user adopt one (optionally remembering it as
-   the per-document model). Distinct from copy-text's A/B compare, which compares
+   results side-by-side, and let the user adopt one. It no longer remembers the
+   picked model for the document: per-document model overrides were removed on
+   2026-09-23. Distinct from copy-text's A/B compare, which compares
    text-extraction engines, not OCR models. Each candidate is a real billed OCR
    call, so a run spends credits per SELECTED model — opening the modal spends
    nothing, because the picker gates the fan-out."
@@ -17,7 +18,6 @@
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
 (defn compare-ocr-page!*
@@ -32,9 +32,8 @@
 (defn effective-ocr-model-id*
   "The OCR model :id a normal Scan Page on `root` would use right now — the id the
    compare picker pre-selects. `_settings-refresh` exists only to create the
-   reactive dependency: adopting a model with Remember bumps :set-setting (see
-   commit-and-remember!*), so without it the next open would pre-select the model
-   the user just replaced. Server-only.
+   reactive dependency: a level or Advanced change bumps :set-setting, and without
+   it the next open would pre-select the model the user just replaced. Server-only.
    Post: an :id present in (ocr/allowed-ocr-model-ids) — effective-ocr-model
    clamps every precedence branch to that list, so callers need no membership
    guard against the picker's own options."
@@ -42,19 +41,14 @@
   #?(:clj (:id (ocr/effective-ocr-model user-id root))
      :cljs nil))
 
-(defn commit-and-remember!*
-  "Save the chosen OCR text to the page; when `remember?`, also persist `model-id`
-   as the per-document OCR model. Bumps :refresh (and :settings-refresh when
-   remembering). Returns the save result. Server-only.
-   Pre: html is sanitized OCR output. Post: page content updated; per-doc model
-   set iff remember? and the save succeeded."
-  [user-id root page html model-id remember?]
+(defn commit-ocr-text!*
+  "Save the chosen OCR text to the page and bump :refresh. Returns the save
+   result. Server-only.
+   Pre: html is sanitized OCR output. Post: page content updated."
+  [user-id root page html]
   #?(:clj (let [r (page/save-page-html-impl root page html)]
             (when (:success r)
-              (commands/bump! user-id :compare-ocr)
-              (when remember?
-                (settings/save-ocr-model user-id root model-id)
-                (commands/bump! user-id :set-setting)))
+              (commands/bump! user-id :compare-ocr))
             r)
      :cljs nil))
 
@@ -107,22 +101,23 @@
                     (dom/text (or (:error result) "Failed")))))))))
 
 (e/defn UseOcrButton
-  "Adopt this model's text for the page; honors the shared Remember checkbox.
+  "Adopt this model's text for the page.
    Closes the modal on success; on failure surfaces the error and leaves the
-   modal open so the user isn't left wondering whether the save happened."
-  [user-id root page model-id result !remember !open]
+   modal open so the user isn't left wondering whether the save happened.
+   Each click yields a fresh value, so a retry after a failure is a new event."
+  [user-id root page result !open]
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-primary" :disabled (not (:success result))
                   :style {:width "100%"}})
       (dom/text "Use this")
-      (let [click (dom/On "click" (fn [_] @!remember) nil)
+      (let [click (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [t ?error] (e/Token click)]
         (when ?error
           (dom/div (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px" :margin-top "4px"}})
             (dom/text "Error: " ?error)))
         (when t
-          (let [r (e/server (e/Offload #(commit-and-remember!* user-id root page (:text result) model-id click)))]
+          (let [r (e/server (e/Offload #(commit-ocr-text!* user-id root page (:text result))))]
             (if (:success r)
               (do (reset! !open nil) (t))
               (t (:error r)))))))))
@@ -136,7 +131,7 @@
 
    ONE model is a legal selection, and such a run is NOT a second Scan Page:
    compare never writes, so the text reaches the page only through \"Use this\"
-   (commit-and-remember!*).
+   (commit-ocr-text!*).
 
    \"Change models\" returns to phase 1 with the ticks intact. The selection outlives
    the phase, the run's results do not — a paid run is lost by going back, by Close,
@@ -221,10 +216,8 @@
                               (str "Compare (" (count models-to-run) ")")))
                   (dom/On "click" (fn [_] (reset! !run {:models models-to-run})) nil)))))
 
-          ;; Phase 2 — run the selected models and show their results. !remember is
-          ;; scoped here because only this branch reads it, so going back to the
-          ;; picker starts the next run with the choice unmade.
-          (let [!remember (atom false)]
+          ;; Phase 2 — run the selected models and show their results.
+          (do
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px"}})
               (dom/div
@@ -241,20 +234,11 @@
                         (dom/props {:style {:flex "1" :min-width "260px" :display "flex" :flex-direction "column" :gap "8px"}})
                         (e/amb
                           (OcrResultColumn model-id result)
-                          (UseOcrButton user-id root-topic-id page model-id result !remember !open)))))
+                          (UseOcrButton user-id root-topic-id page result !open)))))
                   (e/fn [] (loading/Spinner "Running OCR…"))))
               (dom/div
                 (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                                    :justify-content "space-between"}})
-                ;; Lives in phase 2, not beside the picker: "the picked model" means
-                ;; the adopted result, and rendering it during selection collides
-                ;; with the other pick the user is making.
-                (dom/label
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
-                  (dom/input
-                    (dom/props {:type "checkbox"})
-                    (dom/On "change" (fn [e] (reset! !remember (-> e .-target .-checked))) nil))
-                  (dom/text "Remember the picked model for this PDF"))
+                                    :justify-content "flex-end"}})
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary"})
                   (dom/text "Change models")
@@ -287,7 +271,7 @@
           ;; bumps it, including DPI and prompts — and it is still the right channel:
           ;; no narrower one exists, the read is two get-settings, and an unrelated
           ;; write returns the same id, so work-skipping means nothing crosses the
-          ;; wire. Dropping the watch instead would leave a Remember adoption
+          ;; wire. Dropping the watch instead would leave a level change
           ;; pre-selecting the model it just replaced.
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           effective-model-id (e/server (effective-ocr-model-id* settings-refresh user-id root-topic-id))]

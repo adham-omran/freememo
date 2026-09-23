@@ -52,7 +52,7 @@
   [{:keys [at-open? mention-query active-reference-index reference-document-count refs
            sending? mode-entry web-search? web-search-supported? draft user-id active root-topic-id]}
    reference-documents !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
-   !pending-web-search? !model-revision !error]
+   !pending-web-search? !error]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
@@ -177,7 +177,6 @@
                   (dom/div
                     (dom/props {:class "assistant-panel__composer-controls"})
                     (rows/ModeRow user-id active mode-entry !pending-mode)
-                    (rows/ModelRow user-id root-topic-id !model-revision)
                     (rows/WebSearchRow user-id active web-search?
                       web-search-supported? !pending-web-search?))
                   ;; ONE always-mounted button whose command and look depend on

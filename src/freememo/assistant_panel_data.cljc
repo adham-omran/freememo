@@ -82,8 +82,7 @@
         (str (subs text 0 at) (subs text end))))))
 
 (e/defn AssistantPanelData
-  [user-id root-topic-id active details-run pending-mode pending-web-search?
-   model-revision]
+  [user-id root-topic-id active details-run pending-mode pending-web-search?]
   (e/client
     (let [assistant-rev
           (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
@@ -117,11 +116,10 @@
           (if active-chat
             (:web-search? active-chat)
             pending-web-search?)
-          model-state
-          (e/server [(settings/effective-assistant-model user-id root-topic-id)
-                     model-revision])
+          ;; The user's assistant model: the level's, or their own Advanced
+          ;; setting. Documents stopped overriding it on 2026-09-23.
           model-id
-          (first model-state)
+          (e/server (settings/get-assistant-model user-id))
           web-search-supported?
           (card-models/web-search-supported? model-id)]
       {:chat-options chat-options

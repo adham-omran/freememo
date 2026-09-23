@@ -72,11 +72,9 @@
           ;; stored preference through AssistantPanelData.
           !pending-web-search? (atom false)
           pending-web-search? (e/watch !pending-web-search?)
-          !model-revision (atom nil)
-          model-revision (e/watch !model-revision)
           data (panel-data/AssistantPanelData
                  user-id root-topic-id active details-run pending-mode
-                 pending-web-search? model-revision)
+                 pending-web-search?)
           chat-options (:chat-options data)
           mention-query (panel-data/mention-query draft)
           reference-documents
@@ -162,7 +160,7 @@
            :active active
            :root-topic-id root-topic-id}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !pending-web-search? !model-revision !error)
+          !pending-mode !pending-web-search? !error)
 
         ;; Diagnostics LAST, and wrapping nothing. This used to be
         ;; `(case (replace-state! …) (do … (dom/div …)))`, which put the whole
