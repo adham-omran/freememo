@@ -196,7 +196,7 @@
                     :usage {:cost 0.002}}]]
     (with-redefs [settings/get-openrouter-api-key (constantly "key")
                   settings/get-card-count (constantly 1)
-                  settings/get-model (constantly "gemini-3-flash")
+                  settings/get-model (constantly "gemini-3.8-flash")
                   settings/get-card-gen-max-retries (constantly 2)
                   settings/get-reasoning (constantly "low")
                   settings/get-verbosity (constantly "high")
@@ -222,7 +222,7 @@
                :pre-prompt-mode "clarify"
                :goal "Pass the exam"})))
       (is (= 2 @attempts))
-      (is (= [:cards.basic "gemini-3-flash" 0.003] @charged))
+      (is (= [:cards.basic "gemini-3.8-flash" 0.003] @charged))
       (doseq [request-body @request-bodies]
         (is (= {:type "json_object"} (:response_format request-body)))
         (is (true? (get-in request-body [:provider :require_parameters])))
@@ -261,7 +261,7 @@
             responses [(json-response :cards valid-value)]]
         (with-redefs [settings/get-openrouter-api-key (constantly "key")
                       settings/get-card-count (constantly 1)
-                      settings/get-model (constantly "gemini-3-flash")
+                      settings/get-model (constantly "gemini-3.8-flash")
                       settings/get-card-gen-max-retries (constantly 2)
                       settings/get-reasoning (constantly "low")
                       settings/get-verbosity (constantly "high")
@@ -288,7 +288,7 @@
     (testing (name lane)
       (with-redefs [settings/get-openrouter-api-key (constantly "key")
                     settings/get-card-count (constantly 1)
-                    settings/get-model (constantly "gemini-3-flash")
+                    settings/get-model (constantly "gemini-3.8-flash")
                     settings/get-card-gen-max-retries (constantly 1)
                     settings/get-reasoning (constantly "low")
                     settings/get-verbosity (constantly "high")
@@ -383,7 +383,7 @@
     (testing (name lane)
       (with-redefs [settings/get-openrouter-api-key (constantly "key")
                     settings/get-card-count (constantly 1)
-                    settings/get-model (constantly "gemini-3-flash")
+                    settings/get-model (constantly "gemini-3.8-flash")
                     settings/get-card-gen-max-retries (constantly 1)
                     settings/get-reasoning (constantly "low")
                     settings/get-verbosity (constantly "high")

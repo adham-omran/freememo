@@ -138,25 +138,28 @@
             (openrouter/chat-completion-fields entry
               {:reasoning_effort "low" :verbosity "high" :temperature 0.2})))))
   (testing "unsupported optional parameters are omitted"
-    (let [entry (card-models/resolve-model "claude-haiku-4.5")]
-      (is (= {:model "anthropic/claude-haiku-4.5"}
+    ;; No current entry lacks both, so the entry is a literal. Claude Haiku 4.5
+    ;; was the registry's example until it retired on 2026-09-23.
+    (let [entry {:id "json-only" :openrouter-model "example/json-only"
+                 :supported-parameters #{:response_format}}]
+      (is (= {:model "example/json-only"}
             (openrouter/chat-completion-fields entry
               {:reasoning_effort "low" :verbosity "high"})))))
   (testing "a text-only request gets no structured fields"
     (let [fields (openrouter/chat-completion-fields
-                   (card-models/resolve-model "gpt-5.1")
+                   (card-models/resolve-model "gpt-6-sol")
                    {:reasoning_effort "low"})]
       (is (not (contains? fields :response_format)))
       (is (not (get-in fields [:provider :require_parameters]))))))
 
 (deftest structured-chat-fields-require-json-compatible-routes
   (testing "an unpinned model gets JSON mode and parameter-compatible routing"
-    (is (= {:model "google/gemini-3-flash-preview"
+    (is (= {:model "openai/gpt-6-sol"
             :reasoning_effort "low"
             :response_format {:type "json_object"}
             :provider {:require_parameters true}}
           (openrouter/structured-chat-completion-fields
-            (card-models/resolve-model "gemini-3-flash")
+            (card-models/resolve-model "gpt-6-sol")
             {:reasoning_effort "low" :verbosity "high"}))))
   (testing "the GLM provider routing is merged, not replaced"
     (is (= {:model "z-ai/glm-5.3-flash"
@@ -182,8 +185,7 @@
     ;; with HTTP 400 `Reasoning is mandatory for this endpoint and cannot be
     ;; disabled`. The Settings dropdown offers None, so before this every card
     ;; generation, KG step and assistant turn by such a user failed.
-    (doseq [id ["gemini-3.6-flash" "gemini-3.8-flash" "gemini-3.5-flash-lite"
-                "glm-5.3-flash"]]
+    (doseq [id ["gemini-3.8-flash" "gemini-3.5-flash-lite" "glm-5.3-flash"]]
       (let [fields (openrouter/chat-completion-fields
                      (card-models/resolve-model id) {:reasoning_effort "none"})]
         (is (not (contains? fields :reasoning_effort)) id))))
@@ -195,15 +197,14 @@
   (testing "an entry that permits none keeps it"
     ;; Ling 3.0 Flash measured 2026-09-11: "none" returns HTTP 200 with 0
     ;; reasoning tokens on both of its providers, DeepInfra and Novita.
-    (doseq [id ["gpt-5.1" "gemini-3-flash" "claude-sonnet-5" "ling-3.0-flash"]]
+    (doseq [id ["gpt-6-sol" "gpt-6-luna" "claude-sonnet-5" "ling-3.0-flash"]]
       (is (= "none" (:reasoning_effort
                       (openrouter/chat-completion-fields
                         (card-models/resolve-model id)
                         {:reasoning_effort "none"})))
         id)))
   (testing "the flagged set is the one measured against OpenRouter"
-    (is (= #{"gemini-3.6-flash" "gemini-3.8-flash" "gemini-3.5-flash-lite"
-             "glm-5.3-flash"}
+    (is (= #{"gemini-3.8-flash" "gemini-3.5-flash-lite" "glm-5.3-flash"}
           (into #{} (comp (filter :reasoning-mandatory?) (map :id))
             card-models/registry))))
   (testing "the OCR registry carries no reasoning flag, because its lane sends
@@ -211,15 +212,29 @@
             alone. A flag there would be metadata no code reads."
     (is (empty? (filter :reasoning-mandatory? ocr-models/registry)))))
 
+(deftest the-models-retired-on-2026-09-23-leave-the-picker-and-redirect
+  (let [moves {"gpt-5.1" "gpt-6-sol" "gpt-5.6-luna" "gpt-6-luna"
+               "gpt-5.6-terra" "gpt-6-sol" "gpt-5.6-sol" "gpt-6-sol"
+               "gemini-3-flash" "gemini-3.8-flash" "gemini-3.6-flash" "gemini-3.8-flash"
+               "claude-haiku-4.5" "claude-sonnet-5"}]
+    (doseq [[old new] moves]
+      (is (not (some #{old} (map :id card-models/registry))) old)
+      (is (= new (:id (card-models/resolve-model old))) old))
+    (testing "every successor is a current entry, so no redirect needs a second hop"
+      (doseq [{:keys [superseded-by]} card-models/retired]
+        (is (some #{superseded-by} (map :id card-models/registry)) superseded-by)))))
+
 (deftest a-retired-id-resolves-to-its-successor-in-both-registries
   (testing "the retired id is gone from the picker"
     (doseq [registry [card-models/registry ocr-models/registry]]
       (is (not (some #{"gemini-3.5-flash"} (map :id registry))))))
   (testing "a stored selection runs the successor, not a fallback default"
-    (doseq [[resolve effective] [[card-models/resolve-model card-models/effective-id]
-                                 [ocr-models/resolve-model ocr-models/effective-id]]]
-      (is (= "gemini-3.6-flash" (effective "gemini-3.5-flash")))
-      (is (= "google/gemini-3.6-flash"
+    ;; The registries are independent (D1-B): the card lane retired Gemini 3.6
+    ;; Flash on 2026-09-23 and the OCR lane did not, so the successors differ.
+    (doseq [[resolve effective successor] [[card-models/resolve-model card-models/effective-id "gemini-3.8-flash"]
+                                           [ocr-models/resolve-model ocr-models/effective-id "gemini-3.6-flash"]]]
+      (is (= successor (effective "gemini-3.5-flash")))
+      (is (= (str "google/" successor)
             (:openrouter-model (resolve "gemini-3.5-flash"))))))
   (testing "an unknown id still resolves to nil, for the caller to reject"
     (is (nil? (card-models/resolve-model "no-such-model")))
@@ -282,7 +297,7 @@
   (is (= {} (openrouter/stream-chunk-metadata {:choices []}))))
 
 (deftest native-web-search-support-and-sources-are-explicit
-  (is (card-models/native-web-search-supported? "gpt-5.1"))
+  (is (card-models/native-web-search-supported? "gpt-6-sol"))
   (is (not (card-models/native-web-search-supported? "glm-5.3-flash")))
   (is (every? (comp card-models/web-search-supported? :id)
         card-models/registry))

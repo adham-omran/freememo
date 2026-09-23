@@ -78,8 +78,9 @@
 
 (def kg-default-model-id
   "Default model for every knowledge-graph step when the user has no saved
-   selection (product decision — a cheap, fast model for high-volume KG work)."
-  "gemini-3-flash")
+   selection (product decision — a cheap, fast model for high-volume KG work).
+   Gemini 3 Flash until it retired from the picker on 2026-09-23."
+  "gemini-3.8-flash")
 
 (def kg-model-steps
   "Per-step KG model knobs — the single source for both resolution
@@ -274,8 +275,9 @@
 
 (def assistant-default-model-id
   "Default assistant model when the user has no saved selection. Distinct from
-   card-models/default-id (the card-generation default) by product decision."
-  "gemini-3-flash")
+   card-models/default-id (the card-generation default) by product decision.
+   Gemini 3 Flash until it retired from the picker on 2026-09-23."
+  "gemini-3.8-flash")
 
 (defn get-assistant-model
   "Effective assistant-chat model :id for a user: the Reading assistant level's

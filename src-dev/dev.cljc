@@ -35,7 +35,7 @@
 
 ;; Mirror src-prod/prod.cljc so dev with `:credits-enabled? true` uses the same
 ;; default card model. Bump together with src-prod.
-#?(:clj (reset! config/!prod-model "gpt-5.1"))
+#?(:clj (reset! config/!prod-model "gpt-6-sol"))
 
 (comment (-main)) ; repl entrypoint
 

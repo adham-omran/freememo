@@ -33,26 +33,11 @@
    the field for these entries. Every other unsupported effort value is clamped
    by OpenRouter instead of refused (measured), so this flag covers the whole
    failure and no per-value table is needed."
-  [{:id "gpt-5.1"
-    :label "OpenAI · GPT-5.1"
-    :openrouter-model "openai/gpt-5.1"
-    :supported-parameters json-and-reasoning-parameters}
-   {:id "gpt-5.6-luna"
-    :label "OpenAI · GPT-5.6 Luna"
-    :openrouter-model "openai/gpt-5.6-luna"
-    :supported-parameters json-and-reasoning-parameters}
-   {:id "gpt-5.6-terra"
-    :label "OpenAI · GPT-5.6 Terra"
-    :openrouter-model "openai/gpt-5.6-terra"
-    :supported-parameters json-and-reasoning-parameters}
-   {:id "gpt-5.6-sol"
-    :label "OpenAI · GPT-5.6 Sol"
-    :openrouter-model "openai/gpt-5.6-sol"
-    :supported-parameters json-and-reasoning-parameters}
-   ;; GPT-6 Sol and Luna, added 2026-09-23. On OpenRouter that day Sol cost
+  [;; GPT-6 Sol and Luna, added 2026-09-23. On OpenRouter that day Sol cost
    ;; $2 / $10 per million tokens, the same as GPT-5.6 Sol, and Luna cost
-   ;; $0.10 / $0.50, half of GPT-5.6 Luna. Neither is marked as a successor in
-   ;; `retired`, because the vendor statement could not be read (HTTP 403).
+   ;; $0.10 / $0.50, half of GPT-5.6 Luna. The GPT-5.x entries in `retired`
+   ;; redirect here by product decision (2026-09-23), not because the vendor
+   ;; names GPT-6 their successor: that statement could not be read (HTTP 403).
    ;; Both accepted `openrouter:web_search` with engine "native" on 2026-09-23.
    {:id "gpt-6-sol"
     :label "OpenAI · GPT-6 Sol"
@@ -62,21 +47,9 @@
     :label "OpenAI · GPT-6 Luna"
     :openrouter-model "openai/gpt-6-luna"
     :supported-parameters json-and-reasoning-parameters}
-   {:id "gemini-3-flash"
-    :label "Google · Gemini 3 Flash"
-    :openrouter-model "google/gemini-3-flash-preview"
-    :supported-parameters json-and-reasoning-parameters}
-   {:id "gemini-3.6-flash"
-    :label "Google · Gemini 3.6 Flash"
-    :openrouter-model "google/gemini-3.6-flash"
-    :supported-parameters json-and-reasoning-parameters
-    :reasoning-mandatory? true}
-   ;; Same OpenRouter price as Gemini 3.6 Flash — $0.75 / $3.75 per million —
-   ;; and Google states no replacement relationship between any two 3.x Flash
-   ;; models, so this is a sibling entry and not a supersession: 3.6 and the
-   ;; Gemini 3 Flash Preview that OCR defaults to both stay. The method is
-   ;; plans/model-supersession-and-benchmark-review-2026-09-02.md: a route has a
-   ;; replacement only when the vendor or OpenRouter states one.
+   ;; $0.75 / $3.75 per million tokens. Gemini 3.6 Flash and Gemini 3 Flash
+   ;; Preview were retired from the picker on 2026-09-23 and redirect here (see
+   ;; `retired`).
    ;;
    ;; It is also the SLOWEST of the three at that price. OpenRouter p50 over a
    ;; 30-minute window on 2026-09-08, traffic-weighted across endpoints: 3.8 is
@@ -94,10 +67,6 @@
     :openrouter-model "google/gemini-3.5-flash-lite"
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true}
-   {:id "claude-haiku-4.5"
-    :label "Anthropic · Claude Haiku 4.5"
-    :openrouter-model "anthropic/claude-haiku-4.5"
-    :supported-parameters #{:response_format}}
    {:id "claude-sonnet-5"
     :label "Anthropic · Claude Sonnet 5"
     :openrouter-model "anthropic/claude-sonnet-5"
@@ -193,7 +162,32 @@
    going through `resolve-model` cannot call the retired model by accident."
   [{:id "gemini-3.5-flash"
     :label "Google · Gemini 3.5 Flash"
-    :superseded-by "gemini-3.6-flash"}])
+    ;; Pointed at 3.6 until 3.6 itself retired. effective-id takes one hop,
+    ;; so a retired successor must be followed by hand here.
+    :superseded-by "gemini-3.8-flash"}
+   ;; Removed from the picker on 2026-09-23 by product decision. Each points
+   ;; at the nearest current model of its vendor and tier.
+   {:id "gpt-5.1"
+    :label "OpenAI · GPT-5.1"
+    :superseded-by "gpt-6-sol"}
+   {:id "gpt-5.6-luna"
+    :label "OpenAI · GPT-5.6 Luna"
+    :superseded-by "gpt-6-luna"}
+   {:id "gpt-5.6-terra"
+    :label "OpenAI · GPT-5.6 Terra"
+    :superseded-by "gpt-6-sol"}
+   {:id "gpt-5.6-sol"
+    :label "OpenAI · GPT-5.6 Sol"
+    :superseded-by "gpt-6-sol"}
+   {:id "gemini-3-flash"
+    :label "Google · Gemini 3 Flash"
+    :superseded-by "gemini-3.8-flash"}
+   {:id "gemini-3.6-flash"
+    :label "Google · Gemini 3.6 Flash"
+    :superseded-by "gemini-3.8-flash"}
+   {:id "claude-haiku-4.5"
+    :label "Anthropic · Claude Haiku 4.5"
+    :superseded-by "claude-sonnet-5"}])
 
 (def ^:private supersessions
   (into {} (map (juxt :id :superseded-by)) retired))
@@ -208,8 +202,8 @@
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod
-   pin applies. Matches the current !prod-model value."
-  "gpt-5.1")
+   pin applies. Matches the current !prod-model value, and the Best level."
+  "gpt-6-sol")
 
 (def ^:private by-id
   (into {} (map (juxt :id identity)) registry))
@@ -228,17 +222,10 @@
   "Assistant models that accept OpenRouter's native web-search tool.
    This is an allow-list because OpenRouter rejects the tool for models that do
    not support it. Keep it with the user-selectable model catalog."
-  #{"gpt-5.1"
-    "gpt-5.6-luna"
-    "gpt-5.6-terra"
-    "gpt-5.6-sol"
-    "gpt-6-sol"
+  #{"gpt-6-sol"
     "gpt-6-luna"
-    "gemini-3-flash"
-    "gemini-3.6-flash"
     "gemini-3.8-flash"
     "gemini-3.5-flash-lite"
-    "claude-haiku-4.5"
     "claude-sonnet-5"})
 
 (defn native-web-search-supported?
