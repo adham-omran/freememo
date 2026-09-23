@@ -345,18 +345,6 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
                       ON topics USING GIN (content_text gin_trgm_ops)"])
 
-  ;; Capture dedupe. Index the DIGEST, never the text — a btree row cannot
-  ;; exceed about 2704 bytes and `content_text` routinely does, which is the
-  ;; same reason `uq_flashcards_question` indexes `md5(question)`.
-  ;;
-  ;; Scoped by source_id rather than user_id: the question a capture asks is
-  ;; "does this user already hold this page's content under this URL", and
-  ;; `sources` is where the URL lives. That also keeps the index selective —
-  ;; one source has a handful of topics, one user has tens of thousands.
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_source_content_digest
-                      ON topics (source_id, md5(content_text))
-                      WHERE source_id IS NOT NULL AND content_text IS NOT NULL"])
-
   ;; Learn-queue preview. GENERATED, not written by the app, for the reason
   ;; `neoreader_highlights.quote_hash` is: the derivation belongs beside the
   ;; column it reads, where the two cannot drift.
@@ -910,6 +898,23 @@
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS
                        source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_source ON topics(source_id)"])
+
+  ;; Capture dedupe. Index the DIGEST, never the text — a btree row cannot
+  ;; exceed about 2704 bytes and `content_text` routinely does, which is the
+  ;; same reason `uq_flashcards_question` indexes `md5(question)`.
+  ;;
+  ;; Scoped by source_id rather than user_id: the question a capture asks is
+  ;; "does this user already hold this page's content under this URL", and
+  ;; `sources` is where the URL lives. That also keeps the index selective —
+  ;; one source has a handful of topics, one user has tens of thousands.
+  ;;
+  ;; It lives here, not beside `content_text` in setup-schema-topics!, because
+  ;; the ALTER just above adds `source_id`. setup-schema-topics! runs before
+  ;; this fn, so on a fresh database the index failed there with
+  ;; `column "source_id" does not exist`.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_source_content_digest
+                      ON topics (source_id, md5(content_text))
+                      WHERE source_id IS NOT NULL AND content_text IS NOT NULL"])
 
   ;; Backfill sources from legacy topics.source_url (idempotent — only runs
   ;; on rows where source_url IS NOT NULL AND source_id IS NULL).
