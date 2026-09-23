@@ -78,7 +78,8 @@
 (defn- debit-with-retry!
   "Debit a precomputed `cost` IQD — total (never throws). Retries the debit up to
    3 attempts with short backoff, logging :warn ::credit-debit-retry per failure.
-   `ledger` is the db/debit-credits! annotation {:endpoint :model :attempts}.
+   `ledger` is the db/debit-credits! annotation {:endpoint :model :attempts},
+   built by `ledger-annotation`.
    Returns `cost` on success, or nil after exhaustion. Exhaustion logs
    ::credit-charge-failed with `fail-data` (the inputs needed to reconcile the
    charge by hand) and triggers the alert email when SMTP is configured.
@@ -114,17 +115,30 @@
       (tel/error! {:id ::credit-charge-failed :data fail-data} e)
       nil)))
 
+(defn ledger-annotation
+  "The db/debit-credits! annotation for one AI charge.
+   Pre:  endpoint is a keyword; `tokens` is a seq of token maps keyed as
+         openrouter/token-keys, one per billed completion, or nil when the
+         caller knows none.
+   Post: {:endpoint str :model model :attempts v}. :attempts is nil when
+         `tokens` is empty, so the row stores NULL token counts rather than 0."
+  [endpoint model tokens]
+  {:endpoint (name endpoint) :model model :attempts (not-empty (vec tokens))})
+
 (defn record-cost-charge!
-  "Debit credits for a completed OCR action billed from a provider-reported USD
+  "Debit credits for a completed AI action billed from a provider-reported USD
    cost (OpenRouter usage.cost) — total (never throws). No-op when credits are
    disabled. Cost is ceil(usd × fx × markup) via charge-iqd-from-usd, then
    debited with retry. Returns charged IQD (long), or nil when disabled OR all
-   debit attempts failed. `model` is the registry id (for the ledger row)."
-  [user-id endpoint model usd]
+   debit attempts failed. `model` is the registry id (for the ledger row).
+   `tokens` is one openrouter/usage-tokens map per billed completion; the
+   ledger row stores their sums and count. It is required so that no caller
+   drops the counts by omission — pass nil only when none are known."
+  [user-id endpoint model usd tokens]
   (when (config/credits-enabled?)
     (debit-with-retry! user-id endpoint model
       (charge-iqd-from-usd user-id usd)
-      {:endpoint (name endpoint) :model model :attempts nil}
+      (ledger-annotation endpoint model tokens)
       {:user-id user-id :endpoint endpoint :model model :usd usd})))
 
 ;; ── Purchase (§5.5) ──

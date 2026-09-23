@@ -225,6 +225,29 @@
   ([api-key body] (chat-completion! api-key body nil))
   ([api-key body ctx] (ok-body (post! api-key "/chat/completions" body ctx))))
 
+(def token-keys
+  "The token counts `usage-tokens` reads, named as the billing ledger
+   (db/debit-credits!) and assistant_runs name them."
+  [:input-tokens :cached-tokens :output-tokens :reasoning-tokens])
+
+(defn usage-tokens
+  "Token counts from one OpenRouter `usage` object — the :usage of a chat or
+   transcription body, or of a streaming chunk.
+   Pre:  usage is a parsed usage map, or nil.
+   Post: a map over `token-keys` holding only the counts the provider reported.
+         A missing count stays absent, so a caller never records zero for
+         unknown."
+  [usage]
+  (let [prompt-details (:prompt_tokens_details usage)
+        completion-details (:completion_tokens_details usage)
+        reasoning (or (:reasoning_tokens usage) (:reasoning_tokens completion-details))]
+    (cond-> {}
+      (some? (:prompt_tokens usage)) (assoc :input-tokens (:prompt_tokens usage))
+      (some? (:completion_tokens usage)) (assoc :output-tokens (:completion_tokens usage))
+      (some? reasoning) (assoc :reasoning-tokens reasoning)
+      (some? (:cached_tokens prompt-details))
+      (assoc :cached-tokens (:cached_tokens prompt-details)))))
+
 (defn stream-chunk-metadata
   "Normalize provider facts carried by one OpenRouter streaming chunk.
    Pre: chunk is a parsed SSE JSON object. Post: a map containing only reported
@@ -232,20 +255,12 @@
   [chunk]
   (let [usage (:usage chunk)
         prompt-details (:prompt_tokens_details usage)
-        completion-details (:completion_tokens_details usage)
         router (:openrouter_metadata chunk)]
-    (cond-> {}
+    (cond-> (usage-tokens usage)
       (:id chunk) (assoc :generation-id (:id chunk))
       (:model chunk) (assoc :resolved-model (:model chunk))
       (or (:provider chunk) (:provider_name router))
       (assoc :provider-name (or (:provider chunk) (:provider_name router)))
-      (some? (:prompt_tokens usage)) (assoc :input-tokens (:prompt_tokens usage))
-      (some? (:completion_tokens usage)) (assoc :output-tokens (:completion_tokens usage))
-      (some? (or (:reasoning_tokens usage) (:reasoning_tokens completion-details)))
-      (assoc :reasoning-tokens
-        (or (:reasoning_tokens usage) (:reasoning_tokens completion-details)))
-      (some? (:cached_tokens prompt-details))
-      (assoc :cached-tokens (:cached_tokens prompt-details))
       (some? (:cache_write_tokens prompt-details))
       (assoc :cache-write-tokens (:cache_write_tokens prompt-details))
       (some? (get-in usage [:server_tool_use :web_search_requests]))

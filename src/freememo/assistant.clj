@@ -537,10 +537,12 @@
               (recur remaining))))))))
 
 (defn- charge-run!
-  "Record one provider-reported run charge in the independent billing ledger."
+  "Record one provider-reported run charge in the independent billing ledger.
+   `metadata` carries the run's token counts under openrouter/token-keys."
   [user-id endpoint model-id metadata]
   (when-some [cost (:cost-usd metadata)]
-    (credits/record-cost-charge! user-id endpoint model-id (double cost))))
+    (credits/record-cost-charge! user-id endpoint model-id (double cost)
+      [(select-keys metadata openrouter/token-keys)])))
 
 (defn- execute-provider-run!
   "Drain one provider stream and settle its durable answer or checkpoint.

@@ -302,6 +302,20 @@
                    :completion_tokens_details {:reasoning_tokens 9}}})))
   (is (= {} (openrouter/stream-chunk-metadata {:choices []}))))
 
+(deftest usage-tokens-reads-every-openrouter-count
+  (testing "a full usage object"
+    (is (= {:input-tokens 1200 :cached-tokens 1024
+            :output-tokens 300 :reasoning-tokens 120}
+          (openrouter/usage-tokens
+            {:prompt_tokens 1200 :completion_tokens 300 :cost 0.004
+             :prompt_tokens_details {:cached_tokens 1024}
+             :completion_tokens_details {:reasoning_tokens 120}}))))
+  (testing "an unreported count stays absent, never zero"
+    (is (= {:input-tokens 10 :output-tokens 0}
+          (openrouter/usage-tokens {:prompt_tokens 10 :completion_tokens 0})))
+    (is (= {} (openrouter/usage-tokens {:cost 0.01})))
+    (is (= {} (openrouter/usage-tokens nil)))))
+
 (deftest native-web-search-support-and-sources-are-explicit
   (is (card-models/native-web-search-supported? "gpt-6-sol"))
   (is (not (card-models/native-web-search-supported? "glm-5.3-flash")))

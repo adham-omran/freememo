@@ -321,7 +321,8 @@
         ;; with the lane + user, which the card lane alone was omitting.
         ctx {:feature :cards :user-id user-id}]
     (loop [attempt 1
-           cost-acc 0.0]
+           cost-acc 0.0
+           tokens-acc []]
       (let [t-start (System/nanoTime)
             body (openrouter/chat-completion! api-key
                    (assoc model-fields
@@ -335,6 +336,7 @@
             ;; cost money, and §5.4.5 bills the sum of a successful generation's
             ;; attempts.
             cost-acc' (+ cost-acc (double (or cost-usd 0)))
+            tokens-acc' (conj tokens-acc (openrouter/usage-tokens usage))
             _ (tel/log! {:level :info :id ::cards-completion
                          :data {:user-id user-id
                                 :model (:id entry)
@@ -360,7 +362,7 @@
                          :data {:attempt attempt :user-id user-id
                                 :cause (:type (ex-data failure))}}
                 "No usable response, retrying")
-            (recur (inc attempt) cost-acc'))
+            (recur (inc attempt) cost-acc' tokens-acc'))
 
           failure
           (unusable-response-result! failure user-id endpoint-tag attempt cost-acc')
@@ -372,7 +374,8 @@
           ;; Its return is the charged IQD — reflecting the summed retry cost,
           ;; nil when credits are disabled or the debit failed — surfaced as
           ;; :cost-credits for the compare UI (the normal gen path ignores it).
-          (let [charged (credits/record-cost-charge! user-id endpoint-tag (:id entry) cost-acc')]
+          (let [charged (credits/record-cost-charge! user-id endpoint-tag (:id entry)
+                          cost-acc' tokens-acc')]
             {:success true :cards cards :cost-credits charged})
 
           (>= attempt max-retries)
@@ -396,7 +399,7 @@
                          :data {:attempt attempt :expected card-count :got actual-count
                                 :invalid-card-count invalid-card-count}}
                 "Card contract mismatch, retrying")
-            (recur (inc attempt) cost-acc')))))))
+            (recur (inc attempt) cost-acc' tokens-acc')))))))
 
 (defn- generate-cards-wrapped
   "Shared try/catch wrapper around generate-cards* for one card type.

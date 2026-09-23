@@ -109,7 +109,8 @@
         ;; Charge the completed call even when it returned no usable text — the
         ;; provider billed us either way. Total: a billing failure logs
         ;; ::credit-charge-failed and returns nil, never discarding the result.
-        (credits/record-cost-charge! user-id :transcribe model cost-usd)
+        (credits/record-cost-charge! user-id :transcribe model cost-usd
+          [(openrouter/usage-tokens (:usage body))])
         (if (str/blank? text)
           {:success false :error "Transcription returned no text"}
           (do (db/update-topic-content! topic-id (text->html text))

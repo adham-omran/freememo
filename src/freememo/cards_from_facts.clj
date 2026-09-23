@@ -70,12 +70,12 @@
     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :fact-select)
           prompt (cards/load-prompt-template "select-facts.md")
           _ (when-not prompt (throw (ex-info "Failed to load select-facts prompt" {})))
-          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt
-                                  (llm-json/write-prompt-input
-                                    {:passage passage
-                                     :facts (mapv fact->select-row candidate-facts)})
-                                  :fact_ids :vector
-                                  {:feature :fact-select :user-id user-id})
+          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt
+                                         (llm-json/write-prompt-input
+                                           {:passage passage
+                                            :facts (mapv fact->select-row candidate-facts)})
+                                         :fact_ids :vector
+                                         {:feature :fact-select :user-id user-id})
           by-id (into {} (map (juxt :id identity)) candidate-facts)
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))
           dropped-ids (into [] (remove by-id) model-ids)
@@ -88,7 +88,7 @@
           ;; sort preserves the model's order within each weak/mastered band.
           mastery (db/get-fact-mastery user-id (mapv :id relevant))
           prioritized (vec (sort-by #(if (weak-fact? (get mastery (:id %))) 0 1) relevant))]
-      (credits/record-cost-charge! user-id :cards.fact-select (:id entry) cost)
+      (credits/record-cost-charge! user-id :cards.fact-select (:id entry) cost tokens)
       (tel/log! {:level :info :id ::fact-selection-complete
                  :data {:user-id user-id
                         :root-topic-id root-topic-id

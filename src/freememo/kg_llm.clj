@@ -79,7 +79,7 @@
   2)
 
 (defn chat!
-  "One structured completion operation. Returns {:parsed value :cost usd}.
+  "One structured completion operation. Returns {:parsed value :cost usd :tokens v}.
 
    Retries once when the response yields no usable content — empty, truncated,
    no choices, or unparseable (openrouter/retryable-cause? is the single owner of
@@ -92,8 +92,9 @@
    observability signals (see freememo.openrouter/post!).
    Pre:  api-key configured; model-fields is the :model-fields of
          resolve-model+gate!; root-key is a keyword; root-type is :map or :vector.
-   Post: {:parsed collection :cost usd} where :cost is summed across attempts —
-         callers bill that sum. Throws the final attempt's exception on failure
+   Post: {:parsed collection :cost usd :tokens [m …]} where :cost is summed
+         across attempts and :tokens holds one openrouter/usage-tokens map per
+         attempt — callers bill both. Throws the final attempt's exception on failure
          (ex-data carries :type); a failed call bills nothing, and the spend it
          absorbed is logged here as ::unbilled-spend. Callers cannot report that
          cost — the exception carries no accumulator, and kg-questions' skipped
@@ -103,13 +104,15 @@
    (chat! api-key model-fields system-prompt user-content root-key root-type nil))
   ([api-key model-fields system-prompt user-content root-key root-type observability]
    (loop [attempt 1
-          cost-acc 0.0]
+          cost-acc 0.0
+          tokens-acc []]
      (let [body (openrouter/chat-completion! api-key
                   (assoc model-fields
                     :messages [{:role "system" :content system-prompt}
                                {:role "user" :content user-content}])
                   observability)
            cost-acc' (+ cost-acc (double (or (-> body :usage :cost) 0)))
+           tokens-acc' (conj tokens-acc (openrouter/usage-tokens (:usage body)))
            result (try {:parsed (llm-json/parse-response-field
                                   (openrouter/message-content body observability)
                                   root-key root-type)}
@@ -126,5 +129,5 @@
          ;; A cancelled run must not spend the retry — blocking HTTP never
          ;; notices the interrupt, so this loop checks like every other.
          (do (interrupt-checkpoint!)
-             (recur (inc attempt) cost-acc'))
-         (assoc result :cost cost-acc'))))))
+             (recur (inc attempt) cost-acc' tokens-acc'))
+         (assoc result :cost cost-acc' :tokens tokens-acc'))))))

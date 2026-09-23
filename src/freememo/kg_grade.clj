@@ -119,8 +119,8 @@
           prompt (cards/load-prompt-template "kg-grade.md")
           gctx {:feature :kg-grade :user-id user-id}
           ;; unusable output is retried inside llm/chat!; :cost covers both attempts
-          {:keys [parsed cost]} (llm/chat! api-key model-fields prompt payload
-                                  :grade :map gctx)
+          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt payload
+                                         :grade :map gctx)
           grade (validate-grade! parsed)
           verdict (:verdict grade)
           linked-ids (into #{} (map :id) facts)
@@ -129,7 +129,7 @@
           matched (into []
                     (comp (map str) (keep #(lexicon (str/lower-case %))) (distinct))
                     (:matched-keywords grade))]
-      (credits/record-cost-charge! user-id :kg.grade (:id entry) cost)
+      (credits/record-cost-charge! user-id :kg.grade (:id entry) cost tokens)
       {:success true
        :verdict verdict
        :explanation (:explanation grade)
@@ -165,12 +165,12 @@
                      :answer user-answer})
           tmpl (or (cards/load-prompt-template "card-grade.md")
                  (throw (ex-info "Failed to load card-grade prompt" {})))
-          {:keys [parsed cost]} (llm/chat! api-key model-fields tmpl payload
-                                  :grade :map
-                                  {:feature :card-grade :user-id user-id})
+          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields tmpl payload
+                                         :grade :map
+                                         {:feature :card-grade :user-id user-id})
           grade (validate-grade! parsed)
           verdict (:verdict grade)]
-      (credits/record-cost-charge! user-id :cards.grade (:id entry) cost)
+      (credits/record-cost-charge! user-id :cards.grade (:id entry) cost tokens)
       {:success true
        :verdict verdict
        :explanation (:explanation grade)

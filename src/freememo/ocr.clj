@@ -228,7 +228,8 @@
       ;; Bill the completed action from OpenRouter's reported cost (no-op in
       ;; self-host). Total: a billing failure logs ::credit-charge-failed and
       ;; returns nil, never discarding a successful OCR result.
-      (credits/record-cost-charge! user-id :ocr.extract (:id entry) cost-usd)
+      (credits/record-cost-charge! user-id :ocr.extract (:id entry) cost-usd
+        [(openrouter/usage-tokens usage)])
       {:success true :text text})
     (catch Exception e
       ;; Out-of-credits refusal is a normal business outcome, not a pipeline

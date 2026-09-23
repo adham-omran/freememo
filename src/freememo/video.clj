@@ -281,8 +281,9 @@
    correctly.
 
    Post: {:segments [{:start-ms :end-ms :text}] :language name-or-nil
-          :cost-usd n-or-nil} in chunk-local time. The cost is per CHUNK; the
-   caller sums it and charges once for the whole run."
+          :cost-usd n-or-nil :tokens m} in chunk-local time. The cost and the
+   openrouter/usage-tokens map are per CHUNK; the caller sums them and charges
+   once for the whole run."
   [api-key user-id ^bytes audio-bytes language]
   (let [body (openrouter/transcription! api-key
                (cond-> {:input_audio {:data (.encodeToString (Base64/getEncoder) audio-bytes)
@@ -294,6 +295,7 @@
                {:feature :transcription :user-id user-id})]
     {:language (:language body)
      :cost-usd (get-in body [:usage :cost])
+     :tokens (openrouter/usage-tokens (:usage body))
      :segments (->> (:segments body)
                  (keep (fn [s]
                          (let [text (some-> (:text s) str/trim)]
@@ -432,6 +434,7 @@
                                   ;; a 43-minute video is twelve calls, and twelve
                                   ;; rows for one action would bury the ledger.
                                   !cost (atom 0.0)
+                                  !tokens (atom [])
                                   results
                                   (try
                                     (mapv (fn [[i ^java.io.File f]]
@@ -439,6 +442,7 @@
                                                       (java.nio.file.Files/readAllBytes (.toPath f))
                                                       @!lang)]
                                               (swap! !cost + (or (:cost-usd r) 0))
+                                              (swap! !tokens conj (:tokens r))
                                               (when (nil? @!lang)
                                                 (reset! !lang (get iso-639-1
                                                                 (some-> (:language r) str/lower-case))))
@@ -451,7 +455,7 @@
                                       ;; a no-op run writes no ledger row.
                                       (when (pos? @!cost)
                                         (credits/record-cost-charge!
-                                          user-id :transcribe model @!cost))))
+                                          user-id :transcribe model @!cost @!tokens))))
                                   segments (vec (apply concat results))
                                   ordered (map-indexed (fn [i s] (assoc s :ord i)) segments)]
                               (db/replace-video-transcript! topic-id ordered)

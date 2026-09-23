@@ -198,7 +198,8 @@
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
                   llm/chat!
-                  (fn [& _args] {:parsed generated-form :cost 0.25})
+                  (fn [& _args] {:parsed generated-form :cost 0.25
+                                 :tokens [{:input-tokens 900 :output-tokens 40}]})
                   cards/load-prompt-template (fn [_name] "prompt")
                   curriculum/save-draft-form!
                   (fn [& _args] (swap! saves inc) 103)
@@ -207,7 +208,8 @@
       (let [result (exam/generate-form! user-id subject "standard" 70)]
         (is (false? (:success result)))
         (is (zero? @saves))
-        (is (= [[user-id :curriculum.exam-form "test-model" 0.25]]
+        (is (= [[user-id :curriculum.exam-form "test-model" 0.25
+                 [{:input-tokens 900 :output-tokens 40}]]]
               @charges))))))
 
 (deftest failed-grade-validation-records-the-completed-model-cost
@@ -220,13 +222,15 @@
                   llm/resolve-model+gate!
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
-                  llm/chat! (fn [& _args] {:parsed {} :cost 0.5})
+                  llm/chat! (fn [& _args] {:parsed {} :cost 0.5
+                                           :tokens [{:input-tokens 700}]})
                   cards/load-prompt-template (fn [_name] "prompt")
                   credits/record-cost-charge!
                   (fn [& args] (swap! charges conj args) 24)]
       (let [result (exam/grade-sitting! user-id sitting-id)]
         (is (false? (:success result)))
-        (is (= [[user-id :curriculum.exam-grade "test-model" 0.5]]
+        (is (= [[user-id :curriculum.exam-grade "test-model" 0.5
+                 [{:input-tokens 700}]]]
               @charges))))))
 
 (deftest cancelled-generation-does-not-save-a-late-form

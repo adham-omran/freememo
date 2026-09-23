@@ -150,7 +150,7 @@
                                                      user-id object-ids
                                                      discriminators-per-member)
                                     payload (mapv #(cluster->prompt-row discriminators %) batch)
-                                    {:keys [parsed cost]}
+                                    {:keys [parsed cost tokens]}
                                     (llm/chat! api-key model-fields prompt
                                       (llm-json/write-prompt-input {:clusters payload})
                                       :questions :vector
@@ -158,7 +158,7 @@
                                     {:keys [persisted covered]}
                                     (persist-questions! user-id "atomic" (:id entry)
                                       targets 1 parsed)]
-                                {:persisted persisted :cost cost
+                                {:persisted persisted :cost cost :tokens tokens
                                  :omitted (count (remove covered targets))})
                               (catch InterruptedException e (throw e))
                               (catch Exception e
@@ -170,9 +170,11 @@
                                  :omitted (count targets)}))))
                     batches)
           total-cost (reduce + 0.0 (map :cost results))
+          total-tokens (into [] (mapcat :tokens) results)
           questions (reduce + (map :persisted results))
           omitted (reduce + (map :omitted results))]
-      (credits/record-cost-charge! user-id :kg.questions (:id entry) total-cost)
+      (credits/record-cost-charge! user-id :kg.questions (:id entry) total-cost
+        total-tokens)
       ;; :omitted is logged because it is the run's non-idempotent remainder — those
       ;; facts come back as targets, and cost money again, every time this runs.
       (tel/log! {:level :info :id ::atomic-generation-complete
@@ -220,19 +222,19 @@
                :message "Needs at least two facts touching this entity."})
           {:success true :questions 0})
         (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
-              {:keys [parsed cost]} (llm/chat! api-key model-fields
-                                      (cards/load-prompt-template "kg-question-synthesis.md")
-                                      (llm-json/write-prompt-input
-                                        {:entity entity-label
-                                         :facts (mapv fact->prompt-row facts)})
-                                      :questions :vector
-                                      {:feature :kg-synthesis :user-id user-id})
+              {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                                             (cards/load-prompt-template "kg-question-synthesis.md")
+                                             (llm-json/write-prompt-input
+                                               {:entity entity-label
+                                                :facts (mapv fact->prompt-row facts)})
+                                             :questions :vector
+                                             {:feature :kg-synthesis :user-id user-id})
               valid-ids (into #{} (map :id) facts)
               ;; Same validator as atomic; only the fact-count floor differs — a
               ;; synthesis question that draws on one fact is an atomic question.
               {:keys [persisted]} (persist-questions! user-id "synthesis" (:id entry)
                                     valid-ids 2 parsed)]
-          (credits/record-cost-charge! user-id :kg.questions (:id entry) cost)
+          (credits/record-cost-charge! user-id :kg.questions (:id entry) cost tokens)
           (commands/bump! user-id :generate-questions)
           (toasts/push! user-id
             {:level :success

@@ -171,15 +171,21 @@
       (let [attempts (atom 0)
             responses [{:choices [{:message {:content invalid-content}
                                    :finish_reason "stop"}]
-                        :usage {:cost 0.001}}
+                        :usage {:cost 0.001 :prompt_tokens 100 :completion_tokens 5}}
                        {:choices [{:message {:content (json-response root-key valid-value)}
                                    :finish_reason "stop"}]
-                        :usage {:cost 0.002}}]]
+                        :usage {:cost 0.002 :prompt_tokens 110 :completion_tokens 30
+                                :prompt_tokens_details {:cached_tokens 64}
+                                :completion_tokens_details {:reasoning_tokens 12}}}]]
         (with-redefs [openrouter/chat-completion!
                       (fn [_ _ _]
                         (let [index (swap! attempts inc)]
                           (nth responses (dec index))))]
-          (is (= {:parsed valid-value :cost 0.003}
+          (is (= {:parsed valid-value
+                  :cost 0.003
+                  :tokens [{:input-tokens 100 :output-tokens 5}
+                           {:input-tokens 110 :output-tokens 30
+                            :cached-tokens 64 :reasoning-tokens 12}]}
                 (kg-llm/chat! "key" {:model "model"} "prompt" "{}"
                   root-key root-type)))
           (is (= 2 @attempts)))))))
@@ -190,10 +196,12 @@
         request-bodies (atom [])
         responses [{:choices [{:message {:content "{:cards []}"}
                               :finish_reason "stop"}]
-                    :usage {:cost 0.001}}
+                    :usage {:cost 0.001 :prompt_tokens 400 :completion_tokens 9}}
                    {:choices [{:message {:content "{\"cards\":[{\"q\":\"What?\",\"a\":\"This.\"}]}"}
                               :finish_reason "stop"}]
-                    :usage {:cost 0.002}}]]
+                    :usage {:cost 0.002 :prompt_tokens 400 :completion_tokens 20
+                            :prompt_tokens_details {:cached_tokens 256}
+                            :completion_tokens_details {:reasoning_tokens 8}}}]]
     (with-redefs [settings/get-openrouter-api-key (constantly "key")
                   settings/get-card-count (constantly 1)
                   settings/get-model (constantly "gemini-3.8-flash")
@@ -203,8 +211,8 @@
                   settings/get-effective-system-prompt (fn [_ _] "System")
                   credits/check-cost-billed-balance! (constantly {:ok true})
                   credits/record-cost-charge!
-                  (fn [_ endpoint model-id cost]
-                    (reset! charged [endpoint model-id cost])
+                  (fn [_ endpoint model-id cost tokens]
+                    (reset! charged [endpoint model-id cost tokens])
                     3.0)
                   openrouter/chat-completion!
                   (fn [_ request-body _]
@@ -222,7 +230,11 @@
                :pre-prompt-mode "clarify"
                :goal "Pass the exam"})))
       (is (= 2 @attempts))
-      (is (= [:cards.basic "gemini-3.8-flash" 0.003] @charged))
+      (is (= [:cards.basic "gemini-3.8-flash" 0.003
+              [{:input-tokens 400 :output-tokens 9}
+               {:input-tokens 400 :output-tokens 20
+                :cached-tokens 256 :reasoning-tokens 8}]]
+            @charged))
       (doseq [request-body @request-bodies]
         (is (= {:type "json_object"} (:response_format request-body)))
         (is (true? (get-in request-body [:provider :require_parameters])))

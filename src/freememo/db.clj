@@ -3694,12 +3694,31 @@
   (jdbc/execute! ds
     ["UPDATE users SET markup_override = ? WHERE id = ?" markup user-id]))
 
-(defn- sum-tokens [maps k] (reduce + 0 (map #(or (k %) 0) maps)))
+(defn- sum-tokens
+  "Sum of `k` over the token maps that report it, or nil when none does."
+  [maps k]
+  (when-some [vs (seq (keep k maps))]
+    (reduce + vs)))
+
+(defn debit-token-columns
+  "The token columns of one debit ledger row.
+   Pre:  attempts is a seq of token maps keyed as openrouter/token-keys, one
+         per billed completion, or nil when the caller knows none.
+   Post: {:input_tokens :cached_tokens :output_tokens :reasoning_tokens
+          :attempts}. A count no attempt reported is nil (NULL), never 0 —
+         zero is a real count. :attempts is nil when attempts is empty."
+  [attempts]
+  {:input_tokens (sum-tokens attempts :input-tokens)
+   :cached_tokens (sum-tokens attempts :cached-tokens)
+   :output_tokens (sum-tokens attempts :output-tokens)
+   :reasoning_tokens (sum-tokens attempts :reasoning-tokens)
+   :attempts (when (seq attempts) (count attempts))})
 
 (defn debit-credits!
   "Atomic debit for a completed AI action. Locks the balance row, subtracts
    `cost-iqd`, appends a 'debit' ledger row with summed token detail.
-   Pre:  cost-iqd >= 0; attempts is a non-empty seq of token maps.
+   Pre:  cost-iqd >= 0; attempts is a seq of token maps (see
+         debit-token-columns), or nil.
    Post: balance decreased by cost-iqd (may go negative — the gate allows one
          overshoot); ledger row written. Returns the new balance.
    Invariant: between SELECT FOR UPDATE and UPDATE no other tx touches the row."
@@ -3713,17 +3732,13 @@
         ["UPDATE users SET credit_balance_iqd = ? WHERE id = ?" new-bal user-id])
       (jdbc/execute! tx
         (sql/format {:insert-into :credit_transactions
-                     :values [{:user_id user-id
-                               :kind "debit"
-                               :amount_iqd (- cost-iqd)
-                               :balance_after new-bal
-                               :endpoint endpoint
-                               :model model
-                               :input_tokens (sum-tokens attempts :prompt-tokens)
-                               :cached_tokens (sum-tokens attempts :cached-tokens)
-                               :output_tokens (sum-tokens attempts :completion-tokens)
-                               :reasoning_tokens (sum-tokens attempts :reasoning-tokens)
-                               :attempts (count attempts)}]}))
+                     :values [(merge {:user_id user-id
+                                      :kind "debit"
+                                      :amount_iqd (- cost-iqd)
+                                      :balance_after new-bal
+                                      :endpoint endpoint
+                                      :model model}
+                               (debit-token-columns attempts))]}))
       new-bal)))
 
 (defn credit-account!

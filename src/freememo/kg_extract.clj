@@ -109,14 +109,14 @@
   (some-> (digest/digest-of template) (subs 0 12)))
 
 (defn- extract-page-triples!
-  "Pass 1 for one page. Post: {:triples [...] :cost usd}; triples are
-   shape-valid and tagged :page. Unusable model output is retried inside
-   llm/chat!, whose :cost covers both attempts."
+  "Pass 1 for one page. Post: {:triples [...] :cost usd :tokens [m …]};
+   triples are shape-valid and tagged :page. Unusable model output is retried
+   inside llm/chat!, whose :cost and :tokens cover both attempts."
   [api-key model-fields prompt page-number page-text]
-  (let [{:keys [parsed cost]} (llm/chat! api-key model-fields prompt
-                                (llm-json/write-prompt-input {:page-text page-text})
-                                :triples :vector
-                                {:feature :kg-extract})
+  (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt
+                                       (llm-json/write-prompt-input {:page-text page-text})
+                                       :triples :vector
+                                       {:feature :kg-extract})
         triples (if (sequential? parsed) parsed [])
         valid (filterv valid-triple? triples)]
     (when (< (count valid) (count triples))
@@ -125,7 +125,8 @@
                         :dropped (- (count triples) (count valid))}}
         "Dropped shape-invalid triples from extraction output"))
     {:triples (mapv #(assoc % :page page-number) valid)
-     :cost cost}))
+     :cost cost
+     :tokens tokens}))
 
 (def attempt-cap
   "How many times one page's extraction may fail on unchanged text before this
@@ -180,8 +181,9 @@
 
    Pre : `page-state` carries :page_topic_id, :page_number, :content_text and the
          :digest of that text.
-   Post: {:cost usd :extracted true} or {:cost usd :failed true}. `:cost` is what
-         the provider charged whether or not the write succeeded — a lost write
+   Post: {:cost usd :tokens [m …] :extracted true}, or the same with :failed
+         true. `:cost` and `:tokens` are what the provider charged whether or
+         not the write succeeded — a lost write
          does not un-bill the call. Exactly one extraction row is written either
          way, so the page is never left unaccounted."
   [api-key model-fields prompt ctx page-state]
@@ -193,14 +195,14 @@
                   (catch Exception e {:kind :failed :error e}))]
     (case (:kind outcome)
       :extracted
-      (let [{:keys [triples cost]} (:result outcome)]
+      (let [{:keys [triples cost tokens]} (:result outcome)]
         (try
           (db/record-page-extraction!
             (assoc ctx
               :page-topic-id (:page_topic_id page-state)
               :content-digest (:digest page-state)
               :triples triples))
-          {:cost cost :extracted true}
+          {:cost cost :tokens tokens :extracted true}
           (catch InterruptedException e (throw e))
           (catch Exception e
             (tel/log! {:level :warn :id ::page-staging-failed
@@ -209,7 +211,7 @@
                               :error (ex-message e)}}
               "Extracted a page but could not stage it; the page will be retried")
             (record-failure-quietly! ctx page-state e)
-            {:cost cost :failed true})))
+            {:cost cost :tokens tokens :failed true})))
 
       :failed
       (do
@@ -258,7 +260,8 @@
   "Pass 2. Distinct labels → {lower-label entity-id}, creating rows for new.
    Labels without trigram candidates skip the LLM. A failed/invalid LLM
    decision degrades to new (a duplicate entity is reviewable later; a wrong
-   merge is not). Post: every input label has an id; :cost is the LLM spend."
+   merge is not). Post: every input label has an id; :cost is the LLM spend and
+   :tokens its usage-tokens maps, one per completion."
   [api-key model-fields user-id labels]
   (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
         by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
@@ -270,16 +273,16 @@
                              (when-let [cs (seq (get candidates-by-label label))]
                                [label (mapv #(select-keys % [:id :label :aliases]) cs)])))
                      by-lower)
-        {:keys [decisions cost]}
+        {:keys [decisions cost tokens]}
         (if (empty? candidates)
-          {:decisions {} :cost 0.0}
+          {:decisions {} :cost 0.0 :tokens []}
           (try
-            (let [{:keys [parsed cost]} (llm/chat! api-key model-fields
-                                          (cards/load-prompt-template "kg-link.md")
-                                          (llm-json/write-prompt-input
-                                            {:candidates candidates})
-                                          :decisions :map
-                                          {:feature :kg-link})]
+            (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                                                 (cards/load-prompt-template "kg-link.md")
+                                                 (llm-json/write-prompt-input
+                                                   {:candidates candidates})
+                                                 :decisions :map
+                                                 {:feature :kg-link})]
               {:decisions (into {}
                             (map (fn [[label decision]]
                                    [(if (keyword? label)
@@ -287,12 +290,13 @@
                                       (str label))
                                     decision]))
                             parsed)
-               :cost cost})
+               :cost cost
+               :tokens tokens})
             (catch Exception e
               (tel/log! {:level :warn :id ::link-degraded
                          :data {:labels (count candidates) :error (ex-message e)}}
                 "Entity-link call failed; treating all as new entities")
-              {:decisions {} :cost 0.0})))
+              {:decisions {} :cost 0.0 :tokens []})))
         valid-ids (into #{} (comp (mapcat val) (map :id)) candidates)
         id-of (fn [label]
                 (let [d (get decisions label)]
@@ -307,7 +311,8 @@
                  (map (fn [[lower label]]
                         [lower (or (id-of label) (get new-ids label))]))
                  by-lower)
-     :cost cost}))
+     :cost cost
+     :tokens tokens}))
 
 ;; ---------------------------------------------------------------------------
 ;; Orchestrator
@@ -422,10 +427,10 @@
                     staged)
           staged-extraction-ids (into #{} (map :page_extraction_id) staged)
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)
-          {:keys [by-label] link-cost :cost}
+          {:keys [by-label] link-cost :cost link-tokens :tokens}
           (if (seq entity-labels)
             (link-entities! api-key link-model-fields user-id entity-labels)
-            {:by-label {} :cost 0.0})
+            {:by-label {} :cost 0.0 :tokens []})
           entity-id #(get by-label (str/lower-case (str/trim %)))
           predicate-id (memoize
                          (fn [p-label]
@@ -471,8 +476,10 @@
                                            :error (ex-message e)}}
                            "Duplicate sweep failed after distillation; facts kept as-is")
                          0))
-          total-cost (reduce + link-cost (map :cost extractions))]
-      (credits/record-cost-charge! user-id :kg.distill (:id entry) total-cost)
+          total-cost (reduce + link-cost (map :cost extractions))
+          total-tokens (into (vec link-tokens) (mapcat :tokens) extractions)]
+      (credits/record-cost-charge! user-id :kg.distill (:id entry) total-cost
+        total-tokens)
       ;; :skipped and :at-cap are logged because they are what the page skip
       ;; bought and what it withheld. A capped page is reported here AND per
       ;; document in the Knowledge view, because a page silently given up on is

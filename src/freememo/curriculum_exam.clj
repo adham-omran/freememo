@@ -212,13 +212,13 @@
                    :threshold (or threshold curriculum/default-threshold)
                    :weaknesses weaknesses
                    :evidence (evidence-payload materials)}
-          {:keys [parsed cost]} (llm/chat! api-key model-fields
-                                  (cards/load-prompt-template "curriculum-exam-form.md")
-                                  (llm-json/write-prompt-input payload)
-                                  :form :map
-                                  {:feature :curriculum-exam-form :user-id user-id})
+          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                                         (cards/load-prompt-template "curriculum-exam-form.md")
+                                         (llm-json/write-prompt-input payload)
+                                         :form :map
+                                         {:feature :curriculum-exam-form :user-id user-id})
           charge (credits/record-cost-charge! user-id :curriculum.exam-form
-                   (:id entry) cost)
+                   (:id entry) cost tokens)
           {:keys [blueprint questions]} (validate-generated-form! parsed)
           questions (validate-citations! materials questions)]
       ;; OpenRouter ignores thread interruption during its socket read. This
@@ -469,13 +469,13 @@
                    :blueprint (:blueprint sitting)
                    :answers (:answers sitting)
                    :threshold (:threshold sitting)}
-          {:keys [parsed cost]} (llm/chat! api-key model-fields
-                                  (cards/load-prompt-template "curriculum-exam-grade.md")
-                                  (llm-json/write-prompt-input payload)
-                                  :grade :map
-                                  {:feature :curriculum-exam-grade :user-id user-id})
+          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                                         (cards/load-prompt-template "curriculum-exam-grade.md")
+                                         (llm-json/write-prompt-input payload)
+                                         :grade :map
+                                         {:feature :curriculum-exam-grade :user-id user-id})
           charge (credits/record-cost-charge! user-id :curriculum.exam-grade
-                   (:id entry) cost)
+                   (:id entry) cost tokens)
           grade (validate-grade! parsed (:blueprint sitting))
           revision-id (curriculum/record-grade-revision! user-id sitting-id
                         (assoc grade :cost nil :operation-started-at operation-started-at))]
