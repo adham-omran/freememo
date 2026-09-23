@@ -8397,19 +8397,31 @@
   "Flashcards for a topic and all its descendants (via parent_id). Same row
    shape as get-all-flashcards (coalesced page_number + card-group-selects) so
    the Anki-sync 'subtree' scope feeds the same downstream as 'self'/'document'.
-   Reuses get-subtree-ids for the id set (always includes topic-id itself)."
+   The card table reads it for every non-root topic, so a PDF page lists the
+   cards of the extracts made from it.
+   The subtree is a recursive CTE inside this one statement, never an id list:
+   an IN over get-subtree-ids binds one parameter per topic, and a large folder
+   topic would cross the 65,535-parameter bound.
+   Pre:  topic-id is a topic id, or nil.
+   Post: every card whose topic is topic-id or a descendant of it, newest
+         first; nil → []."
   [topic-id]
   (if topic-id
     (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
-        (sql/format {:select (into [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+        (sql/format {:with-recursive [[[:subtree {:columns [:id]}]
+                                       {:union-all [{:select [:id] :from [:topics]
+                                                     :where [:= :id topic-id]}
+                                                    {:select [:c.id] :from [[:topics :c]]
+                                                     :join [[:subtree :s] [:= :c.parent_id :s.id]]}]}]]
+                     :select (into [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
                                card-group-selects)
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
                                  [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
                                  [:score_groups :sg] [:= :f.score_group_id :sg.id]]
-                     :where [:in :f.topic_id (get-subtree-ids topic-id)]
+                     :where [:in :f.topic_id {:select [:id] :from [:subtree]}]
                      :order-by [[:f.created_at :desc]]})))
     []))
 

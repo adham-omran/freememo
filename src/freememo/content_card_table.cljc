@@ -1,6 +1,7 @@
 (ns freememo.content-card-table
   "Unified card table component — virtual-scrolled card list with edit/delete.
-   Queries by topic-id (page or extract topic)."
+   Queries by topic-id: a root lists every card in the document, and any other
+   topic (page or extract) lists its own cards and its descendants' cards."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -35,7 +36,10 @@
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
-;; For child topics (extracts, pages), fetches cards for that specific topic.
+;; For child topics (pages, extracts), fetches the cards of the topic AND of
+;; every descendant. A PDF page's cards are mostly on the extracts made from
+;; it, so a page that listed only its own cards read "No cards yet" beside a
+;; child extract that held four.
 (defn get-cards-for-topic* [_refresh topic-id user-id]
   #?(:clj (try
             (if-not topic-id
@@ -45,7 +49,7 @@
                     is-root? (nil? (:topics/parent_id topic))
                     cards (if is-root?
                             (db/get-all-flashcards topic-id)
-                            (db/get-flashcards topic-id))]
+                            (db/get-flashcards-for-subtree topic-id))]
                 ;; One row per authoring group, matching /library/cards — an
                 ;; occlusion group is ONE row here too (freememo.card-rows).
                 {:success true :cards (rows/collapse-groups cards) :card-revision card-revision}))
