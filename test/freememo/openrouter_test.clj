@@ -221,20 +221,26 @@
       (is (not (some #{old} (map :id card-models/registry))) old)
       (is (= new (:id (card-models/resolve-model old))) old))
     (testing "every successor is a current entry, so no redirect needs a second hop"
-      (doseq [{:keys [superseded-by]} card-models/retired]
-        (is (some #{superseded-by} (map :id card-models/registry)) superseded-by)))))
+      (doseq [[registry retired] [[card-models/registry card-models/retired]
+                                  [ocr-models/registry ocr-models/retired]]
+              {:keys [superseded-by]} retired]
+        (is (some #{superseded-by} (map :id registry)) superseded-by))))
+  (testing "the scanning picker lost the same models"
+    (doseq [[old new] {"openai-gpt-5.1" "openai-gpt-6-sol" "openai-gpt-5.6-luna" "openai-gpt-6-luna"
+                       "openai-gpt-5.6-terra" "openai-gpt-6-sol" "openai-gpt-5.6-sol" "openai-gpt-6-sol"
+                       "gemini-3-flash" "gemini-3.8-flash" "gemini-3.6-flash" "gemini-3.8-flash"}]
+      (is (not (some #{old} (map :id ocr-models/registry))) old)
+      (is (= new (:id (ocr-models/resolve-model old))) old))))
 
 (deftest a-retired-id-resolves-to-its-successor-in-both-registries
   (testing "the retired id is gone from the picker"
     (doseq [registry [card-models/registry ocr-models/registry]]
       (is (not (some #{"gemini-3.5-flash"} (map :id registry))))))
   (testing "a stored selection runs the successor, not a fallback default"
-    ;; The registries are independent (D1-B): the card lane retired Gemini 3.6
-    ;; Flash on 2026-09-23 and the OCR lane did not, so the successors differ.
-    (doseq [[resolve effective successor] [[card-models/resolve-model card-models/effective-id "gemini-3.8-flash"]
-                                           [ocr-models/resolve-model ocr-models/effective-id "gemini-3.6-flash"]]]
-      (is (= successor (effective "gemini-3.5-flash")))
-      (is (= (str "google/" successor)
+    (doseq [[resolve effective] [[card-models/resolve-model card-models/effective-id]
+                                 [ocr-models/resolve-model ocr-models/effective-id]]]
+      (is (= "gemini-3.8-flash" (effective "gemini-3.5-flash")))
+      (is (= "google/gemini-3.8-flash"
             (:openrouter-model (resolve "gemini-3.5-flash"))))))
   (testing "an unknown id still resolves to nil, for the caller to reject"
     (is (nil? (card-models/resolve-model "no-such-model")))

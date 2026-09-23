@@ -18,23 +18,7 @@
    :provider, when present, is OpenRouter's provider-routing request object,
    sent verbatim by openrouter/model-fields — the only way a lane names a
    provider. Absent means OpenRouter picks the provider."
-  [{:id "openai-gpt-5.1"
-    :label "OpenAI · GPT-5.1"
-    :shape :chat
-    :openrouter-model "openai/gpt-5.1"}
-   {:id "openai-gpt-5.6-luna"
-    :label "OpenAI · GPT-5.6 Luna"
-    :shape :chat
-    :openrouter-model "openai/gpt-5.6-luna"}
-   {:id "openai-gpt-5.6-terra"
-    :label "OpenAI · GPT-5.6 Terra"
-    :shape :chat
-    :openrouter-model "openai/gpt-5.6-terra"}
-   {:id "openai-gpt-5.6-sol"
-    :label "OpenAI · GPT-5.6 Sol"
-    :shape :chat
-    :openrouter-model "openai/gpt-5.6-sol"}
-   {:id "openai-gpt-6-sol"
+  [{:id "openai-gpt-6-sol"
     :label "OpenAI · GPT-6 Sol"
     :shape :chat
     :openrouter-model "openai/gpt-6-sol"}
@@ -42,14 +26,6 @@
     :label "OpenAI · GPT-6 Luna"
     :shape :chat
     :openrouter-model "openai/gpt-6-luna"}
-   {:id "gemini-3-flash"
-    :label "Google · Gemini 3 Flash"
-    :shape :chat
-    :openrouter-model "google/gemini-3-flash-preview"}
-   {:id "gemini-3.6-flash"
-    :label "Google · Gemini 3.6 Flash"
-    :shape :chat
-    :openrouter-model "google/gemini-3.6-flash"}
    {:id "gemini-3.8-flash"
     :label "Google · Gemini 3.8 Flash"
     :shape :chat
@@ -77,11 +53,31 @@
    freememo.card-models/retired, and the same reason it is a redirect rather
    than a deletion — read that docstring. The two registries stay independent
    (design decision D1-B), so an id retired in one is not retired in the other
-   by implication; this one happens to share both id and successor with the
-   card lane."
+   by implication. The 2026-09-23 retirement was decided for both lanes at once,
+   so the two lists match on the models they share."
   [{:id "gemini-3.5-flash"
     :label "Google · Gemini 3.5 Flash"
-    :superseded-by "gemini-3.6-flash"}])
+    ;; Pointed at 3.6 until 3.6 itself retired; effective-id takes one hop.
+    :superseded-by "gemini-3.8-flash"}
+   ;; Removed from the picker on 2026-09-23 by product decision.
+   {:id "openai-gpt-5.1"
+    :label "OpenAI · GPT-5.1"
+    :superseded-by "openai-gpt-6-sol"}
+   {:id "openai-gpt-5.6-luna"
+    :label "OpenAI · GPT-5.6 Luna"
+    :superseded-by "openai-gpt-6-luna"}
+   {:id "openai-gpt-5.6-terra"
+    :label "OpenAI · GPT-5.6 Terra"
+    :superseded-by "openai-gpt-6-sol"}
+   {:id "openai-gpt-5.6-sol"
+    :label "OpenAI · GPT-5.6 Sol"
+    :superseded-by "openai-gpt-6-sol"}
+   {:id "gemini-3-flash"
+    :label "Google · Gemini 3 Flash"
+    :superseded-by "gemini-3.8-flash"}
+   {:id "gemini-3.6-flash"
+    :label "Google · Gemini 3.6 Flash"
+    :superseded-by "gemini-3.8-flash"}])
 
 (def ^:private supersessions
   (into {} (map (juxt :id :superseded-by)) retired))
@@ -94,9 +90,11 @@
 
 (def default-id
   "System-wide default OCR model — used when a user has set neither a per-document
-   nor a global selection. Gemini 3 Flash: best Arabic accuracy at the lowest cost
-   in the 0.3 bake-off (see plans/ocr-multi-model-picker.md)."
-  "gemini-3-flash")
+   nor a global selection, and no level supplies one. Gemini 3 Flash held this
+   place for the best Arabic accuracy at the lowest cost in the 0.3 bake-off
+   (see plans/ocr-multi-model-picker.md). It retired on 2026-09-23, and its
+   successor here has not been through that bake-off."
+  "gemini-3.8-flash")
 
 (def ^:private by-id
   (into {} (map (juxt :id identity)) registry))

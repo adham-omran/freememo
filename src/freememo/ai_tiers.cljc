@@ -59,7 +59,9 @@
    Per 5-card batch, GLM low : Gemini 3.8 Flash low : GPT-6 Sol medium cost
    1 : 5 : 20. The KG lanes send no reasoning parameter, so :quiz and :kg set
    models only. Scanning ids are `freememo.ocr-models` ids, which differ from the
-   card ids for the same model."
+   card ids for the same model. Best scanning ran Gemini 3 Flash, the Arabic OCR
+   bake-off winner, until that model retired on 2026-09-23; Gemini 3.8 Flash has
+   not been through the bake-off."
   {:cards
    {"economy"  {"model" "glm-5.3-flash"    "reasoning" "low"}
     "balanced" {"model" "gemini-3.8-flash" "reasoning" "low"}
@@ -67,7 +69,7 @@
    :scan
    {"economy"  {"ocr_model_default" "gemini-3.5-flash-lite" "scan_dpi" "150"}
     "balanced" {"ocr_model_default" "gemini-3.5-flash-lite" "scan_dpi" "300"}
-    "best"     {"ocr_model_default" "gemini-3-flash"        "scan_dpi" "300"}}
+    "best"     {"ocr_model_default" "gemini-3.8-flash"      "scan_dpi" "300"}}
    :assistant
    {"economy"  {"assistant_model" "glm-5.3-flash"    "assistant_reasoning" "low"}
     "balanced" {"assistant_model" "gemini-3.8-flash" "assistant_reasoning" "low"}
