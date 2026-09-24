@@ -479,7 +479,7 @@
           (let [item-count (e/server (count docs))]
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column"
-                                  :height "calc(100vh - 160px)" :padding-top "8px"}})
+                                  :height "calc(100vh - 108px - var(--app-top-chrome, 0px))" :padding-top "8px"}})
               (dom/div
                 (dom/props {:style {:display "flex" :gap "12px" :align-items "center"
                                     :margin "10px 0" :flex-wrap "wrap"}})
@@ -784,7 +784,7 @@
                 all-shown-selected? (and (pos? item-count) (= item-count selected-shown))]
             (dom/div
               (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                                  :height "calc(100vh - 160px)"}})
+                                  :height "calc(100vh - 108px - var(--app-top-chrome, 0px))"}})
               (dom/div
                 (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"}})
                 (dom/button
@@ -1021,7 +1021,7 @@
           (let [item-count (e/server (count questions))]
             (dom/div
               (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                                  :height "calc(100vh - 160px)"}})
+                                  :height "calc(100vh - 108px - var(--app-top-chrome, 0px))"}})
               (dom/div
                 (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
                                     :flex-wrap "wrap"}})
@@ -1190,7 +1190,7 @@
           (let [item-count (e/server (count entities))]
             (dom/div
               (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                                  :height "calc(100vh - 160px)"}})
+                                  :height "calc(100vh - 108px - var(--app-top-chrome, 0px))"}})
               (dom/div
                 (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
                                     :flex-wrap "wrap"}})

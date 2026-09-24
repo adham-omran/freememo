@@ -83,18 +83,6 @@
                     (navigate! :viewer (nav/nav-topic root-topic-id :home page-number)))
                   nil)))))))))
 
-(e/defn QuickLinks [navigate!]
-  (e/client
-    (dom/div
-      (dom/props {:style {:display "flex" :gap "12px" :margin-bottom "40px"}})
-      (e/for-by first [row [["Import" :import] ["Library" :library] ["Learn" :learn]]]
-        (let [[label target] row]
-          (dom/button
-            (dom/props {:class "btn btn-secondary"
-                        :style {:flex "1" :padding "10px 0" :font-size "13px"}})
-            (dom/text label)
-            (dom/On "click" (fn [_] (navigate! target)) nil)))))))
-
 (e/defn HomeSummaryLoading [navigate!]
   (e/client
     (dom/div
@@ -111,8 +99,7 @@
                             :border-radius "var(--radius-md)" :margin-bottom "8px"}})
         (dom/span (dom/props {:class "spinner" :aria-hidden "true"}))
         (dom/text "Loading…"))
-      (dom/div (dom/props {:style {:height "61px"}}))
-      (QuickLinks navigate!))))
+      (dom/div (dom/props {:style {:height "61px"}})))))
 
 (e/defn HomeSummaryFailure [navigate! error]
   (e/client
@@ -127,8 +114,7 @@
                             :border-radius "var(--radius-md)" :margin-bottom "8px"}})
         (dom/text "Import Content")
         (dom/On "click" (fn [_] (navigate! :import)) nil))
-      (dom/div (dom/props {:style {:height "61px"}}))
-      (QuickLinks navigate!))))
+      (dom/div (dom/props {:style {:height "61px"}})))))
 
 (e/defn HomeSummary [navigate! summary]
   (e/client
@@ -185,8 +171,6 @@
                                   :text-decoration "underline"}})
               (dom/text "or import more content")
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :import)) nil))))
-
-        (QuickLinks navigate!)
 
         (when-not configured?
           (dom/div

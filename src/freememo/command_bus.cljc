@@ -325,6 +325,23 @@
     (when-let [show! (:show-left-pane! ctx)]
       (show! "pins"))))
 
+;; The nav rail publishes all three while it is mounted, which is always in
+;; the signed-in shell.
+(register-handler! :toggle-nav-rail
+  (fn [ctx _payload]
+    (when-let [toggle! (:toggle-nav-rail! ctx)]
+      (toggle!))))
+
+(register-handler! :open-nav-rail
+  (fn [ctx _payload]
+    (when-let [open! (:open-nav-rail! ctx)]
+      (open!))))
+
+(register-handler! :go-continue
+  (fn [ctx _payload]
+    (when-let [open! (:open-continue! ctx)]
+      (open!))))
+
 ;; The poem reader publishes :poem-topic-id while it is mounted, and it mounts
 ;; for exactly the topics that have a package — so an absent key IS "this is not
 ;; a poem". RightSidePanel owns both outcomes because the toast queue is a

@@ -23,11 +23,17 @@
           whole))))
 
 (def workflows
-  "Comprehensive tour of FreeMemo, section by section: importing, reading,
+  "Comprehensive tour of FreeMemo, section by section: getting around, importing, reading,
    assistant chat, schedules, curricula, exams, card-making, Anki sync,
    review, the knowledge graph, quizzing, finding/organizing, and shortcuts.
    Each step's label names the real control (with its shortcut where one exists)."
-  [{:title "Importing content"
+  [{:title "Getting around"
+    :intro "The sidebar at the left holds every place in FreeMemo, in the order you use them: import, read, review, plan, explore."
+    :steps [["Open the sidebar" "Rest the pointer on the sidebar, or press Tab to move into it. It opens over the page and closes when you leave it. Open Sidebar in the command palette puts focus in it, and Esc closes it."]
+            ["Keep it open ({toggle-nav-rail})" "Keep open, at the foot of the sidebar, docks it beside the page. In a window 900px wide or less it opens over the page instead. On a phone, ☰ opens it."]
+            ["Continue" "Continue opens the last document you opened in the Viewer. A learn session and a subset review do not change it: Continue returns to the document you chose to read, and a learn session picks its items from a queue."]
+            ["Learn's count" "The number on Learn is how many topics are due, the same count Home shows."]]}
+   {:title "Importing content"
     :intro "Get PDFs, EPUBs, articles, and photos in. Everything starts on the Import tab."
     :steps [["Upload a file" "Import → Upload. Drop a PDF, EPUB, HTML, Markdown, or code-repo (.zip) file (or click to browse); PDFs, EPUBs, and code repos ask \"Import as …\" first. Drag-and-drop onto the modal works too."]
             ["Import from a link" "Import → Link, paste a web or Wikipedia URL, and Fetch. A URL that resolves to a PDF or EPUB is offered for import."]
@@ -36,7 +42,7 @@
    {:title "Studying a PDF"
     :intro "Turn a PDF into studied, card-ready material, one page at a time."
     :steps [["Import it" "Import tab → Upload (PDF or EPUB) or Link (a web or Wikipedia URL). Drag-and-drop works too."]
-            ["Read & navigate" "Open it from Library or the Viewer. The page arrows or the page box move you; the zoom menu fits width or whole page."]
+            ["Read & navigate" "Open it from Library, or from Continue in the sidebar. The page arrows or the page box move you; the zoom menu fits width or whole page."]
             ["Extract the text ({scan})" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
             ["Edit & split ({extract})" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
             ["Mark done ({done})" "Mark a page Done to drop it from your review queue while keeping the content."]]}
@@ -143,7 +149,7 @@
             ["Review a subset" "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."]]}
    {:title "Control FreeMemo with the keyboard"
     :intro "Use focus keys, the command palette, and contextual controls to operate FreeMemo without a pointer."
-    :steps [["Start with focus" "Press Tab to show the Skip to content link. Press Enter to bypass the navigation bar."]
+    :steps [["Start with focus" "Press Tab to show the Skip to content link. Press Enter to bypass the sidebar."]
             ["Move between controls" "Press Tab to move forward. Press Shift+Tab to move backward. A visible ring shows the focused control."]
             ["Activate controls" "Press Enter or Space to activate a focused button, row, result, card, review, exam, transcript segment, or heatmap day."]
             ["Open any tab" "Open {toggle-palette}, type “Go to”, select a destination with the arrow keys, and press Enter."]

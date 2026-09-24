@@ -58,6 +58,9 @@
 (def PROMPT_OCR "prompt_ocr")
 (def EMAIL_UPDATES "email_updates")
 (def THEME "theme")
+;; Account-wide, so it carries no topic id and needs no settings-key-prefixes
+;; entry (plans/nav-stage-rail.md 1.6.2).
+(def NAV_RAIL_KEPT "nav_rail_kept")
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
 (def CARD_TABLE_OPEN "card_table_open")
@@ -1253,6 +1256,24 @@
     (catch Exception e
       (tel/error! {:id ::save-theme} e)
       {:success false :error "Failed to save theme"})))
+
+;; The nav rail's Keep open state. Read and written the way the viewer side
+;; panels store their open state: one boolean row, and the write bumps no
+;; channel, because the client atom it seeded is already authoritative.
+(defn get-nav-rail-kept
+  "Post: true only for a stored \"true\". A missing row or a failed read is false."
+  [user-id]
+  (try
+    (= "true" (db/get-setting user-id NAV_RAIL_KEPT))
+    (catch Exception _ false)))
+
+(defn save-nav-rail-kept [user-id kept?]
+  (try
+    (db/set-setting user-id NAV_RAIL_KEPT (str (boolean kept?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-nav-rail-kept} e)
+      {:success false :error "Failed to save the sidebar state"})))
 
 ;; Extraction button visibility toggles.
 (defn save-anki-sync-settings [user-id {:keys [scope deck allow-dupes]}]

@@ -141,17 +141,17 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn ActionsNavButton
-  "Toolbar pill button that toggles the Actions/undo-history modal.
-   Mirrors modal-open state via .is-open / aria-pressed."
+  "The nav rail's Actions row (freememo.nav-rail). Toggles the Actions /
+   undo-history modal and changes no route. Mirrors modal-open state via
+   .is-open / aria-pressed."
   [!open?]
   (e/client
     (let [open? (e/watch !open?)]
       (dom/button
-        (dom/props {:class (str "nav-action-btn" (when open? " is-open"))
-                    :aria-label "Actions"
+        (dom/props {:class (str "nav-rail__item" (when open? " is-open"))
                     :aria-pressed (str (boolean open?))})
-        (icons/Icon :rotate-ccw :size 16)
-        (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Actions"))
+        (dom/span (dom/props {:class "nav-rail__icon"}) (icons/Icon :rotate-ccw :size 18))
+        (dom/span (dom/props {:class "nav-rail__label"}) (dom/span (dom/text "Actions")))
         (dom/On "click" (fn [_] (swap! !open? not)) nil)))))
 
 (e/defn UndoRow [row user-id]

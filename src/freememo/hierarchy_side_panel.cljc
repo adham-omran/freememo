@@ -124,6 +124,68 @@
                   [row])))]
       (vec (walk scope-root 0)))))
 
+(def ^:private panel-motion-ms
+  "The side panels' open and close animation, in ms. Matches the width
+   transition on `[data-motion]` panels in index.css."
+  160)
+
+(defn install-panel-motion!
+  "Animate a side panel's open and close (plans/nav-stage-rail.md 4.1–4.3).
+
+   Pre : `panel` is the SidePanelShell root. `!open?` is the caller's atom,
+         and `!body-open?` starts equal to it.
+   Post: `!body-open?` follows `!open?` at once on open. On close it stays
+         true until the width transition has run, so the body shrinks with
+         the panel instead of leaving an empty box to animate (N4). It follows
+         at once when no transition runs: under reduced motion, or before the
+         motion is armed. Motion arms two frames after install, so a saved
+         state applies on load with no animation.
+         Returns a fn that uninstalls the watch and the timer.
+
+   Only `!body-open?` gates the body, so a close never unmounts and remounts
+   it: the atom changes once, when the hold ends."
+  [panel !open? !body-open?]
+  #?(:clj (fn [])
+     :cljs
+     (let [k (random-uuid)
+           timer (atom nil)
+           animates? (fn []
+                       (and (.hasAttribute panel "data-motion")
+                            (not= "0s" (.-transitionDuration (js/getComputedStyle panel)))))
+           settle! (fn []
+                     (some-> @timer js/clearTimeout)
+                     (reset! timer nil)
+                     (reset! !body-open? @!open?))]
+       (add-watch !open? k
+         (fn [_ _ was now]
+           (if (and was (not now) (animates?))
+             (do (some-> @timer js/clearTimeout)
+                 (reset! timer (js/setTimeout settle! (+ panel-motion-ms 40))))
+             (settle!))))
+       (js/requestAnimationFrame
+         (fn [] (js/requestAnimationFrame #(.setAttribute panel "data-motion" ""))))
+       (fn []
+         (remove-watch !open? k)
+         (some-> @timer js/clearTimeout)))))
+
+(defn mark-resizing!
+  "Hold the panel's width transition off for one drag (4.2), so the width
+   follows the pointer with no lag.
+   Pre : `handle` is the resize handle, a direct child of the panel.
+   Post: the panel carries `data-resizing` until the handle's pointerup or
+         pointercancel."
+  [handle]
+  #?(:clj nil
+     :cljs
+     (when-let [panel (.-parentElement handle)]
+       (.setAttribute panel "data-resizing" "")
+       (let [done (fn done [_]
+                    (.removeAttribute panel "data-resizing")
+                    (.removeEventListener handle "pointerup" done)
+                    (.removeEventListener handle "pointercancel" done))]
+         (.addEventListener handle "pointerup" done)
+         (.addEventListener handle "pointercancel" done)))))
+
 (e/defn SidePanelShell
   "Shared side-panel chrome, factored out of this ns and freememo.right-side-panel
    (RightSidePanel), which independently grew the same header-toggle +
@@ -158,12 +220,18 @@
            width-px !width-px !width-save]}
    Header-extra Body]
   (e/client
-    (let [[content-side invert?] (case side :left [:before true] :right [:after false])]
+    (let [[content-side invert?] (case side :left [:before true] :right [:after false])
+          ;; Gates the header extra and the body. It lags `open?` on close only,
+          ;; for the length of the width transition (install-panel-motion!).
+          !body-open? (atom @!open?)
+          body-open? (e/watch !body-open?)]
       (dom/div
         ;; The width is a custom property, not an inline width, so the phone
         ;; overlay rule in index.css can replace it. Position lives there too.
         (dom/props {:class (str class (when-not open? (str " " class "--collapsed")))
                     :style {:--side-panel-width (when open? (str width-px "px"))}})
+        (let [uninstall-motion (install-panel-motion! dom/node !open? !body-open?)]
+          (e/on-unmount uninstall-motion))
 
         ;; Header row — toggle (always visible) + Header-extra (only when
         ;; open). The row renders even when collapsed so the fixed gutter
@@ -181,7 +249,7 @@
                   (reset! !open? next-open?)
                   (reset! !save next-open?)))
               nil))
-          (when open? (Header-extra)))
+          (when body-open? (Header-extra)))
 
         ;; Resize handle on the inner edge; only when open.
         (when open?
@@ -193,6 +261,7 @@
                         :aria-valuenow (str (int (or width-px 0)))})
             (dom/On "pointerdown"
               (fn [e]
+                (mark-resizing! (.-currentTarget e))
                 (util/start-drag-px! e !width-px
                   {:min 180
                    :max (max 180 (util/panel-resize-max (.-currentTarget e) content-side 320))
@@ -208,7 +277,7 @@
                    :on-commit #(reset! !width-save %)}))
               nil)))
 
-        (when open? (Body))))))
+        (when body-open? (Body))))))
 
 ;; ---------------------------------------------------------------------------
 ;; HierarchySidePanel is split into three e/defns (row · tree · panel). One

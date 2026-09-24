@@ -10,10 +10,11 @@
 
    Button and popover are SEPARATE components sharing an `!open?` atom the caller
    owns, exactly like `ActionsNavButton` / `UndoHistoryModal`. They cannot be one
-   component: the button belongs inside `.nav-utils`, while the popover must sit
-   outside `.tab-bar` — anything inside it inherits `overflow-x: clip` and, once
-   the strip shrinks, lays out past its right edge unpainted but still focusable.
-   `main.cljc` records that defect against the ⋮ dropdown.
+   component: the button is a row in the nav rail, and the popover is a sibling
+   of the page column, anchored to the rail's docked edge. A popover inside the
+   rail would move with it as a hover-open rail closes, and at phone width it
+   would sit inside the drawer that the Activity click just closed
+   (plans/nav-stage-rail.md N3).
 
    Refresh is two-rate, and deliberately so. The badge watches
    `:activity-mutations`, which bumps only on real transitions — a 20s keepalive
@@ -27,7 +28,6 @@
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal-shell]
    [freememo.navigation :as nav]
-   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])))
 
 (def poll-ms
@@ -116,8 +116,8 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn ActivityNavButton
-  "Nav-bar affordance: a spinner icon carrying the live count, toggling the
-   popover. Not a NavTab or NavUtil — both navigate, and this changes no route."
+  "The nav rail's Activity row: a spinner icon carrying the live count, toggling
+   the popover. It changes no route, so it is not a rail destination."
   [user-id !open?]
   (e/client
     ;; The leave warning installs from here because this button is the one part
@@ -129,15 +129,18 @@
           refresh (e/server (e/watch (us/get-atom user-id :activity-mutations)))
           live (e/server (ac/live-count* refresh user-id))]
       (dom/button
-        (dom/props {:class (str "nav-tab nav-util activity-nav-btn"
-                             (when open? " is-open"))
+        (dom/props {:class (str "nav-rail__item" (when open? " is-open"))
                     :aria-pressed (str (boolean open?))})
-        (tooltip/Tooltip! "Activity" :aria? true)
-        (icons/Icon :loader-2 :size 18)
-        (when (pos? (or live 0))
-          (dom/span
-            (dom/props {:class "activity-badge"})
-            (dom/text (str live))))
+        (dom/span
+          (dom/props {:class "nav-rail__icon"})
+          (icons/Icon :loader-2 :size 18)
+          ;; `live` is a server read, so the badge is its own node with its own
+          ;; props: in the button's map it would null them while in flight.
+          (when (pos? (or live 0))
+            (dom/span
+              (dom/props {:class "activity-badge"})
+              (dom/text (str live)))))
+        (dom/span (dom/props {:class "nav-rail__label"}) (dom/span (dom/text "Activity")))
         (dom/On "click" (fn [_] (swap! !open? not)) nil)))))
 
 (e/defn ActivityRow
@@ -211,8 +214,8 @@
                   (case (e/server (ac/cancel!* user-id ev)) (t)))))))))))
 
 (e/defn ActivityPanel
-  "The popover list. Mount as a SIBLING of `.tab-bar`, last in the nav body, so
-   it is neither clipped by the strip's `overflow-x` nor painted under it."
+  "The popover list. Mount as a sibling of the page column in `.app-shell`, so
+   `--nav-rail-docked` reaches it and the rail's overflow cannot clip it."
   [user-id !open? navigate!]
   (e/client
     (when (e/watch !open?)

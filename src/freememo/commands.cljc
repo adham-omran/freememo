@@ -459,9 +459,12 @@
     {:go-home       {:label "Go to Home"     :class :nav :nav-tab :home}
      :go-learn      {:label "Go to Learn"    :class :nav :nav-tab :learn}
      :go-schedule   {:label "Go to Schedule" :class :nav :nav-tab :schedule}
-     :go-viewer     {:label "Go to Viewer"   :class :nav :nav-tab :viewer}
+     ;; Replaces "Go to Viewer", which opened the empty /viewer. The nav rail
+     ;; publishes :open-continue!, which opens the last document read, or
+     ;; Library when there is none (plans/nav-stage-rail.md 6.2).
+     :go-continue   {:label "Continue reading" :class :nav}
      :go-library    {:label "Go to Library"  :class :nav :nav-tab :library}
-     :go-knowledge  {:label "Go to Knowledge" :class :nav :nav-tab :knowledge}
+     :go-knowledge  {:label "Go to Facts"    :class :nav :nav-tab :knowledge}
      :go-quiz       {:label "Go to Quiz"     :class :nav :nav-tab :quiz}
      :go-search     {:label "Go to Search"   :class :nav :nav-tab :search}
      :go-import     {:label "Go to Import"   :class :nav :nav-tab :import}
@@ -483,6 +486,15 @@
 
      ;; — App shell —
      :toggle-palette    {:label "Command palette" :class :nav :bind "meta+k"}
+     ;; The nav rail (plans/nav-stage-rail.md 1.4.3, 1.4.4). Declared as the
+     ;; viewer's pane toggles are: a client handler flips rail state the rail
+     ;; published, and the rail saves Keep open itself, bumping nothing.
+     ;; "Toggle Sidebar" toggles Keep open. "Open Sidebar" opens the rail and
+     ;; moves focus into it, and Esc closes it.
+     :toggle-nav-rail   {:label "Toggle Sidebar" :class :query :exec :client
+                         :bind "meta+." :views #{}}
+     :open-nav-rail     {:label "Open Sidebar"   :class :query :exec :client
+                         :views #{}}
      :open-undo-history {:label "Action history"  :class :nav}
      ;; Opens the Activity popover. :class :nav with no :nav-tab — it is a
      ;; toggle, not a destination, so command-bus flips the shell atom rather
