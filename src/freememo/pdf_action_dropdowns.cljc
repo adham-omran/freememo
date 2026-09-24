@@ -283,6 +283,7 @@
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
                       :aria-label "Copy menu"})
+          (dom/props {:data-tour "pdf-copy-text"})
           (tooltip/Tooltip! "Copy the PDF's own text (no AI)")
           (icons/Icon :clipboard :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text "Copy text"))

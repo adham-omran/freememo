@@ -61,6 +61,10 @@
 ;; Account-wide, so it carries no topic id and needs no settings-key-prefixes
 ;; entry (plans/nav-stage-rail.md 1.6.2).
 (def NAV_RAIL_KEPT "nav_rail_kept")
+;; Account-wide and carries no topic id, like NAV_RAIL_KEPT. Present only as
+;; "true"; the Show getting started command deletes the row
+;; (plans/getting-started-checklist.md 1.3).
+(def GETTING_STARTED_DISMISSED "getting_started_dismissed")
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
 (def CARD_TABLE_OPEN "card_table_open")
@@ -1274,6 +1278,32 @@
     (catch Exception e
       (tel/error! {:id ::save-nav-rail-kept} e)
       {:success false :error "Failed to save the sidebar state"})))
+
+(defn get-getting-started-dismissed
+  "True when the user dismissed the getting-started checklist."
+  [user-id]
+  (= "true" (db/get-setting user-id GETTING_STARTED_DISMISSED)))
+
+(defn dismiss-getting-started!
+  "Post: the checklist reads dismissed. Returns {:success bool}."
+  [user-id]
+  (try
+    (db/set-setting user-id GETTING_STARTED_DISMISSED "true")
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::dismiss-getting-started} e)
+      {:success false :error "Failed to hide the checklist"})))
+
+(defn reopen-getting-started!
+  "Post: no dismissed row remains, so the checklist shows while an item is
+   open. Returns {:success bool}."
+  [user-id]
+  (try
+    (db/delete-setting user-id GETTING_STARTED_DISMISSED)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::reopen-getting-started} e)
+      {:success false :error "Failed to show the checklist"})))
 
 ;; Extraction button visibility toggles.
 (defn save-anki-sync-settings [user-id {:keys [scope deck allow-dupes]}]

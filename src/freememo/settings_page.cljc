@@ -11,9 +11,11 @@
    [freememo.credits-section :refer [CreditsSection]]
    [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
+   [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
    [freememo.forge-settings-section :refer [ForgeTokensSection]]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
+   [freememo.settings-tab :as settings-tab]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])))
 
@@ -33,8 +35,11 @@
 ;; Stable atom shared across reactive cycles. Atoms created inside e/defn let
 ;; bodies are recreated on every cycle (CLAUDE.md anti-pattern) — the scroll
 ;; handler would write to a stale atom while SettingsNav watches a fresh one.
+;; It lives in freememo.settings-tab so a page outside Settings can pick a tab
+;; without requiring this namespace. Seeded here, once, with the first tab.
 #?(:cljs (defonce !settings-active-section
-           (atom (-> section-defs first :id))))
+           (doto settings-tab/!active-section
+             (reset! (-> section-defs first :id)))))
 
 (defn valid-section-id? [id]
   (boolean (some #(= id (:id %)) section-defs)))
@@ -434,6 +439,9 @@
       (dom/div
         (dom/props {:class "card"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+
+        ;; plans/getting-started-checklist.md 8.4.1
+        (AnkiConnectGuide user-id nil)
 
         ;; ── Auto-load section ──────────────────────────────────────
         (dom/div

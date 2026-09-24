@@ -480,6 +480,7 @@
             (when (pos? due-today)
               (dom/button
                 (dom/props {:class "btn btn-primary learn-start-button"})
+                (dom/props {:data-tour "learn-start"})
                 (dom/text (if session-active? "Resume Learning" "Start Learning"))
                 (dom/On "click"
                   (fn [_]

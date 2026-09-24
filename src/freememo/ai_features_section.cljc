@@ -82,6 +82,7 @@
   (e/client
     (dom/div
       (dom/props {:class "field setting-row setting-row--switch"})
+      (dom/props {:data-tour "settings-ai"})
       (dom/div
         (dom/props {:class "setting-row__text"})
         (dom/label (dom/props {:class "label" :for "ai-enabled"}) (dom/text "Use AI features"))

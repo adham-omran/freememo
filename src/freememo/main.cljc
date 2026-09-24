@@ -32,7 +32,8 @@
             [freememo.interaction-trail :as trail :refer [InteractionForwarder]]
             [freememo.undo-history-modal :refer [UndoHistoryModal]]
             [freememo.activity-panel :refer [ActivityPanel]]
-            [freememo.nav-rail :refer [NavRail]]
+            [freememo.nav-rail :as nav-rail :refer [NavRail]]
+            [freememo.spotlight :as spotlight :refer [Spotlight]]
             [freememo.quick-sync :refer [QuickSyncButton]]
             [freememo.video-import-modal :refer [VideoUploadActivity]]
             [freememo.import-modal :refer [StagingUploadActivity]]
@@ -449,7 +450,12 @@
                 (CommandPalette active-tab)
 
                 ;; Actions history modal (undo-newest is a :queue command now)
-                (UndoHistoryModal user-id !undo-modal-open?))))
+                (UndoHistoryModal user-id !undo-modal-open?)
+
+                ;; The getting-started spotlight. Last, so it paints over the
+                ;; page, and z-index keeps it under the toasts
+                ;; (plans/getting-started-checklist.md 3.3).
+                (Spotlight (spotlight/route-key active-tab (nav-rail/viewer-topic-id r/route))))))
 
           :else
           ;; Not authenticated: render landing page

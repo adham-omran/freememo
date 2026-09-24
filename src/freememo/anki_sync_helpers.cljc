@@ -160,28 +160,44 @@
 
 #?(:cljs
    (defn anki-call!
-     "Call AnkiConnect API. Returns a Promise resolving to the result value."
-     [action params]
-     (from-future
-       (fn [token]
-         (let [ctrl (js/AbortController.)]
-           (.finally token #(.abort ctrl))
-           (-> (js/fetch "http://127.0.0.1:8765"
-                 (clj->js {:method "POST"
-                           :headers {"Content-Type" "application/json"}
-                           :signal (.-signal ctrl)
-                           :body (js/JSON.stringify
-                                   (clj->js (cond-> {:action action :version 6}
-                                              params (assoc :params params))))}))
-             (.then (fn [resp]
-                      (when-not (.-ok resp)
-                        (throw (js/Error. (str "HTTP " (.-status resp)))))
-                      (.json resp)))
-             (.then (fn [json]
-                      (let [result (js->clj json :keywordize-keys true)]
-                        (when (:error result)
-                          (throw (js/Error. (str (:error result)))))
-                        (:result result))))))))))
+     "Call AnkiConnect API. Returns a task resolving to the result value.
+
+      `timeout-ms` is optional and defaults to none, because a large push can
+      take as long as it takes. With one, a request that gets no answer in
+      time fails with an Error whose name is \"TimeoutError\"
+      (plans/getting-started-checklist.md 8.2.1)."
+     ([action params] (anki-call! action params nil))
+     ([action params {:keys [timeout-ms]}]
+      (from-future
+        (fn [token]
+          (let [ctrl (js/AbortController.)
+                !timed-out? (atom false)
+                timer (when timeout-ms
+                        (js/setTimeout (fn [] (reset! !timed-out? true) (.abort ctrl))
+                          timeout-ms))]
+            (.finally token #(.abort ctrl))
+            (-> (js/fetch "http://127.0.0.1:8765"
+                  (clj->js {:method "POST"
+                            :headers {"Content-Type" "application/json"}
+                            :signal (.-signal ctrl)
+                            :body (js/JSON.stringify
+                                    (clj->js (cond-> {:action action :version 6}
+                                               params (assoc :params params))))}))
+              (.then (fn [resp]
+                       (when-not (.-ok resp)
+                         (throw (js/Error. (str "HTTP " (.-status resp)))))
+                       (.json resp)))
+              (.then (fn [json]
+                       (let [result (js->clj json :keywordize-keys true)]
+                         (when (:error result)
+                           (throw (js/Error. (str (:error result)))))
+                         (:result result))))
+              (.catch (fn [err]
+                        (throw (if @!timed-out?
+                                 (doto (js/Error. "AnkiConnect did not answer in time")
+                                   (aset "name" "TimeoutError"))
+                                 err))))
+              (.finally (fn [] (some-> timer js/clearTimeout))))))))))
 
 ;; mime->ext moved to freememo.util — it is a generic media mapping, and two
 ;; other sites had drifted their own (broken) versions of it.

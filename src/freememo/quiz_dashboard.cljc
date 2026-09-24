@@ -549,6 +549,7 @@
                   (dom/On "click" (fn [_] (open-custom!)) nil))
                 (dom/button
                   (dom/props {:class "btn btn-primary btn-sm"})
+                  (dom/props {:data-tour "quiz-start"})
                   (dom/text (if (pos? due) (str "Start Review · " due) "Start Review"))
                   (dom/On "click" (fn [_] (start-review!)) nil))))
             (DashboardTiles stats)

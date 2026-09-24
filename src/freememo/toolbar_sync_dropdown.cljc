@@ -95,6 +95,7 @@
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
                       :aria-label "Anki Sync menu"})
+          (dom/props {:data-tour "anki-sync"})
           (tooltip/Tooltip! "Sync with Anki, or export cards")
           (AnkiMark :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text trigger-label))

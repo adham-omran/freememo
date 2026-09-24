@@ -5,6 +5,8 @@
 1833b55414d413b07e5b4ea64710c2832ad4cb2a24484d30febdf992819b09ed  amiri@5.3.0/LICENSE
 9abf8a10b4a2f27b698740522c9beec9ded7728aeef0738ac0d6e175bf6249d7  amiri@5.3.0/files/amiri-arabic-400-normal.woff2
 c775d9f8c3a7cf0d0c2bb5246dd699e8c09bf6f8758e1be0b98939331b18bcce  amiri@5.3.0/files/amiri-arabic-700-normal.woff2
+65940d866a6b6d831394a4bbed99ed0a39330bac98b643386d9a2f87a1a1d5da  floating-ui@1.8.0/floating-ui.core.umd.min.js
+61a46f943c4e99379eaf073447811aec7e8b8f120d2f646316e01b7694bc90a3  floating-ui@1.8.0/floating-ui.dom.umd.min.js
 dc337efa23903f61e064c8e7e7f93a429e6855dccfc2458802b4ed30c621c087  graphology@0.26.0/graphology.umd.min.js
 837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846  highlight.js@11.9.0/highlight.min.js
 55bccef4e0b028471d18f2c62981a34ea20bc9e95f286dbff7c59579ab48224e  highlight.js@11.9.0/languages/clojure.min.js

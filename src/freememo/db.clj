@@ -329,6 +329,14 @@
   ;; status: a topic may be both done and dismissed (4 positions). Reversible.
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false"])
 
+  ;; A topic the user made with Extract — text or a video range. The
+  ;; getting-started checklist reads it (plans/getting-started-checklist.md 1.2).
+  ;; `kind` cannot answer this: an EPUB chapter is also a `basic` child.
+  ;;
+  ;; Only `create-topic!` with `:extract? true` writes it. Deliberately NOT
+  ;; backfilled (Q6), so an extract made before this column reads false.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS is_extract BOOLEAN NOT NULL DEFAULT false"])
+
   ;; WHEN a topic was marked done. `status` alone cannot answer "how many pages
   ;; did I cover today", which is what the Schedule tab's daily quota counts
   ;; down (plans/study-plan-daily-quota.md §5.1).
@@ -4031,8 +4039,9 @@
 (defn create-topic!
   "Create a topic. attrs is a map with keys:
    :user-id :kind :title :parent-id :content :page-number
-   :source-id :status :priority
+   :source-id :status :priority :extract?
    :source-id attaches an existing `sources` row (bibliography).
+   :extract? true marks a topic the user made with Extract (`is_extract`).
    Returns the created row with :topics/id."
   [attrs]
   (let [clean-title (input/prettify-title (input/sanitize-title (:title attrs)))
@@ -4047,7 +4056,8 @@
               sanitized (assoc :content sanitized
                           :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
-              (:source-id attrs) (assoc :source_id (:source-id attrs)))
+              (:source-id attrs) (assoc :source_id (:source-id attrs))
+              (:extract? attrs) (assoc :is_extract true))
         created (jdbc/execute-one! ds
                   (sql/format {:insert-into :topics
                                :values [row]
@@ -7521,6 +7531,87 @@
                   user-id])]
     (or (:total result) 0)))
 
+;; ── Getting-started checklist (plans/getting-started-checklist.md §4) ──────
+
+(defn get-getting-started-progress
+  "Which getting-started steps `user-id` has done, from one round trip (1.1).
+
+   Pre : `user-id` is a users.id.
+   Post: six booleans, each true when existing data proves the step.
+         :imported?    a root topic not staged for deletion, any kind or status
+         :read?        a Learn Next, Postpone or Done (`topic_repetitions`)
+         :extracted?   an `is_extract` topic not staged for deletion
+         :carded?      a flashcard whose root topic is the user's, not staged
+         :reviewed?    a Quiz review of a flashcard (`kg_reviews.flashcard_id`)
+         :anki-pushed? such a flashcard that also has an `anki_note_id`"
+  [user-id]
+  (let [row (jdbc/execute-one! ds
+              ["SELECT
+                  EXISTS (SELECT 1 FROM topics
+                          WHERE user_id = ? AND parent_id IS NULL
+                            AND staged_delete_id IS NULL) AS has_imported,
+                  EXISTS (SELECT 1 FROM topic_repetitions
+                          WHERE user_id = ?
+                            AND event_type IN ('advance', 'postpone', 'done')) AS has_read,
+                  EXISTS (SELECT 1 FROM topics
+                          WHERE user_id = ? AND is_extract
+                            AND staged_delete_id IS NULL) AS has_extracted,
+                  EXISTS (SELECT 1 FROM flashcards f
+                          JOIN topics r ON r.id = f.root_topic_id
+                          WHERE r.user_id = ? AND r.staged_delete_id IS NULL) AS has_cards,
+                  EXISTS (SELECT 1 FROM kg_reviews
+                          WHERE user_id = ? AND flashcard_id IS NOT NULL) AS has_reviewed,
+                  EXISTS (SELECT 1 FROM flashcards f
+                          JOIN topics r ON r.id = f.root_topic_id
+                          WHERE r.user_id = ? AND r.staged_delete_id IS NULL
+                            AND f.anki_note_id IS NOT NULL) AS has_anki_pushed"
+               user-id user-id user-id user-id user-id user-id])]
+    {:imported? (boolean (:has_imported row))
+     :read? (boolean (:has_read row))
+     :extracted? (boolean (:has_extracted row))
+     :carded? (boolean (:has_cards row))
+     :reviewed? (boolean (:has_reviewed row))
+     :anki-pushed? (boolean (:has_anki_pushed row))}))
+
+(defn get-getting-started-targets
+  "The topics a getting-started \"Show me\" opens, from one round trip (§7).
+
+   Reads `content_preview`, the stored generated column, rather than
+   `content_text`: a test of the TOASTed column would detoast every row the
+   scan passes.
+
+   Pre : `user-id` is a users.id.
+   Post: each key is a topic id or nil. Every topic is the user's and not
+         staged for deletion, and the highest id wins.
+         :text-topic-id  a topic with text, pages included (1.5)
+         :extract-id     an `is_extract` topic with text
+         :pdf-id         a `pdf` root
+         :carded-root-id the root of the newest flashcard"
+  [user-id]
+  (let [row (jdbc/execute-one! ds
+              ["SELECT
+                  (SELECT id FROM topics
+                   WHERE user_id = ? AND staged_delete_id IS NULL
+                     AND content_preview <> ''
+                   ORDER BY id DESC LIMIT 1) AS text_topic_id,
+                  (SELECT id FROM topics
+                   WHERE user_id = ? AND staged_delete_id IS NULL
+                     AND is_extract AND content_preview <> ''
+                   ORDER BY id DESC LIMIT 1) AS extract_id,
+                  (SELECT id FROM topics
+                   WHERE user_id = ? AND staged_delete_id IS NULL
+                     AND parent_id IS NULL AND kind = 'pdf'
+                   ORDER BY id DESC LIMIT 1) AS pdf_id,
+                  (SELECT f.root_topic_id FROM flashcards f
+                   JOIN topics r ON r.id = f.root_topic_id
+                   WHERE r.user_id = ? AND r.staged_delete_id IS NULL
+                   ORDER BY f.id DESC LIMIT 1) AS carded_root_id"
+               user-id user-id user-id user-id])]
+    {:text-topic-id (:text_topic_id row)
+     :extract-id (:extract_id row)
+     :pdf-id (:pdf_id row)
+     :carded-root-id (:carded_root_id row)}))
+
 (defn get-queue-summary
   "Aggregate queue stats in a single SQL query."
   [user-id]
@@ -9164,7 +9255,8 @@
                                   :content content
                                   :kind "basic"
                                   :title title
-                                  :source-id inherited})
+                                  :source-id inherited
+                                  :extract? true})
           extract-id (:topics/id created)]
       (jdbc/execute! ds
         ["INSERT INTO video_segments (topic_id, start_ms, end_ms) VALUES (?, ?, ?)"

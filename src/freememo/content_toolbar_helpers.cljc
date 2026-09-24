@@ -153,7 +153,8 @@
                                                           cleaner/clean-html-fragment)
                                                :kind "basic"
                                                :title title
-                                               :source-id inherited-src})]
+                                               :source-id inherited-src
+                                               :extract? true})]
                 (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-OK new-id=" (:topics/id created)
                                 " inherited-source=" inherited-src))
                 (db/copy-pins-to-child! parent-id (:topics/id created))

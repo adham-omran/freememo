@@ -37,8 +37,9 @@
 ;; ---------------------------------------------------------------------------
 
 (def import-item
-  "The rail's one action, above every destination (W3)."
-  {:tab :import :label "Import" :icon :plus})
+  "The rail's one action, above every destination (W3). `:tour` is its
+   spotlight anchor (plans/getting-started-checklist.md 3.2.1)."
+  {:tab :import :label "Import" :icon :plus :tour "import-cta"})
 
 (def destinations
   "The rail's destinations below Import, in reading-stage order: arrive, read,
@@ -353,14 +354,16 @@
       (dom/span (dom/text text)))))
 
 (e/defn RailItem
-  "One navigating row. `extra-class` is nil or one more class token."
-  [{:keys [label icon]} active? extra-class on-click]
+  "One navigating row. `extra-class` is nil or one more class token. An item
+   with `:tour` carries it as its `data-tour` spotlight anchor."
+  [{:keys [label icon tour]} active? extra-class on-click]
   (e/client
     (dom/button
       (dom/props {:class (str "nav-rail__item"
                            (when extra-class (str " " extra-class))
                            (when active? " is-active"))
                   :aria-current (when active? "page")})
+      (dom/props {:data-tour tour})
       (RailIcon icon)
       (RailLabel label)
       (dom/On "click" (fn [_] (on-click)) nil))))
@@ -446,6 +449,7 @@
         (dom/props {:class "nav-rail__menu" :data-nav-rail-toggle ""
                     :aria-label "Open navigation"
                     :aria-expanded (str (boolean open?))})
+        (dom/props {:data-tour "rail-menu"})
         (icons/Icon :menu :size 20)
         (dom/On "click" (fn [_] (toggle-drawer! !open? !via)) nil))
       (dom/a

@@ -24,6 +24,7 @@
         (dom/props {:class "btn btn-sm btn-primary"
                     :style {:font-weight "500"}
                     :aria-label "Extract"})
+        (dom/props {:data-tour "extract"})
         (tooltip/Tooltip! (if (= context-mode :extract)
                             (str "Extract selected text as a child topic (" chord ")")
                             (str "Extract selected text as a topic (" chord ")")))

@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-form :as form]
    [freememo.doc-context :as dctx]
@@ -53,28 +54,29 @@
 ;; discoverable from whichever document happens to be open.
 
 (e/defn AnkiSyncErrorPanel
-  "Error state with retry and cancel buttons.
+  "Error state: the AnkiConnect setup guide, then retry and cancel buttons.
+   A granted Connect in the guide runs the same retry
+   (plans/getting-started-checklist.md 8.4.2).
    conn = {:!status :!error :!decks :!models :!selected-deck :!all-tags}"
   [conn !show-modal]
   (e/client
-    (let [conn-error (e/watch (:!error conn))]
+    (let [conn-error (e/watch (:!error conn))
+          retry! (fn []
+                   (reset! (:!status conn) :connecting)
+                   (reset! (:!error conn) nil)
+                   (helpers/run-fetch-config! conn))]
       (dom/div
         (dom/props {:style {:text-align "center" :padding "20px"}})
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :margin-bottom "var(--sp-3)"}})
           (dom/text (or conn-error "Connection failed")))
         (dom/div
-          (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin-bottom "var(--sp-4)"}})
-          (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
+          (dom/props {:style {:text-align "left" :margin-bottom "var(--sp-4)"}})
+          (AnkiConnectGuide nil retry!))
         (dom/button
           (dom/props {:class "btn btn-primary" :style {:font-size "14px"}})
           (dom/text "Retry")
-          (dom/On "click"
-            (fn [_]
-              (reset! (:!status conn) :connecting)
-              (reset! (:!error conn) nil)
-              (helpers/run-fetch-config! conn))
-            nil))
+          (dom/On "click" (fn [_] (retry!)) nil))
         (dom/button
           (dom/props {:class "btn btn-secondary" :style {:font-size "14px" :margin-left "var(--sp-2)"}})
           (dom/text "Cancel")

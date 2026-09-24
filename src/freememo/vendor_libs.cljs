@@ -6,9 +6,9 @@
    with an immutable cache header (src-prod/prod.cljc). Quill, quill-resize and
    highlight.js stay as <script> tags in the HTML: Quill's syntax module reads
    window.hljs at editor construction, and quill_field's namespace-load `defonce`
-   patches Quill's icon registry before any guard runs. The six groups here have
-   no tag at all — nothing fetches them until a feature asks, which keeps ~305 KB
-   (gzip) of JS off the boot path.
+   patches Quill's icon registry before any guard runs. The seven groups here
+   have no tag at all — nothing fetches them until a feature asks, which keeps
+   ~305 KB (gzip) of JS off the boot path.
 
    ensure!
      Pre  — `group` is a key of `specs`.
@@ -76,7 +76,13 @@
    :katex
    {:files ["katex@0.16.11/katex.min.js"
             "katex@0.16.11/contrib/auto-render.min.js"]
-    :probes ["katex" "renderMathInElement"]}})
+    :probes ["katex" "renderMathInElement"]}
+
+   ;; @floating-ui/dom reads window.FloatingUICore, so core comes first.
+   :floating-ui
+   {:files ["floating-ui@1.8.0/floating-ui.core.umd.min.js"
+            "floating-ui@1.8.0/floating-ui.dom.umd.min.js"]
+    :probes ["FloatingUICore" "FloatingUIDOM"]}})
 
 (defonce ^:private !pending (atom {}))
 

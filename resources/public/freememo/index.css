@@ -7894,3 +7894,130 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .forge-import p[data-role="errormessage"] {
     margin: 6px 0 0 0; font-size: 13px; color: var(--color-danger-text);
 }
+
+/* ── Getting-started checklist (plans/getting-started-checklist.md §5) ── */
+
+.getting-started {
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-card);
+    padding: var(--sp-4);
+    margin: 0 0 var(--sp-6);
+}
+.getting-started__head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
+}
+.getting-started__title { font-size: 16px; font-weight: 700; margin: 0; }
+.getting-started__count { font-size: 13px; color: var(--color-text-secondary); flex: 1; }
+.getting-started__steps { list-style: none; margin: 0; padding: 0; }
+.getting-started__step {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) 0;
+    border-top: 1px solid var(--color-bg-subtle);
+}
+.getting-started__step:first-child { border-top: none; }
+.getting-started__mark {
+    flex: 0 0 18px;
+    height: 18px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--color-border);
+    color: var(--color-success);
+    display: inline-flex;
+}
+.getting-started__step.is-done .getting-started__mark { box-shadow: none; }
+.getting-started__step.is-next .getting-started__mark { box-shadow: inset 0 0 0 2px var(--color-primary); }
+.getting-started__words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.getting-started__label { font-size: 14px; font-weight: 600; }
+.getting-started__step.is-done .getting-started__label { color: var(--color-text-secondary); font-weight: 500; }
+.getting-started__text { font-size: 13px; color: var(--color-text-secondary); }
+.getting-started__step.is-unavailable .getting-started__text { color: var(--color-warning-dark); }
+.getting-started__optional {
+    margin-left: var(--sp-2);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-hint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Spotlight (plans/getting-started-checklist.md §6) ──
+   The layer never takes a click: the ring's hole must let one through to the
+   target (3.8), and freememo.spotlight closes on an outside pointerdown
+   without swallowing it (3.9). Above .modal-backdrop (1000), under
+   .toast-stack (9999) (3.3). No transitions, so reduced motion has nothing
+   to turn off. */
+
+.spotlight-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 1050;
+    pointer-events: none;
+}
+.spotlight-layer[data-placement="center"] { background: rgba(15, 17, 21, 0.45); }
+.spotlight-ring {
+    position: fixed;
+    display: none;
+    border-radius: var(--radius-md);
+    box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 100vmax rgba(15, 17, 21, 0.45);
+}
+.spotlight-layer[data-placement="anchor"] .spotlight-ring { display: block; }
+.spotlight-card {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: min(320px, calc(100vw - 16px));
+    visibility: hidden;
+    pointer-events: auto;
+    background: var(--color-bg-card);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-modal);
+    padding: var(--sp-4);
+}
+.spotlight-card:focus { outline: none; }
+.spotlight-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.spotlight-layer[data-placement] .spotlight-card { visibility: visible; }
+.spotlight-layer[data-placement="center"] .spotlight-card {
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%);
+}
+.spotlight-card__title { font-size: 15px; font-weight: 700; margin: 0 0 var(--sp-2); }
+.spotlight-card__body { font-size: 14px; color: var(--color-text-secondary); margin: 0 0 var(--sp-3); }
+.spotlight-card__actions { display: flex; justify-content: flex-end; }
+
+/* ── AnkiConnect setup guide (plans/getting-started-checklist.md §9) ── */
+
+.anki-connect-guide {
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-md);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-4);
+    font-size: 14px;
+}
+.anki-connect-guide__title { font-size: 14px; font-weight: 700; margin: 0 0 var(--sp-2); }
+.anki-connect-guide__steps { margin: 0 0 var(--sp-2); padding-left: 20px; }
+.anki-connect-guide__steps li { margin-bottom: var(--sp-2); line-height: 1.5; }
+.anki-connect-guide__note { font-size: 13px; color: var(--color-text-secondary); margin: 0; }
+.anki-connect-guide__outcome {
+    margin-top: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    background: var(--color-bg-subtle);
+}
+.anki-connect-guide__outcome p { margin: 0 0 var(--sp-2); }
+.anki-connect-guide__outcome p:last-child { margin-bottom: 0; }
+.anki-connect-guide__outcome ol { margin: 0 0 var(--sp-2); padding-left: 20px; }
+.anki-connect-guide__outcome.is-ok { background: var(--color-success-lighter); }
+.anki-connect-guide__outcome.is-problem { background: var(--color-warning-bg); }
+.anki-connect-guide__code {
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0 0 var(--sp-2);
+}

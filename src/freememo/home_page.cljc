@@ -2,6 +2,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.getting-started :as getting-started]
+   [freememo.getting-started-steps :as steps]
    [freememo.loading :as loading]
    [freememo.navigation :as nav]
    [freememo.schedule :as sched]
@@ -38,9 +40,11 @@
                  (cond
                    (<= days 0) "today"
                    (= days 1) "tomorrow"
-                   :else (str "in " days " days"))))]
+                   :else (str "in " days " days"))))
+             configured? (:configured? (get-api-key-status* settings-refresh user-id enc-key))]
          (loading/region-success
-           {:configured? (:configured? (get-api-key-status* settings-refresh user-id enc-key))
+           {:configured? configured?
+            :getting-started (getting-started/checklist-input user-id configured?)
             :queue-count (db/get-learning-queue-count user-id)
             :total-count (db/get-total-topic-count user-id)
             :next-review next-review
@@ -50,7 +54,8 @@
        (catch Exception error
          (loading/region-failure (or (ex-message error) "Unknown error"))))
      :cljs (loading/region-success
-             {:configured? false :queue-count 0 :total-count 0 :next-review nil
+             {:configured? false :getting-started {:dismissed? true}
+              :queue-count 0 :total-count 0 :next-review nil
               :schedule-nudges []})))
 
 (e/defn ScheduleNudges [navigate! schedule-nudges]
@@ -116,13 +121,21 @@
         (dom/On "click" (fn [_] (navigate! :import)) nil))
       (dom/div (dom/props {:style {:height "61px"}})))))
 
-(e/defn HomeSummary [navigate! summary]
+(e/defn HomeSummary [navigate! user-id summary]
   (e/client
-    (let [{:keys [configured? queue-count total-count next-review schedule-nudges]} summary
+    (let [{:keys [configured? queue-count total-count next-review schedule-nudges
+                  getting-started]} summary
           new-user? (zero? total-count)
-          has-due? (pos? queue-count)]
+          has-due? (pos? queue-count)
+          checklist (steps/checklist getting-started)
+          ;; The checklist's first step is the import call to action, so a
+          ;; new user with the checklist open sees no second one (2.6).
+          checklist-imports? (and new-user? (some? checklist))]
       (dom/div
-        (when-not has-due?
+        (when checklist
+          (getting-started/GettingStarted navigate! user-id checklist getting-started))
+
+        (when-not (or has-due? checklist-imports?)
           (dom/p
             (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})
             (dom/text
@@ -143,24 +156,25 @@
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :learn)) nil))
             (dom/text (str " across " total-count " total"))))
 
-        (dom/button
-          (dom/props {:class "btn btn-primary"
-                      :style {:width "100%" :padding "14px 0" :font-size "16px" :font-weight "600"
-                              :border-radius "var(--radius-md)" :margin-bottom "8px"}})
-          (dom/text
-            (cond
-              (and new-user? (not configured?)) "Set Up API Key"
-              new-user? "Import Your First Document"
-              has-due? "Continue Learning"
-              :else "Browse Library"))
-          (dom/On "click"
-            (fn [_]
+        (when-not checklist-imports?
+          (dom/button
+            (dom/props {:class "btn btn-primary"
+                        :style {:width "100%" :padding "14px 0" :font-size "16px" :font-weight "600"
+                                :border-radius "var(--radius-md)" :margin-bottom "8px"}})
+            (dom/text
               (cond
-                (and new-user? (not configured?)) (navigate! :settings)
-                new-user? (navigate! :import)
-                has-due? (navigate! :viewer (nav/nav-learn-session))
-                :else (navigate! :library)))
-            nil))
+                (and new-user? (not configured?)) "Set Up API Key"
+                new-user? "Import Your First Document"
+                has-due? "Continue Learning"
+                :else "Browse Library"))
+            (dom/On "click"
+              (fn [_]
+                (cond
+                  (and new-user? (not configured?)) (navigate! :settings)
+                  new-user? (navigate! :import)
+                  has-due? (navigate! :viewer (nav/nav-learn-session))
+                  :else (navigate! :library)))
+              nil)))
 
         (dom/div
           (dom/props {:style {:text-align "center" :margin-bottom "40px"}})
@@ -204,6 +218,7 @@
             (e/server
               (e/Offload #(assoc (home-summary-result* settings-refresh schedule-refresh user-id enc-key)
                              :request-key request-key))))
-          (e/fn [summary _phase _error] (HomeSummary navigate! summary))
+          (e/fn [summary _phase _error] (HomeSummary navigate! user-id summary))
           (e/fn [_phase] (HomeSummaryLoading navigate!))
-          (e/fn [error] (HomeSummaryFailure navigate! error)))))))
+          (e/fn [error] (HomeSummaryFailure navigate! error)))
+        (getting-started/ReopenRequests user-id)))))

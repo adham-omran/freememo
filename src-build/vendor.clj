@@ -37,7 +37,10 @@
   {:pdf.js "3.11.174", :highlight.js "11.9.0", :quill "2.0.3",
    :quill-resize-module "2.1.3", :konva "9.3.16", :graphology "0.26.0",
    :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11",
-   :highlightjs-zig "1.0.2", :amiri "5.3.0"})
+   :highlightjs-zig "1.0.2", :amiri "5.3.0",
+   ;; @floating-ui/core and @floating-ui/dom are released together and share a
+   ;; version number, so one string covers both packages below.
+   :floating-ui "1.8.0"})
 
 (defn- v [lib] (get versions lib))
 (def ^:private cdnjs "https://cdnjs.cloudflare.com/ajax/libs")
@@ -52,7 +55,8 @@
    production. Nothing to vendor; the behaviour is unchanged."
   (let [pdf (v :pdf.js), hl (v :highlight.js), q (v :quill), rs (v :quill-resize-module)
         kv (v :konva), gr (v :graphology), sg (v :sigma), ws (v :wavesurfer.js)
-        lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig), am (v :amiri)]
+        lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig), am (v :amiri)
+        fl (v :floating-ui)]
     [[(str "pdf.js@" pdf "/pdf.min.js")                (str cdnjs "/pdf.js/" pdf "/pdf.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.js")         (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.css")        (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.css")]
@@ -97,7 +101,13 @@
      [(str "amiri@" am "/files/amiri-arabic-700-normal.woff2")
       (str jsd "/@fontsource/amiri@" am "/files/amiri-arabic-700-normal.woff2")]
      ;; The OFL text, so the vendored tree carries its own licence.
-     [(str "amiri@" am "/LICENSE") (str jsd "/@fontsource/amiri@" am "/LICENSE")]]))
+     [(str "amiri@" am "/LICENSE") (str jsd "/@fontsource/amiri@" am "/LICENSE")]
+     ;; Floating UI — core must execute before dom, which reads window.FloatingUICore
+     ;; and defines window.FloatingUIDOM. freememo.spotlight is the consumer.
+     [(str "floating-ui@" fl "/floating-ui.core.umd.min.js")
+      (str jsd "/@floating-ui/core@" fl "/dist/floating-ui.core.umd.min.js")]
+     [(str "floating-ui@" fl "/floating-ui.dom.umd.min.js")
+      (str jsd "/@floating-ui/dom@" fl "/dist/floating-ui.dom.umd.min.js")]]))
 
 (def ^:private vendor-root "resources/public/freememo/vendor")
 (def ^:private lock-file "vendor-lock.sha256")

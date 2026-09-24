@@ -496,6 +496,10 @@
      :open-nav-rail     {:label "Open Sidebar"   :class :query :exec :client
                          :views #{}}
      :open-undo-history {:label "Action history"  :class :nav}
+     ;; Clears a Dismiss and goes Home, where the checklist shows again while
+     ;; a step is open. freememo.getting-started registers the handler and
+     ;; owns the settings write (plans/getting-started-checklist.md 5.1).
+     :show-getting-started {:label "Show getting started" :class :nav}
      ;; Opens the Activity popover. :class :nav with no :nav-tab — it is a
      ;; toggle, not a destination, so command-bus flips the shell atom rather
      ;; than routing. Globally available: work runs on every tab, so a :when

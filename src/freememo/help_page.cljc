@@ -4,6 +4,7 @@
    data-driven so a new workflow is a map, not more markup."
   (:require
    [clojure.string :as str]
+   [freememo.command-bus :as bus]
    [freememo.commands :as commands]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
@@ -111,7 +112,8 @@
             ["Create the cards" "Hide One, Guess One makes one card per mask group; Hide All, Guess One hides them all on every card. Push to Anki as image-occlusion notes."]]}
    {:title "Syncing to Anki"
     :intro "Push curated cards into your own Anki collection over AnkiConnect."
-    :steps [["Sync ({anki-sync})" "Choose the deck, tags and a custom header, then sync. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
+    :steps [["Set up AnkiConnect" "Settings → Anki Sync walks you through it: install Anki and the AnkiConnect add-on, press Connect, and choose Yes when Anki asks about FreeMemo."]
+            ["Sync ({anki-sync})" "Choose the deck, tags and a custom header, then sync. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
             ["Sync now ({quick-sync})" "The same run with your saved settings, in the background — no modal."]
             ["What a run does" "Each card moves whichever way it changed: edited here it goes to Anki, edited in Anki it comes back, deleted on one side it goes from the other. There is no direction to pick."]
             ["Conflicts" "A card edited on BOTH sides is left untouched and reported. Filter Library › Cards by Conflict, then choose Keep FreeMemo or Keep Anki."]]}
@@ -178,6 +180,15 @@
         (dom/props {:style {:font-size "15px" :color "var(--color-text-secondary)"
                             :margin-bottom "28px"}})
         (dom/text "FreeMemo runs three review systems over what you read: a priority queue for reading, FSRS-6 for quiz questions, and your own Anki for cards. Here's how to use it, feature by feature."))
+      ;; plans/getting-started-checklist.md 5.2 — the same command as the palette.
+      (dom/p
+        (dom/props {:style {:font-size "14px" :margin "-16px 0 28px"}})
+        (dom/a
+          (dom/props {:href "/"
+                      :style {:color "var(--color-primary-text)" :font-weight "600"
+                              :text-decoration "underline" :cursor "pointer"}})
+          (dom/text "Show the getting-started checklist")
+          (dom/On "click" (fn [e] (.preventDefault e) (bus/dispatch! :show-getting-started)) nil)))
       (e/for-by :title [wf workflows]
         (dom/section
           (dom/props {:style {:margin-bottom "28px"}})

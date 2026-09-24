@@ -115,6 +115,7 @@
                                   :font-weight "bold"}
                           :disabled no-content?
                           :aria-label (str action-summary " (" (commands/display-chord :generate) ")")})
+              (dom/props {:data-tour "generate"})
               (tooltip/Tooltip! (if no-content?
                                   "Extract text first to generate flashcards"
                                   (str action-summary " (" (commands/display-chord :generate) ")")))
