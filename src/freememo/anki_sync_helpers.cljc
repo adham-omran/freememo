@@ -165,9 +165,16 @@
       `timeout-ms` is optional and defaults to none, because a large push can
       take as long as it takes. With one, a request that gets no answer in
       time fails with an Error whose name is \"TimeoutError\"
-      (plans/getting-started-checklist.md 8.2.1)."
+      (plans/getting-started-checklist.md 8.2.1).
+
+      `simple-request?` true sends no Content-Type, so the browser sends no
+      CORS preflight. `requestPermission` needs it: AnkiConnect answers a
+      preflight from an origin outside `webCorsOriginList` with
+      `Access-Control-Allow-Origin: http://localhost` (its web.py), so the
+      browser blocks the call that would ask Anki to add the origin.
+      AnkiConnect parses the body as JSON whatever its type."
      ([action params] (anki-call! action params nil))
-     ([action params {:keys [timeout-ms]}]
+     ([action params {:keys [timeout-ms simple-request?]}]
       (from-future
         (fn [token]
           (let [ctrl (js/AbortController.)
@@ -178,7 +185,9 @@
             (.finally token #(.abort ctrl))
             (-> (js/fetch "http://127.0.0.1:8765"
                   (clj->js {:method "POST"
-                            :headers {"Content-Type" "application/json"}
+                            :headers (if simple-request?
+                                       {}
+                                       {"Content-Type" "application/json"})
                             :signal (.-signal ctrl)
                             :body (js/JSON.stringify
                                     (clj->js (cond-> {:action action :version 6}

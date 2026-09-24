@@ -51,7 +51,8 @@
   [!state on-granted]
   #?(:cljs
      (do (reset! !state {:phase :connecting})
-         ((helpers/anki-call! "requestPermission" nil {:timeout-ms status/connect-timeout-ms})
+         ((helpers/anki-call! "requestPermission" nil {:timeout-ms status/connect-timeout-ms
+                                                       :simple-request? true})
           (fn [result]
             (let [phase (status/classify {:result result})]
               (reset! !state {:phase phase :version (:version result)})
