@@ -30,6 +30,13 @@
        "defaults write net.ichi2.anki NSAppSleepDisabled -bool true\n"
        "defaults write org.qt-project.Qt.QtWebEngineCore NSAppSleepDisabled -bool true"))
 
+(defn page-origin
+  "This page's origin, the value AnkiConnect compares against
+   `webCorsOriginList`. A self-hosted FreeMemo shows its own address."
+  []
+  #?(:cljs (.. js/window -location -origin)
+     :clj nil))
+
 (defn newest-carded-root-id* [user-id]
   #?(:clj (:carded-root-id (db/get-getting-started-targets user-id))
      :cljs nil))
@@ -108,6 +115,24 @@
               (dom/text "Show me")
               (dom/On "click" (fn [_] (show-sync-trigger! root-id)) nil))))))))
 
+(e/defn ManualOriginSteps
+  "The way to add this site without Connect, for a user whose Anki never
+   asks. AnkiConnect reads its config on every request (its util.py), so the
+   edit needs no restart."
+  [origin]
+  (e/client
+    (dom/details
+      (dom/props {:class "anki-connect-guide__manual"})
+      (dom/summary (dom/text "Or add this site by hand"))
+      (dom/ol
+        (dom/li (dom/text "In Anki, choose Tools → Add-ons, select AnkiConnect, and press Config."))
+        (dom/li
+          (dom/text "Add this site to the webCorsOriginList line. Keep the entries that are there, and put a comma between entries:")
+          (dom/pre (dom/props {:class "anki-connect-guide__code"})
+            (dom/text (str "\"webCorsOriginList\": [\"http://localhost\", \"" origin "\"]")))
+          (CopyButton "Copy site address" (str "\"" origin "\"")))
+        (dom/li (dom/text "Press OK. You do not need to restart Anki."))))))
+
 (e/defn UnreachablePanel []
   (e/client
     (dom/div
@@ -182,4 +207,5 @@
         (dom/p
           (dom/props {:class "anki-connect-guide__note"})
           (dom/text "Anki must run on this computer. Phones and tablets cannot connect."))
+        (ManualOriginSteps (page-origin))
         (OutcomePanel user-id state (nil? on-granted))))))

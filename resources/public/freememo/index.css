@@ -8021,3 +8021,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     word-break: break-all;
     margin: 0 0 var(--sp-2);
 }
+.anki-connect-guide__manual { margin-top: var(--sp-2); font-size: 13px; }
+.anki-connect-guide__manual summary { cursor: pointer; color: var(--color-primary-text); }
+.anki-connect-guide__manual ol { margin: var(--sp-2) 0 0; padding-left: 20px; }
+.anki-connect-guide__manual li { margin-bottom: var(--sp-2); }
