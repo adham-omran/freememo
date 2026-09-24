@@ -64,7 +64,8 @@
 
       :learn
       (do (navigate! :learn)
-          (spotlight/show! {:anchors [:learn-start] :navigates? true
+          (spotlight/show! {:anchors [:learn-start]
+                            :route-key (spotlight/route-key :learn nil)
                             :title "Read it in Learn"
                             :body "Start a session. Press Next when you finish reading."}))
 
@@ -72,12 +73,14 @@
       (cond
         text-topic-id
         (do (open-topic! text-topic-id)
-            (spotlight/show! {:anchors [:extract] :navigates? true
+            (spotlight/show! {:anchors [:extract]
+                              :route-key (spotlight/route-key :viewer text-topic-id)
                               :title "Extract a passage"
                               :body "Select a passage in the editor, then press Extract."}))
         pdf-id
         (do (open-topic! pdf-id)
-            (spotlight/show! {:anchors [:pdf-copy-text] :navigates? true
+            (spotlight/show! {:anchors [:pdf-copy-text]
+                              :route-key (spotlight/route-key :viewer pdf-id)
                               :title "Get the page text"
                               :body "This page has no text yet. Copy text gets it from the PDF."}))
         :else
@@ -89,12 +92,14 @@
       (cond
         (not llm-enabled?)
         (do (open-settings! "settings-ai")
-            (spotlight/show! {:anchors [:settings-ai] :navigates? true
+            (spotlight/show! {:anchors [:settings-ai]
+                              :route-key (spotlight/route-key :settings nil)
                               :title "Turn on AI features"
                               :body "Turn on AI features to generate cards."}))
         (or extract-id text-topic-id)
         (do (open-topic! (or extract-id text-topic-id))
-            (spotlight/show! {:anchors [:generate] :navigates? true
+            (spotlight/show! {:anchors [:generate]
+                              :route-key (spotlight/route-key :viewer (or extract-id text-topic-id))
                               :title "Make flashcards"
                               :body "Generate flashcards from this text."}))
         :else
@@ -104,13 +109,15 @@
 
       :quiz
       (do (navigate! :quiz)
-          (spotlight/show! {:anchors [:quiz-start] :navigates? true
+          (spotlight/show! {:anchors [:quiz-start]
+                            :route-key (spotlight/route-key :quiz nil)
                             :title "Review a card"
                             :body "Review your new cards here."}))
 
       :anki
       (do (open-settings! "settings-anki")
-          (spotlight/show! {:anchors [:anki-connect] :navigates? true
+          (spotlight/show! {:anchors [:anki-connect]
+                            :route-key (spotlight/route-key :settings nil)
                             :title "Send cards to Anki"
                             :body "Connect FreeMemo to Anki on this computer."})))))
 

@@ -27,9 +27,8 @@
   5000)
 
 (defonce ^{:doc "nil, or the open request:
-   {:id uuid :anchor-values [data-tour …] :title s :body s :route key :from key}.
-   `:route` is the route key the card belongs to, or ::pending until the
-   navigation its caller started lands."}
+   {:id uuid :anchor-values [data-tour …] :title s :body s :route-key key}.
+   `:route-key` is the route the card belongs to."}
   !spotlight
   (atom nil))
 
@@ -54,31 +53,29 @@
 
    Pre : every key in `anchors` is a key of `spotlight-anchors/anchors`
          (violation = caller bug). An empty `anchors` asks for a centered
-         card. `navigates?` is true when the caller has just called
-         `navigate!`, so the card belongs to the next route.
+         card. A caller that has just called `navigate!` passes the
+         `route-key` of the destination. The card belongs to that route,
+         whether the navigation lands before this call or after it.
    Post: `!spotlight` holds the new request. Returns nil."
-  [{:keys [anchors title body navigates?]}]
+  [{:keys [anchors title body route-key]}]
   {:pre [(every? catalogue/anchors anchors)]}
-  (let [here @!route-key]
-    (reset! !spotlight {:id (random-uuid)
-                        :anchor-values (mapv catalogue/anchors anchors)
-                        :title title
-                        :body body
-                        :route (if navigates? ::pending here)
-                        :from here})
-    nil))
+  (reset! !spotlight {:id (random-uuid)
+                      :anchor-values (mapv catalogue/anchors anchors)
+                      :title title
+                      :body body
+                      :route-key (or route-key @!route-key)})
+  nil)
 
 (defn observe-route!
-  "Close the spotlight when the route leaves the one it belongs to (3.9).
-   A request opened with `:navigates?` adopts the first route that differs
-   from the one it opened on.
+  "Close the spotlight when the shell reports a route other than the one the
+   card belongs to (3.9). A navigation still in flight has not been reported
+   yet, so it cannot close the card that asked for it.
    Post: `!route-key` holds `key`. Returns nil."
   [key]
   (reset! !route-key key)
-  (when-let [{:keys [route from]} @!spotlight]
-    (cond
-      (= route ::pending) (when (not= key from) (swap! !spotlight assoc :route key))
-      (not= route key) (close!)))
+  (when-let [request @!spotlight]
+    (when (not= key (:route-key request))
+      (close!)))
   nil)
 
 ;; ── DOM ────────────────────────────────────────────────────────────────────

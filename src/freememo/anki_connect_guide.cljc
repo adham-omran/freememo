@@ -71,7 +71,8 @@
   [root-id]
   (if root-id
     (do (bus/dispatch! :open-topic {:topic-id root-id})
-        (spotlight/show! {:anchors [:anki-sync] :navigates? true
+        (spotlight/show! {:anchors [:anki-sync]
+                          :route-key (spotlight/route-key :viewer root-id)
                           :title "Send cards to Anki"
                           :body "Open this menu and choose Sync with Anki."}))
     (spotlight/show! {:anchors []
