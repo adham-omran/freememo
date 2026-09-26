@@ -23,6 +23,15 @@
    stop through `boot!`'s own thunk, and the stale-client reload, which owns its
    exit.
 
+   **A server crash can also leave the reactor running, so the socket's close
+   event reports too.** After a server-side failure, the client's close handler
+   runs and cancels the process, but the root frame can fail to finish its
+   teardown. `connector` then never reaches its close-code branch, and neither
+   continuation runs. The close event itself always arrives, so `boot!` also
+   listens for 1011 and 1012 on Electric's socket, and sends the report and
+   raises the banner from there. The measurements are in
+   `plans/card-refresh-server-local.md` §4.
+
    **The banner is plain DOM on purpose.** Electric is dead by the time it
    renders, so it cannot be an `e/defn`. It is appended to `document.body`, the
    one parent Electric adds to and removes from by identity rather than by child
@@ -30,7 +39,7 @@
 
    `.cljs`, not `.cljc`: the CLJ peer has no use for any of this, and `dev.cljc`
    keeps Electric-heavy CLJ requires off its main thread."
-  ;; Required for one auto-resolved keyword, `::electric-client/stale-client`.
+  ;; Required for `::electric-client/stale-client` and `*ws-server-url*`.
   ;; The alias is compile-checked where the literal
   ;; `:hyperfiddle.electric-client3/stale-client` would not be, and the namespace
   ;; is already loaded by every caller.
@@ -139,6 +148,41 @@
   [error]
   (= ::electric-client/stale-client (:hyperfiddle.electric/type (ex-data error))))
 
+(def ^:private server-terminated-codes
+  "Close codes after which Electric never reconnects: 1011 is a server process
+   crash and 1012 a program mismatch."
+  #{1011 1012})
+
+(defonce ^:private !electric-close-handler (atom nil))
+
+(defn- observe-electric-closes!
+  "Give every socket opened to Electric's URL a `close` listener that calls the
+   handler current at the time the socket opens.
+
+   Pre : called before the process opens its socket.
+   Post: `js/WebSocket` still constructs native sockets, with the native
+         prototype and constants. It is replaced at most once per page load.
+   Invariant: a socket reports to the process that opened it, so the close of a
+         socket from an earlier dev reload never reaches a later process."
+  [handler]
+  (reset! !electric-close-handler handler)
+  ;; String keys for the marker, read and write alike: Closure renames a dotted
+  ;; property that no extern names.
+  (when-not (aget js/WebSocket "freememoObservesCloses")
+    (let [native js/WebSocket
+          observed (fn [url protocols]
+                     (let [socket (if (undefined? protocols)
+                                    (new native url)
+                                    (new native url protocols))]
+                       (when (= url electric-client/*ws-server-url*)
+                         (.addEventListener socket "close" @!electric-close-handler))
+                       socket))]
+      (set! (.-prototype observed) (.-prototype native))
+      (doseq [constant ["CONNECTING" "OPEN" "CLOSING" "CLOSED"]]
+        (aset observed constant (aget native constant)))
+      (aset observed "freememoObservesCloses" true)
+      (set! (.-WebSocket js/window) observed))))
+
 (defn boot!
   "Start the Electric client process with continuations that report themselves.
 
@@ -151,7 +195,9 @@
          caller gets, so the recording cannot be forgotten — stopping the process
          any other way is a caller bug, and it banners.
    Invariant: the banner appears only for a termination nobody asked for, and at
-         most once per page load.
+         most once per page load. At most one failure report goes out per
+         process, from whichever of the close event and the two continuations
+         comes first.
 
    **The deliberate-stop flag is per process, not per module, and that is the
    whole reason this shape exists.** A dev hot reload cancels the process, and
@@ -162,22 +208,35 @@
    by the time the old process reported, and every save would raise the banner."
   [task]
   (let [!deliberate-stop? (atom false)
-        cancel (task
-                 (fn [_]
-                   ;; Success is not a healthy state here — only a deliberate
-                   ;; stop is.
-                   (when-not @!deliberate-stop?
-                     (send-failure! "unexpected-success" nil)
-                     (raise-banner!)))
-                 (fn [error]
-                   (when-not (stale-client? error)
-                     ;; The error OBJECT, not its message: `socket-emit` enriches
-                     ;; an unserializable transfer with the let-bound values it
-                     ;; could be, and stringifying it loses them.
-                     (js/console.error "Electric client process failed" error)
+        !reported? (atom false)
+        report-once! (fn [termination error]
+                       (when (compare-and-set! !reported? false true)
+                         (send-failure! termination error)))]
+    (observe-electric-closes!
+      (fn [event]
+        (when (and (server-terminated-codes (.-code event))
+                (not @!deliberate-stop?))
+          (js/console.error "Electric socket closed by the server"
+            (.-code event) (.-reason event))
+          (report-once! "server-close"
+            (str "close " (.-code event) ": " (.-reason event)))
+          (raise-banner!))))
+    (let [cancel (task
+                   (fn [_]
+                     ;; Success is not a healthy state here — only a deliberate
+                     ;; stop is.
                      (when-not @!deliberate-stop?
-                       (send-failure! "failure" error)
-                       (raise-banner!)))))]
-    (fn stop-electric-process! []
-      (reset! !deliberate-stop? true)
-      (cancel))))
+                       (report-once! "unexpected-success" nil)
+                       (raise-banner!)))
+                   (fn [error]
+                     (when-not (stale-client? error)
+                       ;; The error OBJECT, not its message: `socket-emit` enriches
+                       ;; an unserializable transfer with the let-bound values it
+                       ;; could be, and stringifying it loses them.
+                       (js/console.error "Electric client process failed" error)
+                       (when-not @!deliberate-stop?
+                         (report-once! "failure" error)
+                         (raise-banner!)))))]
+      (fn stop-electric-process! []
+        (reset! !deliberate-stop? true)
+        (cancel)))))
