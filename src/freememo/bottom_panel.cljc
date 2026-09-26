@@ -34,12 +34,11 @@
 (e/defn BottomPanel
   "Bottom card-table region for both PDF-page and extract topic views.
 
-   props keys: :user-id :topic-id :card-font-size
-   refresh: combined card-refresh value."
+   props keys: :user-id :topic-id :card-font-size"
   []
   (e/client
     (let [user-id dctx/user-id topic-id dctx/page-topic-id
-          card-font-size dctx/card-font-size refresh dctx/card-refresh]
+          card-font-size dctx/card-font-size]
       (dom/div
         ;; `.bottom-panel` lives in CSS, not inline, so a phone rule can shrink
         ;; an empty card table to its message.

@@ -192,9 +192,6 @@
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           meta-refresh (e/server (e/watch (us/get-atom user-id :meta-refresh)))
-          sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
-          card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
-          card-refresh (+ refresh sync-mutations card-mutations)
 
           ;; Every read below is a blocking JDBC call. A bare e/server runs it on
           ;; the session's reactive thread, so the whole graph stalls for its
@@ -274,7 +271,7 @@
        :user-id user-id :enc-key enc-key :navigate! navigate!
        :llm-enabled? llm-enabled? :queue-ctx queue-ctx
        ;; refresh clocks (also seed DocumentViewState)
-       :refresh refresh :meta-refresh meta-refresh :card-refresh card-refresh
+       :refresh refresh :meta-refresh meta-refresh
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
        :focus-available? focus-available? :focus-scope-id focus-scope-id

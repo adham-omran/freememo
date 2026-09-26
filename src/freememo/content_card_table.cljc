@@ -61,8 +61,16 @@
 (e/defn ContentCardTable []
   (e/client
     (let [topic-id dctx/page-topic-id card-font-size dctx/card-font-size user-id dctx/user-id
-          refresh dctx/card-refresh
-          cards-result (e/server (e/Offload #(get-cards-for-topic* refresh topic-id user-id)))
+          ;; The refresh sum is built on the server, where it is read. A client
+          ;; sum was a client-owned value that the server read back, here and in
+          ;; ContentToolbar, and that round trip exposes a value to Electric's
+          ;; :diff-corruption race. topic-id and user-id still make the trip.
+          ;; See bugs/20260926-electric-input-diff-corruption/README.md.
+          cards-result (e/server
+                         (let [rev (+ (e/watch (us/get-atom user-id :refresh))
+                                     (e/watch (us/get-atom user-id :sync-mutations))
+                                     (e/watch (us/get-atom user-id :card-mutations)))]
+                           (e/Offload #(get-cards-for-topic* rev topic-id user-id))))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)
           !anki-status (atom :idle)

@@ -264,7 +264,7 @@
   "Above-the-content chrome: ToolbarBar (command ribbon), the PDF-only
    PdfToolbar, the one-shot biblio auto-open, and the bibliography modal.
    Renders into the caller's dom parent. Own e/defn for Electric's 64KB
-   method cap. card-refresh/!show-bib are passed positionally to ToolbarBar."
+   method cap. !show-bib is passed positionally to ToolbarBar."
   []
   (e/client
     (let [user-id dctx/user-id enc-key dctx/enc-key page-topic-id dctx/page-topic-id
@@ -273,7 +273,7 @@
           llm-enabled? dctx/llm-enabled? extract-status dctx/extract-status
           navigate! dctx/navigate! queue-ctx dctx/queue-ctx citation dctx/citation
           page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
-          reading-mode? dctx/reading-mode? card-refresh dctx/card-refresh !show-bib dctx/!show-bib
+          reading-mode? dctx/reading-mode? !show-bib dctx/!show-bib
           show-bib? dctx/show-bib? total dctx/total layout dctx/layout is-live? dctx/is-live?
           scan-dpi dctx/scan-dpi scanning-pages dctx/scanning-pages ocr-errors dctx/ocr-errors
           phone? dctx/phone? toggle-layout! dctx/toggle-layout!
@@ -296,7 +296,7 @@
         ;; so it sits above everything. The card table stays at the bottom.
         ;; Derive/remap the toolbar sub-tree's ambient values; pass-throughs
         ;; (user-id, enc-key, llm-enabled?, navigate!, citation, page-info,
-        ;; pdf-root?, pdf-status, reading-mode?, card-refresh, !show-bib) are
+        ;; pdf-root?, pdf-status, reading-mode?, !show-bib) are
         ;; already bound at the root.
         (binding [dctx/topic-id page-topic-id
                   dctx/audio? (= kind "audio")

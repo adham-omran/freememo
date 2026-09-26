@@ -67,7 +67,6 @@
 (e/declare page-info)
 (e/declare pdf-status)
 (e/declare extract-status)
-(e/declare card-refresh)
 
 ;; ── LLM / generation ─────────────────────────────────────────────────────
 (e/declare card-type)

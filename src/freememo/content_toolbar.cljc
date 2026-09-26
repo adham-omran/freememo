@@ -175,10 +175,14 @@
           extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
           citation dctx/citation page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
           reading-mode? dctx/reading-mode?
-          refresh dctx/card-refresh
           !show-bib dctx/!show-bib
-          ;; Unsynced card count — uses refresh value for reactivity
-          unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
+          ;; Unsynced card count. The refresh sum is built on the server, as in
+          ;; ContentCardTable, for the reason given there.
+          unsynced-count (e/server
+                           (let [rev (+ (e/watch (us/get-atom user-id :refresh))
+                                       (e/watch (us/get-atom user-id :sync-mutations))
+                                       (e/watch (us/get-atom user-id :card-mutations)))]
+                             (helpers/get-unsynced-count* rev topic-id)))
           ;; biblio-target-id: the item that OWNS the bibliography. Extracts and
           ;; web/epub topics own theirs; PDF pages own none, so they resolve to
           ;; the document root. Feeds the citation display and the item-scoped

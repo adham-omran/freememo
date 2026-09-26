@@ -23,7 +23,7 @@
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id pdf-root-id dctx/pdf-root-id
           is-pdf? dctx/is-pdf? reading-mode? dctx/reading-mode?
           focus-available? dctx/focus-available? focus-scope-id dctx/focus-scope-id
-          card-font-size dctx/card-font-size card-refresh dctx/card-refresh
+          card-font-size dctx/card-font-size
           t-layout dctx/t-layout layout-save dctx/layout-save
           t-focus dctx/t-focus focus-save dctx/focus-save
           t-last-page dctx/t-last-page last-page-save dctx/last-page-save
@@ -102,7 +102,7 @@
               dctx/llm-enabled? (:llm-enabled? m) dctx/extract-status (:extract-status m) dctx/navigate! (:navigate! m)
               dctx/queue-ctx (:queue-ctx m) dctx/citation (:citation m) dctx/page-info (:page-info m)
               dctx/pdf-root? (:pdf-root? m) dctx/pdf-status (:pdf-status m) dctx/reading-mode? (:reading-mode? m)
-              dctx/card-refresh (:card-refresh m) dctx/!show-bib (:!show-bib m) dctx/show-bib? (:show-bib? m)
+              dctx/!show-bib (:!show-bib m) dctx/show-bib? (:show-bib? m)
               dctx/total (:total m) dctx/layout (:layout m) dctx/is-live? (:is-live? m)
               dctx/scan-dpi (:scan-dpi m) dctx/scanning-pages (:scanning-pages m) dctx/ocr-errors (:ocr-errors m)
               dctx/phone? (:phone? m) dctx/!current-page (:!current-page m) dctx/toggle-layout! (:toggle-layout! m)
