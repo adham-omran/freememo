@@ -135,6 +135,15 @@
               dctx/is-code? (:is-code? m) dctx/code-has-source? (:code-has-source? m)
               dctx/!video-el (:!video-el m) dctx/!video-region (:!video-region m)
               dctx/!video-playhead (:!video-playhead m)]
+      ;; The anchor. These ids are computed on the client, and the server reads
+      ;; them back in readers that unmount and remount on every advance. When
+      ;; every request for an id drops at once, one peer can respawn its session
+      ;; from size 0 while the other keeps its size, and the next diff crashes
+      ;; the socket with :diff-corruption. This server read, drained on the
+      ;; client, lives as long as DocumentRoot and keeps both peers' requests
+      ;; above 0. `e/drain` holds the sibling at size 0.
+      ;; See bugs/20260926-electric-input-diff-corruption/README.md.
+      (e/drain (e/server [dctx/user-id dctx/page-topic-id dctx/root-topic-id]))
       (DocumentBody)
       ;; LAST, and outside DocumentBody, for two reasons. Last: the picker is a
       ;; 0-or-1 sibling, and this file's `e/drain` comments record what a size

@@ -64,7 +64,8 @@
           ;; The refresh sum is built on the server, where it is read. A client
           ;; sum was a client-owned value that the server read back, here and in
           ;; ContentToolbar, and that round trip exposes a value to Electric's
-          ;; :diff-corruption race. topic-id and user-id still make the trip.
+          ;; :diff-corruption race. topic-id and user-id still make the trip,
+          ;; and DocumentRoot's anchor holds them.
           ;; See bugs/20260926-electric-input-diff-corruption/README.md.
           cards-result (e/server
                          (let [rev (+ (e/watch (us/get-atom user-id :refresh))
@@ -216,6 +217,10 @@
                         source-index (nth visible-indexes visible-index nil)
                         card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
                         card (second card-result)]
+                    ;; The anchor for `card`, which the client computes and
+                    ;; CardRow reads back on the server. It lives as long as the
+                    ;; row frame, as DocumentRoot's anchor lives for the ids.
+                    (e/drain (e/server (some? card)))
                     (when (and card (= source-index (first card-result)))
                       (CardRow card !editing-card user-id i anki-overlay (= visible-index review-target)))))
                 (when (zero? total-row-count)
