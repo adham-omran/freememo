@@ -7270,10 +7270,20 @@
 ;; which is defined further down (near owns-topic?).
 (declare subtree-owner)
 
+(def max-topic-interval-days
+  "The longest interval, in days, that a topic write may schedule: 100 years,
+   the same as Anki's default maximum interval (`fsrs/make-scheduler`).
+   Without it, the 27th advance at the default A-Factor of 2.0 computes
+   NOW() + 2^27 days and PostgreSQL rejects it with `timestamp out of range`.
+   See plans/topic-interval-upper-bound.md."
+  36500.0)
+
 (defn advance-topic!
   "Advance a topic's review schedule using A-Factor algorithm.
    Logs 'advance' event with pre-mutation snapshot. Owner-gated by `user-id`
-   (the topic's root carries the owner); a non-owner call is a no-op."
+   (the topic's root carries the owner); a non-owner call is a no-op.
+   Post: interval_days <= max-topic-interval-days, and next_review_at is
+         NOW() plus that same interval."
   [user-id id]
   (jdbc/with-transaction [tx ds]
     (when (= user-id (subtree-owner tx id))
@@ -7284,13 +7294,15 @@
       ;; → next_review_at = NOW() → topic stays due forever). GREATEST(...,1.0)
       ;; enforces the "interval >= 1 day" invariant so every advance pushes the
       ;; review strictly into the future.
+      ;; LEAST(..., cap) is the upper bound. Both expressions read the old row,
+      ;; so with the same cap in each, the stored interval and the date agree.
       (jdbc/execute-one! tx
         ["UPDATE topics
-          SET interval_days = GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0),
-              next_review_at = NOW() + (GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
+          SET interval_days = LEAST(GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0), ?),
+              next_review_at = NOW() + LEAST(GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0), ?) * INTERVAL '1 day',
               last_review_at = NOW()
           WHERE id = ?"
-         id])))))
+         max-topic-interval-days max-topic-interval-days id])))))
 
 (defn update-topic-priority!
   "Update a topic's priority (0=highest … 100=lowest, three decimal places).
@@ -7326,7 +7338,9 @@
 
 (defn postpone-topic!
   "Postpone a topic by N days without changing interval/a-factor. Owner-gated by
-   `user-id`. Logs 'postpone' event with pre-mutation snapshot."
+   `user-id`. Logs 'postpone' event with pre-mutation snapshot.
+   `days` is typed by the user and the Postpone input's max is advisory, so
+   LEAST caps it at max-topic-interval-days before it reaches the timestamp."
   [user-id id days]
   (jdbc/with-transaction [tx ds]
     (when (= user-id (subtree-owner tx id))
@@ -7334,10 +7348,10 @@
       (insert-repetition! tx id "postpone" before)
       (jdbc/execute-one! tx
         ["UPDATE topics
-          SET next_review_at = NOW() + ? * INTERVAL '1 day',
+          SET next_review_at = NOW() + LEAST(?, ?) * INTERVAL '1 day',
               last_review_at = NOW()
           WHERE id = ?"
-         (double days) id])))))
+         (double days) max-topic-interval-days id])))))
 
 (defn done-topic!
   "Mark a topic as done. Owner-gated by `user-id`. Logs 'done' event with
