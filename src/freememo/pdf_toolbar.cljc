@@ -20,14 +20,17 @@
        the focus toggle and mark-done stay inline and scan/copy drop into a ⋮
        panel. The zoom group is absent: all four of its controls act on a viewer
        this mode has destroyed.
-     phone (C3) — two primary controls + a ⋮ overflow dropdown holding the rest.
-       Live docs get the add-photos buttons as primaries; other PDFs get
-       page-nav. Everything else (page-nav for live, zoom, mark-done, scan/copy,
-       the focus toggle) drops into .pdf-overflow-panel, one tap away."
+     phone (C3) — two primary controls, mark-done, and a ⋮ overflow dropdown
+       holding the rest. Live docs get the add-photos buttons as primaries;
+       other PDFs get page-nav. Mark-done stays inline so the page's done state
+       is visible (plans/done-state-visibility.md). Everything else (page-nav
+       for live, zoom, scan/copy, the focus toggle) drops into
+       .pdf-overflow-panel, one tap away."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.done-toggle :refer [DoneToggleFace]]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.optimistic :as opt]
@@ -338,8 +341,14 @@
     (PdfZoomControls)))
 
 (e/defn PdfMarkDone
-  "Mark-page-done toggle — plain ghost secondary button, check/rotate icon,
-   Done/Restore label. Registers the keyboard ref so the Done shortcut works."
+  "Mark-page-done toggle — a `.done-toggle` whose `aria-pressed` is the page's
+   done state (plans/done-state-visibility.md). Its name, \"Page N done\", is the
+   same in both states; the pressed state carries the change. Registers the
+   keyboard ref so the Done shortcut works.
+
+   `:class` sits in its own `dom/props`, apart from the props derived from
+   `page-done?`: that value waits on a server read, and an absent props map
+   nulls every prop in it (CLAUDE.md)."
   []
   (e/client
     (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id page-number dctx/page-number]
@@ -353,16 +362,14 @@
         (let [pending-commands (e/watch (cs/get-atom :pending-commands))
               page-done? (opt/queued-page-done? pending-commands pdf-root-id page-number persisted-done?)]
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label (if page-done?
-                                    (str "Restore page " page-number)
-                                    (str "Mark page " page-number " as done"))})
-          (tooltip/Tooltip! "Mark this page as completed to track your extraction progress")
-          (icons/Icon (if page-done? :rotate-ccw :check) :size 16)
-          (dom/span (dom/props {:class "icon-label"})
-            (dom/text (if page-done?
-                        (str "Restore page " page-number)
-                        (str "Mark page " page-number " as done"))))
+          (dom/props {:class "btn btn-sm btn-secondary done-toggle"})
+          (dom/props {:aria-pressed (str (boolean page-done?))
+                      :aria-label (str "Page " page-number " done")})
+          (tooltip/Tooltip! (if page-done?
+                              (str "Page " page-number " is done. Click to restore it.")
+                              "Mark this page as completed to track your extraction progress"))
+          (DoneToggleFace page-done? (str "Page " page-number " done")
+            (str "Restore page " page-number))
           (let [node dom/node]
             (bus/publish-invoker! :done (fn [] (.click node)))
             (e/on-unmount (fn [] (bus/retract-invoker! :done))))
@@ -417,8 +424,8 @@
             (js/setTimeout (fn [] (reset! !show false)) 3000))))))))
 
 (e/defn PdfPhoneToolbar
-  "Phone (C3): two primary controls + a ⋮ overflow dropdown holding the rest.
-   Own e/defn for the 64KB method cap.
+  "Phone (C3): two primary controls, mark-done, and a ⋮ overflow dropdown
+   holding the rest. Own e/defn for the 64KB method cap.
 
    Focus reader appears here only as its toggle, inside the overflow panel: a
    390px bar affords two primaries, and burying page-nav to surface the toggle
@@ -440,8 +447,16 @@
               (binding [dctx/document-id pdf-root-id dctx/compact? true]
                 (LiveDocAddPhotos)))
             (PdfPageNav))
-          ;; ⋮ trigger (pushed right).
-          (PdfOverflowTrigger !overflow-open)
+          ;; Mark done + ⋮ trigger, pushed right as one unit. Mark done is
+          ;; inline so its done state shows without opening the panel, and so
+          ;; the bar's `:has()` tint can see it. The wrapper is sized to its
+          ;; content, so the two children's `margin-left: auto` resolve to 0
+          ;; inside it instead of splitting the bar's free space.
+          (dom/div
+            (dom/props {:class "pdf-phone-trailing"})
+            (when-not dctx/is-score?
+              (PdfMarkDone))
+            (PdfOverflowTrigger !overflow-open))
           ;; Overflow panel — secondary controls, one tap away.
           (when overflow-open
             (dom/div
@@ -455,8 +470,7 @@
                 (e/amb
                   (FocusReaderToggle nil)
                   (binding [dctx/extract-style extract-style dctx/is-live? false]
-                    (PdfScanCopy))
-                  (PdfMarkDone)))))
+                    (PdfScanCopy))))))
           (PdfOcrError))
         (PdfOverflowBackdrop !overflow-open)))))
 

@@ -1,6 +1,6 @@
 (ns freememo.bibliography-toolbar
   "DocumentMetaGroup — the former bibliography bar, folded into the toolbar.
-   Holds document-level readouts + Mark-PDF-Done: the citation, the
+   Holds document-level readouts + the document done toggle: the citation, the
    page-progress X/Y badge, and the schedule pace badge beside it.
    Edit/Refetch/Push bibliography moved to Document Options (item-scoped).
    Replaces the full-width strip below the toolbar."
@@ -8,7 +8,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
-   [freememo.icons :as icons]
+   [freememo.command-bus :as bus]
+   [freememo.done-toggle :refer [DoneToggleFace]]
    [freememo.schedule :as sched]
    [freememo.schedule-forecast :as fc]
    [freememo.client-state :as cs]
@@ -88,26 +89,68 @@
           (dom/text (fc/schedule-badge-face (e/server (:pages-today pace))
                       (e/server (:days-to-target pace)))))))))
 
+;; Pre:  bib-topic-id is the document: the PDF root, or the score itself (a
+;;       score is its own pdf-root, topic_state.cljc). pdf-status is that
+;;       topic's status for both kinds. variant is :inline or :overflow.
+;; Post: a PDF root or a score shows a `.done-toggle` whose aria-pressed is the
+;;       document's done state; a click enqueues :set-pdf-done. Every other
+;;       kind renders nothing.
+;;       On a score the :inline copy also publishes the :done invoker, so
+;;       meta+d and the palette's "Mark done" reach it. No other publisher is
+;;       mounted on a score (PdfMarkDone is gated off there); a PDF root does
+;;       NOT publish, because PdfMarkDone owns :done on a PDF. The :overflow
+;;       copy never publishes — one publisher per surface.
+;; Inv : `:class` sits in its own dom/props, apart from the state-derived
+;;       props (CLAUDE.md, "An Absent Props Map Nulls Every Prop").
+;;       Its own e/defn: DocumentMetaGroup is near the 64KB method cap.
+(e/defn DocumentDoneToggle
+  []
+  (e/client
+    (let [bib-topic-id dctx/bib-topic-id pdf-root? dctx/pdf-root?
+          score? dctx/is-score? pdf-status dctx/pdf-status
+          inline? (= dctx/variant :inline)
+          pending-commands (e/watch (cs/get-atom :pending-commands))
+          done? (opt/queued-pdf-done? pending-commands bib-topic-id (= pdf-status "done"))
+          noun (if score? "score" "PDF")]
+      (when (or pdf-root? score?)
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary done-toggle"})
+          (dom/props {:aria-pressed (str (boolean done?))
+                      :aria-label (if score? "Score done" "PDF done")})
+          (tooltip/Tooltip! (if done?
+                              (str "This " noun " is done. Click to restore it to the active queue.")
+                              (str "Mark this " noun " as completed")))
+          (DoneToggleFace done? (if score? "Score done" "PDF done")
+            (str "Restore " noun))
+          (when (and score? inline?)
+            (let [node dom/node]
+              (bus/publish-invoker! :done node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :done node)))))
+          (dom/On "click"
+            (fn [_]
+              (opt/enqueue! {:type :set-pdf-done
+                             :payload {:pdf-root-id bib-topic-id
+                                       :done? (not done?)}}))
+            nil))))))
+
 ;; Pre:  user-id non-nil; bib-topic-id = the citation's item (document root for
 ;;       PDF pages); citation is a string-or-nil; page-info is
 ;;       {:done :total :remaining-tooltip}-or-nil; pdf-root? + pdf-status
-;;       describe the PDF root (both nil for non-PDF).
-;; Post: Mark-PDF-Done toggles topics.status via toggle-pdf-done!* (PDF root
-;;       only). Bibliography actions (Edit/Refetch/Push) live in Document
-;;       Options now.
+;;       describe the PDF root or score (both nil otherwise).
+;; Post: DocumentDoneToggle toggles topics.status via :set-pdf-done (PDF root
+;;       and score only). Bibliography actions (Edit/Refetch/Push) live in
+;;       Document Options now.
 ;; Invariant: variant :inline adds the citation + progress readouts (early-
 ;;            collapse classes); :overflow renders only Mark-PDF-Done.
 (e/defn DocumentMetaGroup
   []
   (e/client
-    (let [user-id dctx/user-id bib-topic-id dctx/bib-topic-id citation dctx/citation
-          page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
+    (let [bib-topic-id dctx/bib-topic-id citation dctx/citation
+          page-info dctx/page-info
           page-number dctx/page-number
           variant dctx/variant
-          persisted-pdf-done? (= pdf-status "done")
           inline? (= variant :inline)
           pending-commands (e/watch (cs/get-atom :pending-commands))
-          done? (opt/queued-pdf-done? pending-commands bib-topic-id persisted-pdf-done?)
           persisted-page-done? (:current-done? page-info)
           queued-page-done? (when page-info
                               (opt/queued-page-done? pending-commands bib-topic-id page-number
@@ -122,23 +165,8 @@
                               " pages completed. Saving page " page-number "…")
                          (:remaining-tooltip page-info))]
 
-      ;; Mark PDF Done / Restore — PDF root only.
-      (when pdf-root?
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label (if done? "Restore PDF" "Mark PDF Done")})
-          (tooltip/Tooltip! (if done?
-                              "Restore this PDF to the active queue"
-                              "Mark this PDF as completed"))
-          (icons/Icon (if done? :rotate-ccw :check) :size 16)
-          (dom/span (dom/props {:class "icon-label"})
-            (dom/text (if done? "Restore PDF" "Mark PDF Done")))
-          (dom/On "click"
-            (fn [_]
-              (opt/enqueue! {:type :set-pdf-done
-                             :payload {:pdf-root-id bib-topic-id
-                                       :done? (not done?)}}))
-            nil)))
+      ;; Document done toggle — PDF root and score only.
+      (DocumentDoneToggle)
 
       ;; Citation — inline only; first element to collapse (variable width).
       (when (and inline? citation)

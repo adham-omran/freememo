@@ -263,7 +263,9 @@
           bib-topic-id (if (= kind "page") (or pdf-root-id root-topic-id) topic-id)
           pdf-root? (and is-pdf? (= kind "pdf"))
           citation (e/server (e/Offload #(bibform/get-topic-citation* refresh user-id bib-topic-id)))
-          pdf-status (e/server (when pdf-root?
+          ;; A score is its own pdf-root-id, and its done toggle reads this
+          ;; too (bibliography_toolbar.cljc, DocumentDoneToggle).
+          pdf-status (e/server (when (or pdf-root? is-score?)
                                  (e/Offload #(get-topic-status* meta-refresh pdf-root-id))))
           scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
           ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))]

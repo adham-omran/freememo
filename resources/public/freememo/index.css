@@ -53,6 +53,10 @@
     --color-success-dark: light-dark(#15803d, #4ade80); /* #16a34a was 3.3:1 as text on white */
     --color-success-light: light-dark(#dcfce7, #14532d);
     --color-success-lighter: light-dark(#86efac, #22c55e);
+    /* A toolbar background for a done item: 40% --color-success-light over
+       --color-bg-subtle. The full -light fails hint text (4.4:1 light, 3.6:1
+       dark); this keeps it at 4.53:1 and 5.14:1. */
+    --color-success-tint: light-dark(#edfbf3, #183630);
 
     /* Status: danger */
     --color-danger-light: light-dark(#fecaca, #7f1d1d);
@@ -708,6 +712,14 @@ html:has(> body > .app-shell) > body {
     inset: 0;
     z-index: 99;
 }
+/* Phone PDF bar: mark-done + ⋮, pushed right as one unit. Icon-only — the
+   phone bar installs no collapse detector, so nothing else hides the label. */
+.pdf-phone-trailing {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+}
+.pdf-phone-trailing .icon-label { display: none; }
 
 /* Toolbar readout capsule — the page-progress X/Y badge and the schedule pace
    badge beside it. Shared as a class rather than repeated as an inline :style
@@ -1096,10 +1108,35 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     background: light-dark(#fef2f2, #35181a);
 }
 
-/* Done / Restore keep a persistent colored border (state signal — exception to
-   ghost); hover shows a colored fill tint matching the border color. */
-.toolbar-done-btn:not(:disabled):hover { background: light-dark(#ecfdf3, #16271d); }
-.toolbar-restore-btn:not(:disabled):hover { background: light-dark(#eff6ff, #16223a); }
+/* ── Done toggle (plans/done-state-visibility.md) ─────────────────────────
+   Every done control — PDF page, PDF or score document, extract — is a
+   `.done-toggle` whose `aria-pressed` is the done state
+   (freememo.done-toggle). Not pressed, it is an ordinary ghost .btn-secondary,
+   so green means only "done". Pressed, it is a solid green fill.
+   Selectors lead with `.btn.done-toggle` to outrank the ghost rules above
+   (`.toolbar-group .btn-secondary`, and its :hover at 0,4,0).
+   Contrast: white on #15803d is 5.02:1; #1f2937 on #4ade80 is 8.42:1. */
+.btn.done-toggle[aria-pressed="true"],
+.btn.done-toggle[aria-pressed="true"]:not(:disabled):hover {
+    background: var(--color-success-dark);
+    border-color: var(--color-success-dark);
+    color: var(--color-bg-card);
+}
+/* ↺ + the restore label replace ✓ + the label on hover and keyboard focus —
+   the preview of what a click does. The rules only ever HIDE: setting a
+   display value here would outrank the collapse tiers' `.icon-label` hide. */
+.done-toggle:not(:hover):not(:focus-visible) .done-toggle__restore { display: none; }
+.done-toggle[aria-pressed="true"]:is(:hover, :focus-visible) .done-toggle__state { display: none; }
+
+/* The bar that holds a pressed done toggle is tinted: a done page tints the PDF
+   bar, a done document or extract tints the main bar. `:has()` reads the
+   toggle's own `aria-pressed`, so no container carries a prop derived from the
+   done state (CLAUDE.md, "An Absent Props Map Nulls Every Prop"). The two bars
+   are siblings, so neither can match the other's toggle. */
+.toolbar-container:has(.done-toggle[aria-pressed="true"]) > .toolbar {
+    background: var(--color-success-tint);
+    box-shadow: inset 0 2px 0 var(--color-success);
+}
 
 /* Unified control height — every toolbar button + stepper is a fixed 28px so
    borderless and bordered buttons line up exactly (a 1px border would otherwise

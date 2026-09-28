@@ -7,6 +7,7 @@
    [taoensso.telemere :as tel]
    [freememo.doc-context :as dctx]
    [freememo.card-components :as card-components]
+   [freememo.done-toggle :refer [DoneToggleFace]]
    [freememo.history-modal :refer [HistoryModal]]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
@@ -129,14 +130,13 @@
                 done-click (e/watch !done-click)
                 [t _] (e/Token done-click)]
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary toolbar-done-btn"
-                          :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
-                                  :font-weight "500"}
-                          :disabled (some? t)
+              (dom/props {:class "btn btn-sm btn-secondary done-toggle"
+                          :style {:font-weight "500"}
+                          :aria-pressed "false"
                           :aria-label "Done"})
+              (dom/props {:disabled (some? t)})
               (tooltip/Tooltip! "Mark as fully processed (extracted/carded everything useful)")
-              (icons/Icon :check :size 16)
-              (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
+              (DoneToggleFace false "Done" "Restore")
               (let [node dom/node]
                 (bus/publish-invoker! :done (fn [] (.click node)))
                 (e/on-unmount (fn [] (bus/retract-invoker! :done))))
@@ -153,17 +153,18 @@
                         (t))
                     (t (:error r)))))))
 
-          ;; Done status: show Restore button
+          ;; Done status: the same toggle, pressed. It stays a separate branch
+          ;; with its own token, :restore invoker and navigation — only the look
+          ;; is shared (plans/done-state-visibility.md, S3).
           (let [!restore-click (atom nil)
                 restore-click (e/watch !restore-click)]
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary toolbar-restore-btn"
-                          :style {:color "var(--color-primary-text)" :border "1px solid var(--color-primary)"
-                                  :font-weight "500"}
-                          :aria-label "Restore"})
-              (tooltip/Tooltip! "Restore to active review queue")
-              (icons/Icon :rotate-ccw :size 16)
-              (dom/span (dom/props {:class "icon-label"}) (dom/text "Restore"))
+              (dom/props {:class "btn btn-sm btn-secondary done-toggle"
+                          :style {:font-weight "500"}
+                          :aria-pressed "true"
+                          :aria-label "Done"})
+              (tooltip/Tooltip! "Done. Click to restore it to the active review queue.")
+              (DoneToggleFace true "Done" "Restore")
               (let [node dom/node]
                 (bus/publish-invoker! :restore (fn [] (.click node)))
                 (e/on-unmount (fn [] (bus/retract-invoker! :restore))))
