@@ -155,26 +155,6 @@
   (build-prompt (:overlapping prompt-configs) card-count has-context? pre-prompt
     pre-prompt-mode user-id topic-id))
 
-;; Context retrieval
-(defn get-context-pages
-  "Get text from previous N pages for context.
-   parent-id is the root PDF topic. Returns concatenated text from pages in range."
-  [parent-id page-number context-window]
-  (let [start-page (max 1 (- page-number context-window))
-        end-page (dec page-number)]
-    (when (>= end-page start-page)
-      (let [pages (db/get-context-pages parent-id start-page end-page)]
-        (when (seq pages)
-          (->> pages
-            (map :topics/content)
-            (str/join "\n\n---\n\n")))))))
-
-(defn get-extract-page-context
-  "Get the original PDF page text for use as context when generating cards from an extract."
-  [parent-id page-number]
-  (when-let [page-text (:topics/content (first (db/get-context-pages parent-id page-number page-number)))]
-    page-text))
-
 ;; Model response parsing
 (defn parse-card-response
   "Parse the model's JSON object and return its :cards vector.
