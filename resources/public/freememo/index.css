@@ -2340,21 +2340,26 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 }
 .nav-rail__import.is-active { border-color: var(--color-primary); }
 
-/* Due count: a dot on the closed rail's icon, a pill on the open row. */
+/* Due count: a dot on the closed rail's icon, a pill on the open row.
+   The dot is anchored at its RIGHT edge, so a long count grows inward over
+   the icon. Anchored at the left, "181" ran past the 48px rail and the
+   panel's overflow clipped it. The ring separates it from the glyph. */
 .nav-rail__dot {
     position: absolute;
-    top: 1px;
-    left: calc(50% + 3px);
+    top: -1px;
+    right: 2px;
     min-width: 16px;
     height: 16px;
-    padding: 0 4px;
+    padding: 0 3px;
     border-radius: 8px;
     background: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-bg-card);
     color: #fff;
     font-size: 10px;
     font-weight: 700;
     line-height: 16px;
     text-align: center;
+    font-variant-numeric: tabular-nums;
 }
 .nav-rail:is([data-state="open"], [data-state="kept"]) .nav-rail__dot { display: none; }
 .nav-rail__count {
@@ -2378,6 +2383,7 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     background: #fff;
     color: var(--color-primary);
 }
+.nav-rail__item.is-active .nav-rail__dot { box-shadow: 0 0 0 2px var(--color-primary); }
 .nav-rail__sr {
     position: absolute;
     width: 1px;

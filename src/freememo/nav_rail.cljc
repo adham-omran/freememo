@@ -386,15 +386,21 @@
           (dom/text (if target (:title target) "Nothing open yet"))))
       (dom/On "click" (fn [_] (open-continue! navigate! target)) nil))))
 
+(defn dot-text
+  "The closed rail's dot is 48px wide with the icon under it, so it shows at
+   most \"99+\". The open rail's pill shows the exact count."
+  [due]
+  (if (> due 99) "99+" (str due)))
+
 (e/defn DueCount
   "The due count, as a dot on the closed rail's icon or a pill on the open
    rail's row. Renders nothing at 0 (2.2.1)."
-  [due class]
+  [due text class]
   (e/client
     (when (pos? (or due 0))
       (dom/span
         (dom/props {:class class})
-        (dom/text (str due))
+        (dom/text text)
         (dom/span (dom/props {:class "nav-rail__sr"}) (dom/text " due"))))))
 
 (e/defn LearnItem
@@ -407,9 +413,9 @@
       (dom/span
         (dom/props {:class "nav-rail__icon"})
         (icons/Icon icon :size 18)
-        (DueCount due "nav-rail__dot"))
+        (DueCount due (dot-text (or due 0)) "nav-rail__dot"))
       (RailLabel label)
-      (DueCount due "nav-rail__count")
+      (DueCount due (str due) "nav-rail__count")
       (dom/On "click" (fn [_] (navigate! :learn)) nil))))
 
 (e/defn ContinueTracker
