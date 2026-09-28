@@ -136,9 +136,9 @@
   "Card kinds whose fields carry `{{cN::…}}` markers, and so need TeX close braces
    spaced apart before they reach Anki.
 
-   THE single definition. Push, CSV export, and the Anki-modified diff must all
-   agree on it: spacing on push but not when comparing (or the reverse) makes
-   every affected card read as perpetually modified in the library overlay."
+   THE single definition. Push and the Anki-modified diff must agree on it:
+   spacing on push but not when comparing (or the reverse) makes every affected
+   card read as perpetually modified in the library overlay."
   #{"cloze" "overlapping"})
 
 (defn cloze-bearing-kind?

@@ -40,10 +40,10 @@
 ;; vocabulary differs (:unpushed here, :unsynced there), because this table's
 ;; badges, `:status` sort and delete-danger treatment key on these names.
 ;;
-;; The CSV-export divergence this comment used to record is GONE: a card exported
-;; to CSV got `anki_synced_at` without an `anki_note_id`, which the timestamp rule
-;; read as :synced. Nothing reads `anki_synced_at` now, so `pushed?` answers that
-;; case directly.
+;; `anki_synced_at` is a DISPLAY timestamp that no predicate reads. `pushed?`
+;; answers from `anki_note_id` alone, so a card cannot read as :synced without a
+;; note behind it — the contradiction an older timestamp rule produced, when a
+;; card could carry the timestamp with no note.
 ;;
 ;; :anki-modified is still reserved for the client overlay (live AnkiConnect diff)
 ;; and is never produced server-side.

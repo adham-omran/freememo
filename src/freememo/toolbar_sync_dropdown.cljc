@@ -17,7 +17,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.anki-sync :refer [AnkiSyncButton]]
-   [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
@@ -70,7 +69,6 @@
       ;; not affected by the button-only display:none.
       (dom/div
         (dom/props {:class "toolbar-dropdown-sources"})
-        (ExportButton user-id topic-id root-topic-id unsynced-count)
         ;; `PullFromAnkiButton` and its `:pull-anki` menu item are gone. A pull
         ;; is now one of the outcomes a reconcile chooses per card, never a
         ;; direction the user picks for a whole document.
@@ -96,7 +94,7 @@
                       :aria-expanded (if open "true" "false")
                       :aria-label "Anki Sync menu"})
           (dom/props {:data-tour "anki-sync"})
-          (tooltip/Tooltip! "Sync with Anki, or export cards")
+          (tooltip/Tooltip! "Sync with Anki")
           (AnkiMark :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text trigger-label))
           (icons/Icon :chevron-down :size 14)
@@ -131,20 +129,5 @@
                 (dom/On "click"
                   (fn [_]
                     (bus/dispatch! :anki-sync)
-                    (reset! !open false))
-                  nil))
-
-              ;; Export as CSV
-              (dom/button
-                (dom/props {:class "toolbar-dropdown-item"
-                            :role "menuitem"
-                            :aria-label "Export as CSV"})
-                (icons/Icon :download :size 16)
-                (dom/span (dom/text (if has-unsynced?
-                                      (str "Export as CSV (" unsynced-count ")...")
-                                      "Export as CSV...")))
-                (dom/On "click"
-                  (fn [_]
-                    (bus/dispatch! :export)
                     (reset! !open false))
                   nil)))))))))

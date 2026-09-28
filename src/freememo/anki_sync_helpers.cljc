@@ -1045,8 +1045,8 @@
    the IO fields and the score fields, and a new builder cannot forget it.
 
    Per-value conversion (including the kind-dependent cloze brace spacing) is
-   `math/stored->anki-html`; the kind predicate lives there so the CSV export and
-   the Anki-modified diff cannot disagree with this path.
+   `math/stored->anki-html`; the kind predicate lives there so the Anki-modified
+   diff cannot disagree with this path.
 
    pre : `fields` is a map of field name → value; `kind` is a card kind string.
    post: no value contains a `\\(…\\)` region; non-string values are untouched."

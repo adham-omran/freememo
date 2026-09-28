@@ -313,8 +313,6 @@
      ;; cannot, so it promises nothing about timing.
      :copy-card      {:label "Copy card…" :class :nav :exec :ui-button
                       :when #{:viewer :library} :views #{}}
-     :export         {:label "Export cards…" :class :query :exec :ui-button
-                      :when #{:viewer} :views #{}}
      ;; The focus-reader flag is one settings row per supported document.
      ;; Nothing re-queries it after the initial read, so :views stays empty.
      :toggle-focus-reader {:label "Focus reader" :class :mutation :exec :ui-button

@@ -7125,25 +7125,6 @@
           {:group-deleted? true})
         {:group-deleted? false}))))
 
-(defn mark-cards-exported
-  "Mark cards as exported (sets anki_synced_at). Used after CSV export.
-
-   `anki_synced_at` is now a DISPLAY timestamp — no staleness predicate reads it
-   (`unsynced-sql` and `card-components/unsynced?` read the digests and
-   `anki_note_id`), so a CSV export no longer changes how any card reads. That is
-   the intended answer, not an oversight: the old timestamp rule reported a
-   CSV-exported card as synced to Anki, which `library-cards/flashcard-sync-state`
-   already contradicted with `:unpushed`. A card is exported, not pushed.
-
-   Making \"exported to CSV\" visible again needs its own column and its own badge;
-   overloading a sync timestamp for it is what produced the contradiction."
-  [card-ids]
-  (when (seq card-ids)
-    (jdbc/execute! ds
-      (sql/format {:update :flashcards
-                   :set {:anki_synced_at [:now]}
-                   :where [:in :id (vec card-ids)]}))))
-
 (defn unsynced-sql
   "THE staleness predicate, as SQL. `prefix` is a table alias with a trailing
    dot (\"f.\"), or \"\" for an unaliased `flashcards`.
