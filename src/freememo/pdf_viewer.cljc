@@ -124,8 +124,10 @@
      "Fetch pdf-url (cache-first) and `.setDocument` onto the viewer currently in
       `!viewer-state`, guarded by my-gen so stale loads skip. Shared by
       init-viewer! (fresh viewer) and set-document! (existing viewer, in-place
-      swap). Destroys the previously-loaded PDFDocumentProxy before replacing."
-     [pdf-url my-gen on-ready]
+      swap). Destroys the previously-loaded PDFDocumentProxy before replacing.
+      `fit` is the document's stored fit (\"page-width\" or \"page-fit\"), applied
+      on `pagesloaded`."
+     [pdf-url fit my-gen on-ready]
      (when-let [{:keys [^js viewer ^js event-bus ^js link-service]} @!viewer-state]
        (let [^js pdfjs (.-pdfjsLib js/window)
              doc-id (pdf-url->doc-id pdf-url)
@@ -147,7 +149,7 @@
                            (.setDocument link-service pdf nil)
                            (.on event-bus "pagesloaded"
                              (fn []
-                               (set! (.-currentScaleValue viewer) "page-width"))
+                               (set! (.-currentScaleValue viewer) fit))
                              (clj->js {:once true}))
                            (when on-ready (on-ready pdf viewer)))))]
          (-> (pdf-cache/cache-get doc-id)
@@ -170,7 +172,7 @@
    (defn- create-viewer!
      "Body of init-viewer!, split out so the load gate stays a one-liner.
       Pre: window.pdfjsLib and window.pdfjsViewer exist (init-viewer! ensures it)."
-     [container viewer-div pdf-url on-ready]
+     [container viewer-div pdf-url fit on-ready]
      ;; Increment generation FIRST — plain defn, so swap! always increments.
      ;; Any previous init's async callbacks see a stale gen and skip.
      (let [my-gen (swap! !init-gen inc)]
@@ -207,38 +209,39 @@
                (.preventDefault e)
                (zoom! (if (pos? (.-deltaY e)) 0.9 1.1))))
            #js {:passive false})
-         (start-load! pdf-url my-gen on-ready)))))
+         (start-load! pdf-url fit my-gen on-ready)))))
 
 (defn init-viewer!
   "Create the PDF.js viewer ONCE in the given container and load pdf-url.
    Destroys any previous viewer first. For swapping the document on an
    already-created viewer (no recreate), use set-document! instead.
-   Calls on-ready when the PDF is loaded with (pdf viewer) args.
+   Calls on-ready when the PDF is loaded with (pdf viewer) args. The pages open
+   at `fit`, \"page-width\" or \"page-fit\".
 
    pdf.js is vendored WITHOUT a <script> tag, so this awaits
    freememo.vendor-libs/ensure! :pdf-js first — that promise also sets
    GlobalWorkerOptions.workerSrc. The viewer therefore appears one turn after the
    call; set-document! needs no such gate, since a non-nil !viewer-state already
    implies pdf.js is present."
-  [container viewer-div pdf-url on-ready]
+  [container viewer-div pdf-url fit on-ready]
   #?(:clj nil
      :cljs (when (and container viewer-div)
              (vendor/with! :pdf-js
-               #(create-viewer! container viewer-div pdf-url on-ready)))))
+               #(create-viewer! container viewer-div pdf-url fit on-ready)))))
 
 (defn set-document!
   "Swap the displayed PDF on the EXISTING viewer (no destroy/recreate). Used when
    the topic advances to a different PDF while the viewer stays mounted, avoiding
    the frame-churn that corrupts the Electric incseq diff. No-op if no viewer is
-   mounted (caller should init-viewer! first)."
-  [pdf-url on-ready]
+   mounted (caller should init-viewer! first). The pages open at `fit`."
+  [pdf-url fit on-ready]
   #?(:clj nil
      :cljs
      (when (and (some? @!viewer-state)
              (not= (pdf-url->doc-id pdf-url) @!loaded-doc-id))
        (let [my-gen (swap! !init-gen inc)]
          (tel/log! {:level :debug :id ::set-document :data {:gen my-gen :url pdf-url}} "set-document!")
-         (start-load! pdf-url my-gen on-ready)))))
+         (start-load! pdf-url fit my-gen on-ready)))))
 
 (defn go-to-page!
   "Navigate to specific page number (1-indexed)."
@@ -372,8 +375,8 @@
 (defn go-to-page-after-load!
   "Restore to page-num and hold it there through the post-fit reflow.
 
-   The app sets the page-width fit on `pagesloaded`; that fit re-lays-out every
-   page over the following frames, sliding a single jump off the target (observed:
+   The app sets the document's stored fit on `pagesloaded`; that fit re-lays-out
+   every page over the following frames, sliding a single jump off the target (observed:
    restore to 20 → viewport settles on 30). pin-anchor-through-reflow! re-asserts
    the page across the whole reflow.
 

@@ -82,6 +82,7 @@
 (def KG_DEDUP_OBJECT_TRIGRAM "kg_dedup_object_trigram")
 (def KG_DEDUP_CONTAINMENT "kg_dedup_containment")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
+; The per-PDF fit key is dynamic too: (str "pdf_fit_" doc-id)
 
 (def kg-default-model-id
   "Default model for every knowledge-graph step when the user has no saved
@@ -654,6 +655,28 @@
     (catch Exception e
       (tel/error! {:id ::save-pdf-layout} e)
       {:success false})))
+
+;; Each PDF stores the fit it opens at: "page-width" or "page-fit". The toolbar's
+;; fit toggle is the only writer. A numeric zoom is not stored, so a document
+;; zoomed to 150% opens at its last chosen fit.
+(def pdf-fits #{"page-width" "page-fit"})
+(def default-pdf-fit "page-width")
+
+(defn get-pdf-fit [user-id doc-id]
+  (try
+    (let [v (db/get-setting user-id (str "pdf_fit_" doc-id))]
+      (if (contains? pdf-fits v) v default-pdf-fit))
+    (catch Exception _ default-pdf-fit)))
+
+(defn save-pdf-fit [user-id doc-id fit]
+  (if-not (contains? pdf-fits fit)
+    {:success false :error (str "Unknown PDF fit: " fit)}
+    (try
+      (db/set-setting user-id (str "pdf_fit_" doc-id) fit)
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-pdf-fit} e)
+        {:success false :error "Failed to save PDF fit"}))))
 
 ;; Each supported document stores one focus-reader flag. Read the old PDF key
 ;; as a fallback so existing PDF preferences continue to work.

@@ -6,7 +6,8 @@
    [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
-   [freememo.pdf-viewer :as viewer]))
+   [freememo.pdf-viewer :as viewer]
+   #?(:clj [freememo.settings :as settings])))
 
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
@@ -22,6 +23,9 @@
    `reload-nonce` (the page count) is folded into the pdf url as ?v=<nonce>, so
    when it changes (e.g. a Live Document append) the viewer fetches and swaps the
    fresh blob in place — see the versioned-key reconciliation below.
+   Each load opens at the document's stored fit (settings/get-pdf-fit), read
+   again for every versioned key, so a Live Document append keeps a fit chosen
+   since the document opened.
    Returns: The current page number (for OCR integration)."
   []
   (e/client
@@ -29,7 +33,7 @@
     ;; re-evaluates (atom …) on subsequent reactive cycles when callers
     ;; rebuild prop closures, recreating !page and silently throwing away
     ;; scroll-induced page changes (observed: scroll to p14 → atom reset → p15).
-    (let [document-id dctx/document-id initial-page dctx/initial-page
+    (let [user-id dctx/user-id document-id dctx/document-id initial-page dctx/initial-page
           on-navigate! dctx/on-navigate! on-total! dctx/on-total!
           target-page dctx/target-page is-live? dctx/is-live?
           has-file? dctx/has-file? reload-nonce dctx/reload-nonce
@@ -108,6 +112,28 @@
               (let [version  (or reload-nonce 0)
                     pdf-url  (str "/api/pdf/" document-id "?v=" version)
                     desired-key (str document-id "?v=" version)
+                    ;; The stored fit, paired with the key it was read for.
+                    ;; e/Offload keeps the PREVIOUS result while a new read is
+                    ;; in flight, so on a swap or a version bump the old pair
+                    ;; stays visible until the new one lands. Loading on the
+                    ;; old pair would open the new document at the old
+                    ;; document's fit.
+                    ;;
+                    ;; So `fit` is EMPTY for that window, never nil: the calls
+                    ;; that take it wait, and nothing else moves. A `fit` in
+                    ;; the `when` test below would remount its branch on every
+                    ;; document change. The branch's `(nil? @viewer/!viewer-state)`
+                    ;; test runs only when the branch mounts, because Electric
+                    ;; does not re-run a deref of an unchanged atom. Mounted once
+                    ;; with no viewer, it sends every later document through
+                    ;; init-viewer!. Remounted, it finds the live viewer and
+                    ;; calls set-document!, where PDF.js 3.11 throws: its
+                    ;; AnnotationEditorUIManager.destroy calls destroy on the
+                    ;; alt-text manager, which this viewer never gets.
+                    keyed-fit (e/server
+                                (e/Offload
+                                  #(vector desired-key (settings/get-pdf-fit user-id document-id))))
+                    fit (if (= desired-key (nth keyed-fit 0)) (nth keyed-fit 1) (e/amb))
                     on-ready (fn [^js pdf _]
                                (let [n (.-numPages pdf)]
                                  (reset! !total n)
@@ -145,10 +171,10 @@
                       (js/setTimeout
                         (fn []
                           (reset! !timer-id nil)
-                          (viewer/init-viewer! @!container @!viewer-div pdf-url on-ready))
+                          (viewer/init-viewer! @!container @!viewer-div pdf-url fit on-ready))
                         100))
                     ;; Viewer exists, different doc OR new version → swap in place.
-                    (viewer/set-document! pdf-url on-ready))))))))
+                    (viewer/set-document! pdf-url fit on-ready))))))))
 
       ;; Return current page number for OCR integration
       page)))

@@ -47,6 +47,7 @@
    [freememo.focus-reader :refer [FocusReaderToggle]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])))
 
 ;; ---------------------------------------------------------------------------
@@ -207,6 +208,51 @@
         (dom/props {:class "pdf-overflow-backdrop"})
         (dom/On "click" (fn [_] (reset! !open false)) nil)))))
 
+(e/defn PdfFitToggle
+  "Fit toggle: page-width ↔ page-fit. The glyph shows the CURRENT fit (⇔ width,
+   ⤢ page), outlined while a fit mode is active. No :width icon exists in the
+   icon set, so a text glyph (like −/+/⇄) is used.
+
+   A click applies the other fit and stores it as the document's fit, so the
+   document opens at it next time (PdfViewerComponent reads it on load). The
+   click captures the document id with the mode, so a write that lands after
+   the viewer swaps documents still names the document it was made on.
+
+   Pre : a PDF is in view; dctx/pdf-root-id names it.
+   Post: the viewer shows the chosen fit, and `pdf_fit_<pdf-root-id>` holds it."
+  []
+  (e/client
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id
+          scale-mode (e/watch viewer/!scale-mode)
+          fit? (contains? #{"page-width" "page-fit"} scale-mode)
+          width? (= scale-mode "page-width")]
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary"
+                    :aria-label (if width? "Fit page" "Fit width")
+                    :style {:font-size "14px"
+                            :outline (when fit? "1px solid currentColor")}})
+        (tooltip/Tooltip! (if width? "Fit page" "Fit width"))
+        (dom/text (if width? "⇔" "⤢"))
+        (let [choice (dom/On "click"
+                       (fn [_]
+                         (let [mode (if width? "page-fit" "page-width")]
+                           (if (= mode "page-fit")
+                             (viewer/set-zoom-page-fit!)
+                             (viewer/set-zoom-fit!))
+                           (when pdf-root-id [pdf-root-id mode])))
+                       nil)
+              [t ?error] (e/Token choice)]
+          ;; `e/drain` holds this at size 0, as it holds DocumentBody's
+          ;; persisters. A bare `(when t …)` changes size while the write is in
+          ;; flight, and that shifts the buttons after this one in
+          ;; PdfZoomControls.
+          (e/drain
+            (when t
+              (let [[doc-id mode] choice
+                    r (e/server (e/Offload #(settings/save-pdf-fit user-id doc-id mode)))]
+                (when (some? r)
+                  (if (:success r) (case r (t)) (t (:error r))))))))))))
+
 (e/defn PdfZoomControls
   "−  [zoom%]  +  │  fit-toggle  │  rotate  │  layout-toggle.
 
@@ -221,8 +267,6 @@
   (e/client
     (let [layout dctx/layout on-layout-toggle! dctx/on-layout-toggle!
           scale (e/watch viewer/!scale)
-          scale-mode (e/watch viewer/!scale-mode)
-          fit? (contains? #{"page-width" "page-fit"} scale-mode)
           pct (js/Math.round (* 100 scale))
           !zoom-val (atom (str pct "%"))
           zoom-val (e/watch !zoom-val)
@@ -266,20 +310,7 @@
           (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom In"})
           (dom/text "+")
           (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
-        ;; Fit toggle: page-width ↔ page-fit. Glyph reflects the CURRENT fit
-        ;; (⇔ width, ⤢ page); outlined while a fit mode is active. No :width icon
-        ;; exists in the icon set, so a text glyph (like −/+/⇄) is used.
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label (if (= scale-mode "page-width") "Fit page" "Fit width")
-                      :style {:font-size "14px"
-                              :outline (when fit? "1px solid currentColor")}})
-          (tooltip/Tooltip! (if (= scale-mode "page-width") "Fit page" "Fit width"))
-          (dom/text (if (= scale-mode "page-width") "⇔" "⤢"))
-          (dom/On "click"
-            (fn [_] (if (= scale-mode "page-width")
-                      (viewer/set-zoom-page-fit!)
-                      (viewer/set-zoom-fit!))) nil))
+        (PdfFitToggle)
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
                       :aria-label "Rotate counter-clockwise"})

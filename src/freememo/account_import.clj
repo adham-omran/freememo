@@ -272,7 +272,8 @@
   "Settings key prefixes whose suffix is a topic id (§5.4.8, settings.clj).
    The panel keys use `pane-scope-id`. It resolves to the document root topic
    id, so one translation serves all pages."
-  ["last_page_" "pdf_layout_" "pdf_focus_" "focus_reader_" "extract_style_" "ocr_model_" "card_model_"
+  ["last_page_" "pdf_layout_" "pdf_fit_" "pdf_focus_" "focus_reader_" "extract_style_"
+   "ocr_model_" "card_model_"
    "goal_" "assistant_model_" "anki_preset_" "hierarchy_open_" "pins_open_"
    "assistant_tab_" "left_panel_tab_"
    ;; `right_panel_tab_<pane-scope-id>` is the poem reader's tab choice, saved
