@@ -2,7 +2,8 @@
   "Plain-text extraction for indexing (search) and analysis."
   (:require [clojure.string :as str]
             [taoensso.telemere :as tel])
-  (:import [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]
+           [org.jsoup.nodes Element Node TextNode]))
 
 ;; PUA codepoints used by Linux Libertine / Linux Biolinum to encode
 ;; ligatures, small caps, and stylistic alternates that have no real
@@ -108,6 +109,85 @@
   (if (or (nil? html) (and (string? html) (str/blank? html)))
     ""
     (-> (Jsoup/parseBodyFragment html) .body .text)))
+
+(def ^:private line-block-tags
+  "Elements that start and end a line of rendered text. `div` is here because
+   Quill stores each code line as its own `div.ql-code-block`."
+  #{"address" "article" "aside" "blockquote" "dd" "div" "dl" "dt" "figcaption"
+    "figure" "footer" "h1" "h2" "h3" "h4" "h5" "h6" "header" "hr" "li" "main"
+    "nav" "ol" "p" "pre" "section" "table" "tr" "ul"})
+
+(def ^:private hidden-tags
+  "Elements whose text a reader never sees. Quill's code-language picker is a
+   `select` inside the code-block container."
+  #{"script" "select" "style" "template"})
+
+(defn- preformatted? [^Element element]
+  (or (= "pre" (.normalName element)) (.hasClass element "ql-code-block")))
+
+(defn- last-char [^StringBuilder sb]
+  (when (pos? (.length sb))
+    (.charAt sb (dec (.length sb)))))
+
+(defn- break-line! [^StringBuilder sb]
+  (when-not (contains? #{nil \newline} (last-char sb))
+    (.append sb \newline)))
+
+(defn- append-flowing-text!
+  "Append text outside preformatted content, collapsed the way a browser
+   collapses it."
+  [^StringBuilder sb ^String text]
+  (let [collapsed (str/replace text #"\s+" " ")]
+    (.append sb ^String (if (contains? #{nil \newline \space \tab} (last-char sb))
+                          (str/triml collapsed)
+                          collapsed))))
+
+(defn- append-node-text! [^StringBuilder sb ^Node node preformatted]
+  (cond
+    (instance? TextNode node)
+    (let [text (.getWholeText ^TextNode node)]
+      (if preformatted
+        (.append sb text)
+        (append-flowing-text! sb text)))
+
+    (instance? Element node)
+    (let [element ^Element node
+          tag (.normalName element)
+          line-block (contains? line-block-tags tag)]
+      (cond
+        (contains? hidden-tags tag) nil
+        (= "br" tag) (.append sb \newline)
+        :else
+        (do
+          (when line-block (break-line! sb))
+          (when (and (contains? #{"td" "th"} tag) (.previousElementSibling element))
+            (.append sb \tab))
+          (doseq [child (.childNodes element)]
+            (append-node-text! sb child (or preformatted (preformatted? element))))
+          (when line-block (break-line! sb)))))))
+
+(defn html->text-with-line-breaks
+  "Convert HTML to plain text that keeps its line structure.
+
+   `strip-html` joins everything onto one line, which destroys code: the two
+   lines `(m/sp` and `  (m/? task))` read as one expression. Use this where a
+   reader, human or model, needs the lines.
+
+   Pre : `html` is a string or nil.
+   Post: \"\" for nil or blank input. Otherwise text with every entity decoded
+         and no markup. Each block element, `<br>` and Quill code line starts a
+         new line. Code keeps its indentation, table cells are separated by a
+         tab, and no run of blank lines is longer than one."
+  [html]
+  (if (str/blank? html)
+    ""
+    (let [sb (StringBuilder.)]
+      (append-node-text! sb (.body (Jsoup/parseBodyFragment html)) false)
+      (-> (str sb)
+        (str/replace #"[ \t]+\n" "\n")
+        (str/replace #"\n{3,}" "\n\n")
+        (str/replace #"\A\n+" "")
+        str/trimr))))
 
 (defn escape-html
   "Escape the four HTML-significant characters."

@@ -44,16 +44,33 @@
     :else
     (mapcat semantic-nodes (.childNodes node))))
 
-(defn- text-parts [value]
-  (loop [remaining (str/trim (or value ""))
+(defn- strip-leading-newlines [value]
+  (str/replace value #"\A\n+" ""))
+
+(defn- text-parts
+  "Split text into parts of at most max-visible-chars.
+   Pre : `value` is a string or nil.
+   Post: no part is blank or longer than max-visible-chars. A cut falls on the
+         last line break in the back half of the window, else on the last space
+         there, else at the limit. A part after a line-break cut keeps its first
+         line's indentation, so a split code block stays indented."
+  [value]
+  (loop [remaining (str/trimr (strip-leading-newlines (or value "")))
          parts []]
     (if (<= (count remaining) max-visible-chars)
       (cond-> parts (not (str/blank? remaining)) (conj remaining))
       (let [window (subs remaining 0 max-visible-chars)
-            last-space (max (.lastIndexOf window " ") (.lastIndexOf window "\n"))
-            cut (if (>= last-space (quot max-visible-chars 2)) last-space max-visible-chars)
-            part (str/trim (subs remaining 0 cut))
-            tail (str/trim (subs remaining cut))]
+            half (quot max-visible-chars 2)
+            last-break (.lastIndexOf window "\n")
+            last-space (.lastIndexOf window " ")
+            [cut tail] (cond
+                         (>= last-break half)
+                         [last-break (strip-leading-newlines (subs remaining (inc last-break)))]
+                         (>= last-space half)
+                         [last-space (str/triml (subs remaining last-space))]
+                         :else
+                         [max-visible-chars (strip-leading-newlines (subs remaining max-visible-chars))])
+            part (str/trimr (subs remaining 0 cut))]
         (recur tail (cond-> parts (not (str/blank? part)) (conj part)))))))
 
 (defn- long-element-html [^Element element part]
@@ -66,12 +83,13 @@
   (cond
     (instance? TextNode node)
     (mapv (fn [part] {:text part :html nil})
-      (text-parts (.getWholeText ^TextNode node)))
+      (text-parts (str/trim (.getWholeText ^TextNode node))))
 
     (instance? Element node)
     (let [element ^Element node
-          visible (str/trim (.text element))
-          safe-html (cleaner/clean-html-fragment (.outerHtml element))]
+          outer-html (.outerHtml element)
+          visible (text/html->text-with-line-breaks outer-html)
+          safe-html (cleaner/clean-html-fragment outer-html)]
       (cond
         (str/blank? visible) []
         (<= (count visible) max-visible-chars)
@@ -94,7 +112,10 @@
   "Split stored HTML into retained source blocks.
 
    Each block has plain text, optional safe HTML, a section label, and an anchor.
-   The HTML ends at an element boundary and has at most max-visible-chars of text."
+   The HTML ends at an element boundary and has at most max-visible-chars of text.
+   `:text` keeps the source's line breaks and code indentation, with entities
+   decoded (`text/html->text-with-line-breaks`). The assistant sends it to the
+   model, so it must never carry markup or entities."
   [html]
   (let [doc (compact-output! (Jsoup/parseBodyFragment
                                (or (cleaner/clean-html html) "")))

@@ -37,3 +37,26 @@
     (is (= "Safe text" (:text block)))
     (is (not (str/includes? (:html block) "onclick")))
     (is (not (str/includes? (:html block) "script")))))
+
+(defn- quill-code-block [lines]
+  (str "<div class=\"ql-code-block-container\">"
+    (apply str (map #(str "<div class=\"ql-code-block\">" % "</div>") lines))
+    "</div>"))
+
+(deftest a-code-block-keeps-its-lines-and-decoded-text
+  (let [[block] (excerpt/evidence-blocks
+                  (quill-code-block ["(m/sp" "  (m/? (m/?&lt; flow)))"]))]
+    (is (= "(m/sp\n  (m/? (m/?< flow)))" (:text block)))))
+
+(deftest a-long-code-block-splits-between-lines
+  (let [lines (mapv #(str "  (step-" % " ?&lt;)") (range 150))
+        decoded (mapv #(str/replace % "&lt;" "<") lines)
+        blocks (excerpt/evidence-blocks (quill-code-block lines))]
+    (is (< 1 (count blocks)))
+    (is (every? #(<= (count (:text %)) excerpt/max-visible-chars) blocks))
+    (testing "the parts rejoin to the whole block, so every cut fell on a line break"
+      (is (= (str/join "\n" decoded) (str/join "\n" (map :text blocks)))))
+    (testing "each part starts with an indented line"
+      (is (every? #(str/starts-with? (:text %) "  (step-") blocks)))
+    (testing "each part's HTML is preformatted"
+      (is (every? #(str/starts-with? (:html %) "<pre>") blocks)))))

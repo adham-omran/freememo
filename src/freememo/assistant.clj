@@ -197,7 +197,11 @@
       :else (str "Source " excerpt))))
 
 (defn- content-evidence
-  "Build block-level evidence for one retained HTML source."
+  "Build block-level evidence for one retained HTML source.
+   `:snapshot-content` is the text the model reads, and it is never HTML. A model
+   copies an entity such as `&lt;` into its answer verbatim, and the answer's
+   Markdown renderer then shows the entity instead of `<`. `:quoted-html` keeps
+   the markup for the citation display."
   [content {:keys [document-topic-id page-topic-id page-number document-title
                    source-revision]} first-index]
   (mapv
@@ -212,7 +216,7 @@
        :source-revision source-revision
        :quoted-text (:text block)
        :quoted-html (:html block)
-       :snapshot-content (or (:html block) (:text block))})
+       :snapshot-content (:text block)})
     (range)
     (evidence-excerpt/evidence-blocks content)))
 

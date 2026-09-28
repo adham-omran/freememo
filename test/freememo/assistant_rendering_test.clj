@@ -107,6 +107,15 @@
     (is (= ["memory" "memory" "memory"] (mapv :anchor sources)))
     (is (every? :quoted-html sources))))
 
+(deftest the-model-reads-decoded-text-while-the-citation-keeps-markup
+  (let [[source] (content-evidence
+                   "<p>Compare <code>?&lt;</code> with <code>?&gt;</code>.</p>"
+                   {:document-topic-id 12 :page-topic-id 12
+                    :document-title "Missionary" :source-revision "rev-1"}
+                   1)]
+    (is (= "Compare ?< with ?>." (:snapshot-content source)))
+    (is (str/includes? (:quoted-html source) "<code>?&lt;</code>"))))
+
 (deftest rich-render-switch-and-size-limit-fall-back-to-text
   (testing "the deployment switch disables formatted answers"
     (with-redefs [config/assistant-rich-render? (constantly false)]
