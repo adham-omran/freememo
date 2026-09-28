@@ -42,10 +42,11 @@
         (dom/props {:style {:height "100%" :width "100%"
                             :min-width "0" :min-height "0" :overflow "hidden"}})
 
-        ;; No e/for-by: the viewer persists across pdf-root-id changes and swaps
-        ;; the document in-place (PdfViewerComponent → viewer/set-document!).
-        ;; Remounting here caused the :diff-corruption WS crash on learn-session
-        ;; advance.
+        ;; No e/for-by: PdfViewerComponent stays mounted across pdf-root-id
+        ;; changes. Remounting here caused the :diff-corruption WS crash on
+        ;; learn-session advance. The PDF.js viewer inside it is not kept: each
+        ;; document builds a new one through viewer/init-viewer!. See
+        ;; CLAUDE.md, "Every Document Change Builds a New PDF.js Viewer".
         (reset! !current-page
           (binding [dctx/document-id pdf-root-id
                     dctx/on-navigate! (fn [p]

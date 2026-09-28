@@ -16,9 +16,9 @@
 ;; Init generation — incremented in init-viewer!/set-document!; stale async callbacks check & skip
 (defonce !init-gen (atom 0))
 
-;; doc-id currently displayed by the mounted viewer (nil = none loaded). The
-;; persistent PdfViewerComponent reads this to decide init-viewer! vs in-place
-;; set-document! on a document-id change.
+;; doc-id currently displayed by the mounted viewer (nil = none loaded).
+;; start-load! and set-document! skip a load of the doc already shown.
+;; destroy-viewer! clears it, so a load through init-viewer! never skips.
 (defonce !loaded-doc-id (atom nil))
 
 ;; True while a programmatic page restore AND its post-fit reflow settle window
@@ -114,8 +114,8 @@
      "Cache/identity key for a /api/pdf/<id>?v=<version> url — the last path
       segment WITH its version query. Including the version makes a same-id byte
       change (e.g. a Live Document append) a DISTINCT key: the IndexedDB cache
-      misses (forcing a fresh fetch) and set-document!'s same-key no-op guard
-      fires. Unversioned urls key on the bare id string."
+      misses, which forces a fresh fetch. Unversioned urls key on the bare id
+      string."
      [pdf-url]
      (-> pdf-url (.split "/") (.pop))))
 
@@ -123,8 +123,9 @@
    (defn- start-load!
      "Fetch pdf-url (cache-first) and `.setDocument` onto the viewer currently in
       `!viewer-state`, guarded by my-gen so stale loads skip. Shared by
-      init-viewer! (fresh viewer) and set-document! (existing viewer, in-place
-      swap). Destroys the previously-loaded PDFDocumentProxy before replacing.
+      init-viewer! (fresh viewer) and set-document! (existing viewer). Only the
+      init-viewer! path runs in practice — see set-document!. Destroys the
+      previously-loaded PDFDocumentProxy before replacing.
       `fit` is the document's stored fit (\"page-width\" or \"page-fit\"), applied
       on `pagesloaded`."
      [pdf-url fit my-gen on-ready]
@@ -194,8 +195,8 @@
          (reset! !viewer-state {:viewer viewer
                                 :event-bus event-bus
                                 :link-service link-service})
-         ;; Zoom sync (once per viewer — event-bus lives for the viewer's life,
-         ;; reused across set-document! swaps, so no listener stacking). Mirrors
+         ;; Zoom sync (once per viewer — the event-bus lives exactly as long as
+         ;; the viewer, so listeners never stack). Mirrors
          ;; PDF.js scale into !scale/!scale-mode for the toolbar to e/watch.
          (.on event-bus "scalechanging"
            (fn [_e]
@@ -212,9 +213,9 @@
          (start-load! pdf-url fit my-gen on-ready)))))
 
 (defn init-viewer!
-  "Create the PDF.js viewer ONCE in the given container and load pdf-url.
-   Destroys any previous viewer first. For swapping the document on an
-   already-created viewer (no recreate), use set-document! instead.
+  "Create a PDF.js viewer in the given container and load pdf-url. Destroys
+   any previous viewer first. PdfViewerComponent calls this for every document
+   and every new version of one, not once — see set-document!.
    Calls on-ready when the PDF is loaded with (pdf viewer) args. The pages open
    at `fit`, \"page-width\" or \"page-fit\".
 
@@ -230,10 +231,16 @@
                #(create-viewer! container viewer-div pdf-url fit on-ready)))))
 
 (defn set-document!
-  "Swap the displayed PDF on the EXISTING viewer (no destroy/recreate). Used when
-   the topic advances to a different PDF while the viewer stays mounted, avoiding
-   the frame-churn that corrupts the Electric incseq diff. No-op if no viewer is
-   mounted (caller should init-viewer! first). The pages open at `fit`."
+  "Swap the displayed PDF on the EXISTING viewer (no destroy/recreate). No-op if
+   no viewer is mounted (caller should init-viewer! first). The pages open at
+   `fit`.
+
+   NOT REACHED IN PRACTICE, and on a live viewer it throws. PdfViewerComponent
+   calls it from a branch whose test, (nil? @!viewer-state), runs once, when the
+   branch mounts. No viewer exists then, so every document goes through
+   init-viewer!. On a live viewer, PDF.js 3.11's setDocument throws in
+   AnnotationEditorUIManager.destroy, because this viewer has no alt-text
+   manager. See CLAUDE.md, \"Every Document Change Builds a New PDF.js Viewer\"."
   [pdf-url fit on-ready]
   #?(:clj nil
      :cljs

@@ -21,8 +21,8 @@
    the viewer stays un-initialized (PDF.js never fetches a 404); the add-photos
    empty-state is rendered upstream by DocumentBody, which preempts this pane.
    `reload-nonce` (the page count) is folded into the pdf url as ?v=<nonce>, so
-   when it changes (e.g. a Live Document append) the viewer fetches and swaps the
-   fresh blob in place — see the versioned-key reconciliation below.
+   when it changes (e.g. a Live Document append) a new PDF.js viewer loads the
+   fresh blob — see the versioned-key reconciliation below.
    Each load opens at the document's stored fit (settings/get-pdf-fit), read
    again for every versioned key, so a Live Document append keeps a fit chosen
    since the document opened.
@@ -44,7 +44,7 @@
           !viewer-div (atom nil)
           ;; Per-mount stable refs: !timer-id for unmount clearTimeout;
           ;; !requested-doc-id holds the versioned doc key (id + reload-nonce)
-          ;; already loaded, so init/swap runs exactly once per (doc, version).
+          ;; already loaded, so init runs exactly once per (doc, version).
           !timer-id (atom nil)
           !requested-doc-id (atom nil)
           show-empty? (and is-live? (not has-file?))
@@ -75,11 +75,12 @@
           (dom/props {:style {:flex "1"
                               :position "relative"}})
 
-          ;; Viewer container — created ONCE (init-viewer!) and the document is
-          ;; swapped IN-PLACE (set-document!) when document-id changes; never
-          ;; remounted per topic. Mirrors the persistent Quill editor
-          ;; (rich_text_editor_component) and fixes the :diff-corruption WS crash
-          ;; that the previous per-document e/for-by remount caused.
+          ;; Viewer container — mounted ONCE and never remounted per topic.
+          ;; That fixes the :diff-corruption WS crash that the previous
+          ;; per-document e/for-by remount caused. The PDF.js viewer inside it
+          ;; is NOT kept: each (doc, version) builds a new one through
+          ;; init-viewer!, never set-document! (see the keyed-fit comment below
+          ;; and CLAUDE.md, "Every Document Change Builds a New PDF.js Viewer").
           (dom/div
             (dom/props {:class "pdf-viewer-container"
                         :style {:position "absolute"
@@ -102,11 +103,10 @@
 
               ;; The pdf url carries ?v=<reload-nonce> so a byte change (a
               ;; Live Document append bumps the page count) yields a NEW versioned
-              ;; key: a distinct IndexedDB cache key (forces a fresh fetch) and a
-              ;; new !loaded-doc-id (so set-document!'s same-key no-op guard fires
-              ;; and swaps the fresh blob in place). !requested-doc-id holds the
-              ;; versioned key, so init/swap runs exactly once per (doc, version);
-              ;; reload-nonce changing re-evaluates this let. document-id /
+              ;; key: a distinct IndexedDB cache key, which forces a fresh fetch.
+              ;; !requested-doc-id holds the versioned key, so init runs exactly
+              ;; once per (doc, version). A reload-nonce change re-evaluates
+              ;; this let. document-id /
               ;; reload-nonce / initial-page appear only here or inside the
               ;; on-ready closure (Electric treats fn bodies as opaque).
               (let [version  (or reload-nonce 0)
@@ -166,14 +166,17 @@
                 (when (and (not show-empty?) (not= desired-key @!requested-doc-id))
                   (reset! !requested-doc-id desired-key)
                   (if (nil? @viewer/!viewer-state)
-                    ;; No viewer yet → create once, deferred so DOM nodes exist.
+                    ;; Always taken: this test runs once, when the branch mounts,
+                    ;; and no viewer exists then (see keyed-fit above). Build a
+                    ;; new viewer, deferred so DOM nodes exist.
                     (reset! !timer-id
                       (js/setTimeout
                         (fn []
                           (reset! !timer-id nil)
                           (viewer/init-viewer! @!container @!viewer-div pdf-url fit on-ready))
                         100))
-                    ;; Viewer exists, different doc OR new version → swap in place.
+                    ;; Not reached while this branch stays mounted. If a remount
+                    ;; reaches it, PDF.js 3.11 throws (see keyed-fit above).
                     (viewer/set-document! pdf-url fit on-ready))))))))
 
       ;; Return current page number for OCR integration
