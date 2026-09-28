@@ -13,7 +13,10 @@
 	     dev traffic never reaches a third party. -->
 	$:freememo/deployment-head$
 
-	<title>FreeMemo</title>
+	<!-- Google copies this into the search result's title link, so it says what
+	     FreeMemo does rather than only its name. Mirrored in
+	     freememo.crawler-page/home-title. -->
+	<title>FreeMemo — Incremental reading, AI quizzes, and Anki cards</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="color-scheme" content="light dark">
 
@@ -35,6 +38,28 @@
 	<!-- Twitter reads og:title/og:description/og:image as fallbacks; only the
 	     card type has no Open Graph equivalent. -->
 	<meta name="twitter:card" content="summary_large_image">
+	<!-- Site name and entity for search engines. Google reads WebSite markup
+	     for the site name, and Organization markup to tell this FreeMemo apart
+	     from other products with the same name. Every value here is also on
+	     the page. Mirrored in freememo.crawler-page/structured-data, and
+	     crawler-head-matches-the-shell compares the two as parsed data.
+	     Self-hosters must change the freememo.net origin here too. -->
+	<script type="application/ld+json">
+	{"@context": "https://schema.org",
+	 "@graph": [
+	   {"@type": "WebSite",
+	    "@id": "https://freememo.net/#website",
+	    "name": "FreeMemo",
+	    "url": "https://freememo.net/",
+	    "publisher": {"@id": "https://freememo.net/#organization"}},
+	   {"@type": "Organization",
+	    "@id": "https://freememo.net/#organization",
+	    "name": "FreeMemo",
+	    "url": "https://freememo.net/",
+	    "logo": "https://freememo.net/freememo/favicon-192.png",
+	    "description": "Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, free during early access.",
+	    "sameAs": ["https://github.com/adham-omran/freememo"]}]}
+	</script>
 
 	<!-- Open Sans, self-hosted (committed text; its woff2 files live in the
 	     gitignored vendor tree). A <link> rather than index.css's old @import:
@@ -45,8 +70,13 @@
 	     route boundary would flash the fallback on every reader mount. -->
 	<link rel="stylesheet" href="/freememo/amiri.css">
 	<link rel="stylesheet" href="/freememo/index.css" type="text/css" media="screen" />
+	<!-- Browsers take the SVG. Google Search takes no SVG favicon, so a
+	     crawler that reads this shell rather than freememo.crawler-page's
+	     document still finds the PNG. /favicon.ico is a static file for
+	     clients that ask for it without reading any link. -->
 	<link rel="icon" type="image/svg+xml" href="/freememo/favicon.svg">
-	<link rel="apple-touch-icon" sizes="180x180" href="/freememo/favicon.svg">
+	<link rel="icon" type="image/png" sizes="192x192" href="/freememo/favicon-192.png">
+	<link rel="apple-touch-icon" sizes="180x180" href="/freememo/apple-touch-icon.png">
 
 	<!-- ── Vendored third-party assets ──────────────────────────────────────
 	     Everything below is served from /freememo/vendor/<lib>@<version>/,

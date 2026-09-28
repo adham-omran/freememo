@@ -17,15 +17,18 @@
 
    ## What the document deliberately omits
 
-   No script, no stylesheet, no font. A crawler runs no JavaScript here, so the
-   app bundle would do nothing and the eager vendor tags would cost it four
-   round-trips for nothing. Omitting the bundle also means Google's infrastructure
-   never opens a WebSocket against this server.
+   No executable script, no stylesheet, no font. A crawler runs no JavaScript
+   here, so the app bundle would do nothing and the eager vendor tags would cost
+   it four round-trips for nothing. Omitting the bundle also means Google's
+   infrastructure never opens a WebSocket against this server.
+
+   The one `<script>` element is `application/ld+json`, which is data a crawler
+   parses and no browser runs.
 
    ## What it duplicates, and why
 
-   The head's title, description and Open Graph values are duplicated from
-   `index.prod.html`. Deriving them from one source would need a second
+   The head's title, description, Open Graph values and JSON-LD are duplicated
+   from `index.prod.html`. Deriving them from one source would need a second
    placeholder in that shell, which is the mechanism this design chose T3 to
    avoid. The shell already duplicates its own description into `og:description`,
    so the file tolerates the pattern. A change to either must be mirrored, and
@@ -38,6 +41,7 @@
 
    See plans/crawler-rendering-and-well-known-files.md."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
    [freememo.landing-copy :as lc]
    [freememo.legal-copy :as legal]))
@@ -49,7 +53,12 @@
 
    `googlebot` is the agent Google's Web Rendering Service uses, and
    `adsbot-google` scores the landing page of a Google Ads campaign — both read a
-   page this app cannot render for them. The unfurlers read only Open Graph tags,
+   page this app cannot render for them.
+
+   `google-inspectiontool` is the agent of the Rich Results Test and of URL
+   Inspection in Search Console. Its string does not contain `googlebot`, so
+   without this member both tools read the app shell and cannot show what
+   Googlebot reads. The unfurlers read only Open Graph tags,
    which `head-html` emits, so one document covers them too.
 
    `mediapartners-google` was a member until 2026-08-06. It is the ad-network
@@ -65,7 +74,7 @@
 
    A fixed allowlist, never an inverted browser list: inverting it would hand the
    static document to any browser this list failed to recognize."
-  ["googlebot" "adsbot-google"
+  ["googlebot" "google-inspectiontool" "adsbot-google"
    "bingbot" "duckduckbot" "yandexbot" "applebot"
    "slackbot" "twitterbot" "facebookexternalhit" "linkedinbot" "discordbot"
    "telegrambot" "whatsapp"])
@@ -116,7 +125,17 @@
    resolves to this address and no two URLs carry the same text."
   "https://freememo.net/")
 
-(def ^:private page-title "FreeMemo")
+(def ^:private site-name
+  "The site's name, alone. `og:site_name`, the JSON-LD `name` and the legal
+   documents' titles read it."
+  "FreeMemo")
+
+(def ^:private home-title
+  "The landing page's `<title>`, which Google copies into the search result's
+   title link. It says what FreeMemo does, because the bare name gave Google
+   nothing to tell this site apart from other products called FreeMemo.
+   Duplicated from index.prod.html. Mirror any change."
+  "FreeMemo — Incremental reading, AI quizzes, and Anki cards")
 
 (def ^:private og-title "FreeMemo — read it once, remember it")
 
@@ -125,6 +144,51 @@
   "Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, free during early access.")
 
 (def ^:private og-image (str canonical-url "freememo/landing-hero.png"))
+
+(def ^:private favicon-png
+  "The icon Google Search can use. Google takes no SVG favicon, so this document
+   links only the PNG. It is also the Organization logo, which Google requires
+   to be at least 112x112px."
+  "/freememo/favicon-192.png")
+
+(def ^:private apple-touch-icon "/freememo/apple-touch-icon.png")
+
+(def structured-data
+  "The JSON-LD graph in the landing document's head, as data.
+
+   `WebSite` is what Google reads for the site name. `Organization` carries the
+   `sameAs` link that ties this site to its repository, which Google uses to tell
+   this FreeMemo apart from others. Every value is also on the page or in a meta
+   tag that `crawler-head-matches-the-shell` checks.
+   Duplicated from index.prod.html. That test compares the two as parsed data."
+  (let [website-id (str canonical-url "#website")
+        org-id (str canonical-url "#organization")]
+    {"@context" "https://schema.org"
+     "@graph" [{"@type" "WebSite"
+                "@id" website-id
+                "name" site-name
+                "url" canonical-url
+                "publisher" {"@id" org-id}}
+               {"@type" "Organization"
+                "@id" org-id
+                "name" site-name
+                "url" canonical-url
+                "logo" (str (str/replace canonical-url #"/$" "") favicon-png)
+                "description" description
+                "sameAs" ["https://github.com/adham-omran/freememo"]}]}))
+
+(defn- json-ld-html
+  "A JSON-LD script element holding `data`.
+
+   Pre: `data` is a map cheshire can encode.
+   Post: the element's body holds no `</`, so no value can close the element.
+   `esc` does not apply here, because entity escapes inside a script element are
+   not decoded and would corrupt the JSON. `<\\/` is the JSON escape for `</`
+   and parses back to the same string."
+  [data]
+  (str "<script type=\"application/ld+json\">"
+       (str/replace (json/generate-string data) "</" "<\\/")
+       "</script>"))
 
 (def ^:private og-image-alt
   "FreeMemo showing a PDF page beside its extracted text, with generated basic and cloze flashcards below.")
@@ -135,8 +199,10 @@
 (defn- head-html
   "The document head.
 
-   Post: carries the title, the description, a canonical link and the full Open
-   Graph set. The Open Graph tags are load-bearing beyond search: the unfurlers in
+   Post: carries the title, the description, a canonical link, the PNG icon
+   links, the full Open Graph set and the `structured-data` JSON-LD. Google reads
+   the favicon from this head only, because Googlebot never receives the shell.
+   The Open Graph tags are load-bearing beyond search: the unfurlers in
    `crawler-user-agents` read nothing else, so dropping them would regress every
    shared FreeMemo link to a bare title.
    It carried one deployment contribution — a site-verification meta — until the
@@ -145,12 +211,14 @@
   []
   (str "<head>"
        "<meta charset=\"utf-8\">"
-       "<title>" (esc page-title) "</title>"
+       "<title>" (esc home-title) "</title>"
        "<link rel=\"canonical\" href=\"" (esc canonical-url) "\">"
+       "<link rel=\"icon\" type=\"image/png\" sizes=\"192x192\" href=\"" favicon-png "\">"
+       "<link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"" apple-touch-icon "\">"
        (meta-tag "name" "description" description)
        (meta-tag "name" "viewport" "width=device-width, initial-scale=1")
        (meta-tag "property" "og:type" "website")
-       (meta-tag "property" "og:site_name" page-title)
+       (meta-tag "property" "og:site_name" site-name)
        (meta-tag "property" "og:title" og-title)
        (meta-tag "property" "og:description" description)
        (meta-tag "property" "og:url" canonical-url)
@@ -159,6 +227,7 @@
        (meta-tag "property" "og:image:height" "2400")
        (meta-tag "property" "og:image:alt" og-image-alt)
        (meta-tag "name" "twitter:card" "summary_large_image")
+       (json-ld-html structured-data)
        "</head>"))
 
 ;; ── Body sections ──
@@ -240,8 +309,9 @@
 (defn landing-document
   "The whole static document for a crawler, as a string.
 
-   Post: a complete HTML document holding the landing page's words and NO
-   `<script>`, no stylesheet link and no font link.
+   Post: a complete HTML document holding the landing page's words, NO
+   executable script, no stylesheet link and no font link. Its one `<script>` is
+   the `application/ld+json` block.
    Pure: reads only `freememo.landing-copy`."
   []
   (str "<!DOCTYPE html>"
@@ -281,11 +351,11 @@
   [path doc]
   (str "<head>"
        "<meta charset=\"utf-8\">"
-       "<title>" (esc (str (:title doc) " — " page-title)) "</title>"
+       "<title>" (esc (str (:title doc) " — " site-name)) "</title>"
        "<link rel=\"canonical\" href=\""
        (esc (str (str/replace canonical-url #"/$" "") path)) "\">"
        (meta-tag "name" "description"
-         (str "The " (str/lower-case (:title doc)) " for " page-title "."))
+         (str "The " (str/lower-case (:title doc)) " for " site-name "."))
        (meta-tag "name" "viewport" "width=device-width, initial-scale=1")
        "</head>"))
 
@@ -328,5 +398,5 @@
            (str (tag "h1" (esc (:title doc)))
                 (para (str "Last updated " (:updated doc)))
                 (str/join (map legal-section-html (:sections doc)))))
-         (tag "footer" (link "/" (str "Back to " page-title)))
+         (tag "footer" (link "/" (str "Back to " site-name)))
          "</body></html>")))

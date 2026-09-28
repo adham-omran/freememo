@@ -12,15 +12,32 @@
    This namespace is public. It requires no database: `freememo.shell` reaches
    only `freememo.crawler-page` and `freememo.deployment-hook`, and the route test
    that does need one lives with the excluded implementation's suite."
-  (:require [clojure.java.io :as io]
+  (:require [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.crawler-page :as crawler-page]
             [freememo.landing-copy :as lc]
             [freememo.legal-copy :as legal]
-            [freememo.shell :as shell]))
+            [freememo.shell :as shell]
+            [ring.middleware.content-type :refer [wrap-content-type]]
+            [ring.middleware.resource :refer [wrap-resource]]))
 
 (def ^:private document (crawler-page/landing-document))
+
+(defn- executable-scripts
+  "HTML → the opening tag of every `<script>` a browser would run.
+   A JSON-LD block is data, so it is not counted."
+  [html]
+  (remove #(str/includes? % "type=\"application/ld+json\"")
+          (re-seq #"<script\b[^>]*>" html)))
+
+(defn- json-ld
+  "HTML → the parsed body of its one JSON-LD block, or nil."
+  [html]
+  (some-> (re-find #"(?s)<script type=\"application/ld\+json\">(.*?)</script>" html)
+          second
+          json/parse-string))
 
 (defn- visible-text
   "HTML → the words a crawler reads, with tags and runs of space removed."
@@ -41,7 +58,7 @@
     ;; A crawler runs no JavaScript here, so the app bundle would do nothing and
     ;; the eager vendor tags would cost four round-trips for nothing. Omitting the
     ;; bundle also keeps Google's infrastructure from opening a WebSocket to us.
-    (is (not (str/includes? document "<script")))
+    (is (empty? (executable-scripts document)))
     (is (not (str/includes? document "rel=\"stylesheet\"")))
     (is (not (str/includes? document "open-sans")))
     (is (not (str/includes? document "/freememo/js/"))))
@@ -95,8 +112,8 @@
     (is (str/includes? document "&quot;pre-production&quot;"))))
 
 ;; ---------------------------------------------------------------------------
-;; Head drift. The title, description and Open Graph values are duplicated from
-;; index.prod.html by design, because deriving them would need a second
+;; Head drift. The title, description, Open Graph values and JSON-LD are
+;; duplicated from index.prod.html by design, because deriving them would need a second
 ;; placeholder in that shell. Duplication is only safe while something checks it.
 ;; ---------------------------------------------------------------------------
 
@@ -108,7 +125,35 @@
                   "property=\"og:description\"" "property=\"og:url\""
                   "property=\"og:image\"" "property=\"og:image:alt\""]]
       (is (= (content-of shell-html attr) (content-of document attr))
-        (str attr " differs between index.prod.html and the crawler document")))))
+        (str attr " differs between index.prod.html and the crawler document")))
+
+    (testing "the title, which Google copies into the search result's title link"
+      (let [title-of #(second (re-find #"<title>([^<]*)</title>" %))]
+        (is (some? (title-of document)))
+        (is (= (title-of shell-html) (title-of document)))))
+
+    (testing "the JSON-LD, compared as data so layout does not matter"
+      (is (some? (json-ld shell-html)) "index.prod.html carries no JSON-LD")
+      (is (= (json-ld shell-html) (json-ld document) crawler-page/structured-data)))
+
+    (testing "both link the PNG icon, the format Google Search accepts"
+      (doseq [html [shell-html document]]
+        (is (str/includes? html "rel=\"icon\" type=\"image/png\" sizes=\"192x192\" href=\"/freememo/favicon-192.png\""))))))
+
+(deftest crawler-document-offers-google-no-svg-icon
+  ;; Google Search takes no SVG favicon, and which link it picks from several is
+  ;; undocumented. So the document Googlebot reads links raster icons only.
+  (let [icon-links (re-seq #"<link rel=\"(?:icon|apple-touch-icon)\"[^>]*>" document)]
+    (is (seq icon-links))
+    (doseq [l icon-links]
+      (is (not (str/includes? l ".svg")) l))))
+
+(deftest json-ld-cannot-close-its-element
+  ;; `esc` does not reach the JSON-LD block, so a value holding `</script>` would
+  ;; end the element early and spill the rest of the JSON into the page.
+  (let [html (#'crawler-page/json-ld-html {"description" "a</script><p>b"})]
+    (is (= 1 (count (re-seq #"</script>" html))))
+    (is (= {"description" "a</script><p>b"} (json-ld html)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Copy parity. The words live in one namespace; the SECTION ORDER lives in both
@@ -243,10 +288,13 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest crawler-user-agent-matches-crawlers-and-no-browser
-  (testing "the two Google agents that read this page — the render and the ad
-            landing-page check — both match"
+  (testing "the three Google agents that read this page — the render, the
+            Search Console and Rich Results tools, and the ad landing-page
+            check — all match"
     (is (crawler-page/crawler-user-agent?
           "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"))
+    (is (crawler-page/crawler-user-agent?
+          "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36 (compatible; Google-InspectionTool/1.0)"))
     (is (crawler-page/crawler-user-agent?
           "AdsBot-Google (+http://www.google.com/adsbot.html)")))
 
@@ -294,7 +342,7 @@
     (let [r (get-as "/" bot)]
       (is (= 200 (:status r)))
       (is (str/includes? (get-in r [:headers "Content-Type"]) "text/html"))
-      (is (not (str/includes? (:body r) "<script")))
+      (is (empty? (executable-scripts (:body r))))
       (is (str/includes? (:body r) (:hero/headline lc/copy)))))
 
   (testing "a crawler at a legal path gets that document, not the landing one"
@@ -355,3 +403,22 @@
     (is (re-find #"(?m)^User-agent: \*" body))
     (is (not (re-find #"(?i)sitemap:" body))
       "/sitemap.xml is a deliberate 404, so advertising a sitemap wastes a fetch")))
+
+(deftest icons-are-static-files-ahead-of-the-shell
+  ;; The shell is the catch-all, so an icon path with no file behind it gets the
+  ;; app's HTML with a 200. That was /favicon.ico for any agent the allowlist does
+  ;; not name, "Google Favicon" included. The chain below is prod.cljc's order:
+  ;; the resource handler answers before the shell is reached.
+  (let [chain (-> (fn [_] {:status 599 :body "fell through to next-handler"})
+                  (shell/wrap-prod-index-page
+                    {:resources-path "public" :manifest-path "public/freememo/js/manifest.edn"})
+                  (wrap-resource "public")
+                  wrap-content-type)]
+    (doseq [ua [bot "Googlebot-Image/1.0"
+                "Mozilla/5.0 (Windows NT 6.1; rv:6.0) Gecko/20110814 Firefox/6.0 Google Favicon"]
+            [uri content-type] [["/favicon.ico" "image/x-icon"]
+                                ["/freememo/favicon-192.png" "image/png"]
+                                ["/freememo/apple-touch-icon.png" "image/png"]]]
+      (let [r (chain {:uri uri :request-method :get :headers {"user-agent" ua}})]
+        (is (= 200 (:status r)) (str uri " for " ua))
+        (is (= content-type (get-in r [:headers "Content-Type"])) (str uri " for " ua))))))
