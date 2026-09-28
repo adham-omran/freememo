@@ -944,6 +944,25 @@ html:has(> body > .app-shell) > body {
 }
 .ai-level-chip--custom { background: var(--color-remark-tint); color: var(--color-remark-tint-text); }
 
+/* A saved prompt, marked on its accordion summary so it shows while closed. */
+.prompt-chip {
+    margin-left: 8px; font-size: 11px; font-weight: 600; padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    background: var(--color-primary-tint); color: var(--color-primary-tint-text);
+}
+.prompt-chip--stale { background: var(--color-warning-bg); color: var(--color-warning-dark); }
+.prompt-stale-notice {
+    margin: 0 0 8px; padding: 10px 14px; border-radius: var(--radius-md);
+    background: var(--color-warning-bg); font-size: 13px; line-height: 1.5;
+}
+.prompt-stale-notice p { margin: 0 0 8px; }
+.prompt-default-text {
+    margin: 8px 0 0; padding: 10px; max-height: 240px; overflow-y: auto;
+    white-space: pre-wrap; font-size: 12px; line-height: 1.5;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    background: var(--color-bg-subtle);
+}
+
 .ai-advanced__note {
     font-size: 13px; line-height: 1.5; margin: 0 0 var(--sp-5);
     padding: 10px 14px; border-radius: var(--radius-md);

@@ -11,7 +11,10 @@
 
 (def title-max 500)
 (def card-max 10000)
-(def prompt-max 5000)
+;; Must admit every default prompt: `resources/prompts/system.md` alone is
+;; over 5000 characters, which was the cap until an edit of the default could
+;; not be saved. saved_prompt_test asserts the defaults fit.
+(def prompt-max 20000)
 (def label-max 500)   ; one occlusion label's text, newlines included
 
 (defn check-length!

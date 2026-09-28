@@ -589,6 +589,48 @@
             (seg/Segment mode ppm/clarify (ppm/label ppm/clarify) SaveMode)
             (seg/Segment mode ppm/verbatim (ppm/label ppm/verbatim) SaveMode)))))))
 
+(def ^:private prompt-chip-text
+  "The Advanced view's mark for a saved prompt, by
+   `settings/prompt-override-state`. :default has none. Never \"Custom\": the
+   task level chip uses that word, and a saved prompt does not change the level."
+  {:edited "Edited"
+   :stale "Edited · default changed"
+   :unknown-base "Edited · default may have changed"})
+
+(def ^:private stale-notice-text
+  {:stale "The default prompt changed after you saved yours. Your version is still in use."
+   :unknown-base "The default prompt may have changed after you saved yours. Your version is still in use."})
+
+(defn- state-after-save
+  "The saved prompt's state once `text` is saved. The server deletes a save equal
+   to the default and stamps any other with the current default."
+  [text default]
+  (if (= text default) :default :edited))
+
+(e/defn PromptChip [state]
+  (e/client
+    (when-some [label (prompt-chip-text state)]
+      (dom/span
+        (dom/props {:class (str "prompt-chip" (when (stale-notice-text state) " prompt-chip--stale"))})
+        (dom/text label)))))
+
+(e/defn PromptStaleNotice
+  "Says a saved prompt is not following the default, with the default readable."
+  [state default-text]
+  (e/client
+    (when-some [message (stale-notice-text state)]
+      (let [!show? (atom false)
+            show? (e/watch !show?)]
+        (dom/div
+          (dom/props {:class "prompt-stale-notice" :role "status"})
+          (dom/p (dom/text message))
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-secondary" :aria-expanded (str show?)})
+            (dom/text (if show? "Hide default" "View default"))
+            (dom/On "click" (fn [_] (swap! !show? not)) nil))
+          (when show?
+            (dom/pre (dom/props {:class "prompt-default-text"}) (dom/text default-text))))))))
+
 (e/defn SystemPromptField
   "Card Generation System Prompt — collapsed accordion. Controls the persona,
    rules, and style for flashcard generation; format-specific instructions
@@ -598,16 +640,20 @@
     (let [default-sys (e/server (settings/get-default-system-prompt))
           server-sys (e/server (settings/get-system-prompt user-id))
           !sys-prompt (atom server-sys)
-          sys-prompt (e/watch !sys-prompt)]
+          sys-prompt (e/watch !sys-prompt)
+          !state (atom (e/server (settings/prompt-override-state user-id :system)))
+          state (e/watch !state)]
       (dom/details
         (dom/props {:class "settings-accordion"})
         (dom/summary
           (dom/props {:class "settings-accordion__summary"})
-          (dom/text "Card Generation System Prompt"))
+          (dom/text "Card Generation System Prompt")
+          (PromptChip state))
         (dom/div
           (dom/props {:class "settings-accordion__body"})
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
             (dom/text "Controls the persona, rules, and style for flashcard generation. Format-specific instructions (basic/cloze/context) are appended automatically."))
+          (PromptStaleNotice state default-sys)
           ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
           ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
           ;; don't clobber the user's draft mid-edit), committed once on "change"
@@ -625,7 +671,11 @@
               (when t
                 (let [r (e/server (e/Offload #(settings/save-system-prompt user-id committed)))]
                   (case r
-                    (if (:success r) (do (reset! !sys-prompt committed) (t)) (t (:error r))))))))
+                    (if (:success r)
+                      (do (reset! !sys-prompt committed)
+                          (reset! !state (state-after-save committed default-sys))
+                          (t))
+                      (t (:error r))))))))
           (dom/button
             (dom/props {:type "button" :class "btn btn-secondary"
                         :disabled (= sys-prompt default-sys)
@@ -637,7 +687,7 @@
                 (let [r (e/server (e/Offload #(settings/reset-system-prompt user-id)))]
                   (case r
                     (if (:success r)
-                      (do (reset! !sys-prompt default-sys) (t))
+                      (do (reset! !sys-prompt default-sys) (reset! !state :default) (t))
                       (t (:error r)))))))))))))
 
 (e/defn OcrPromptField
@@ -649,16 +699,20 @@
     (let [default-ocr (e/server (settings/get-default-ocr-prompt))
           server-ocr (e/server (settings/get-ocr-prompt user-id))
           !ocr-prompt (atom server-ocr)
-          ocr-prompt (e/watch !ocr-prompt)]
+          ocr-prompt (e/watch !ocr-prompt)
+          !state (atom (e/server (settings/prompt-override-state user-id :ocr)))
+          state (e/watch !state)]
       (dom/details
         (dom/props {:class "settings-accordion" :style {:margin-top "12px"}})
         (dom/summary
           (dom/props {:class "settings-accordion__summary"})
-          (dom/text "OCR Extraction Prompt"))
+          (dom/text "OCR Extraction Prompt")
+          (PromptChip state))
         (dom/div
           (dom/props {:class "settings-accordion__body"})
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
             (dom/text "Instructions for extracting text from PDF page images. Controls how tables, headings, and structure are handled."))
+          (PromptStaleNotice state default-ocr)
           ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
           ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
           ;; don't clobber the user's draft mid-edit), committed once on "change"
@@ -676,7 +730,11 @@
               (when t
                 (let [r (e/server (e/Offload #(settings/save-ocr-prompt user-id committed)))]
                   (case r
-                    (if (:success r) (do (reset! !ocr-prompt committed) (t)) (t (:error r)))))))))
+                    (if (:success r)
+                      (do (reset! !ocr-prompt committed)
+                          (reset! !state (state-after-save committed default-ocr))
+                          (t))
+                      (t (:error r)))))))))
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary"
                       :disabled (= ocr-prompt default-ocr)
@@ -688,7 +746,7 @@
               (let [r (e/server (e/Offload #(settings/reset-ocr-prompt user-id)))]
                 (case r
                   (if (:success r)
-                    (do (reset! !ocr-prompt default-ocr) (t))
+                    (do (reset! !ocr-prompt default-ocr) (reset! !state :default) (t))
                     (t (:error r))))))))))))
 
 (e/defn AdvancedCards [user-id level card-model-ids card-label-of]

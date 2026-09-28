@@ -56,6 +56,11 @@
 (def CARD_GEN_MAX_RETRIES "card_gen_max_retries")
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
+;; Hex SHA-256 of the default a saved prompt was based on. Written with the
+;; prompt, so the Advanced view can say when the default changed under a saved
+;; prompt. No topic id, so no settings-key-prefixes entry.
+(def PROMPT_SYSTEM_BASE "prompt_system_base")
+(def PROMPT_OCR_BASE "prompt_ocr_base")
 (def EMAIL_UPDATES "email_updates")
 (def THEME "theme")
 ;; Account-wide, so it carries no topic id and needs no settings-key-prefixes
@@ -1506,13 +1511,14 @@
 - <p> for paragraphs
 - <ul><li> and <ol><li> for lists
 - <strong> for bold/important text
-- <em> for italic/emphasized text
+- <em> for italic or emphasized prose. Italic letters in a formula are math, not emphasis.
 - LaTeX between \\( and \\) for mathematical notation, e.g. \\(x \\times (y + z)\\)
 Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
 REFLOW: a line ending on the page is layout, not content. Join the lines the layout wrapped into one continuous <p>. Open a new <p> only where the source itself starts a new paragraph — a first-line indent, extra vertical space, or a heading above it. Never end a wrapped line with a line break.
 HYPHENS: when a word is split across a line ending, rejoin it. Drop the hyphen when the joined word is not hyphenated in ordinary use (\"program-\" + \"ming\" -> \"programming\"). Keep the hyphen when the word is a real compound (\"tree-\" + \"like\" -> \"tree-like\"). Decide word by word.
 <br> is only for a break the source itself forces — verse, an address block, a line of code. Never for a wrapped line.
 Transcribe formulas as LaTeX in \\(...\\) whether they sit mid-sentence or on their own line. \\(...\\) is the only delimiter — never $...$, never $$...$$, never \\[...\\]. Do not convert prose into notation — only text that is already mathematical.
+Never write math with <sub>, <sup>, <em>, <i> or HTML entities. Subscripts are _{…}, superscripts ^{…}, primes ', ∂ is \\partial. Keep an equation number outside the formula: (9) \\(vmh_m(q, m) - C'(m) = 0\\).
 IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only.")
 
 (defn get-default-system-prompt [] @default-system-prompt)
@@ -1526,43 +1532,99 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
   (or (db/get-setting user-id PROMPT_OCR)
     default-ocr-prompt))
 
+;; ── Saved prompts and their base stamp ──
+;; A saved prompt freezes its text: a new default never reaches a user who has
+;; one. The base stamp records which default the saved text was written against,
+;; so the Advanced view can say "the default changed after you saved yours".
+;; See plans/ocr-math-html-to-tex.md §5.
+
+(def ^:private saved-prompts
+  {:system {:key PROMPT_SYSTEM :base-key PROMPT_SYSTEM_BASE :field :system-prompt
+            :label "System prompt" :noun "system prompt" :default get-default-system-prompt}
+   :ocr    {:key PROMPT_OCR :base-key PROMPT_OCR_BASE :field :ocr-prompt
+            :label "OCR prompt" :noun "OCR prompt" :default get-default-ocr-prompt}})
+
+(defn- lf [s] (str/replace (or s "") "\r\n" "\n"))
+
+(defn- prompt-digest
+  "Hex SHA-256 of prompt text `s` (nil reads as \"\"), UTF-8, after CRLF → LF."
+  [s]
+  (->> (.digest (java.security.MessageDigest/getInstance "SHA-256")
+         (.getBytes ^String (lf s) "UTF-8"))
+    (map #(format "%02x" (bit-and % 0xff)))
+    (apply str)))
+
+(defn override-state
+  "Where a saved prompt stands against the current default.
+   Pre:  `saved` and `stamp` are the stored strings or nil; `default` is the
+         current default text.
+   Post: :default (nothing saved), :edited (saved against this default),
+         :stale (saved against another default), or :unknown-base (saved before
+         stamps existed)."
+  [saved stamp default]
+  (cond
+    (nil? saved) :default
+    (nil? stamp) :unknown-base
+    (= stamp (prompt-digest default)) :edited
+    :else :stale))
+
+(defn prompt-override-state
+  "`override-state` for `user-id`'s saved prompt of `kind` (:system or :ocr)."
+  [user-id kind]
+  (let [{:keys [key base-key default]} (saved-prompts kind)
+        stored (db/get-settings user-id [key base-key])]
+    (override-state (stored key) (stored base-key) (default))))
+
+(defn- save-prompt!
+  "Save `value` as `user-id`'s prompt of `kind`, stamped with the current
+   default. Text equal to the default deletes the row instead, so a saved row
+   exists iff it differs from the default it was written against.
+   Pre: `value` is within input/prompt-max (throws ::length-exceeded)."
+  [user-id kind value]
+  (let [{:keys [key base-key field default]} (saved-prompts kind)
+        current (default)]
+    (input/check-length! field value input/prompt-max)
+    (if (= (lf value) (lf current))
+      ;; Prompt first: a stamp left behind reads :default, a prompt left
+      ;; behind without its stamp would read :unknown-base.
+      (do (db/delete-setting user-id key)
+          (db/delete-setting user-id base-key))
+      (db/set-settings! user-id {key value base-key (prompt-digest current)}))))
+
+(defn- save-prompt-result
+  "Run `save-prompt!`, mapped to {:success true} / {:success false :error msg}."
+  [user-id kind value]
+  (let [{:keys [noun]} (saved-prompts kind)
+        log-id (keyword "freememo.settings" (str "save-" (name kind) "-prompt"))]
+    (try
+      (save-prompt! user-id kind value)
+      {:success true}
+      (catch clojure.lang.ExceptionInfo e
+        (if (input/length-error? (ex-data e))
+          {:success false :error (.getMessage e)}
+          (do (tel/error! {:id log-id} e)
+              {:success false :error (str "Failed to save " noun)})))
+      (catch Exception e
+        (tel/error! {:id log-id} e)
+        {:success false :error (str "Failed to save " noun)}))))
+
 (defn save-system-prompt [user-id value]
-  (try
-    (input/check-length! :system-prompt value input/prompt-max)
-    (db/set-setting user-id PROMPT_SYSTEM value)
-    {:success true}
-    (catch clojure.lang.ExceptionInfo e
-      (if (input/length-error? (ex-data e))
-        {:success false :error (.getMessage e)}
-        (do (tel/error! {:id ::save-system-prompt} e)
-            {:success false :error "Failed to save system prompt"})))
-    (catch Exception e
-      (tel/error! {:id ::save-system-prompt} e)
-      {:success false :error "Failed to save system prompt"})))
+  (save-prompt-result user-id :system value))
 
 (defn save-ocr-prompt [user-id value]
-  (try
-    (input/check-length! :ocr-prompt value input/prompt-max)
-    (db/set-setting user-id PROMPT_OCR value)
-    {:success true}
-    (catch clojure.lang.ExceptionInfo e
-      (if (input/length-error? (ex-data e))
-        {:success false :error (.getMessage e)}
-        (do (tel/error! {:id ::save-ocr-prompt} e)
-            {:success false :error "Failed to save OCR prompt"})))
-    (catch Exception e
-      (tel/error! {:id ::save-ocr-prompt} e)
-      {:success false :error "Failed to save OCR prompt"})))
+  (save-prompt-result user-id :ocr value))
 
 (defn- reset-prompt!
-  "Delete a prompt setting, snapshotting the prior custom value for undo with
-   an Undo toast. No undo entry when the prompt was already at default (nil)."
-  [user-id setting-key label]
-  (let [old (db/get-setting user-id setting-key)]
-    (db/delete-setting user-id setting-key)
-    (when (some? old)
+  "Delete `user-id`'s saved prompt of `kind` and its stamp, snapshotting both
+   for undo with an Undo toast. No undo entry when nothing was saved."
+  [user-id kind]
+  (let [{:keys [key base-key label]} (saved-prompts kind)
+        old (db/get-settings user-id [key base-key])]
+    (db/delete-setting user-id key)
+    (db/delete-setting user-id base-key)
+    (when (contains? old key)
       (let [undo-id (db/insert-undo-entry! user-id "reset-prompt" "setting"
-                      [setting-key] [{:key setting-key :value old}])]
+                      [key] (mapv (fn [[k v]] {:key k :value v}) old))]
         (toasts/push! user-id {:level :success
                                :message (str label " reset")
                                :dedup? false
@@ -1570,7 +1632,7 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
 
 (defn reset-system-prompt [user-id]
   (try
-    (reset-prompt! user-id PROMPT_SYSTEM "System prompt")
+    (reset-prompt! user-id :system)
     {:success true}
     (catch Exception e
       (tel/error! {:id ::reset-system-prompt} e)
@@ -1578,7 +1640,7 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
 
 (defn reset-ocr-prompt [user-id]
   (try
-    (reset-prompt! user-id PROMPT_OCR "OCR prompt")
+    (reset-prompt! user-id :ocr)
     {:success true}
     (catch Exception e
       (tel/error! {:id ::reset-ocr-prompt} e)

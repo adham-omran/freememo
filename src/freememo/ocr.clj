@@ -10,6 +10,7 @@
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
    [freememo.math :as math]
+   [freememo.ocr-math :as ocr-math]
    [freememo.openrouter :as openrouter]
    [clojure.string :as str]
    [taoensso.telemere :as tel])
@@ -151,6 +152,28 @@
              (finally (.close out)))))}
       (finally (.close doc)))))
 
+(defn response->page-html
+  "The stored page HTML in an OCR response `body` from a model of `shape`.
+
+   Math normalisation belongs here, not in the prompt: the :plugin lane never
+   receives the prompt (it sends \"ok\" plus the PDF), and a :chat model can
+   ignore it — `gemini-3.5-flash-lite` answered with `<sub>` and `&partial;`.
+   Every result passes this one point, so the stored form is `\\(TeX\\)`
+   whichever model ran. `html-math->tex` must precede `clean-html`, which
+   escapes an unknown entity to literal text.
+
+   Pre:  `shape` is :chat or :plugin; `body` is a parsed 200 response.
+   Post: sanitized HTML, or nil when the model returned no text."
+  [shape body]
+  (let [raw (case shape
+              :chat   (some-> (-> body :choices first :message :content)
+                        strip-code-fences
+                        markdown/dollar-math->tex)
+              :plugin (some-> (mistral-ocr-text body) markdown/markdown-with-math->html))]
+    (when-not (str/blank? raw)
+      ;; Model output is untrusted — sanitize before persistence.
+      (-> raw ocr-math/html-math->tex math/display->inline cleaner/clean-html))))
+
 (defn- run-ocr
   "OCR one pre-rendered page via OpenRouter per registry `entry`. No credits/DB
    side effects and no PDF decode — `prepare-ocr-page` did that.
@@ -180,20 +203,9 @@
         body (:body resp)]
     (when-not (= 200 (:status resp))
       (throw (openrouter/api-error resp)))
-    ;; Math normalisation belongs here, not in the prompt: the :plugin lane never
-    ;; receives the prompt (it sends "ok" plus the PDF), and :chat compliance is
-    ;; unmeasured. Normalising at the one point both shapes pass through is what
-    ;; makes the stored form `\(TeX\)` regardless of which model ran.
-    (let [raw (case (:shape entry)
-                :chat   (some-> (-> body :choices first :message :content)
-                          strip-code-fences
-                          markdown/dollar-math->tex)
-                :plugin (some-> (mistral-ocr-text body) markdown/markdown-with-math->html))]
-      (when (str/blank? raw)
-        (throw (ex-info "Empty OCR response" {:shape (:shape entry)})))
-      ;; Model output is untrusted — sanitize before persistence.
-      {:text (-> raw math/display->inline cleaner/clean-html)
-       :cost-usd (get-in body [:usage :cost]) :usage (:usage body)})))
+    {:text (or (response->page-html (:shape entry) body)
+               (throw (ex-info "Empty OCR response" {:shape (:shape entry)})))
+     :cost-usd (get-in body [:usage :cost]) :usage (:usage body)}))
 
 (defn extract-text-with-model
   "OCR a PDF page with an explicit registry `model-id` (no model resolution).

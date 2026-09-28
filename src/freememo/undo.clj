@@ -38,8 +38,11 @@
       (if (map? s) (db/restore-card-rows! s) (db/restore-flashcards! s))
       nil)
     "remove-pin"      (do (db/restore-pin! (first (:snapshot entry))) nil)
-    "reset-prompt"    (let [{:keys [key value]} (first (:snapshot entry))]
-                        (db/set-setting user-id key value) nil)
+    ;; The prompt and its base stamp, restored together. Entries written before
+    ;; stamps existed hold the prompt alone.
+    "reset-prompt"    (do (db/set-settings! user-id
+                            (into {} (map (juxt :key :value)) (:snapshot entry)))
+                          nil)
     "delete-document" (db/restore-staged-document! user-id entry)
     "delete-curriculum" (curriculum/restore-staged-curriculum! user-id entry)
     "move-topic"      (do (db/restore-topic-parent! entry) nil)
