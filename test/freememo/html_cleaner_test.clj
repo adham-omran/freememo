@@ -126,9 +126,9 @@
     :html "<p>Kaleida was funded to {{c1::$40 million}} in {{c2::1991}}</p>"
     :keeps ["{{c1::$40 million}}" "{{c2::1991}}"]}
 
-   ;; Not reachable from the menu (no indent or font control; Quill's Tab
-   ;; bindings are removed in a11y/free-quill-tab!) but reachable by pasting
-   ;; Quill HTML, and inside Quill's own whitelists — indent.ts:126, font.ts:81.
+   ;; Not in the menu, but Tab and Shift+Tab apply indent
+   ;; (a11y/install-tab-indent!), and pasting Quill HTML reaches both. Both are
+   ;; inside Quill's own whitelists — indent.ts:126, font.ts:81.
    {:control "Indent 1 / 5 / 8 on list items"
     :html (str "<ol><li data-list=\"ordered\" class=\"ql-indent-1\">a</li>"
             "<li data-list=\"ordered\" class=\"ql-indent-5\">b</li>"

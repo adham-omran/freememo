@@ -182,6 +182,19 @@ html:has(> body > .app-shell) > body {
     outline-offset: 2px;
 }
 
+/* Text for assistive technology only (e.g. the editor keyboard hint). */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
 /* ── Buttons ───────────────────────────────────────────────────── */
 .btn {
     display: inline-flex;
@@ -2843,6 +2856,125 @@ textarea:hover {
    rtl direction when the property is set explicitly, so pin it with :dir(rtl). */
 .ql-editor { text-align: start; }
 .ql-editor:dir(rtl) { text-align: right; }
+
+/* ── Lists and indents ─────────────────────────────────────────── */
+/* One list level is a small step in: the text starts at --fm-list-inset and the
+   bullet 1.5em before it. Each .ql-indent-N adds N × --fm-list-step. Tab and
+   Shift+Tab change the level (a11y/install-tab-indent!).
+   These rules must outrank Quill's `.ql-editor ol/li` rules, because
+   quill.*.css loads AFTER this file. The logical properties follow the line's
+   direction, so an RTL list mirrors.
+   The fm-rich-lists block below draws the same geometry outside an editor.
+   See plans/bullet-indent-tab-behavior.md. */
+.quill-editor-wrapper .ql-indent-1 { --fm-list-level: 1; }
+.quill-editor-wrapper .ql-indent-2 { --fm-list-level: 2; }
+.quill-editor-wrapper .ql-indent-3 { --fm-list-level: 3; }
+.quill-editor-wrapper .ql-indent-4 { --fm-list-level: 4; }
+.quill-editor-wrapper .ql-indent-5 { --fm-list-level: 5; }
+.quill-editor-wrapper .ql-indent-6 { --fm-list-level: 6; }
+.quill-editor-wrapper .ql-indent-7 { --fm-list-level: 7; }
+.quill-editor-wrapper .ql-indent-8 { --fm-list-level: 8; }
+.quill-editor-wrapper .ql-editor ol { padding: 0; }
+.quill-editor-wrapper .ql-editor ol > li[data-list] {
+    padding: 0;
+    padding-inline-start: calc(var(--fm-list-inset) + var(--fm-list-level, 0) * var(--fm-list-step));
+}
+.quill-editor-wrapper .ql-editor :not(li):is(.ql-indent-1, .ql-indent-2, .ql-indent-3, .ql-indent-4,
+                                             .ql-indent-5, .ql-indent-6, .ql-indent-7, .ql-indent-8) {
+    padding-left: 0;
+    padding-right: 0;
+    padding-inline-start: calc(var(--fm-list-level) * var(--fm-list-step));
+}
+/* The marker box spans 1.2em ending 0.3em before the text. A bullet sits at its
+   start; a number is end-aligned so that 9. and 10. align on the dot. */
+.quill-editor-wrapper .ql-editor li[data-list] > .ql-ui::before {
+    margin-left: 0;
+    margin-right: 0;
+    margin-inline-start: -1.5em;
+    margin-inline-end: .3em;
+    text-align: end;
+}
+.quill-editor-wrapper .ql-editor li[data-list=bullet] > .ql-ui::before { text-align: start; }
+
+/* Lists and indents outside an editor: card views that render stored HTML
+   carry .fm-rich. Stored HTML is Quill's flat form —
+   <ol><li data-list="bullet" class="ql-indent-N"> — so without these rules a
+   bullet list shows numbers and every level shows flat. The marker comes from
+   li::before, not span.ql-ui, because Anki may drop the empty span.
+   freememo-anki.css holds the same block without the `.fm-rich ` prefix;
+   rich_list_css_test fails when the two differ. */
+/* fm-rich-lists:start */
+:root {
+    --fm-list-inset: 2.5em;
+    --fm-list-step: 1.25em;
+}
+.fm-rich ol:has(> li[data-list]) {
+    padding: 0;
+    counter-reset: list-0 list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8;
+}
+.fm-rich li[data-list] {
+    list-style-type: none;
+    padding-inline-start: calc(var(--fm-list-inset) + var(--fm-list-level, 0) * var(--fm-list-step));
+}
+.fm-rich :not(li)[class*="ql-indent-"] {
+    padding-inline-start: calc(var(--fm-list-level, 0) * var(--fm-list-step));
+}
+.fm-rich .ql-indent-1 { --fm-list-level: 1; }
+.fm-rich .ql-indent-2 { --fm-list-level: 2; }
+.fm-rich .ql-indent-3 { --fm-list-level: 3; }
+.fm-rich .ql-indent-4 { --fm-list-level: 4; }
+.fm-rich .ql-indent-5 { --fm-list-level: 5; }
+.fm-rich .ql-indent-6 { --fm-list-level: 6; }
+.fm-rich .ql-indent-7 { --fm-list-level: 7; }
+.fm-rich .ql-indent-8 { --fm-list-level: 8; }
+.fm-rich li[data-list]::before {
+    display: inline-block;
+    width: 1.2em;
+    margin-inline-start: -1.5em;
+    margin-inline-end: .3em;
+    text-align: end;
+    white-space: nowrap;
+}
+.fm-rich li[data-list=bullet]::before { content: '\2022'; text-align: start; }
+.fm-rich li[data-list=ordered] { counter-increment: list-0; }
+.fm-rich li[data-list=ordered]::before { content: counter(list-0, decimal) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-1 { counter-increment: list-1; }
+.fm-rich li[data-list=ordered].ql-indent-1::before { content: counter(list-1, lower-alpha) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-2 { counter-increment: list-2; }
+.fm-rich li[data-list=ordered].ql-indent-2::before { content: counter(list-2, lower-roman) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-3 { counter-increment: list-3; }
+.fm-rich li[data-list=ordered].ql-indent-3::before { content: counter(list-3, decimal) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-4 { counter-increment: list-4; }
+.fm-rich li[data-list=ordered].ql-indent-4::before { content: counter(list-4, lower-alpha) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-5 { counter-increment: list-5; }
+.fm-rich li[data-list=ordered].ql-indent-5::before { content: counter(list-5, lower-roman) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-6 { counter-increment: list-6; }
+.fm-rich li[data-list=ordered].ql-indent-6::before { content: counter(list-6, decimal) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-7 { counter-increment: list-7; }
+.fm-rich li[data-list=ordered].ql-indent-7::before { content: counter(list-7, lower-alpha) '. '; }
+.fm-rich li[data-list=ordered].ql-indent-8 { counter-increment: list-8; }
+.fm-rich li[data-list=ordered].ql-indent-8::before { content: counter(list-8, lower-roman) '. '; }
+@supports (counter-set: none) {
+    .fm-rich li[data-list] { counter-set: list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-1 { counter-set: list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-2 { counter-set: list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-3 { counter-set: list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-4 { counter-set: list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-5 { counter-set: list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-6 { counter-set: list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-7 { counter-set: list-8; }
+}
+@supports not (counter-set: none) {
+    .fm-rich li[data-list] { counter-reset: list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-1 { counter-reset: list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-2 { counter-reset: list-3 list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-3 { counter-reset: list-4 list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-4 { counter-reset: list-5 list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-5 { counter-reset: list-6 list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-6 { counter-reset: list-7 list-8; }
+    .fm-rich li[data-list].ql-indent-7 { counter-reset: list-8; }
+}
+/* fm-rich-lists:end */
 
 /* The bubble editor's native tooltip is replaced by our own floating card
    (freememo.format-menu). Hide Quill's — we keep the bubble theme only for its

@@ -109,8 +109,9 @@
                             :margin-bottom "2px"}})
         (dom/text label))
       (dom/div
-        (dom/props {:style {:font-size "13px" :line-height "1.5"
-                            :overflow-wrap "anywhere"}})
+        (dom/props {:class "fm-rich"
+                   :style {:font-size "13px" :line-height "1.5"
+                           :overflow-wrap "anywhere"}})
         (cc/set-inner-html! dom/node html)))))
 
 (e/defn VersionEntry

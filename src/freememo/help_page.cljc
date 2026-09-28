@@ -162,7 +162,7 @@
             ["Use the topic tree" "Focus an arrow and press Enter or Space to expand it. Focus the row to open the topic."]
             ["Move a topic" "Activate its ⠿ grip. Tab to a destination grip and activate it. Press Escape to cancel."]
             ["Use the graph" "Open Filters and use Find a concept. Type a name, use the arrow keys, and press Enter."]
-            ["Use rich-text editors" "Press Tab or Shift+Tab to leave an editor. Press Escape to remove focus from it."]
+            ["Use rich-text editors" "Press Tab to indent a line and Shift+Tab to outdent it. Press Escape, then Tab, to leave the editor. In a dialog, press Escape a second time to close it."]
             ["Use dialogs" "Press Tab or Shift+Tab to move inside a dialog. Press Escape to close it and restore focus."]
             ["Resize panes" "Tab to a separator. Use the arrow keys to resize its adjacent panes."]
             ["Spatial editors" "Score regions and image-occlusion masks require precise pointer input. All other documented workflows support keyboard control."]]}])

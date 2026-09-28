@@ -76,7 +76,8 @@
   [html]
   (e/client
     (dom/div
-      (dom/props {:dir "auto" :style {:font-size "13px" :line-height "1.4" :text-align "start"}})
+      (dom/props {:dir "auto" :class "fm-rich"
+                  :style {:font-size "13px" :line-height "1.4" :text-align "start"}})
       (math/set-html! dom/node html))))
 
 (e/defn CardResultColumn

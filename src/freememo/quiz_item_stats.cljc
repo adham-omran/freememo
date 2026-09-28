@@ -311,7 +311,7 @@
           ;; A card's prompt is stored HTML carrying \(TeX\), so it goes through
           ;; math/set-html!; a question's is plain text (CLAUDE.md).
           (if (= :card (:item-kind stats))
-            (dom/div (dom/props {:dir "auto" :class "bidi-per-block item-stats-prompt"})
+            (dom/div (dom/props {:dir "auto" :class "bidi-per-block item-stats-prompt fm-rich"})
               (math/set-html! dom/node (str (:prompt stats))))
             (dom/p (dom/props {:dir "auto" :class "item-stats-prompt"})
               (dom/text (str (:prompt stats)))))

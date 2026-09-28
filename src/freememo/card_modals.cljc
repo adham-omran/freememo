@@ -232,13 +232,18 @@
 
 #?(:cljs
    (defn handle-modal-tab!
-     "Advance focus one tab-stop and consume the event so Quill cannot insert a
-      tab. Shift+Tab reverses; both ends wrap. No-op when there are no stops.
+     "Advance focus one tab-stop. Shift+Tab reverses; both ends wrap. No-op when
+      there are no stops, and when focus is inside an editor — Tab there
+      indents the line (`a11y/install-tab-indent!`), and Escape is the way out.
       Pre : `e` is a keydown event on `container`.
-      Post: on Tab, document.activeElement is the next/prev stop; the event is
-            prevented and stopped (Quill's own Tab handler never fires)."
+      Post: on Tab outside an editor, document.activeElement is the next/prev
+            stop and the event is prevented and stopped. The stop that holds
+            focus is the one equal to, containing, or contained in the active
+            element — so after Escape focuses an editor's Quill container,
+            Tab moves to the stop after that editor."
      [container e]
-     (when (= (.-key e) "Tab")
+     (when (and (= (.-key e) "Tab")
+                (not (some-> (.-activeElement js/document) (.closest ".ql-editor"))))
        (let [stops (modal-tab-stops container)
              n     (count stops)]
          (when (pos? n)
@@ -247,7 +252,9 @@
            (let [active (.-activeElement js/document)
                  idx    (reduce (fn [_ i]
                                   (let [s (nth stops i)]
-                                    (when (or (= s active) (.contains s active))
+                                    (when (or (= s active)
+                                              (.contains s active)
+                                              (.contains active s))
                                       (reduced i))))
                           nil (range n))
                  delta  (if (.-shiftKey e) -1 1)
@@ -259,9 +266,8 @@
 #?(:cljs
    (defn attach-modal-tab-nav!
      "Install the capture-phase Tab navigator on `container`, returning a 0-arg
-      cleanup that removes the listener. Capture phase is required: Quill's
-      keydown handler lives on the .ql-editor and would insert a tab before a
-      bubble-phase listener could act."
+      cleanup that removes the listener. The navigator yields while focus is in
+      an editor, so Quill's own keydown handler receives Tab there."
      [container]
      (let [handler (fn [e] (handle-modal-tab! container e))]
        (.addEventListener container "keydown" handler true)

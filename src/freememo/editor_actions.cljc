@@ -198,7 +198,7 @@
           mod+shift+alt+C from firing it too — stated rather than left implicit.
    Note : no teardown. The bindings live on the module instance, which dies with
           the editor when `destroy-quill-field!` empties its container. This is
-          `a11y/install-quill-tab-escape!`'s argument, one layer in."
+          `a11y/install-editor-escape!`'s argument, one layer in."
   [ed]
   #?(:cljs
      (let [^js ed ed

@@ -13,12 +13,13 @@
    `test/freememo/html_cleaner_test.clj` asserts it fixture-by-fixture.
 
    Scope of a class token: Quill's stylesheet scopes every format rule under
-   `.ql-editor` (`quill.snow.css`, e.g. `.ql-editor .ql-font-monospace{…}`), and
-   neither `index.css` nor `freememo-anki.css` defines a format rule of its own,
-   so an admitted class round-trips through the editors but is inert in
-   read-only card views and in Anki. Inline `style` colours render everywhere.
-   Admitting a token is therefore a fidelity fix, not a rendering one —
-   rendering outside an editor needs a matching CSS rule."
+   `.ql-editor` (`quill.snow.css`, e.g. `.ql-editor .ql-font-monospace{…}`), so
+   an admitted class round-trips through the editors but is inert in read-only
+   card views and in Anki. Inline `style` colours render everywhere. Admitting a
+   token is therefore a fidelity fix, not a rendering one — rendering outside an
+   editor needs a matching CSS rule. Lists (`data-list`) and `ql-indent-*` are
+   the one exception: the fm-rich-lists block in `index.css` and
+   `freememo-anki.css` renders them."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document$OutputSettings]

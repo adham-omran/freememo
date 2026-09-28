@@ -26,6 +26,7 @@
    minority of the menu."
   (:require [clojure.string :as str]
             [freememo.client-errors :as ce]
+            [freememo.editor-popovers :as editor-popovers]
             [freememo.util :as util]))
 
 ;; ---------------------------------------------------------------------------
@@ -259,6 +260,12 @@
     (reset! !menu-teardown nil))
   (when-let [existing (.querySelector js/document "#image-context-menu")]
     (.remove existing)))
+
+;; The menu is one per page, so it registers once, for the page's lifetime.
+(defonce ^:private unregister-popover!
+  (editor-popovers/register!
+    #(some? (.querySelector js/document "#image-context-menu"))
+    remove-menu!))
 
 (defn- make-button
   "Create a styled menu button element."

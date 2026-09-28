@@ -494,6 +494,13 @@
               (fn [e] (.preventDefault e) (set-active-tab! id))
               nil)))))))
 
+(def editor-keys
+  "Rich-text editor keys for the shortcuts table. They are bound in each
+   editor, not in freememo.commands, so no registry-derived list has them."
+  [{:key "Tab" :desc "Indent the line (in a rich-text editor)"}
+   {:key "Shift+Tab" :desc "Outdent the line (in a rich-text editor)"}
+   {:key "Escape, then Tab" :desc "Leave a rich-text editor"}])
+
 (e/defn SettingsPage [user-id username enc-key base-url client-country]
   (e/client
     (init-active-from-hash!)
@@ -617,7 +624,10 @@
                                 :desc "New cloze deletion (in a cloze field)"}
                                {:key (commands/display-chord
                                        :cloze-eq (:eq editor-actions/cloze-chords))
-                                :desc "Same cloze number (in a cloze field)"}])]
+                                :desc "Same cloze number (in a cloze field)"}]
+                              ;; Editor-local too: a11y/install-tab-indent! and
+                              ;; a11y/install-editor-escape!.
+                              editor-keys)]
                 
                 (dom/table
                   (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})

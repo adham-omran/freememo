@@ -671,3 +671,81 @@ pre > code {
     font-weight: bold;
     font-size: 1em;
 }
+
+/* Quill lists and indents. Stored card HTML is Quill's flat form —
+   <ol><li data-list="bullet" class="ql-indent-N"> — which renders as a numbered,
+   flat list without these rules. This block is a copy of the fm-rich-lists block
+   in index.css without its `.fm-rich ` prefix; rich_list_css_test fails when the
+   two differ. See plans/bullet-indent-tab-behavior.md. */
+/* fm-rich-lists:start */
+:root {
+    --fm-list-inset: 2.5em;
+    --fm-list-step: 1.25em;
+}
+ol:has(> li[data-list]) {
+    padding: 0;
+    counter-reset: list-0 list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8;
+}
+li[data-list] {
+    list-style-type: none;
+    padding-inline-start: calc(var(--fm-list-inset) + var(--fm-list-level, 0) * var(--fm-list-step));
+}
+:not(li)[class*="ql-indent-"] {
+    padding-inline-start: calc(var(--fm-list-level, 0) * var(--fm-list-step));
+}
+.ql-indent-1 { --fm-list-level: 1; }
+.ql-indent-2 { --fm-list-level: 2; }
+.ql-indent-3 { --fm-list-level: 3; }
+.ql-indent-4 { --fm-list-level: 4; }
+.ql-indent-5 { --fm-list-level: 5; }
+.ql-indent-6 { --fm-list-level: 6; }
+.ql-indent-7 { --fm-list-level: 7; }
+.ql-indent-8 { --fm-list-level: 8; }
+li[data-list]::before {
+    display: inline-block;
+    width: 1.2em;
+    margin-inline-start: -1.5em;
+    margin-inline-end: .3em;
+    text-align: end;
+    white-space: nowrap;
+}
+li[data-list=bullet]::before { content: '\2022'; text-align: start; }
+li[data-list=ordered] { counter-increment: list-0; }
+li[data-list=ordered]::before { content: counter(list-0, decimal) '. '; }
+li[data-list=ordered].ql-indent-1 { counter-increment: list-1; }
+li[data-list=ordered].ql-indent-1::before { content: counter(list-1, lower-alpha) '. '; }
+li[data-list=ordered].ql-indent-2 { counter-increment: list-2; }
+li[data-list=ordered].ql-indent-2::before { content: counter(list-2, lower-roman) '. '; }
+li[data-list=ordered].ql-indent-3 { counter-increment: list-3; }
+li[data-list=ordered].ql-indent-3::before { content: counter(list-3, decimal) '. '; }
+li[data-list=ordered].ql-indent-4 { counter-increment: list-4; }
+li[data-list=ordered].ql-indent-4::before { content: counter(list-4, lower-alpha) '. '; }
+li[data-list=ordered].ql-indent-5 { counter-increment: list-5; }
+li[data-list=ordered].ql-indent-5::before { content: counter(list-5, lower-roman) '. '; }
+li[data-list=ordered].ql-indent-6 { counter-increment: list-6; }
+li[data-list=ordered].ql-indent-6::before { content: counter(list-6, decimal) '. '; }
+li[data-list=ordered].ql-indent-7 { counter-increment: list-7; }
+li[data-list=ordered].ql-indent-7::before { content: counter(list-7, lower-alpha) '. '; }
+li[data-list=ordered].ql-indent-8 { counter-increment: list-8; }
+li[data-list=ordered].ql-indent-8::before { content: counter(list-8, lower-roman) '. '; }
+@supports (counter-set: none) {
+    li[data-list] { counter-set: list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-1 { counter-set: list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-2 { counter-set: list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-3 { counter-set: list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-4 { counter-set: list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-5 { counter-set: list-6 list-7 list-8; }
+    li[data-list].ql-indent-6 { counter-set: list-7 list-8; }
+    li[data-list].ql-indent-7 { counter-set: list-8; }
+}
+@supports not (counter-set: none) {
+    li[data-list] { counter-reset: list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-1 { counter-reset: list-2 list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-2 { counter-reset: list-3 list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-3 { counter-reset: list-4 list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-4 { counter-reset: list-5 list-6 list-7 list-8; }
+    li[data-list].ql-indent-5 { counter-reset: list-6 list-7 list-8; }
+    li[data-list].ql-indent-6 { counter-reset: list-7 list-8; }
+    li[data-list].ql-indent-7 { counter-reset: list-8; }
+}
+/* fm-rich-lists:end */

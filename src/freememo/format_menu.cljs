@@ -47,6 +47,7 @@
             [freememo.card-count :as cc]
             [freememo.command-bus :as bus]
             [freememo.commands :as commands]
+            [freememo.editor-popovers :as editor-popovers]
             [freememo.selection-placement :as sel-place]))
 
 ;; ---------------------------------------------------------------------------
@@ -679,7 +680,8 @@
                               (not (.contains card (.-target e)))
                               (not (.contains (.-root q) (.-target e))))
                         (hide!)))
-        on-key (fn [^js e] (when (and (open?) (= "Escape" (.-key e))) (hide!)))]
+        on-key (fn [^js e] (when (and (open?) (= "Escape" (.-key e))) (hide!)))
+        unregister-popover! (editor-popovers/register! open? hide!)]
     (set! (.. card -style -display) "none")
     (.appendChild js/document.body card)
     (.on q "selection-change" on-selection)
@@ -700,5 +702,6 @@
       (.removeEventListener js/window "resize" reposition)
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
+      (unregister-popover!)
       (when card-count-sync (remove-watch cc/!card-count watch-key))
       (when (.-parentNode card) (.remove card))))))

@@ -449,10 +449,9 @@
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
        ;; container — label its pickers/buttons.
        (a11y/label-quill-toolbar! container)
-       ;; Tab moves focus out (Quill's indent bindings removed); Escape
-       ;; also blurs, as belt-and-suspenders for nested contexts.
-       (a11y/free-quill-tab! editor)
-       (a11y/install-quill-tab-escape! editor)
+       ;; Tab indents the line; Escape leaves the editor.
+       (a11y/install-tab-indent! editor)
+       (a11y/install-editor-escape! editor)
        editor)))
 
 (defn init-editor!

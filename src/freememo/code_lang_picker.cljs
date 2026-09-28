@@ -15,7 +15,8 @@
    the caret sits in, and hides when the caret leaves. Nothing is ever added to
    the editor's own subtree, so no mutation-feedback loop can form.
 
-   install! wires the listeners and returns a teardown fn removing everything.")
+   install! wires the listeners and returns a teardown fn removing everything."
+  (:require [freememo.editor-popovers :as editor-popovers]))
 
 (defn- el [tag class]
   (let [n (js/document.createElement tag)]
@@ -141,7 +142,8 @@
                               (not (.contains popup (.-target e)))
                               (not (.contains trigger (.-target e))))
                         (close-popup!)))
-        on-key (fn [^js e] (when (and (popup-open?) (= "Escape" (.-key e))) (close-popup!)))]
+        on-key (fn [^js e] (when (and (popup-open?) (= "Escape" (.-key e))) (close-popup!)))
+        unregister-popover! (editor-popovers/register! popup-open? close-popup!)]
     (set! (.-type trigger) "button")
     (.setAttribute trigger "title" "Code language")
     (.setAttribute trigger "aria-label" "Code block language")
@@ -165,5 +167,6 @@
       (.removeEventListener js/window "resize" reposition)
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
+      (unregister-popover!)
       (when (.-parentNode trigger) (.remove trigger))
       (when (.-parentNode popup) (.remove popup)))))

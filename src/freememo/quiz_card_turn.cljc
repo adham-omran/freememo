@@ -112,7 +112,7 @@
   [html size]
   (e/client
     (dom/div
-      (dom/props {:dir "auto" :class "bidi-per-block"
+      (dom/props {:dir "auto" :class "bidi-per-block fm-rich"
                   :style {:font-size size :line-height "1.5"}})
       (math/set-html! dom/node html))))
 

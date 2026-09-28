@@ -22,6 +22,7 @@
          `document.getElementById`. Imported content carries arbitrary ids and
          may collide with the app's own — `#main-content` is a real one."
   (:require [clojure.string :as str]
+            [freememo.editor-popovers :as editor-popovers]
             [freememo.link-target :as lt]))
 
 ;; ── The card ───────────────────────────────────────────────────────
@@ -179,7 +180,8 @@
                                (not (anchor-at (.-target e))))
                          (hide!)))
         on-key (fn [e] (when (and (= "Escape" (.-key e)) (visible?)) (hide!)))
-        on-scroll (fn [_] (when (visible?) (hide!)))]
+        on-scroll (fn [_] (when (visible?) (hide!)))
+        unregister-popover! (editor-popovers/register! visible? hide!)]
 
     (set! (.-className card) "link-actions-popover")
     (.setAttribute card "style" card-style)
@@ -247,4 +249,5 @@
       (.removeEventListener js/document "keydown" on-key)
       (.removeEventListener js/document "scroll" on-scroll true)
       (.removeEventListener js/window "resize" on-scroll)
+      (unregister-popover!)
       (when (.-parentNode card) (.remove card)))))
