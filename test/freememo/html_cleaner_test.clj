@@ -114,6 +114,14 @@
     :html "<p><img src=\"/api/media/12\" width=\"300\"></p>"
     :keeps ["/api/media/12" "width=\"300\""]}
 
+   {:control "Insert audio (clip, looping)"                ; audio_clip.cljc stored form
+    :html "<p>a</p><audio controls loop src=\"/api/media/7\"></audio>"
+    :keeps ["<audio" "controls" "loop" "/api/media/7"]}
+
+   {:control "Insert audio (clip, not looping)"            ; same, loop absent
+    :html "<audio controls src=\"/api/media/7\"></audio>"
+    :keeps ["<audio" "controls" "/api/media/7"]}
+
    {:control "Cloze markers are plain text"                ; editor_actions.cljc:51-52
     :html "<p>Kaleida was funded to {{c1::$40 million}} in {{c2::1991}}</p>"
     :keeps ["{{c1::$40 million}}" "{{c2::1991}}"]}
@@ -150,6 +158,10 @@
    {:scenario "hljs token OUTSIDE a code block — carve-out does not leak"
     :html "<p><span class=\"hljs-keyword\">defn</span></p>"
     :drops ["hljs-keyword"]}
+
+   {:scenario "data: src on an audio clip — util/storable-image-mime-types note"
+    :html "<audio controls src=\"data:text/html;base64,PHNjcmlwdD4=\"></audio>"
+    :drops ["data:text/html"]}
 
    {:scenario "script element"
     :html "<p>a</p><script>alert(1)</script>"

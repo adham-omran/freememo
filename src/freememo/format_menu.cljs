@@ -31,10 +31,14 @@
    the card once, and returns a teardown fn that removes them and the card.
 
    `opts` (2-arity install!) turns on optional controls: `:image?` adds an
-   image-insert button, `:cloze?` adds a cloze-deletion row (both drive
-   freememo.editor-actions), `:card-gen?` adds the document editor's card-count,
-   Generate-here, and Parse-questions actions.
-   The document editor passes `:card-gen?`; card fields pass `:image?/:cloze?`.
+   image-insert button, `:audio?` an audio-insert button, `:cloze?` adds a
+   cloze-deletion row (all three drive freememo.editor-actions), `:card-gen?`
+   adds the document editor's card-count, Generate-here, and Parse-questions
+   actions.
+   The document editor passes `:card-gen?/:audio?`; card fields pass
+   `:image?/:audio?/:cloze?`. The document editor takes images by paste and drop
+   only, which is why it passes no `:image?` — audio has no such history, so it
+   gets its button on both surfaces.
 
    Math has no control here: formulas are created by typing `\\(…\\)` and edited
    through the anchored popover in freememo.formula-ui."
@@ -73,6 +77,14 @@
     "<circle cx=\"6.3\" cy=\"7.3\" r=\"1.3\" fill=\"currentColor\" stroke=\"none\"/>"
     "<path d=\"M3 13 L7 9 L9.5 11.5 L12 9 L15 12.5\"/></svg>"))
 
+
+;; Speaker with two waves — the Insert audio button. Same 18-viewBox stroke
+;; construction as image-glyph above, so the two sit at one weight in the row.
+(def ^:private audio-glyph
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\">"
+    "<path d=\"M3.5 6.8 H6.2 L9.6 3.8 V14.2 L6.2 11.2 H3.5 Z\"/>"
+    "<path d=\"M12.1 6.9 A3.1 3.1 0 0 1 12.1 11.1\"/>"
+    "<path d=\"M13.9 5.1 A5.5 5.5 0 0 1 13.9 12.9\"/></svg>"))
 
 ;; Sparkles — matches freememo.icons :sparkles (24-viewBox Lucide path); marks
 ;; the Generate-here action on the card-gen row.
@@ -441,6 +453,15 @@
       (.appendChild row-blockfmt
         (glyph-button image-glyph "Insert image"
           (after #(editor-actions/insert-image! q (:index (get-rng)))))))
+    ;; Audio insert. MP3 only, because `api/upload-media-handler` accepts
+    ;; exactly audio/mpeg beside image/*; the picker's accept filter says so
+    ;; before the server has to. Drag and paste reach the same upload through
+    ;; `editor-actions/install-image-rehost!`, so this button is the discoverable
+    ;; half of one path, not a second one.
+    (when (:audio? opts)
+      (.appendChild row-blockfmt
+        (glyph-button audio-glyph "Insert audio"
+          (after #(editor-actions/insert-audio! q (:index (get-rng)))))))
     ;; Restore a page boundary (plans/merged-page-reading.md §4.3-4.7).
     ;;
     ;; Built ALWAYS and hidden by `refresh` below, NOT gated by `opts`:

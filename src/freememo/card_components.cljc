@@ -9,6 +9,7 @@
    #?(:clj [freememo.toasts :as toasts])
    [freememo.anki-review :as review]
    [freememo.occlusion-ordinals :as ord]
+   [freememo.audio-clip :as clip]
    [freememo.math :as math]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
@@ -31,11 +32,24 @@
         html
         (str (subs html 0 (min (count html) max-chars)) "…")))))
 
+(defn replace-audio-with-chip
+  "Replace each audio clip with an inline `[audio]` chip, as images are.
+
+   A row is cut at a CHARACTER bound by `truncate-html-for-row`, so a clip left
+   in place can be split into a broken `<audio` tag — and an unclosed media
+   element is not the harmless tail the truncation comment describes. The chip
+   is also what keeps a 36px row from mounting a player per cell.
+
+   `freememo.audio-clip` owns the element's shape; this fn only names the chip."
+  [html]
+  (clip/replace-clips html "<span class=\"card-row-audio-chip\">[audio]</span>"))
+
 (defn card-row-html
   "Prepare card-field HTML for inline rendering inside a CardRow cell."
   [html]
   (-> (or html "")
     replace-img-with-chip
+    replace-audio-with-chip
     (truncate-html-for-row 200)))
 
 (defn set-inner-html!

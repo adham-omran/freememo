@@ -4044,7 +4044,11 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 /* Image context menu — right-click on an <img> in the document editor.
    Owns Copy/Save image plus the pin and occlusion actions
    (freememo.editor-image-menu). */
-.image-context-menu {
+/* The clip menu (editor-actions/install-clip-menu!) shares this chrome. It is a
+   separate menu because it needs the Quill instance and both editors, not the
+   container plus app callbacks the image menu takes. */
+.image-context-menu,
+.clip-context-menu {
     position: fixed;
     z-index: 9999;
     background: var(--color-bg-card, #fff);
@@ -4056,7 +4060,8 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 13px;
     animation: fade-in 0.1s ease;
 }
-.image-context-menu button {
+.image-context-menu button,
+.clip-context-menu button {
     display: block;
     width: 100%;
     text-align: left;
@@ -4069,10 +4074,12 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.4;
     white-space: nowrap;
 }
-.image-context-menu button:hover:not(:disabled) {
+.image-context-menu button:hover:not(:disabled),
+.clip-context-menu button:hover:not(:disabled) {
     background: var(--color-bg-hover, #f3f4f6);
 }
-.image-context-menu button:disabled {
+.image-context-menu button:disabled,
+.clip-context-menu button:disabled {
     color: var(--color-text-hint, #9ca3af);
     cursor: not-allowed;
 }
@@ -4083,7 +4090,8 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     background: var(--color-border, #d1d5db);
 }
 /* Last button is "Cancel" — visually separated */
-.image-context-menu button:last-child {
+.image-context-menu button:last-child,
+.clip-context-menu button:last-child {
     border-top: 1px solid var(--color-border, #d1d5db);
     margin-top: 2px;
     padding-top: 8px;
@@ -5116,7 +5124,10 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     padding: 0;
 }
 
-.card-row-img-chip {
+/* One chip per media kind, one rule: a row is cut at a character bound, so
+   neither an <img> nor an <audio> may survive into it (card-components). */
+.card-row-img-chip,
+.card-row-audio-chip {
     display: inline-block;
     padding: 0 6px;
     margin: 0 2px;

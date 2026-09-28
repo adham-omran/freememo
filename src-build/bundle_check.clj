@@ -42,7 +42,11 @@
                {:type ::ambiguous-bundle
                 :found (mapv #(.getName ^File %) found)})))))
 
-;; The divider blot is registered by a namespace-load `defonce` in
+;; Every registration below opens with a `Quill.import(…)` call, so the next one
+;; after a registration's anchor is where that registration's text ends.
+(def ^:private registration-opening "Quill.import(")
+
+;; The BlockEmbed blots are registered by namespace-load `defonce`s in
 ;; freememo.quill-field, and Parchment reads `blotName` off the class by that
 ;; literal name. `blotName` appears in no Closure extern, so a
 ;; `(set! (.-blotName Divider) …)` write is one Closure believes nothing reads —
@@ -50,74 +54,102 @@
 ;; which registers nothing and drops every `<hr>` in production while dev works.
 ;; `(aset Divider "blotName" …)` is what prevents that. This checks the outcome
 ;; rather than the source, because the source form is easy to change back.
-(def ^:private divider-anchor "Quill.import(\"blots/block/embed\")")
+;;
+;; Every BlockEmbed blot imports the same class, so `Quill.import(
+;; "blots/block/embed")` opens each registration but identifies none of them.
+;; The `tagName` write is the anchor instead: `tagName` is a DOM extern, so
+;; Closure keeps that write whatever it does to the others, and it is absent only
+;; when the whole registration is.
+(def ^:private embed-opening "Quill.import(\"blots/block/embed\")")
 
-(def ^:private divider-requirements
-  "[label regex] pairs the emitted registration must satisfy. Closure emits an
-   unquoted property write when it keeps the name, so match on the name and its
-   value rather than on a quoted key."
-  [["blotName survives, keyed \"divider\"" #"\.blotName\s*=\s*\"divider\""]
-   ["tagName survives, keyed \"HR\""       #"\.tagName\s*=\s*\"HR\""]
+(defn- embed-requirements
+  "The [label regex] pairs every BlockEmbed registration must satisfy. Closure
+   emits an unquoted property write when it keeps the name, so match on the name
+   and its value rather than on a quoted key."
+  [blot-name]
+  [[(str "blotName survives, keyed " (pr-str blot-name))
+    (re-pattern (str "\\.blotName\\s*=\\s*\"" blot-name "\""))]
    ["Reflect.construct bridges the ES6 superclass" #"Reflect\.construct"]
-   ["Quill.register is called"             #"Quill\.register"]])
+   ["Quill.register is called"                     #"Quill\.register"]])
 
-;; The `id` attributor is the second registration with the same exposure. Quill
+;; The `id` attributor is the other registration with the same exposure. Quill
 ;; models no `id`, so without it every in-document anchor target dies in the
 ;; Delta on the first edit — and `freememo.html-cleaner` would be storing an
 ;; attribute the editor cannot keep. Its own `aget` reads are string-keyed for
 ;; the reason above; these assertions prove the string keys reached the bundle.
-(def ^:private attributor-anchor "Quill.import(\"parchment\")")
-
+;;
 ;; Closure canonicalises `x["Attributor"]` to `x.Attributor` and, for a property
 ;; read on a value from an unknown global, leaves the NAME alone — measured:
 ;; `new Bjb.Attributor("id","id",{scope:Bjb.Scope.BLOCK})`. So these match the
-;; dot form, as the divider requirements above do. Asserting the bracket form
-;; fails on a bundle that is perfectly correct.
-(def ^:private attributor-requirements
-  [["the Attributor constructor survives by name" #"\.Attributor\("]
-   ["Scope.BLOCK survives by name"                #"\.Scope\.BLOCK"]
-   ["the attribute is named \"id\" twice"         #"\"id\"\s*,\s*\"id\""]
-   ["Quill.register is called"                    #"Quill\.register"]])
+;; dot form, as the blot requirements do. Asserting the bracket form fails on a
+;; bundle that is perfectly correct.
+(def ^:private registrations
+  "Each registration the bundle must carry.
+   :anchor  — text that occurs in that registration and nowhere else
+   :opening — the text the registration starts with, at or before :anchor"
+  [{:what "divider blot"
+    :anchor ".tagName=\"HR\"" :opening embed-opening
+    :requirements (embed-requirements "divider")}
+   ;; Parchment calls `create` and `value` by name. Without `create` a clip
+   ;; mounts as a bare <audio> with no src; without `value` its Delta holds
+   ;; `true`, and the src is lost on the first round trip.
+   {:what "audio-clip blot"
+    :anchor ".tagName=\"AUDIO\"" :opening embed-opening
+    :requirements (into (embed-requirements "audio-clip")
+                    [["create survives by name" #"\.create\s*=\s*function"]
+                     ["value survives by name"  #"\.value\s*=\s*function"]])}
+   {:what "id attributor"
+    :anchor "Quill.import(\"parchment\")" :opening "Quill.import(\"parchment\")"
+    :requirements
+    [["the Attributor constructor survives by name" #"\.Attributor\("]
+     ["Scope.BLOCK survives by name"                #"\.Scope\.BLOCK"]
+     ["the attribute is named \"id\" twice"         #"\"id\"\s*,\s*\"id\""]
+     ["Quill.register is called"                    #"Quill\.register"]]}])
 
 (def ^:private max-block-chars
-  "Each registration is one emitted IIFE; this covers it with room."
-  400)
+  "Each registration is one emitted IIFE; this covers the longest with room.
+   The audio-clip blot measures about 570 characters, because its `create` and
+   `value` bodies are emitted inline."
+  1000)
 
 (defn- registration-findings
-  "What the registration anchored at `anchor` fails to satisfy.
+  "What the registration identified by `anchor` fails to satisfy.
 
-   Pre : `source` is the bundle's text; `requirements` is [label regex] pairs;
-         `others` names every OTHER registration's anchor.
+   Pre : `source` is the bundle's text; `registration` is one entry of
+         `registrations`.
    Post: a vector of failure strings, empty when every requirement holds.
-   Inv : the window stops at the next registration. Closure emitted the divider
+   Inv : the window runs from the registration's opening to the next
+         `registration-opening` after its anchor. Closure emitted the divider
          and the attributor adjacent, putting TWO `Quill.register` calls inside
          a fixed 400-char window — so a deleted divider registration would have
          passed on its neighbour's call, which is the exact elimination this
          file exists to catch.
    Inv : an anchor that occurs more than once is an error, not a first-match.
-         Both anchors resolve by position, so a second occurrence anywhere
+         Every anchor resolves by position, so a second occurrence anywhere
          earlier would silently retarget the whole check."
-  [^String source what anchor others requirements]
-  (let [at (.indexOf source ^String anchor)]
+  [^String source {:keys [what ^String anchor ^String opening requirements]}]
+  (let [at (.indexOf source anchor)]
     (cond
       (neg? at)
       [(str "the " what " registration is absent from the bundle"
          " — the defonce was eliminated")]
 
-      (not (neg? (.indexOf source ^String anchor (inc at))))
+      (not (neg? (.indexOf source anchor (inc at))))
       [(str what ": the anchor " (pr-str anchor) " occurs more than once —"
          " the check cannot tell which registration it is reading")]
 
       :else
-      (let [next-at (->> others
-                      (map #(.indexOf source ^String % (inc at)))
-                      (remove neg?)
-                      (reduce min (count source)))
-            block (subs source at (min next-at (+ at max-block-chars)))]
-        (into [] (keep (fn [[label re]]
-                         (when-not (re-find re block)
-                           (str what ": " label " — NOT FOUND"))))
-          requirements)))))
+      (let [start (.lastIndexOf source opening at)]
+        (if (or (neg? start) (< max-block-chars (- at start)))
+          [(str what ": no " (pr-str opening) " opens the registration")]
+          (let [next-at (.indexOf source ^String registration-opening (inc at))
+                end (min (if (neg? next-at) (count source) next-at)
+                      (+ start max-block-chars))
+                block (subs source start end)]
+            (into [] (keep (fn [[label re]]
+                             (when-not (re-find re block)
+                               (str what ": " label " — NOT FOUND"))))
+              requirements)))))))
 
 (defn verify!
   "Assert the `:advanced` bundle kept what a successful build does not guarantee.
@@ -127,15 +159,13 @@
   [_]
   (let [bundle (prod-bundle)
         source (slurp bundle)
-        findings (into (registration-findings source "divider blot"
-                         divider-anchor [attributor-anchor] divider-requirements)
-                   (registration-findings source "id attributor"
-                     attributor-anchor [divider-anchor] attributor-requirements))]
+        findings (into [] (mapcat #(registration-findings source %)) registrations)]
     (when (seq findings)
       (throw (ex-info (str "bundle-check: " (.getName bundle) " failed "
                         (count findings) " assertion(s):\n  "
                         (str/join "\n  " findings))
                {:type ::bundle-check :bundle (.getName bundle) :findings findings})))
-    (println (format "bundle-check: %s satisfies %d assertions"
+    (println (format "bundle-check: %s satisfies %d assertions over %d registrations"
                (.getName bundle)
-               (+ (count divider-requirements) (count attributor-requirements))))))
+               (reduce + (map (comp count :requirements) registrations))
+               (count registrations)))))

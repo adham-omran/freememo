@@ -45,7 +45,7 @@
 (def storable-image-mime-types
   "MIME types an image may declare to be pasted, dropped, or re-hosted into the
    media table. Single source of truth for both ends of that path:
-   `editor-actions/install-image-rehost!` filters clipboard/drop files against
+   `editor-actions/install-attachment-upload!` filters clipboard/drop files against
    it, and `image-rehost/rehost-data-uris!` filters data: <img src> against it.
 
    Renderable raster formats only, and the exclusions are deliberate:
@@ -61,6 +61,19 @@
    no MIME restriction, so without it a crafted `data:text/html;base64,…` src
    would be stored as kind \"image\" and echoed back as HTML."
   #{"image/png" "image/jpeg" "image/jpg" "image/gif" "image/webp" "image/avif"})
+
+(def storable-audio-mime-types
+  "MIME types an audio clip may declare to be dropped, pasted, or picked into
+   the media table. The twin of `storable-image-mime-types`, read by the same
+   filter in `editor-actions/install-attachment-upload!`.
+
+   MP3 alone, and the set matches the server rather than leading it:
+   `api/upload-media-handler` accepts exactly `audio/mpeg` beside `image/*`, so
+   a wider set here would earn a 400 rather than a clip. `mime->ext` also maps
+   only `audio/mpeg` to a real extension, and a clip pushed to Anki is named
+   from that map — every other audio type would arrive as `.bin` and play
+   nowhere."
+  #{"audio/mpeg"})
 
 (defn mime->ext
   "File extension for a MIME type, without the dot.

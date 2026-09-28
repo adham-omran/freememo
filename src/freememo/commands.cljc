@@ -248,6 +248,15 @@
                            :exec :electric :when #{:viewer}
                            :table #{:topics :flashcards}
                            :views #{:card-mutations}}
+     ;; The palette twin of the format menu's Insert audio button, for the
+     ;; document editor only: a card field's editor lives inside its modal and
+     ;; publishes nothing the palette can reach. freememo.rich-text-editor
+     ;; registers the handler and a preparer that is nil while no document
+     ;; editor is mounted. :views is empty for the reason :apply-code-language
+     ;; gives — the clip reaches `topics` through the editor's own autosave.
+     :insert-audio   {:label "Insert audio" :class :mutation :exec :client
+                      :when #{:viewer}
+                      :table #{:media :topics} :views #{}}
      ;; :schedule-mutations is load-bearing on both. A page's done status IS the
      ;; study plan's coverage figure, so day 0 of the plan — a quota that counts
      ;; down — cannot move without it. Declaring it here rather than widening

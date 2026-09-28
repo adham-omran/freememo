@@ -10,6 +10,7 @@
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
    [freememo.a11y :as a11y]
+   #?(:cljs [freememo.command-bus :as bus])
    #?(:cljs [freememo.editor-links :as editor-links])
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
@@ -135,6 +136,26 @@
   #?(:clj nil
      :cljs (:editor @!editor-state)))
 
+;; The palette's :insert-audio (freememo.commands). It is registered here
+;; because this namespace owns the one editor the palette can name.
+;;
+;; Pre : the palette dispatches from a keypress or a click, so the file picker
+;;       opens under that user activation.
+;; Post: the preparer is nil while no document editor is mounted, which keeps
+;;       the entry out of the palette. The handler opens a file picker, and a
+;;       picked MP3 lands at the caret the editor last held: `getSelection`
+;;       with `true` focuses the editor, and Quill's focus restores its saved
+;;       range. An editor that never held a caret inserts at index 0, because
+;;       that is where Quill's saved range starts.
+#?(:cljs
+   (do (bus/register-preparer! :insert-audio
+         (fn [_ctx] (when (current-editor) {})))
+       (bus/register-handler! :insert-audio
+         (fn [_ctx _payload]
+           (when-let [^js ed (current-editor)]
+             (editor-actions/insert-audio! ed
+               (some-> (.getSelection ed true) .-index)))))))
+
 (defn destroy-editor!
   "Destroy the current global editor instance (if any).
 
@@ -150,7 +171,7 @@
      (do
        (reset! !editor-ready? false)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown clip-menu-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -163,6 +184,7 @@
            (when format-menu-teardown (format-menu-teardown))
            ;; Remove the custom code-language picker (observer + popup + triggers).
            (when code-lang-teardown (code-lang-teardown))
+           (when clip-menu-teardown (clip-menu-teardown))
            ;; Remove the formula click/blur/Escape listeners on the editor root.
            (when formula-teardown (formula-teardown))
            ;; Remove the delayed Markdown listener before the editor DOM.
@@ -318,7 +340,7 @@
            ;; This editor never had any image-paste handling: only QuillField
            ;; carried the (inert) matcher, so a screenshot pasted here was
            ;; stored as base64 in topics.content, which has no length cap.
-           _ (editor-actions/install-image-rehost! editor)
+           _ (editor-actions/install-attachment-upload! editor)
            ;; Stored `\(TeX\)` → span.ql-formula[data-value] for Parchment.
            ;; Skipped without KaTeX so an unresolvable span cannot lose its
            ;; data-value on the next save.
@@ -382,8 +404,13 @@
                                                         :!toast !link-toast
                                                         :!base-url !document-base-url
                                                         :!import-status !import-status})
-                              :format-menu-teardown (format-menu/install! editor {:card-gen? true})
+                              :format-menu-teardown (format-menu/install! editor {:card-gen? true :audio? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
+                              ;; Right-click an audio clip to toggle its loop
+                              ;; setting. Installed per editor, unlike the image
+                              ;; context menu, which editor-pane installs on this
+                              ;; editor alone — a card field holds clips too.
+                              :clip-menu-teardown (editor-actions/install-clip-menu! editor)
                               ;; Formula popover + typed-source conversion. Only
                               ;; when KaTeX arrived — Formula.create throws without
                               ;; it, and there is no insert button to gate instead.

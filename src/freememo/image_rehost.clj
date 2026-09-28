@@ -235,7 +235,7 @@
 
    This is the layer that makes \"no data: URI is ever persisted\" true rather
    than intended: the client keeps base64 out of the editor for pastes and drops
-   (`editor-actions/install-image-rehost!`), but a save that races an in-flight
+   (`editor-actions/install-attachment-upload!`), but a save that races an in-flight
    upload, or HTML pasted out of an EPUB import (which inlines base64), still
    arrives here carrying bytes.
 

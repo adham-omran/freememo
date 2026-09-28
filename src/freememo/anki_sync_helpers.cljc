@@ -4,6 +4,7 @@
    [missionary.core :as m]
    [clojure.string :as str]
    [freememo.anki-fields :as fields]
+   [freememo.audio-clip :as clip]
    [freememo.occlusion-svg :as osvg]
    [freememo.logging :as log]
    [freememo.math :as math]
@@ -903,10 +904,14 @@
    :options {:allowDuplicate false :duplicateScope "deck"}})
 
 (defn- score-sound-html
-  "[sound:...] tag for the group's clip, via the uploaded filename."
+  "[sound:...] tag for the group's clip, via the uploaded filename.
+
+   The token's shape lives in `freememo.audio-clip`, which an inline clip builds
+   too. Two spellings of `[sound:…]` in one codebase drift the day either one
+   changes, and a drifted token plays nothing."
   [clip-media-id filename-map]
-  (str "[sound:" (get filename-map (str clip-media-id)
-                   (str clip-media-id ".mp3")) "]"))
+  (clip/sound-tag (get filename-map (str clip-media-id)
+                    (str clip-media-id ".mp3"))))
 
 (defn- score-sheet-html
   "Notation crops stacked vertically in ordinal order (page order — a phrase
@@ -1055,6 +1060,25 @@
                (assoc m k (if (string? v) (math/stored->anki-html v kind) v)))
     {} fields))
 
+(defn- clips->anki-fields
+  "Every audio clip in every field value replaced by its `[sound:…]` token.
+
+   The twin of `math->anki-fields`, called at the same two places and for the
+   same reason: both push paths converge there, so one call covers every kind —
+   including `io_fields` and the overlapping Text fields, which each builder
+   rewrites on its own.
+
+   Pre : the field builders have already run `rewrite-media-srcs`. That is what
+         puts the uploaded filename into each clip's src, and
+         `audio-clip/stored->anki-html` states the order it needs.
+   Post: no `<audio>` element reaches Anki, in any field of any kind.
+   Inv : a field with no clip comes back identical, so this cannot move the
+         digest of a card that holds none."
+  [fields]
+  (reduce-kv (fn [m k v]
+               (assoc m k (if (string? v) (clip/stored->anki-html v) v)))
+    {} fields))
+
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect addNote map, routing by card kind to the app-owned
@@ -1068,7 +1092,8 @@
            (overlapping-card? card) (build-overlapping-note card settings filename-map)
            (= "cloze" (:flashcards/kind card)) (build-cloze-note card settings filename-map)
            :else (build-basic-note card settings filename-map))
-       (update :fields math->anki-fields (:flashcards/kind card)))))
+       (update :fields math->anki-fields (:flashcards/kind card))
+       (update :fields clips->anki-fields))))
 
 #?(:cljs
    (defn build-update-fields
@@ -1083,7 +1108,8 @@
            (overlapping-card? card) (build-overlapping-content-fields card settings filename-map)
            (= "cloze" (:flashcards/kind card)) (build-cloze-content-fields card settings filename-map)
            :else (build-basic-content-fields card settings filename-map))
-       (math->anki-fields (:flashcards/kind card)))))
+       (math->anki-fields (:flashcards/kind card))
+       clips->anki-fields)))
 
 (defn owned-model-name
   "The app-owned Anki model name for a card kind. Every kind is app-owned."
@@ -1394,7 +1420,12 @@
    Push applies four transforms to a field body and this undoes three (see
    `push-inverse` bindings below). The fourth, `rewrite-media-srcs`, has no
    inverse, so `fields/mask-img-tags` takes images out of the COMPARISON and
-   `fields/restore-img-tags` keeps the local tags in the WRITE."
+   `fields/restore-img-tags` keeps the local tags in the WRITE.
+
+   An audio clip takes the same treatment through `audio-clip/mask-clips` and
+   `restore-clip-tags`, with one difference: push rewrites the clip's SPELLING
+   as well as its src — `<audio>` becomes `[sound:…]` — so the mask has to cover
+   both forms or every clip-bearing card reads as an Anki-side edit forever."
   [card anki-fields]
   (let [kind (:flashcards/kind card)
         ordered-vals (ordered-field-values anki-fields)
@@ -1404,8 +1435,15 @@
         local->stored (fn [v wrap?] (local-field->comparable v kind wrap?))
         ;; Images are compared masked. A field differing only in its media srcs
         ;; is NOT a pull — that difference is push's own rewrite, not an edit.
-        same? (fn [anki-v local-v]
-                (= (fields/mask-img-tags anki-v) (fields/mask-img-tags local-v)))]
+        ;; Images AND clips out of the comparison; see the note above.
+        comparable (fn [v] (clip/mask-clips (fields/mask-img-tags v)))
+        same? (fn [anki-v local-v] (= (comparable anki-v) (comparable local-v)))
+        ;; The write keeps LOCAL media markup, because neither rewrite has an
+        ;; inverse: Anki's `412.png` and `412.mp3` name files only Anki can
+        ;; serve, and writing them locally would break both.
+        with-local-media (fn [anki-v local-v]
+                           (-> (fields/restore-img-tags anki-v local-v)
+                             (clip/restore-clip-tags local-v)))]
     (cond
       ;; `fields/no-inverse-kinds` is THE definition; nothing is pulled for
       ;; those. `anki-reconcile/apply-kind-limits` turns their pulls into
@@ -1427,7 +1465,7 @@
                                   local-v (local->stored (get io k) false)]
                               (if (same? anki-v local-v)
                                 acc
-                                (assoc acc k (fields/restore-img-tags anki-v local-v)))))))
+                                (assoc acc k (with-local-media anki-v local-v)))))))
                       {} io-pull-field-names)]
         (when (seq changed)
           {:card-id (:flashcards/id card) :io-fields changed}))
@@ -1445,15 +1483,15 @@
             a-changed? (not (same? anki-a local-a))]
         (when (or q-changed? a-changed?)
           (cond-> {:card-id (:flashcards/id card)}
-            q-changed? (assoc :question (fields/restore-img-tags anki-q local-q))
-            a-changed? (assoc :answer (fields/restore-img-tags anki-a local-a)))))
+            q-changed? (assoc :question (with-local-media anki-q local-q))
+            a-changed? (assoc :answer (with-local-media anki-a local-a)))))
 
       :else
       (let [anki-c (anki->stored (first ordered-vals))
             local-c (local->stored (:flashcards/cloze card) false)]
         (when-not (same? anki-c local-c)
           {:card-id (:flashcards/id card)
-           :cloze (fields/restore-img-tags anki-c local-c)})))))
+           :cloze (with-local-media anki-c local-c)})))))
 
 #?(:cljs
    (defn do-anki-pull!

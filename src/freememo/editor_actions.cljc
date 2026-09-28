@@ -1,7 +1,7 @@
 (ns freememo.editor-actions
   "Editor mutation actions shared across Quill instances — cloze-deletion
    insertion, formula insert/edit, and the pasted/dropped/picked image re-host
-   path that keeps base64 out of both editors (`install-image-rehost!`).
+   path that keeps base64 out of both editors (`install-attachment-upload!`).
 
    It also owns focus reader's page boundaries inside the editor: where they
    are (`page-at-scroll-top`, `!marker-offsets`), moving to one
@@ -398,7 +398,7 @@
        (js/Blob. (clj->js [buf]) (clj->js {:type mime})))
      :clj nil))
 
-(defn upload-image-blob!
+(defn upload-media-blob!
   "POST a Blob or File to /api/upload-media.
 
    Pre  : blob carries image bytes and its .type is the MIME type (used for the
@@ -433,7 +433,7 @@
    CLJS only."
   [data-uri on-uploaded]
   #?(:cljs
-     (-> (upload-image-blob! (data-uri->blob data-uri))
+     (-> (upload-media-blob! (data-uri->blob data-uri))
        (.then (fn [url] (on-uploaded url)))
        (.catch (fn [err]
                  (js/console.warn "[editor-actions] image upload failed:" (str err))
@@ -482,7 +482,7 @@
   #?(:cljs
      (let [^js ed ed
            blot (aget (.getLeaf ed index) 0)]
-       (-> (upload-image-blob! file)
+       (-> (upload-media-blob! file)
          (.then (fn [url]
                   (let [Quill (.-Quill js/window)
                         Delta (.import Quill "delta")
@@ -528,7 +528,64 @@
                    index))))
      :clj nil))
 
-(defn install-image-rehost!
+(defn- insert-audio-clip!
+  "Upload `file`, THEN insert one audio-clip embed at `index`.
+
+   A clip gets no placeholder, which is the one way it differs from an image.
+   An image's placeholder is a `data:` URI, and a Save that races the upload is
+   caught by `image-rehost/rehost-data-uris!` — a fn that matches `img[src]`
+   alone. A `data:` clip would be caught by nothing: it would sit in
+   `topics.content` at base64 size forever, and `clean-html` allow-lists no
+   `data:` on an audio src, so the first card save would drop it silently.
+
+   Pre  : ed is a live Quill instance; index is a 0-based position; file's type
+          is in util/storable-audio-mime-types.
+   Post : resolves to the index after the inserted embed. On a failed upload
+          nothing is inserted, `index` is returned, and one message is reported.
+   Inv  : no `data:` URI ever reaches the document."
+  [ed index file]
+  #?(:cljs
+     (let [^js ed ed]
+       (-> (upload-media-blob! file)
+         (.then (fn [url]
+                  (.insertEmbed ed index "audio-clip" #js {:src url :loop false} "user")
+                  (.setSelection ed (inc index) 0 "user")
+                  (inc index)))
+         (.catch (fn [err]
+                   (ce/report! :editor/audio-upload err
+                     (str "Audio could not be stored: " (.-message err)))
+                   index))))
+     :clj nil))
+
+(defn insert-audio!
+  "Open a file picker, upload the chosen MP3, and insert it as a clip.
+
+   The audio twin of `insert-image!`, and it shares that fn's contract about a
+   cached index. `accept` states MP3 alone because `api/upload-media-handler`
+   accepts exactly `audio/mpeg`; a picker offering more would earn a 400.
+
+   Pre  : `editor` is a Quill instance; `index` is a cached 0-based position or
+          nil (nil → editor end).
+   Post : on a successful upload one clip embed is inserted at the index
+          (clamped to the live length) with source \"user\", which fires
+          text-change so the field's on-change persists it. A cancelled pick or
+          a failed upload inserts nothing.
+   Inv  : only the /api/media URL is ever stored. Async: the picker and upload
+          resolve after this returns."
+  [editor index]
+  #?(:cljs
+     (let [^js ed editor
+           ^js input (js/document.createElement "input")]
+       (set! (.-type input) "file")
+       (set! (.-accept input) "audio/mpeg,.mp3")
+       (.addEventListener input "change"
+         (fn [_]
+           (when-let [file (aget (.-files input) 0)]
+             (insert-audio-clip! ed (min (or index (.getLength ed)) (.getLength ed)) file))))
+       (.click input))
+     :clj nil))
+
+(defn install-attachment-upload!
   "Replace Quill's Uploader so pasted and dropped images become /api/media URLs
    instead of inline base64.
 
@@ -553,22 +610,122 @@
        (when-let [^js uploader (.-uploader ed)]
          (set! (.-upload uploader)
            (fn [^js range files]
-             (let [storable? (fn [^js f] (util/storable-image-mime-types (.-type f)))
+             (let [image? (fn [^js f] (util/storable-image-mime-types (.-type f)))
+                   clip? (fn [^js f] (util/storable-audio-mime-types (.-type f)))
+                   attachable? (fn [^js f] (or (image? f) (clip? f)))
                    fs (vec (array-seq files))]
-               (doseq [^js f (remove storable? fs)]
-                 (ce/report! :editor/image-format
-                   (str "Unsupported image format: " (.-type f))
+               (doseq [^js f (remove attachable? fs)]
+                 (ce/report! :editor/attachment-format
+                   (str "Unsupported attachment format: " (.-type f))
                    (str "Cannot paste "
                      (if (str/blank? (.-type f)) "this file" (.-type f))
-                     " — supported image formats are PNG, JPEG, GIF, WebP and AVIF.")))
+                     " — supported formats are PNG, JPEG, GIF, WebP and AVIF"
+                     " images, and MP3 audio.")))
                ;; Chained, not concurrent: each insert awaits the previous one so
                ;; multiple files land in clipboard order. Only the INSERT is
                ;; serialised — the uploads run in parallel behind it.
                (reduce (fn [p file]
-                         (.then p (fn [i] (insert-and-rehost-image! ed i file))))
+                         (.then p (fn [i] (if (image? file)
+                                            (insert-and-rehost-image! ed i file)
+                                            (insert-audio-clip! ed i file)))))
                  (js/Promise.resolve (.-index range))
-                 (filter storable? fs))
+                 (filter attachable? fs))
                nil)))))
+     :clj nil))
+
+(defn install-clip-menu!
+  "Right-click an audio clip to toggle whether it loops. Returns a teardown fn.
+
+   Lives here rather than in `freememo.editor-image-menu` for two reasons. That
+   menu takes a container element plus app callbacks and is installed on the
+   document editor alone, through `editor-pane`. A clip needs the QUILL
+   INSTANCE, because the toggle is a document edit, and card fields hold clips
+   too — every per-editor installer in this ns already has that shape.
+
+   The toggle REPLACES the embed instead of setting the attribute on its node.
+   A DOM write Quill did not make is invisible to the Delta: the document would
+   look changed and save nothing, and the next load would restore the old
+   setting. One `updateContents` delete+insert is a single commit, so
+   text-change fires once and the field's on-change persists it — the shape
+   `rehost-embed-at!` above uses to swap an image's src.
+
+   Pre  : `ed` is a live Quill instance.
+   Post : a contextmenu on an `<audio>` inside this editor opens one menu, and
+          the toggle rewrites that clip with `loop` flipped, source \"user\".
+          A contextmenu anywhere else is left to the browser.
+   Inv  : at most one clip menu exists at a time, and teardown leaves behind no
+          menu and no listener."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           !menu (atom nil)
+           !dismiss (atom nil)
+           close! (fn []
+                    (when-let [^js m @!menu] (.remove m))
+                    (reset! !menu nil)
+                    (when-let [f @!dismiss] (f))
+                    (reset! !dismiss nil))
+           toggle-loop!
+           (fn [^js node]
+             (when-let [^js blot (.find (.-Quill js/window) node)]
+               (let [Quill (.-Quill js/window)
+                     Delta (.import Quill "delta")
+                     at (.getIndex ed blot)]
+                 (.updateContents ed
+                   (-> (new Delta)
+                     (.retain at)
+                     (.delete 1)
+                     (.insert (clj->js {:audio-clip {:src (.getAttribute node "src")
+                                                     :loop (not (.hasAttribute node "loop"))}})))
+                   "user"))))
+           button (fn [label on-click]
+                    (let [b (js/document.createElement "button")]
+                      (set! (.-textContent b) label)
+                      (.addEventListener b "click"
+                        (fn [_] (close!) (when on-click (on-click))))
+                      b))
+           handler
+           (fn [e]
+             (let [^js target (.-target e)]
+               (when (and target
+                       (= "AUDIO" (.-tagName target))
+                       (.closest target ".ql-editor"))
+                 (.preventDefault e)
+                 (.stopPropagation e)
+                 (close!)
+                 (let [menu (js/document.createElement "div")
+                       looping? (.hasAttribute target "loop")]
+                   (.setAttribute menu "class" "clip-context-menu")
+                   (set! (.-style.left menu) (str (.-pageX e) "px"))
+                   (set! (.-style.top menu) (str (.-pageY e) "px"))
+                   (.appendChild menu
+                     (button (if looping? "Stop looping" "Loop this clip")
+                       #(toggle-loop! target)))
+                   (.appendChild menu (button "Cancel" nil))
+                   (.appendChild js/document.body menu)
+                   (reset! !menu menu)
+                   ;; Dismissal, as the image menu does it: Escape, or a click
+                   ;; outside. The outside listener is registered a tick later,
+                   ;; so the contextmenu that opened this does not close it.
+                   (let [on-key (fn [ev] (when (= "Escape" (.-key ev))
+                                           (.stopPropagation ev)
+                                           (close!)))
+                         on-doc-click (fn [ev] (when-not (.contains menu (.-target ev))
+                                                 (close!)))
+                         timer (js/setTimeout
+                                 #(.addEventListener js/document "click" on-doc-click)
+                                 0)]
+                     (.addEventListener js/document "keydown" on-key)
+                     (reset! !dismiss
+                       (fn []
+                         (js/clearTimeout timer)
+                         (.removeEventListener js/document "keydown" on-key)
+                         (.removeEventListener js/document "click" on-doc-click))))))))
+           container (.-container ed)]
+       (.addEventListener container "contextmenu" handler)
+       (fn []
+         (.removeEventListener container "contextmenu" handler)
+         (close!)))
      :clj nil))
 
 (defn insert-image!

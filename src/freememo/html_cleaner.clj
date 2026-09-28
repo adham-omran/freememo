@@ -236,9 +236,16 @@
                                                    "a" "strong" "em" "b" "i" "u" "s"
                                                    "span" "div" "sub" "sup"
                                                    "img" "figure" "figcaption"
-                                                   "dl" "dt" "dd"]))
+                                                   "dl" "dt" "dd" "audio"]))
                      (.addAttributes "a" (into-array String ["href" "title"]))
                      (.addAttributes "img" (into-array String ["src" "alt" "width" "height"]))
+                     ;; An audio clip. `controls` makes it playable and `loop`
+                     ;; is the ONLY record of that clip's loop setting, so both
+                     ;; are content here, not decoration. `freememo.audio-clip`
+                     ;; owns the stored form these three attributes make up, and
+                     ;; `quill-field`'s audio-clip blot is the half that keeps
+                     ;; Quill from dropping the element on load.
+                     (.addAttributes "audio" (into-array String ["src" "controls" "loop"]))
                      (.addAttributes "td" (into-array String ["data-row"]))
                      ;; `Safelist/relaxed` admits `colspan` and `rowspan` on
                      ;; both cell tags already, so this has to REMOVE them —
@@ -262,6 +269,13 @@
                      ;; to about:blank anyway, which is the intended inert.
                      (.addProtocols "a" "href" (into-array String ["http" "https" "mailto" "tel"]))
                      (.addProtocols "img" "src" (into-array String ["http" "https" "data"]))
+                     ;; NO `data` on a clip, deliberately. `get-media-handler`
+                     ;; echoes the stored mime_type as the response Content-Type
+                     ;; with no `nosniff`, and the note at
+                     ;; `util/storable-image-mime-types` records what a crafted
+                     ;; `data:` src turns into. A clip always comes from
+                     ;; /api/media, so http and https are the whole need.
+                     (.addProtocols "audio" "src" (into-array String ["http" "https"]))
                      ;; Keep relative URLs (e.g. /api/media/<id>) intact —
                      ;; without this, Jsoup strips relative srcs because they
                      ;; don't match any allowed protocol.

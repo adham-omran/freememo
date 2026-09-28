@@ -105,6 +105,51 @@
          (.register js/Quill Divider)
          true))))
 
+;; An audio clip — `<audio controls src="/api/media/<id>">`, plus `loop` when
+;; that clip loops. Quill 2.0.3 registers no audio blot, so without this one
+;; `clipboard.convert` drops the element on load and the first keystroke writes
+;; the flattened DOM back over the stored clip. `freememo.audio-clip` owns the
+;; stored shape and `html-cleaner`'s safelist admits it; all three must agree.
+;;
+;; The VALUE carries src and loop together, rather than the src alone with loop
+;; as a Parchment format. Two reasons. A value that dropped `loop` would lose
+;; the user's setting on every reload, which is the whole feature. And an embed
+;; whose value is a map needs no format plumbing: the loop toggle replaces the
+;; embed with `updateContents` delete+insert, the shape `editor-actions`
+;; already uses to swap an image's src after its upload.
+;;
+;; `create` builds the element instead of calling super. Parchment's own
+;; `create` is `document.createElement(this.tagName)` plus an optional
+;; className this blot does not set, and an ES5 constructor calling into an ES6
+;; class is the `new`-in-call-position hazard CLAUDE.md records.
+;;
+;; `aset` for every static, never `set!` — see the divider comment above.
+;; `bundle-check/verify!` asserts that all four reached the `:advanced` bundle.
+#?(:cljs
+   (defonce ^:private audio-clip-blot-registered?
+     (let [BlockEmbed (.import js/Quill "blots/block/embed")]
+       (letfn [(AudioClip [scroll node]
+                 (js/Reflect.construct BlockEmbed #js [scroll node] AudioClip))]
+         (js/Object.setPrototypeOf (.-prototype AudioClip) (.-prototype BlockEmbed))
+         (js/Object.setPrototypeOf AudioClip BlockEmbed)
+         (aset AudioClip "blotName" "audio-clip")
+         (aset AudioClip "tagName" "AUDIO")
+         (aset AudioClip "create"
+           (fn [value]
+             (let [node (js/document.createElement "audio")
+                   v (if (string? value) #js {:src value} value)
+                   src (aget v "src")]
+               (.setAttribute node "controls" "")
+               (when (seq (str src)) (.setAttribute node "src" (str src)))
+               (when (aget v "loop") (.setAttribute node "loop" ""))
+               node)))
+         (aset AudioClip "value"
+           (fn [node]
+             #js {:src (.getAttribute node "src")
+                  :loop (.hasAttribute node "loop")}))
+         (.register js/Quill AudioClip)
+         true))))
+
 ;; Quill 2.0.3 models no `id`, so `clipboard.convert` drops it from every
 ;; element — measured on h1-h6, p, span and a. That makes an in-document anchor
 ;; a link to nothing the moment the document is edited: `clean-html` now stores
@@ -446,8 +491,8 @@
          ;; REPLACES a clipboard matcher that could never fire: Quill routes any
          ;; clipboard payload carrying files straight to uploader.upload, and on
          ;; the html path matchBlot has already read the src into the delta
-         ;; before an appended matcher runs. See install-image-rehost!.
-         (editor-actions/install-image-rehost! ed)
+         ;; before an appended matcher runs. See install-attachment-upload!.
+         (editor-actions/install-attachment-upload! ed)
          ;; Cmd/Ctrl+\\ mirrors the custom format menu's Clear formatting
          ;; action for a selected range. It is editor-local, so it never reaches
          ;; another contenteditable surface through the global chord handler.
@@ -468,8 +513,14 @@
            {:editor ed
             :teardowns [markdown-teardown
                         (format-menu/install! ed {:image? true
+                                                  :audio? true
                                                   :cloze? (boolean cloze?)})
                         (code-lang-picker/install! ed)
+                        ;; Right-click an audio clip to toggle its loop setting.
+                        ;; The image context menu is installed by editor-pane on
+                        ;; the document editor alone; a card field holds clips
+                        ;; too, so this one is installed per editor.
+                        (editor-actions/install-clip-menu! ed)
                         ;; Release the resize module when focus leaves the editor.
                         (install-resize-release-on-focus-out! ed)
                         ;; Install the formula popover only when KaTeX is ready.
