@@ -2814,10 +2814,14 @@ textarea:hover {
 .ql-editor {
     min-height: 100px;
     font-size: 16px;
-    line-height: 1.6;
     background: var(--color-bg-card);
     color: var(--color-text-primary);
 }
+/* The document editor reads at 1.5, as Notion does. A bare `.ql-editor` rule
+   cannot set this: quill.bubble.css loads after this file and sets
+   `.ql-editor{line-height:1.42}` at the same specificity, so it wins. Card
+   fields (.quill-field-wrapper) keep Quill's tighter value. */
+.quill-editor-wrapper:not(.quill-field-wrapper) .ql-editor { line-height: 1.5; }
 .ql-editor p + p { margin-top: 0.6em; }
 .ql-editor img {
     max-width: 100%;
@@ -2894,7 +2898,24 @@ textarea:hover {
     margin-inline-end: .3em;
     text-align: end;
 }
-.quill-editor-wrapper .ql-editor li[data-list=bullet] > .ql-ui::before { text-align: start; }
+/* A bullet is drawn at 1.4× the text so it reads as a disc, not a dot. Its box
+   is sized in its own em, so each length is the one above divided by 1.4: the
+   text still starts in the same place. `vertical-align: middle` centres it on
+   the x-height, and `line-height: 1` keeps it from making the line taller. */
+.quill-editor-wrapper .ql-editor li[data-list=bullet] > .ql-ui::before {
+    font-size: 1.4em;
+    line-height: 1;
+    vertical-align: middle;
+    width: calc(1.2em / 1.4);
+    margin-inline-start: calc(-1.5em / 1.4);
+    margin-inline-end: calc(.3em / 1.4);
+    text-align: start;
+}
+/* A gap between items shows where one wrapped item ends and the next starts.
+   A list takes the same gap from its neighbours as a paragraph does (p + p). */
+.quill-editor-wrapper .ql-editor li[data-list] + li[data-list] { margin-top: .35em; }
+.quill-editor-wrapper .ql-editor > ol:not(:first-child),
+.quill-editor-wrapper .ql-editor > ol + * { margin-top: .6em; }
 
 /* Lists and indents outside an editor: card views that render stored HTML
    carry .fm-rich. Stored HTML is Quill's flat form —
@@ -2935,7 +2956,19 @@ textarea:hover {
     text-align: end;
     white-space: nowrap;
 }
-.fm-rich li[data-list=bullet]::before { content: '\2022'; text-align: start; }
+.fm-rich li[data-list=bullet]::before {
+    content: '\2022';
+    font-size: 1.4em;
+    line-height: 1;
+    vertical-align: middle;
+    width: calc(1.2em / 1.4);
+    margin-inline-start: calc(-1.5em / 1.4);
+    margin-inline-end: calc(.3em / 1.4);
+    text-align: start;
+}
+.fm-rich li[data-list] + li[data-list] { margin-top: .35em; }
+.fm-rich ol:has(> li[data-list]):not(:first-child),
+.fm-rich ol:has(> li[data-list]) + * { margin-top: .6em; }
 .fm-rich li[data-list=ordered] { counter-increment: list-0; }
 .fm-rich li[data-list=ordered]::before { content: counter(list-0, decimal) '. '; }
 .fm-rich li[data-list=ordered].ql-indent-1 { counter-increment: list-1; }

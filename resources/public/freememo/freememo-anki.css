@@ -709,7 +709,19 @@ li[data-list]::before {
     text-align: end;
     white-space: nowrap;
 }
-li[data-list=bullet]::before { content: '\2022'; text-align: start; }
+li[data-list=bullet]::before {
+    content: '\2022';
+    font-size: 1.4em;
+    line-height: 1;
+    vertical-align: middle;
+    width: calc(1.2em / 1.4);
+    margin-inline-start: calc(-1.5em / 1.4);
+    margin-inline-end: calc(.3em / 1.4);
+    text-align: start;
+}
+li[data-list] + li[data-list] { margin-top: .35em; }
+ol:has(> li[data-list]):not(:first-child),
+ol:has(> li[data-list]) + * { margin-top: .6em; }
 li[data-list=ordered] { counter-increment: list-0; }
 li[data-list=ordered]::before { content: counter(list-0, decimal) '. '; }
 li[data-list=ordered].ql-indent-1 { counter-increment: list-1; }
