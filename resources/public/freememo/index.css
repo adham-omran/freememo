@@ -4300,6 +4300,36 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     color: var(--color-text-secondary, #6b7280);
 }
 
+/* The grip that moves an audio clip, and the line that shows where a drop will
+   put it (editor-actions/install-clip-drag!). Both are children of
+   .ql-container, which Quill positions, and never of the editor root. The
+   script sets `left`, `top` and `display`. */
+.clip-drag-handle {
+    position: absolute;
+    display: none;
+    width: 14px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: grab;
+    z-index: 2;
+    color: var(--color-text-secondary, #6b7280);
+    background:
+        radial-gradient(circle, currentColor 1.5px, transparent 2px) center / 7px 7px,
+        var(--color-bg-subtle, #f9fafb);
+}
+.clip-drag-handle:active {
+    cursor: grabbing;
+}
+.clip-drop-line {
+    position: absolute;
+    display: none;
+    height: 2px;
+    margin-top: -1px;
+    pointer-events: none;
+    z-index: 2;
+    background: var(--color-primary, #2563eb);
+}
+
 /* Image drag-resize — quill-resize-module 2.1.3.
    Ported from the package's dist/resize.css instead of linking it, so the
    colours follow the app's theme tokens rather than the module's hardcoded

@@ -457,7 +457,7 @@
     ;; Audio insert. MP3 only, because `api/upload-media-handler` accepts
     ;; exactly audio/mpeg beside image/*; the picker's accept filter says so
     ;; before the server has to. Drag and paste reach the same upload through
-    ;; `editor-actions/install-image-rehost!`, so this button is the discoverable
+    ;; `editor-actions/install-attachment-upload!`, so this button is the discoverable
     ;; half of one path, not a second one.
     (when (:audio? opts)
       (.appendChild row-blockfmt

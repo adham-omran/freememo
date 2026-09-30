@@ -728,6 +728,199 @@
          (close!)))
      :clj nil))
 
+(defn install-clip-drag!
+  "Drag an audio clip by its grip to move it. Returns a teardown fn.
+
+   A grip shows at the clip's right edge while the pointer is on the clip. A
+   drop in the text moves the clip to the line boundary nearest the drop point:
+   before the line under the pointer, or after it from the line's second half.
+   A block embed inserted mid-line would split that line in two.
+
+   Three choices, each forced:
+   - The grip is the drag source, not the clip. Every point of the clip is the
+     browser's media controls, where a press plays, seeks or sets the volume.
+   - The grip and the drop line live in `quill.container`, outside the root, so
+     `quill-field/editor-html` never reads them into the stored form.
+   - The drop listener runs in the CAPTURE phase on the root. Quill's uploader
+     calls preventDefault on every drop there and handles files only, so no
+     drop that reaches it can move anything.
+
+   The move is ONE `updateContents`, the delete+insert shape
+   `install-clip-menu!` uses, so text-change fires once and autosave persists
+   it. The drop index comes from `caretRangeFromPoint` through the two
+   `quill.selection` methods Quill's own file drop uses. They are not public
+   API; Quill is pinned at 2.0.3.
+
+   Pre  : `ed` is a live Quill instance with the audio-clip blot registered.
+   Post : a drag the grip started, dropped inside this editor's root, moves
+          that clip with its src and loop, source \"user\". Every other drag
+          and drop is left to Quill and the browser.
+   Inv  : teardown removes the grip, the drop line and every listener."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js root (.-root ed)
+           ^js container (.-container ed)
+           Quill (.-Quill js/window)
+           Delta (.import Quill "delta")
+           ^js grip (js/document.createElement "div")
+           ^js drop-line (js/document.createElement "div")
+           !hovered (atom nil)   ; the <audio> the grip sits beside
+           !dragged (atom nil)   ; the <audio> a drag is moving
+           px (fn [n] (str n "px"))
+           ;; A viewport y as a `top` inside the container, which scrolls in
+           ;; some editors — its absolutely placed children scroll with it.
+           container-y (fn [y] (+ (- y (.-top (.getBoundingClientRect container)))
+                                 (.-scrollTop container)))
+           hide-grip! (fn []
+                        (set! (.. grip -style -display) "none")
+                        (reset! !hovered nil))
+           hide-drop-line! #(set! (.. drop-line -style -display) "none")
+           place-grip!
+           (fn [^js clip]
+             (let [^js r (.getBoundingClientRect clip)]
+               (reset! !hovered clip)
+               (set! (.. grip -style -display) "block")
+               (set! (.. grip -style -left)
+                 (px (+ (- (.-right r) (.-left (.getBoundingClientRect container)))
+                       (.-scrollLeft container))))
+               (set! (.. grip -style -top)
+                 (px (container-y (+ (.-top r)
+                                    (/ (- (.-height r) (.-offsetHeight grip)) 2)))))))
+           ;; The document index under the pointer, as Quill's uploader finds
+           ;; it for a dropped file.
+           point-index
+           (fn [^js e]
+             (let [x (.-clientX e)
+                   y (.-clientY e)
+                   ^js native
+                   (cond
+                     (.-caretRangeFromPoint js/document)
+                     (.caretRangeFromPoint js/document x y)
+                     ;; Firefox has only the position form.
+                     (.-caretPositionFromPoint js/document)
+                     (when-let [^js p (.caretPositionFromPoint js/document x y)]
+                       (doto (.createRange js/document)
+                         (.setStart (.-offsetNode p) (.-offset p))
+                         (.setEnd (.-offsetNode p) (.-offset p)))))
+                   ^js sel (.-selection ed)
+                   ^js normalized (when native (.normalizeNative sel native))]
+               (when normalized (.-index ^js (.normalizedToRange sel normalized)))))
+           nearest-boundary
+           (fn [i]
+             (let [[^js line offset] (.getLine ed i)]
+               (if line
+                 (let [start (.getIndex ed line)
+                       len (.length line)]
+                   (if (< offset (/ len 2)) start (+ start len)))
+                 i)))
+           show-drop-line!
+           (fn [boundary]
+             (let [^js r (.getBoundingClientRect root)
+                   ^js cs (js/getComputedStyle root)
+                   pad-l (js/parseFloat (.-paddingLeft cs))
+                   pad-r (js/parseFloat (.-paddingRight cs))
+                   [^js line offset] (.getLine ed boundary)
+                   ;; The top of the line a clip will precede, or the bottom
+                   ;; of the last block when it will close the document.
+                   y (if (and line (zero? offset))
+                       (.-top (.getBoundingClientRect (.-domNode line)))
+                       (.-bottom (.getBoundingClientRect (.-lastElementChild root))))]
+               (set! (.. drop-line -style -display) "block")
+               (set! (.. drop-line -style -left)
+                 (px (+ (- (+ (.-left r) pad-l) (.-left (.getBoundingClientRect container)))
+                       (.-scrollLeft container))))
+               (set! (.. drop-line -style -width) (px (- (.-width r) pad-l pad-r)))
+               (set! (.. drop-line -style -top) (px (container-y y)))))
+           move!
+           (fn [^js clip to]
+             (when-let [^js blot (.find Quill clip)]
+               (let [from (.getIndex ed blot)
+                     clip-op (clj->js {:audio-clip {:src (.getAttribute clip "src")
+                                                    :loop (.hasAttribute clip "loop")}})]
+                 ;; `to` and `to` - 1 both leave the clip where it is.
+                 (when-not (<= from to (inc from))
+                   (.updateContents ed
+                     (if (< to from)
+                       (-> (new Delta) (.retain to) (.insert clip-op)
+                         (.retain (- from to)) (.delete 1))
+                       (-> (new Delta) (.retain from) (.delete 1)
+                         (.retain (- to from 1)) (.insert clip-op)))
+                     "user")))))
+           on-mousemove
+           (fn [^js e]
+             (let [^js t (.-target e)]
+               (cond
+                 (= t grip) nil
+                 (and (= "AUDIO" (.-tagName t)) (.contains root t)) (place-grip! t)
+                 :else (hide-grip!))))
+           on-dragstart
+           (fn [^js e]
+             (when-let [^js clip @!hovered]
+               (let [^js dt (.-dataTransfer e)]
+                 (reset! !dragged clip)
+                 ;; Firefox starts no drag without data.
+                 (.setData dt "application/x-freememo-clip" "")
+                 (set! (.-effectAllowed dt) "move")
+                 (.setDragImage dt clip (.-offsetWidth clip) (/ (.-offsetHeight clip) 2)))))
+           on-dragend (fn [_]
+                        (reset! !dragged nil)
+                        (hide-drop-line!)
+                        (hide-grip!))
+           on-dragover
+           (fn [^js e]
+             (when @!dragged
+               (.preventDefault e)
+               (set! (.. e -dataTransfer -dropEffect) "move")
+               (when-let [i (point-index e)]
+                 (show-drop-line! (nearest-boundary i)))))
+           on-dragleave
+           (fn [^js e]
+             (when-not (.contains root (.-relatedTarget e))
+               (hide-drop-line!)))
+           on-drop
+           (fn [^js e]
+             (when-let [^js clip @!dragged]
+               (.preventDefault e)
+               (.stopPropagation e)
+               (reset! !dragged nil)
+               (hide-drop-line!)
+               (when-let [i (point-index e)]
+                 (move! clip (nearest-boundary i)))))
+           ;; Scrolling moves the clip out from under the grip, and an edit
+           ;; can remove the clip the grip belongs to.
+           on-scroll (fn [_] (hide-grip!))
+           on-mouseleave (fn [_] (hide-grip!))
+           on-text-change (fn [_ _ _] (hide-grip!))]
+       (.setAttribute grip "class" "clip-drag-handle")
+       (.setAttribute grip "aria-hidden" "true")
+       (set! (.-draggable grip) true)
+       (.setAttribute drop-line "class" "clip-drop-line")
+       (.appendChild container grip)
+       (.appendChild container drop-line)
+       (.addEventListener container "mousemove" on-mousemove)
+       (.addEventListener container "mouseleave" on-mouseleave)
+       (.addEventListener container "scroll" on-scroll)
+       (.addEventListener root "scroll" on-scroll)
+       (.addEventListener grip "dragstart" on-dragstart)
+       (.addEventListener grip "dragend" on-dragend)
+       (.addEventListener root "dragover" on-dragover true)
+       (.addEventListener root "dragleave" on-dragleave true)
+       (.addEventListener root "drop" on-drop true)
+       (.on ed "text-change" on-text-change)
+       (fn []
+         (.removeEventListener container "mousemove" on-mousemove)
+         (.removeEventListener container "mouseleave" on-mouseleave)
+         (.removeEventListener container "scroll" on-scroll)
+         (.removeEventListener root "scroll" on-scroll)
+         (.removeEventListener root "dragover" on-dragover true)
+         (.removeEventListener root "dragleave" on-dragleave true)
+         (.removeEventListener root "drop" on-drop true)
+         (.off ed "text-change" on-text-change)
+         (.remove grip)
+         (.remove drop-line)))
+     :clj nil))
+
 (defn insert-image!
   "Open a file picker, upload the chosen image, and insert it into `editor`
    as an <img> pointing at the returned /api/media URL.

@@ -521,6 +521,8 @@
                         ;; the document editor alone; a card field holds clips
                         ;; too, so this one is installed per editor.
                         (editor-actions/install-clip-menu! ed)
+                        ;; Drag a clip by its grip to another line.
+                        (editor-actions/install-clip-drag! ed)
                         ;; Release the resize module when focus leaves the editor.
                         (install-resize-release-on-focus-out! ed)
                         ;; Install the formula popover only when KaTeX is ready.

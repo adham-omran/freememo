@@ -175,7 +175,7 @@
      (do
        (reset! !editor-ready? false)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown clip-menu-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown clip-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -189,6 +189,7 @@
            ;; Remove the custom code-language picker (observer + popup + triggers).
            (when code-lang-teardown (code-lang-teardown))
            (when clip-menu-teardown (clip-menu-teardown))
+           (when clip-drag-teardown (clip-drag-teardown))
            ;; Remove the formula click/blur/Escape listeners on the editor root.
            (when formula-teardown (formula-teardown))
            ;; Remove the delayed Markdown listener before the editor DOM.
@@ -415,6 +416,8 @@
                               ;; context menu, which editor-pane installs on this
                               ;; editor alone — a card field holds clips too.
                               :clip-menu-teardown (editor-actions/install-clip-menu! editor)
+                              ;; Drag a clip by its grip to another line.
+                              :clip-drag-teardown (editor-actions/install-clip-drag! editor)
                               ;; Formula popover + typed-source conversion. Only
                               ;; when KaTeX arrived — Formula.create throws without
                               ;; it, and there is no insert button to gate instead.
