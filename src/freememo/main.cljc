@@ -11,6 +11,7 @@
             [freememo.credits-return-page :refer [CreditsReturnPage]]
             #?(:clj [freememo.credits :as credits])
             #?(:clj [freememo.geo :as geo])
+            #?(:clj [freememo.electric-process-failure :as process-failure])
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.schedule-page :refer [SchedulePage]]
@@ -461,6 +462,14 @@
           ;; Not authenticated: render landing page
           (LandingPage auth-error (e/server (config/auth-mode))))))))
 
-(defn electric-boot [ring-request]
-  #?(:clj (e/boot-server {} Main (e/server ring-request))
+(defn electric-boot
+  "Boot this app's Electric process. Every entrypoint in src-dev and src-prod
+   goes through here.
+
+   The server side logs its process failure through
+   `electric-process-failure/logged`, because the adapter's own failure line
+   is lost when the teardown stalls."
+  [ring-request]
+  #?(:clj (process-failure/logged ring-request
+            (e/boot-server {} Main (e/server ring-request)))
      :cljs (e/boot-client {} Main (e/server (e/amb)))))
