@@ -9639,7 +9639,7 @@
             FROM topics t JOIN sub ON sub.id = t.id
            WHERE t.repo_path = ANY(?) AND t.kind IN ('code', 'dir')
              AND t.staged_delete_id IS NULL"
-         commit-id (into-array String (distinct paths))]
+         commit-id (into-array String (set paths))]
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn topic-code-exists?
