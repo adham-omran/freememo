@@ -47,8 +47,8 @@
 
 ;; Focus restore (WCAG dialog pattern): remember the element that had focus
 ;; when the modal opened; put focus back there when the modal unmounts. Focus
-;; return must not reveal an old caret and move a reader away from its page.
-;; Platform-split so the e/defn body stays frame-safe.
+;; return must not move a reader away from its page, and must give an editor
+;; back the caret it had. Platform-split so the e/defn body stays frame-safe.
 
 ;; Capture-then-focus in ONE synchronous call so the ordering cannot race:
 ;; the opener is read before .focus is even scheduled (the focus itself is
@@ -68,11 +68,35 @@
 #?(:clj (defn opener-element [] nil))
 
 #?(:cljs
+   (defn- quill-editor-of
+     "The Quill instance whose root is `el`, or nil. Quill keys its instances by
+      container, and the root is the container's child."
+     [^js el]
+     (let [Quill (.-Quill js/window)]
+       (when (and Quill (.. el -classList (contains "ql-editor")))
+         (let [^js found (.find Quill (.-parentElement el))]
+           (when (instance? Quill found) found))))))
+
+#?(:cljs
    (defn restore-focus!
-     "Refocus a connected modal opener without changing any scroll position."
+     "Refocus a connected modal opener without changing any scroll position.
+
+      Pre  : `opener` is the element that had focus when the modal opened.
+      Post : `opener` has focus. When it is a Quill root, it also has the caret
+             it held when the modal opened.
+
+      A Quill root is refocused through Quill, never as an element. Chrome puts
+      the caret at the START of a contenteditable that `.focus()` enters from
+      outside, so closing any modal left the editor's caret at index 0 —
+      measured on 2026-09-30, a caret at 12 read back 0. The palette's Insert
+      audio then put its clip at the top of the document. Quill's own focus
+      restores the range it saved when focus left, and `preventScroll` keeps
+      that restore from moving the page."
      [opener]
      (when (and opener (.contains js/document.documentElement opener))
-       (.focus opener #js {:preventScroll true}))))
+       (if-let [^js editor (quill-editor-of opener)]
+         (.focus editor #js {:preventScroll true})
+         (.focus opener #js {:preventScroll true})))))
 #?(:clj (defn restore-focus! [_opener] nil))
 
 (e/defn FocusReturn

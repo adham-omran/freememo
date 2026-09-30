@@ -147,6 +147,10 @@
 ;;       with `true` focuses the editor, and Quill's focus restores its saved
 ;;       range. An editor that never held a caret inserts at index 0, because
 ;;       that is where Quill's saved range starts.
+;; Inv : the caret survives whichever runs first, this handler or the
+;;       palette's focus return, because `modal-shell/restore-focus!` also
+;;       focuses a Quill root through Quill. A plain `.focus()` there moved the
+;;       caret to index 0 first, and every clip landed at the top.
 #?(:cljs
    (do (bus/register-preparer! :insert-audio
          (fn [_ctx] (when (current-editor) {})))
