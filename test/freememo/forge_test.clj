@@ -43,3 +43,15 @@
   (is (false? (forge/address-permitted? "http://127.0.0.1:3000/api/v1")))
   (is (false? (forge/address-permitted? "http://192.168.1.10/api/v4")))
   (is (false? (forge/address-permitted? "file:///etc/passwd"))))
+
+(deftest blob-url-names-the-file-page-on-each-forge
+  (let [sha "0123456789abcdef0123456789abcdef01234567"]
+    (is (= (str "https://github.com/o/r/blob/" sha "/docs/ir-spec.md")
+          (forge/blob-url "github" "https://github.com/o/r" sha "docs/ir-spec.md")))
+    (is (= (str "https://gitlab.com/g/s/p/-/blob/" sha "/docs/ir-spec.md")
+          (forge/blob-url "gitlab" "https://gitlab.com/g/s/p" sha "docs/ir-spec.md")))
+    (is (= (str "https://codeberg.org/o/r/src/commit/" sha "/docs/ir-spec.md")
+          (forge/blob-url "forgejo" "https://codeberg.org/o/r" sha "docs/ir-spec.md")))
+    (testing "each segment is encoded, and the separators are not"
+      (is (= (str "https://github.com/o/r/blob/" sha "/my%20docs/a%23b.md")
+            (forge/blob-url "github" "https://github.com/o/r" sha "my docs/a#b.md"))))))

@@ -60,10 +60,11 @@
 (def ^:private highlight-class "anchor-target-flash")
 (def ^:private highlight-ms 1600)
 
-(defn- scroll-to-anchor!
+(defn scroll-to-anchor!
   "Scroll the editor to the element carrying `id` and flash it.
 
-   Pre : `root` is the `.ql-editor` element; `id` is a fragment with no `#`.
+   Pre : `root` is the element whose ids the fragment names — the `.ql-editor`,
+         or the code pane's rendered Markdown; `id` is a fragment with no `#`.
    Post: true when a target existed and was scrolled to; false otherwise — the
          caller toasts on false rather than leaving the click silent.
    Inv : scoped to `root`. A document-wide lookup would match the app's own

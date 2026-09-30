@@ -546,7 +546,7 @@
   ([node html after-render]
    #?(:cljs (let [s (str (or html ""))]
               (set! (.-innerHTML node) s)
-              (if (str/includes? s "\\(")
+              (if (or (str/includes? s "\\(") (str/includes? s "\\["))
                 (render-math! node after-render)
                 (when after-render (after-render)))
               nil)

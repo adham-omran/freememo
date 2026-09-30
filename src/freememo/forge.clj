@@ -337,6 +337,18 @@
       "gitlab" (str repo "/repository/archive.zip?sha=" sha)
       "forgejo" (str repo "/archive/" sha ".zip"))))
 
+(defn blob-url
+  "Post: the forge's web page for file `path` at commit `sha` in the repository
+   at `repo-url` (`origin-url` + \"/\" + owner/name, as the import stores it).
+   Each path segment is percent-encoded, so a space or `#` in a file name
+   cannot end the path."
+  [forge repo-url sha path]
+  (let [segments (str/join "/" (map enc (str/split path #"/")))]
+    (case forge
+      "github" (str repo-url "/blob/" sha "/" segments)
+      "gitlab" (str repo-url "/-/blob/" sha "/" segments)
+      "forgejo" (str repo-url "/src/commit/" sha "/" segments))))
+
 (defn download-archive!
   "Stream the zip archive of `sha` to a temp file.
 

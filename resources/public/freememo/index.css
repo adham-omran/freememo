@@ -2632,61 +2632,61 @@ body .ql-editor pre.ql-syntax {
    intentionally omitted — Quill's `.ql-ui` <select> picker already
    shows the current language in the editor. */
 
-:is(.ql-editor, .code-pane-source) .hljs-keyword,
-:is(.ql-editor, .code-pane-source) .hljs-symbol,
-:is(.ql-editor, .code-pane-source) .hljs-tag,
-:is(.ql-editor, .code-pane-source) .hljs-name,
-:is(.ql-editor, .code-pane-source) .hljs-template-tag,
-:is(.ql-editor, .code-pane-source) .hljs-template-variable { color: #c678dd; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-keyword,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-symbol,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-tag,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-name,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-template-tag,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-template-variable { color: #c678dd; }
 
-:is(.ql-editor, .code-pane-source) .hljs-string,
-:is(.ql-editor, .code-pane-source) .hljs-regexp             { color: #98c379; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-string,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-regexp             { color: #98c379; }
 
-:is(.ql-editor, .code-pane-source) .hljs-comment,
-:is(.ql-editor, .code-pane-source) .hljs-quote {
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-comment,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-quote {
     color: #5c6370;
     font-style: italic;
 }
 
-:is(.ql-editor, .code-pane-source) .hljs-doctag,
-:is(.ql-editor, .code-pane-source) .hljs-meta               { color: #56b6c2; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-doctag,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-meta               { color: #56b6c2; }
 
-:is(.ql-editor, .code-pane-source) .hljs-function .hljs-title,
-:is(.ql-editor, .code-pane-source) .hljs-title.function_,
-:is(.ql-editor, .code-pane-source) .hljs-section            { color: #61afef; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-function .hljs-title,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-title.function_,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-section            { color: #61afef; }
 
-:is(.ql-editor, .code-pane-source) .hljs-variable,
-:is(.ql-editor, .code-pane-source) .hljs-attr,
-:is(.ql-editor, .code-pane-source) .hljs-attribute,
-:is(.ql-editor, .code-pane-source) .hljs-params             { color: #e06c75; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-variable,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-attr,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-attribute,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-params             { color: #e06c75; }
 
-:is(.ql-editor, .code-pane-source) .hljs-number,
-:is(.ql-editor, .code-pane-source) .hljs-literal,
-:is(.ql-editor, .code-pane-source) .hljs-bullet,
-:is(.ql-editor, .code-pane-source) .hljs-link               { color: #d19a66; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-number,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-literal,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-bullet,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-link               { color: #d19a66; }
 
-:is(.ql-editor, .code-pane-source) .hljs-type,
-:is(.ql-editor, .code-pane-source) .hljs-class .hljs-title,
-:is(.ql-editor, .code-pane-source) .hljs-title.class_,
-:is(.ql-editor, .code-pane-source) .hljs-built_in           { color: #e5c07b; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-type,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-class .hljs-title,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-title.class_,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-built_in           { color: #e5c07b; }
 
-:is(.ql-editor, .code-pane-source) .hljs-selector-tag       { color: #e06c75; }
-:is(.ql-editor, .code-pane-source) .hljs-selector-id        { color: #d19a66; }
-:is(.ql-editor, .code-pane-source) .hljs-selector-class,
-:is(.ql-editor, .code-pane-source) .hljs-selector-attr,
-:is(.ql-editor, .code-pane-source) .hljs-selector-pseudo    { color: #e5c07b; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-selector-tag       { color: #e06c75; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-selector-id        { color: #d19a66; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-selector-class,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-selector-attr,
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-selector-pseudo    { color: #e5c07b; }
 
-:is(.ql-editor, .code-pane-source) .hljs-addition {
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-addition {
     color: #98c379;
     background: rgba(152, 195, 121, 0.12);
 }
-:is(.ql-editor, .code-pane-source) .hljs-deletion {
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-deletion {
     color: #e06c75;
     background: rgba(224, 108, 117, 0.12);
 }
 
-:is(.ql-editor, .code-pane-source) .hljs-emphasis { font-style: italic; }
-:is(.ql-editor, .code-pane-source) .hljs-strong   { font-weight: bold;  }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-emphasis { font-style: italic; }
+:is(.ql-editor, .code-pane-source, .code-pane-rendered) .hljs-strong   { font-weight: bold;  }
 
 /* ── Card Table RTL ───────────────────────────────────────────── */
 /* dir="auto" on .card-table handles column flip via CSS Grid.
@@ -7129,7 +7129,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
 /* The heading an in-document anchor just landed on. Transient: editor-links
    removes the class after 1.6s, so this must not be relied on as state. */
-.ql-editor .anchor-target-flash {
+.ql-editor .anchor-target-flash,
+.code-pane-rendered .anchor-target-flash {
     animation: anchor-target-flash 1.6s ease-out;
     border-radius: var(--radius-sm);
 }
@@ -7138,7 +7139,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
-    .ql-editor .anchor-target-flash { animation: none; outline: 2px solid var(--color-primary); }
+    .ql-editor .anchor-target-flash,
+    .code-pane-rendered .anchor-target-flash { animation: none; outline: 2px solid var(--color-primary); }
 }
 
 /* ── Focus reader (plans/focus-reader.md §6) ───────────────────────────────
@@ -8098,6 +8100,57 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     white-space: pre; tab-size: 4;
 }
 .code-pane-source code.hljs { display: block; padding: 0; background: transparent; }
+
+/* A repo Markdown file rendered as a document (plans/markdown-rendered-code-pane.md
+   §2.5). Prose wraps and reads at the page's text size; a wide table scrolls in
+   its own box so the page never scrolls sideways. Fences keep the source view's
+   dark ground, because the token palette above is chosen for it. */
+.code-pane-rendered {
+    flex: 1; min-height: 0; overflow: auto; padding: 12px 20px 32px;
+    font-size: 15px; line-height: 1.6; color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+}
+.code-pane-rendered:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.code-pane-rendered > :first-child { margin-top: 0; }
+.code-pane-rendered :is(h1, h2, h3, h4, h5, h6) { margin: 1.4em 0 0.5em; line-height: 1.3; }
+.code-pane-rendered :is(h1, h2) { padding-bottom: 0.3em; border-bottom: 1px solid var(--color-border); }
+.code-pane-rendered h1 { font-size: 1.8em; }
+.code-pane-rendered h2 { font-size: 1.45em; }
+.code-pane-rendered h3 { font-size: 1.2em; }
+.code-pane-rendered :is(p, ul, ol, blockquote, table, pre) { margin: 0 0 1em; }
+.code-pane-rendered :is(ul, ol) { padding-left: 1.6em; }
+.code-pane-rendered li + li { margin-top: 0.25em; }
+.code-pane-rendered a { color: var(--color-primary-text); }
+.code-pane-rendered blockquote {
+    padding: 0 1em; color: var(--color-text-secondary);
+    border-left: 3px solid var(--color-border);
+}
+.code-pane-rendered hr { border: none; border-top: 1px solid var(--color-border); margin: 1.5em 0; }
+.code-pane-rendered :not(pre) > code {
+    padding: 0.1em 0.35em; border-radius: var(--radius-sm);
+    background: var(--color-bg-subtle); font-size: 0.88em;
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+}
+.code-pane-rendered pre {
+    overflow-x: auto; padding: 10px 12px; border-radius: var(--radius-sm);
+    background: #23241f; color: #f8f8f2;
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: var(--code-block-font-size, 13px); line-height: 1.5;
+    white-space: pre; tab-size: 4; overflow-wrap: normal;
+}
+.code-pane-rendered pre code.hljs { display: block; padding: 0; background: transparent; }
+/* `display: block` makes the table its own scroll box; the rows keep table
+   layout inside it. */
+.code-pane-rendered table {
+    display: block; max-width: 100%; width: max-content; overflow-x: auto;
+    border-collapse: collapse; font-size: 14px; overflow-wrap: normal;
+}
+.code-pane-rendered :is(th, td) {
+    padding: 6px 12px; border: 1px solid var(--color-border);
+    text-align: left; vertical-align: top;
+}
+.code-pane-rendered th { background: var(--color-bg-subtle); font-weight: 600; }
+.code-pane-rendered sup { line-height: 0; }
 
 /* Repository node: the Update control. */
 .repo-update-bar {

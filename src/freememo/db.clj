@@ -9600,6 +9600,48 @@
      topic-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn get-repo-file-origin
+  "Where `user-id`'s repo file `topic-id` came from, for building links out of it
+   (plans/markdown-rendered-code-pane.md §1.5).
+   Post: {:commit-id :commit-sha :repo-url :forge}, or nil when the topic is not
+         the user's or has no commit and repository ancestor."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["WITH RECURSIVE up AS (
+        SELECT id, parent_id, kind, commit_sha, repo_url
+          FROM topics WHERE id = ? AND user_id = ?
+        UNION ALL
+        SELECT t.id, t.parent_id, t.kind, t.commit_sha, t.repo_url
+          FROM topics t JOIN up ON t.id = up.parent_id)
+      SELECT c.id AS commit_id, c.commit_sha, r.repo_url, rs.forge
+        FROM up c
+        JOIN up r ON r.id = c.parent_id AND r.kind = 'repo'
+        JOIN repo_selections rs ON rs.topic_id = r.id
+       WHERE c.kind = 'commit'"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn repo-topic-ids-by-path
+  "The live topics under commit node `commit-id` whose `repo_path` is in `paths`.
+   Post: {repo-path topic-id}, holding only the paths that resolve. One
+         statement with one array parameter, whatever the size of `paths`."
+  [commit-id paths]
+  (if (empty? paths)
+    {}
+    (into {}
+      (map (juxt :repo_path :id))
+      (jdbc/execute! ds
+        ["WITH RECURSIVE sub AS (
+            SELECT id FROM topics WHERE id = ?
+            UNION ALL
+            SELECT t.id FROM topics t JOIN sub ON t.parent_id = sub.id)
+          SELECT t.id, t.repo_path
+            FROM topics t JOIN sub ON sub.id = t.id
+           WHERE t.repo_path = ANY(?) AND t.kind IN ('code', 'dir')
+             AND t.staged_delete_id IS NULL"
+         commit-id (into-array String (distinct paths))]
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn topic-code-exists?
   "Post: true when `topic-id` has stored source, i.e. is not an empty leaf."
   [topic-id]

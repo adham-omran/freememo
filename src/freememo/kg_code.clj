@@ -24,6 +24,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [freememo.archive :as archive]
+   [freememo.code-language-html :refer [source->code-block-html]]
    [freememo.db :as db]
    [freememo.user-state :as us]
    [freememo.commands :as commands]
@@ -163,29 +164,6 @@
 ;; ---------------------------------------------------------------------------
 ;; Topic tree
 ;; ---------------------------------------------------------------------------
-
-(defn- html-escape [s]
-  (-> (str s)
-    (str/replace "&" "&amp;")
-    (str/replace "<" "&lt;")
-    (str/replace ">" "&gt;")))
-
-(defn source->code-block-html
-  "Source string → Quill code-block HTML: one <div class=\"ql-code-block\"
-   data-language=lang> per source line, wrapped in a .ql-code-block-container.
-   Matches quill_field's div.ql-code-block clipboard matcher, so stored source
-   round-trips in the editor; html-cleaner's container carve-out preserves the
-   data-language attribute.
-   Pre:  lang matches ^[A-Za-z0-9_-]+$. Post: HTML string; blank lines
-         preserved (split limit -1)."
-  [source lang]
-  (str "<div class=\"ql-code-block-container\" spellcheck=\"false\">"
-    (str/join
-      (map (fn [line]
-             (str "<div class=\"ql-code-block\" data-language=\"" lang "\">"
-               (html-escape line) "</div>"))
-        (str/split (str source) #"\n" -1)))
-    "</div>"))
 
 (def ^:private clojure-ext-re #"(?i)\.clj[cs]?$")
 

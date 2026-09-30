@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
+   [freememo.code-pane :as code-pane]
    [freememo.rich-text-editor :as editor]
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
@@ -44,23 +45,32 @@
                            (fn [_]
                              (let [click-id (.toString (js/Date.now))]
                                (log/log-debug (str "[EXTRACT-CLICK " click-id "] handler fired"))
-                               (when-let [{:keys [html index length]} (editor/get-selection-html!)]
-                                 (log/log-debug (str "[EXTRACT-CLICK " click-id "] selection captured len=" (count html)))
-                                 (when (seq html)
-                                   (editor/highlight-range! index length)
-                                   (reset! !error nil)
-                                   (log/log-debug (str "[EXTRACT-CLICK " click-id "] returning html"))
-                                   html))))
+                               ;; The code pane's rendered Markdown wins over the
+                               ;; notes, as it does for Generate. Its source is
+                               ;; read-only, so nothing marks the span.
+                               (if-let [html (code-pane/rendered-selection-html)]
+                                 (do (reset! !error nil)
+                                     {:html html :rendered-markdown? true})
+                                 (when-let [{:keys [html index length]} (editor/get-selection-html!)]
+                                   (log/log-debug (str "[EXTRACT-CLICK " click-id "] selection captured len=" (count html)))
+                                   (when (seq html)
+                                     (editor/highlight-range! index length)
+                                     (reset! !error nil)
+                                     (log/log-debug (str "[EXTRACT-CLICK " click-id "] returning html"))
+                                     {:html html :rendered-markdown? false})))))
                            nil)
               [t _] (e/Token click-html)]
           (when t
-            (log/log-debug (str "[EXTRACT-WHEN-SOME] token activated, html-len=" (count click-html)))
-            (let [html click-html
+            (log/log-debug (str "[EXTRACT-WHEN-SOME] token activated, html-len=" (count (:html click-html))))
+            (let [html (:html click-html)
+                  rendered-markdown? (:rendered-markdown? click-html)
                   title (let [raw (str/replace (or html "") #"<[^>]+>" "")]
                           (if (str/blank? raw) "Extract" (subs raw 0 (min 80 (count raw)))))
                   result (e/server
                            (e/Offload
-                             #(helpers/create-extract-topic-safe! topic-id user-id html title)))]
+                             #(if rendered-markdown?
+                                (helpers/create-rendered-markdown-extract! topic-id user-id html title)
+                                (helpers/create-extract-topic-safe! topic-id user-id html title))))]
               (case result
                 (do (log/log-debug (str "[EXTRACT-RESULT] result=" (pr-str result)))
                   (if (:success result)

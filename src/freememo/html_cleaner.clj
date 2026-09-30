@@ -262,6 +262,11 @@
                      (.removeAttributes "th" (into-array String ["colspan" "rowspan"]))
                      (.addAttributes "tr" (into-array String ["data-row"]))
                      (.addAttributes "div" (into-array String ["data-language"]))
+                     ;; A fenced block's language in a rendered repo Markdown
+                     ;; file, where the fence is a `pre` and not a Quill
+                     ;; container. `freememo.repo-markdown` moves it off the
+                     ;; `code` class this safelist strips.
+                     (.addAttributes "pre" (into-array String ["data-language"]))
                      (.addAttributes "li" (into-array String ["data-list"]))
                      ;; `tel` joins the set so a phone link reaches the OS
                      ;; handler; without it Jsoup drops the href and leaves an

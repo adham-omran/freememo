@@ -250,6 +250,15 @@
       (is (str/includes? out "hljs-title function_"))
       (is (str/includes? out "data-language=\"clojure\"")))))
 
+(deftest a-fence-language-survives-on-pre
+  ;; `freememo.repo-markdown` moves a fence's `language-x` class to
+  ;; `data-language` on the `pre`, because the class is stripped.
+  (is (str/includes? (cleaner/clean-html "<pre data-language=\"zig\"><code>x</code></pre>")
+        "data-language=\"zig\""))
+  (is (not (str/includes? (cleaner/clean-html "<pre data-language=\"a b\"><code>x</code></pre>")
+             "data-language"))
+    "a value that is not an identifier is dropped"))
+
 (deftest format-classes-land-on-their-own-element
   (testing "a surviving token is a real class, not a substring in some attribute"
     ;; The fixture assertions above are substring matches, which would also pass

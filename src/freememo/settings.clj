@@ -699,6 +699,27 @@
       (tel/error! {:id ::save-focus-reader} e)
       {:success false})))
 
+;; Each repo Markdown file stores how the code pane shows it: "rendered" or
+;; "source" (plans/markdown-rendered-code-pane.md §3). Unset reads "rendered".
+(def code-views #{"rendered" "source"})
+(def default-code-view "rendered")
+
+(defn get-code-view [user-id topic-id]
+  (try
+    (let [v (db/get-setting user-id (str "code_view_" topic-id))]
+      (if (contains? code-views v) v default-code-view))
+    (catch Exception _ default-code-view)))
+
+(defn save-code-view [user-id topic-id view]
+  (if-not (contains? code-views view)
+    {:success false :error (str "Unknown code view: " view)}
+    (try
+      (db/set-setting user-id (str "code_view_" topic-id) view)
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-code-view} e)
+        {:success false :error "Failed to save the view"}))))
+
 ;; Per-PDF quick-text-extraction engine: "client" (PDF.js) | "remote" (PDFBox).
 ;; nil = unset → Copy-text runs both and shows the compare modal.
 (defn get-extract-style [user-id doc-id]

@@ -170,6 +170,21 @@
           (if (= :display kind) (str "\\[" body "\\]") (str "\\(" body "\\)")))))
     html regions))
 
+(defn render-with-lifted-math
+  "Run `render` over `md` with every math region lifted out, then put the
+   regions back. See `markdown-with-math->html` for why the lift exists.
+
+   pre : `md` is a Markdown string, or nil. `render` takes Markdown and returns
+         HTML, or nil. It must carry a letters-and-digits token through as text.
+   post: nil/blank in → nil out; otherwise `render`'s output with each math
+         region restored as `\\(…\\)` or `\\[…\\]`, HTML-escaped."
+  [md render]
+  (when (seq md)
+    (let [unwrapped (unwrap-non-math-dollars md)
+          prefix (sentinel-prefix unwrapped)
+          [protected regions] (extract-math unwrapped prefix)]
+      (some-> (render protected) (restore-math regions prefix)))))
+
 (defn markdown-with-math->html
   "Render Markdown to HTML, carrying every math region through verbatim.
 
@@ -196,11 +211,7 @@
          of `&`, `<`, `>`.
    inv : one math region out per math region in."
   [md]
-  (when (seq md)
-    (let [unwrapped (unwrap-non-math-dollars md)
-          prefix (sentinel-prefix unwrapped)
-          [protected regions] (extract-math unwrapped prefix)]
-      (some-> (parse-markdown protected) (restore-math regions prefix)))))
+  (render-with-lifted-math md parse-markdown))
 
 (defn extract-frontmatter-title
   "Extract title from YAML frontmatter block if present. Returns string or nil."

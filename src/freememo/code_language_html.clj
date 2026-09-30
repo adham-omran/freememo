@@ -23,7 +23,8 @@
    `clean-html` keeps `data-language` on `div` and validates it against
    `^[a-zA-Z0-9_-]+$` (`html_cleaner.clj`), so every key in
    `freememo.code-languages` survives a later sanitize unchanged."
-  (:require [freememo.code-languages :as langs])
+  (:require [clojure.string :as str]
+            [freememo.code-languages :as langs])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document$OutputSettings]))
 
@@ -38,6 +39,29 @@
   (let [doc (Jsoup/parseBodyFragment html)]
     (.prettyPrint (.outputSettings doc) false)
     doc))
+
+(defn- html-escape [s]
+  (-> (str s)
+    (str/replace "&" "&amp;")
+    (str/replace "<" "&lt;")
+    (str/replace ">" "&gt;")))
+
+(defn source->code-block-html
+  "Source string → Quill code-block HTML: one <div class=\"ql-code-block\"
+   data-language=lang> per source line, wrapped in a .ql-code-block-container.
+   Matches quill_field's div.ql-code-block clipboard matcher, so stored source
+   round-trips in the editor; html-cleaner's container carve-out preserves the
+   data-language attribute.
+   Pre:  lang matches ^[A-Za-z0-9_-]+$. Post: HTML string; blank lines
+         preserved (split limit -1)."
+  [source lang]
+  (str "<div class=\"ql-code-block-container\" spellcheck=\"false\">"
+    (str/join
+      (map (fn [line]
+             (str "<div class=\"ql-code-block\" data-language=\"" lang "\">"
+               (html-escape line) "</div>"))
+        (str/split (str source) #"\n" -1)))
+    "</div>"))
 
 (defn code-block-count
   "How many code blocks `html` holds.

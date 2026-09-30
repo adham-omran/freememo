@@ -21,6 +21,7 @@
            com.vladsch.flexmark/flexmark-ext-tables {:mvn/version "0.64.8"}
            com.vladsch.flexmark/flexmark-ext-gfm-strikethrough {:mvn/version "0.64.8"}
            com.vladsch.flexmark/flexmark-ext-gfm-tasklist {:mvn/version "0.64.8"}
+           com.vladsch.flexmark/flexmark-ext-footnotes {:mvn/version "0.64.8"}
            com.maxmind.db/maxmind-db {:mvn/version "3.1.1"}
            org.apache.commons/commons-compress {:mvn/version "1.27.1"}
            org.tukaani/xz {:mvn/version "1.10"}}

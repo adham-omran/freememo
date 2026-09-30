@@ -294,7 +294,10 @@
    ;; translation as every other per-topic key. The file id itself travels
    ;; unchanged and is harmless on the target: the app holds no `drive.file`
    ;; grant for it there, so a sync asks the user to pick the file again.
-   "boox_file_"])
+   "boox_file_"
+   ;; `code_view_<code topic id>`: rendered or source, for one repo Markdown
+   ;; file (plans/markdown-rendered-code-pane.md §3).
+   "code_view_"])
 
 ;; ── Media URL rewriting (§5.4.7) ───────────────────────────────────
 

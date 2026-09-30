@@ -12,6 +12,7 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.page-merge :as page-merge])
+   #?(:clj [freememo.repo-markdown :as repo-md])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
@@ -162,6 +163,18 @@
               (catch Exception e
                 (log/log-error (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-FAILED " (.getMessage e)))
                 {:success false :error (.getMessage e)})))
+     :cljs nil))
+
+(defn create-rendered-markdown-extract!
+  "`create-extract-topic-safe!` for a selection in the code pane's rendered
+   Markdown view (plans/markdown-rendered-code-pane.md §4.2).
+   Pre : `html` is that selection, from `code-pane/rendered-selection-html`.
+   Post: as `create-extract-topic-safe!`. The extract holds the selection with
+         its tables lowered and its fences as Quill code blocks, so the first
+         edit in Quill does not flatten it."
+  [parent-id user-id html title]
+  #?(:clj (create-extract-topic-safe! parent-id user-id
+            (repo-md/selection->extract-html html) title)
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------
