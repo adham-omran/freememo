@@ -21,12 +21,14 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.forge-kinds :as kinds]
    [freememo.modal-shell :as modal-shell]
    [freememo.navigation :as nav]
    [freememo.repo-tree :as tree]
+   [freememo.scroll :refer [Scroll-window]]
    [freememo.typeahead :as typeahead]
+   [freememo.util :as util]
    #?(:clj [freememo.forge :as forge])
    #?(:clj [freememo.forge-tokens :as tokens])
    #?(:clj [freememo.repo-import :as repo-import])))
@@ -182,12 +184,12 @@
    click answers with no round trip."
   [i row decisions !decisions]
   (e/client
-    (let [{:keys [path name depth file-count]} row]
+    (let [{:keys [path name depth file-count match?]} row]
       (dom/tr
         (dom/props {:style {:--order i}})
         (dom/td
           (dom/label
-            (dom/props {:class "forge-picker__dir"
+            (dom/props {:class (if match? "forge-picker__dir" "forge-picker__dir forge-picker__dir--context")
                         :style {:padding-left (str (+ 8 (* 16 depth)) "px")}})
             (dom/input
               (dom/props {:type "checkbox" :checked (tree/dir-selected? decisions path)})
@@ -215,8 +217,18 @@
           picked (e/server (e/Offload #(staged-tree* user-id stage-id)))
           commit-tree (e/server (:tree picked))
           rows (e/server (tree/picker-rows commit-tree))
-          row-count (e/server (count rows))
+          ;; Searches are debounced client atoms and run on the server, so a
+          ;; keystroke sends one string and the rows never cross whole.
+          !dir-query (atom "")
+          dir-query (e/watch !dir-query)
+          !dir-query-timer (atom nil)
+          shown-rows (e/server (tree/filter-picker-rows rows dir-query))
+          row-count (e/server (count shown-rows))
           extension-counts (e/server (tree/extension-counts commit-tree))
+          !ext-query (atom "")
+          ext-query (e/watch !ext-query)
+          !ext-query-timer (atom nil)
+          shown-extensions (e/server (tree/filter-extension-counts extension-counts ext-query))
           !decisions (atom {})
           decisions (e/watch !decisions)
           !extensions (atom #{})
@@ -234,43 +246,64 @@
         (dom/div
           (dom/props {:class "forge-picker__heading"})
           (dom/span (dom/text "Directories"))
-          (dom/button
-            (dom/props {:type "button" :class "forge-import__link"})
-            (dom/text "All")
-            (dom/On "click" (fn [_] (reset! !decisions {"" true})) nil))
-          (dom/button
-            (dom/props {:type "button" :class "forge-import__link"})
-            (dom/text "None")
-            (dom/On "click" (fn [_] (reset! !decisions {})) nil)))
+          ;; With no search this is [""], so All and None write the root as
+          ;; they always did; with one, they write the matches and their subtrees.
+          (let [outermost (e/server (tree/outermost-matches shown-rows))]
+            (dom/button
+              (dom/props {:type "button" :class "forge-import__link"})
+              (dom/text "All")
+              (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost true)) nil))
+            (dom/button
+              (dom/props {:type "button" :class "forge-import__link"})
+              (dom/text "None")
+              (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost false)) nil))))
+        (dom/input
+          (dom/props {:type "text" :class "input forge-picker__search"
+                      :placeholder "Search directories…" :aria-label "Search directories"})
+          (dom/On "input" (fn [e] (util/debounce! !dir-query-timer !dir-query (-> e .-target .-value) 300)) nil))
         (dom/div
           (dom/props {:class "tape-scroll forge-picker__dirs"})
-          (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
+          (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                 {:overquery-factor 2 :reset-key dir-query})]
             (dom/props {:style {:--count row-count :--grid-cols "1fr"
                                 :--row-height (str row-height "px")}})
             (dom/table
               (e/for [i (Tape offset limit)]
-                (let [row (e/server (nth rows i nil))]
+                (let [row (e/server (nth shown-rows i nil))]
                   (when row
-                    (DirectoryRow i row decisions !decisions)))))))
+                    (DirectoryRow i row decisions !decisions)))))
+            ;; A sibling overlay, never a branch that unmounts the table
+            ;; (CLAUDE.md, "Never unmount a virtual-scroll table").
+            (when (zero? row-count)
+              (dom/div (dom/props {:class "tape-table-empty"})
+                (dom/text "No directories match.")))))
 
         (dom/div
           (dom/props {:class "forge-picker__heading"})
           (dom/span (dom/text "File extensions"))
-          (let [all-extensions (e/server (mapv first extension-counts))]
+          ;; All and None act on the extensions shown, which with no search
+          ;; is every extension.
+          (let [shown (e/server (mapv first shown-extensions))]
             (dom/button
               (dom/props {:type "button" :class "forge-import__link"})
               (dom/text "All")
-              (dom/On "click" (fn [_] (reset! !extensions (set all-extensions))) nil)))
-          (dom/button
-            (dom/props {:type "button" :class "forge-import__link"})
-            (dom/text "None")
-            (dom/On "click" (fn [_] (reset! !extensions #{})) nil)))
+              (dom/On "click" (fn [_] (swap! !extensions into shown)) nil))
+            (dom/button
+              (dom/props {:type "button" :class "forge-import__link"})
+              (dom/text "None")
+              (dom/On "click" (fn [_] (swap! !extensions #(reduce disj % shown))) nil))))
         (dom/p
           (dom/props {:class "hint"})
           (dom/text "A file with an unselected extension is still a topic, with no source. You can mark it done later."))
+        (dom/input
+          (dom/props {:type "text" :class "input forge-picker__search"
+                      :placeholder "Search extensions…" :aria-label "Search extensions"})
+          (dom/On "input" (fn [e] (util/debounce! !ext-query-timer !ext-query (-> e .-target .-value) 300)) nil))
         (dom/div
           (dom/props {:class "forge-picker__extensions"})
-          (e/for [[ext n] (e/diff-by first extension-counts)]
+          (when (e/server (empty? shown-extensions))
+            (dom/span (dom/props {:class "hint"}) (dom/text "No extensions match.")))
+          (e/for [[ext n] (e/diff-by first shown-extensions)]
             (dom/label
               (dom/props {:class "forge-picker__extension"})
               (dom/input
@@ -278,7 +311,7 @@
                 (dom/On "change"
                   (fn [e] (swap! !extensions (if (-> e .-target .-checked) conj disj) ext))
                   nil))
-              (dom/span (dom/props {:dir "ltr"}) (dom/text (if (= "" ext) "no extension" ext)))
+              (dom/span (dom/props {:dir "ltr"}) (dom/text (tree/extension-label ext)))
               (dom/span (dom/props {:class "forge-picker__count"}) (dom/text (str n))))))
 
         (dom/p

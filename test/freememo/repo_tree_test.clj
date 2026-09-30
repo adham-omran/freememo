@@ -103,6 +103,61 @@
   (is (= [[".clj" 3] [".js" 2] [".md" 2] ["" 1] [".png" 1]]
         (tree/extension-counts commit-tree))))
 
+(deftest set-dir-agrees-with-toggle-dir
+  (doseq [decisions [{} {"src" true} {"" true "src/vendor" false}]
+          dir (:dirs commit-tree)]
+    (is (= (tree/toggle-dir decisions dir)
+          (tree/set-dir decisions dir (not (tree/dir-selected? decisions dir))))
+      (str decisions " " dir))))
+
+(deftest set-dirs-ignores-order
+  (let [dirs ["src" "src/vendor/deep" "docs/img"]]
+    (doseq [decisions [{} {"" true} {"src/vendor" false}]
+            target [true false]]
+      (is (= (tree/set-dirs decisions dirs target)
+            (tree/set-dirs decisions (reverse dirs) target))
+        (str decisions " " target)))))
+
+(deftest a-directory-search-keeps-the-ancestors-of-a-match
+  (let [rows (tree/picker-rows commit-tree)]
+    (testing "a match deep in the tree brings its ancestors, marked as context"
+      (is (= [["" false] ["src" false] ["src/vendor" false] ["src/vendor/deep" true]]
+            (mapv (juxt :path :match?) (tree/filter-picker-rows rows "DEEP")))))
+    (testing "the name matches, not the path"
+      (is (= ["" "src" "src/vendor"]
+            (mapv :path (tree/filter-picker-rows rows "vendor"))))
+      (is (= ["" "src" "src-old"]
+            (mapv :path (tree/filter-picker-rows rows "src")))
+        "src/vendor holds \"src\" in its path, not in its name"))
+    (testing "a blank query shows every row as a match"
+      (is (= (mapv #(assoc % :match? true) rows) (tree/filter-picker-rows rows "  "))))
+    (testing "no match shows nothing"
+      (is (= [] (tree/filter-picker-rows rows "nothing-here"))))))
+
+(deftest all-writes-only-the-outermost-matches
+  (let [rows (tree/picker-rows commit-tree)
+        outermost #(tree/outermost-matches (tree/filter-picker-rows rows %))]
+    (testing "a blank query writes the root, which is today's All and None"
+      (is (= [""] (outermost "")))
+      (is (= {"" true} (tree/set-dirs {} (outermost "") true)))
+      (is (= {} (tree/set-dirs {"src" true} (outermost "") false))))
+    (testing "a match inside another match is covered by it"
+      ;; "vendor" and "deep" both match "e"; deep sits under vendor.
+      (is (= ["src/vendor"] (outermost "e"))))
+    (testing "All selects the matches and their subtrees, and nothing else"
+      (let [plan (tree/import-plan commit-tree (tree/set-dirs {} (outermost "vendor") true))]
+        (is (= ["src/vendor" "src/vendor/deep"] (:dirs plan)))))))
+
+(deftest an-extension-search-matches-the-label-shown
+  (let [counts (tree/extension-counts commit-tree)]
+    (is (= [[".js" 2]] (tree/filter-extension-counts counts ".J")))
+    (is (= [["" 1]] (tree/filter-extension-counts counts "no ext"))
+      "the empty extension is found by its label")
+    (is (= [[".clj" 3] [".png" 1]]
+          (filterv (fn [[e _]] (#{".clj" ".png"} e)) (tree/filter-extension-counts counts "")))
+      "a blank query keeps every pair")
+    (is (= [] (tree/filter-extension-counts counts ".rs")))))
+
 (deftest languages-come-from-the-extension
   (is (= "clojure" (tree/language-for "src/core.cljc")))
   (is (= "zig" (tree/language-for "build.zig")))

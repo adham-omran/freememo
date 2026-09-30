@@ -8107,6 +8107,9 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .forge-picker__name { overflow: hidden; text-overflow: ellipsis; }
+/* An ancestor a directory search keeps for context, not a match. */
+.forge-picker__dir--context { color: var(--color-text-secondary); }
+.forge-picker__search { width: 100%; }
 .forge-picker__count { margin-left: auto; padding-right: 8px; font-size: 12px; color: var(--color-text-label); }
 .forge-picker__extensions {
     display: flex; flex-wrap: wrap; gap: 6px 12px; max-height: 140px; overflow-y: auto;
