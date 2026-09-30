@@ -48,7 +48,7 @@
    and a card two hundred pixels away that opens a file dialog was competing with
    the control the whole page is built around. The `:upload` source id survives
    without a card: the intake area's single-file route and the palette's
-   `:import-upload` command both open that modal directly."
+   `:import-upload` and `:import-file` commands all open that modal directly."
   [{:id :link      :group :primary   :key "1" :icon :link      :title "Link"
     :desc "Fetch a web page or a Wikipedia article"}
    {:id :audio     :group :primary   :key "2" :icon :mic       :title "Audio"
@@ -126,6 +126,8 @@
 #?(:cljs
    (do (bus/register-handler! :import-link (open-import! :link))
        (bus/register-handler! :import-upload (open-import! :upload))
+       (bus/register-handler! :import-file (open-import! :upload))
+       (bus/register-handler! :import-code (open-import! :code))
        (bus/register-handler! :import-audio (open-import! :audio))
        (bus/register-handler! :import-video (open-import! :video))
        (bus/register-handler! :import-score (open-import! :score))

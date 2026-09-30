@@ -358,6 +358,10 @@
     ;;   matching modal) —
     {:import-link    {:label "Import from link…" :class :nav}
      :import-upload  {:label "Upload file…" :class :nav}
+     ;; Same modal as :import-upload. The palette matches on :label only, so a
+     ;; user who types "import" finds file upload only through this entry.
+     :import-file    {:label "Import document…" :class :nav}
+     :import-code    {:label "Import code…" :class :nav}
      :import-audio   {:label "Import audio…" :class :nav}
      :import-video   {:label "Import video…" :class :nav}
      :import-score   {:label "Import score…" :class :nav}
