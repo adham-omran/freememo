@@ -97,6 +97,16 @@
 ;; Writes
 ;; ---------------------------------------------------------------------------
 
+(defn- open-row-id
+  "Post: the id of the in-flight row for (`user-id`, `type`, `work-key`), or nil."
+  [user-id type work-key]
+  (:id (jdbc/execute-one! db/ds
+         ["SELECT id FROM activities
+            WHERE user_id = ? AND type = ? AND work_key = ?
+              AND terminated_at IS NULL"
+          user-id (name type) work-key]
+         {:builder-fn rs/as-unqualified-maps})))
+
 (defn start!
   "Open an activity, or return the id of the one already in flight.
 
@@ -144,12 +154,7 @@
         id (or (:id inserted)
              ;; Lost the race, or this work was already in flight. Either way the
              ;; caller wants the live row's id, not a failure.
-             (:id (jdbc/execute-one! db/ds
-                    ["SELECT id FROM activities
-                      WHERE user_id = ? AND type = ? AND work_key = ?
-                        AND terminated_at IS NULL"
-                     user-id type work-key]
-                    {:builder-fn rs/as-unqualified-maps})))]
+             (open-row-id user-id type work-key))]
     (when (:id inserted)
       (tel/log! {:level :info :id ::activity-started
                  :data {:user-id user-id :type type :work-key work-key :activity-id id}}
@@ -440,6 +445,24 @@
               :cancelled)
           :not-cancellable)))
     :gone))
+
+(defn cancel-work!
+  "Cancel pulled-tier work from its owner's own UI, where the caller knows the
+   work key and not the row.
+
+   A mark alone is not enough: the reporter closes a row whose owner forgot the
+   work as 'success', so the row must be terminated here, as `cancel!` does.
+
+   Pre : `type` is a registered pulled-tier type.
+   Post: `cancel!`'s result when a row is open. With no row yet, the owner's
+         canceller runs and :cancelled is returned — its `:cancelled-key` keeps
+         discovery from opening a row. :not-cancellable when neither exists."
+  [user-id type work-key]
+  (if-some [activity-id (open-row-id user-id type work-key)]
+    (cancel! user-id activity-id)
+    (if-some [cancel-fn (registry/owner-cancel-fn type user-id work-key)]
+      (do (cancel-fn) :cancelled)
+      :not-cancellable)))
 
 ;; ---------------------------------------------------------------------------
 ;; Sweeps. Registered into the hourly sweep at namespace load, the same

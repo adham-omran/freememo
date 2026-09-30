@@ -20,9 +20,14 @@
 
    Activity (§4.3 3.8): `:importing-repos` maps a work key to its phase while
    work runs, and `:repo-import-errors` keeps the failure the reporter reads
-   when it closes the row."
+   when it closes the row.
+
+   Cancel (plans/repo-import-progress.md): cooperative. `:repo-import-cancelled`
+   marks a work key; the archive read checks it per buffer, and the insert
+   transaction per batch. Neither can be stopped from outside."
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
+            [freememo.activity :as activity]
             [freememo.archive :as archive]
             [freememo.commands :as commands]
             [freememo.db :as db]
@@ -32,6 +37,7 @@
             [freememo.input-check :as input]
             [freememo.priority :as priority]
             [freememo.repo-tree :as tree]
+            [freememo.toasts :as toasts]
             [freememo.user-state :as us]
             [taoensso.telemere :as tel])
   (:import [java.io File]
@@ -83,16 +89,36 @@
 (defn- set-phase! [user-id key phase]
   (swap! (us/get-atom user-id :importing-repos) assoc key phase))
 
+(defn- cancelled?
+  "Post: true when the user abandoned the run of `key`."
+  [user-id key]
+  (contains? @(us/get-atom user-id :repo-import-cancelled) key))
+
+(defn- throw-if-cancelled!
+  "Post: nil, or a throw when the run of `key` is abandoned. `run-as-activity`
+   turns the throw into the cancelled result."
+  [user-id key]
+  (when (cancelled? user-id key)
+    (throw (ex-info "Repository import cancelled" {:type ::cancelled}))))
+
 (defn- run-as-activity
   "Run `f` while `key` is published in `:importing-repos`.
 
-   Post: `f`'s value. A result carrying `:ok false`, or a throw, records its
+   Post: `f`'s value. A throw after the run was marked cancelled returns
+         {:ok false :cancelled? true} and records no error: the user chose it.
+         Otherwise a result carrying `:ok false`, or a throw, records its
          message in `:repo-import-errors` BEFORE membership drops, so the
          reporter closes the row as failed; any other result clears the entry.
-   Invariant: membership is removed on every path."
+   Invariant: membership, the canceller and the mark are removed on every path,
+         in that order, so a stale mark cannot cancel the next run of `key`."
   [user-id key phase f]
-  (let [errors (us/get-atom user-id :repo-import-errors)]
+  (let [errors (us/get-atom user-id :repo-import-errors)
+        cancellers (us/get-atom user-id :repo-import-cancellers)
+        marks (us/get-atom user-id :repo-import-cancelled)]
+    (swap! marks disj key)
     (set-phase! user-id key phase)
+    (swap! cancellers assoc key (fn [] (swap! marks conj key)))
+    ;; After the canceller: discovery reads cancellability when it opens the row.
     (us/work-started! user-id)
     (try
       (let [r (f)]
@@ -101,10 +127,15 @@
           (swap! errors dissoc key))
         r)
       (catch Throwable t
-        (swap! errors assoc key (or (.getMessage t) "Import failed"))
-        (throw t))
+        (if (cancelled? user-id key)
+          (do (swap! errors dissoc key)
+              {:ok false :cancelled? true})
+          (do (swap! errors assoc key (or (.getMessage t) "Import failed"))
+              (throw t))))
       (finally
-        (swap! (us/get-atom user-id :importing-repos) dissoc key)))))
+        (swap! (us/get-atom user-id :importing-repos) dissoc key)
+        (swap! cancellers dissoc key)
+        (swap! marks disj key)))))
 
 (defn- failure-message
   "Post: a message for the user. An unexpected throw is logged here, once."
@@ -146,7 +177,8 @@
          archive file is gone on every path (§4.3 3.7)."
   ^File [user-id key forge origin token path sha]
   (set-phase! user-id key "downloading")
-  (let [zip (forge/download-archive! forge origin token path sha)]
+  (let [zip (forge/download-archive! forge origin token path sha
+              #(cancelled? user-id key))]
     (try
       (set-phase! user-id key "extracting")
       (archive/extract-to-temp-dir! zip extract-limits)
@@ -213,8 +245,10 @@
    Post: {:ok true :topic-id commit-id :repo-id N :report {…}}, or
          {:ok false :error S} with nothing written — when a node cap refuses
          (§4.3 3.9, 3.9.1) or the sha is already a child of the repository.
-   Invariant: every row commits in one transaction."
-  [user-id ^File root source selection repo-id]
+   Invariant: every row commits in one transaction.
+   Invariant: `check-cancelled!` runs before the transaction and before each
+         source batch; when it throws, the transaction writes nothing."
+  [user-id ^File root source selection repo-id check-cancelled!]
   (let [{:keys [forge repo-url path ref sha]} source
         commit-tree (tree/tree (file-paths root))
         plan (tree/import-plan commit-tree (:dirs selection))
@@ -277,12 +311,14 @@
                                          :byte_size len :lang (tree/language-for p)})
                                     (do (swap! !report update :binary-files inc) nil)))))
                         (filter #(contains? extensions (tree/extension %)) (:files plan)))]
+        (check-cancelled!)
         (jdbc/with-transaction [tx db/ds]
           (if (and repo-id (db/find-commit-node tx repo-id sha))
             {:ok false :error (str "Commit " (subs sha 0 7) " is already imported.")}
             (do
               (db/insert-topic-rows! tx topic-rows)
               (doseq [batch (partition-by-bytes statement-source-bytes code-rows)]
+                (check-cancelled!)
                 (db/insert-topic-code-rows! tx batch))
               (when (nil? repo-id)
                 (db/insert-repo-selection! tx repo-id* forge ref selection))
@@ -317,6 +353,18 @@
       {:ok true :forge forge :origin origin :path (:path parsed)
        :ref (some-> ref str/trim not-empty)})))
 
+(defn form-work-key
+  "Post: the work key a download of `form` publishes under, or nil when the form
+   does not name a repository. The key encoding stays in this namespace."
+  [form]
+  (let [{:keys [ok origin path]} (read-import-form form)]
+    (when ok (work-key origin path))))
+
+(defn source-work-key
+  "Post: the work key of the import of a staged `source` ({:origin-url :path})."
+  [{:keys [origin-url path]}]
+  (work-key (forge/parse-origin origin-url) path))
+
 (defn stage-repository!
   "Phase one of an import: fetch the commit and hold its tree for the picker.
 
@@ -325,7 +373,8 @@
          {:ok false :error S}, which also carries :topic-id when the repository
          is already imported. On success an upload session owns the extracted
          tree, nothing is charged to quota, and no topic exists yet. On failure
-         nothing remains on disk or in upload_sessions.
+         nothing remains on disk or in upload_sessions. A cancelled download
+         returns {:ok false :cancelled? true} and leaves nothing either.
    A repository that is already imported is refused before any download: its
    selection cannot change (frame), and Update on its node is the path."
   [user-id form]
@@ -345,12 +394,17 @@
                       {:keys [sha ref]} (forge/resolve-commit forge origin token path ref)
                       dir (fetch-tree! user-id key forge origin token path sha)]
                   (try
+                    (throw-if-cancelled! user-id key)
                     (let [source {:forge forge :origin-url (forge/origin-url origin)
-                                  :repo-url repo-url :path path :ref ref :sha sha}]
-                      {:ok true
-                       :file-count (count (file-paths (archive-root dir)))
-                       :source source
-                       :stage-id (db/open-forge-stage! user-id path dir source)})
+                                  :repo-url repo-url :path path :ref ref :sha sha}
+                          file-count (count (file-paths (archive-root dir)))
+                          stage-id (db/open-forge-stage! user-id path dir source)]
+                      ;; A cancel that lands after the stage opened: no picker
+                      ;; will mount to release it.
+                      (when (cancelled? user-id key)
+                        (db/release-upload-session! user-id stage-id)
+                        (throw-if-cancelled! user-id key))
+                      {:ok true :file-count file-count :source source :stage-id stage-id})
                     (catch Throwable t
                       (archive/delete-dir! dir)
                       (throw t))))))
@@ -376,31 +430,129 @@
 
    Pre : `stage-id` came from `stage-repository!` for `user-id`; `selection` is
          {:dirs :extensions} from the picker.
-   Post: {:ok true :topic-id commit-id :report {…}} or {:ok false :error S}.
-         The stage is released on EVERY path. A failed import downloads again,
+   Post: {:ok true :topic-id commit-id :path S :report {…}},
+         {:ok false :cancelled? true} with nothing written, or
+         {:ok false :error S}. The stage is released on EVERY path. A failed import downloads again,
          which costs less than a session that holds a repository on disk for six
          hours."
   [user-id stage-id selection]
   (swap! !importing-stages conj stage-id)
   (try
     (if-let [{:keys [dir forge-source]} (db/get-forge-stage user-id stage-id)]
-      (let [{:keys [origin-url repo-url path]} forge-source]
+      (let [{:keys [repo-url path]} forge-source
+            key (source-work-key forge-source)]
         (try
-          (run-as-activity user-id (work-key (forge/parse-origin origin-url) path) "creating topics"
+          (run-as-activity user-id key "creating topics"
             (fn []
               (if (db/find-repo-node user-id repo-url)
                 {:ok false :error (str path " was imported while this picker was open.")}
                 (let [r (create-commit-subtree! user-id (archive-root dir) forge-source
-                          (normalize-selection selection) nil)]
+                          (normalize-selection selection) nil
+                          #(throw-if-cancelled! user-id key))]
                   (when (:ok r)
                     (commands/bump! user-id :import-document))
-                  r))))
+                  (assoc r :path path)))))
           (catch Throwable t
             {:ok false :error (failure-message t)})))
       {:ok false :error "This download expired. Start the import again."})
     (finally
       (db/release-upload-session! user-id stage-id)
       (swap! !importing-stages disj stage-id))))
+
+;; ── Background import ──────────────────────────────────────────────
+;; The picker waits on a run it does not own, so Close can unmount it while the
+;; import continues (plans/repo-import-progress.md §3).
+
+(def ^:private settled-run-ttl-ms
+  "How long a settled run stays readable for a late Close."
+  (* 60 60 1000))
+
+(defonce ^:private !import-runs
+  ;; stage id -> {:user-id :delivery promise :backgrounded? :result :settled-at}.
+  ;; The result and the Close mark are each written with `swap-vals!`, so
+  ;; whichever lands second sees the other and pushes the one toast.
+  (atom {}))
+
+(defn- push-result-toast!
+  "Post: one toast for `r`, or none for a cancelled run — the user chose it."
+  [user-id {:keys [ok cancelled? topic-id path report error]}]
+  (cond
+    cancelled? nil
+    ok (toasts/push! user-id
+         {:level :info
+          :message (str "Imported " path ": " (:topics-created report) " topics.")
+          :actions [{:label "Open" :nav [:viewer {:type :topic :topic-id topic-id}]}]})
+    :else (toasts/push! user-id {:level :error :message error})))
+
+(defn- settle-run!
+  "Record `r` for `stage-id`, hand it to the waiting picker, and toast it when
+   the picker already closed."
+  [stage-id r]
+  (let [[old _] (swap-vals! !import-runs update stage-id assoc
+                  :result r :settled-at (System/currentTimeMillis))
+        run (get old stage-id)]
+    (deliver (:delivery run) r)
+    (when (:backgrounded? run)
+      (push-result-toast! (:user-id run) r))))
+
+(defn- without-expired-runs [runs now]
+  (into {} (remove (fn [[_ {:keys [settled-at]}]]
+                     (and settled-at (> (- now settled-at) settled-run-ttl-ms))))
+    runs))
+
+(defn start-import!
+  "Run `import-staged!` for `stage-id` on a server thread, once.
+
+   Pre : as `import-staged!`.
+   Post: a promise of `import-staged!`'s result. A second call for the same
+         stage — an e/Offload restart — returns the same promise and starts
+         nothing. A stage another user's run holds delivers a refusal.
+   Invariant: the stage is held before this returns, so a picker that unmounts
+         at once cannot release the tree the run reads."
+  [user-id stage-id selection]
+  (let [fresh {:user-id user-id :delivery (promise)}
+        run (get (swap! !import-runs
+                   (fn [runs]
+                     (let [runs (without-expired-runs runs (System/currentTimeMillis))]
+                       (if (contains? runs stage-id) runs (assoc runs stage-id fresh)))))
+              stage-id)]
+    (cond
+      (not= user-id (:user-id run))
+      (doto (promise) (deliver {:ok false :error "This download expired. Start the import again."}))
+
+      (identical? run fresh)
+      (do (swap! !importing-stages conj stage-id)
+          (future
+            (settle-run! stage-id
+              (try (import-staged! user-id stage-id selection)
+                (catch Throwable t {:ok false :error (failure-message t)}))))
+          (:delivery run))
+
+      :else (:delivery run))))
+
+(defn background-import!
+  "The picker waiting on `stage-id`'s run closed.
+   Post: the run's result reaches the user as a toast exactly once — now if it
+         already settled, else when it settles. Nothing for a run `user-id`
+         does not own. Returns nil."
+  [user-id stage-id]
+  (let [[old _] (swap-vals! !import-runs
+                  (fn [runs]
+                    (if (= user-id (get-in runs [stage-id :user-id]))
+                      (assoc-in runs [stage-id :backgrounded?] true)
+                      runs)))
+        run (get old stage-id)]
+    (when (and (= user-id (:user-id run)) (not (:backgrounded? run)) (contains? run :result))
+      (push-result-toast! user-id (:result run)))
+    nil))
+
+(defn cancel-import!
+  "Abandon the running download or import published under `key`.
+   Post: `activity/cancel-work!`'s result. The run stops at its next check and
+         its Activity row reads cancelled."
+  [user-id key]
+  (when key
+    (activity/cancel-work! user-id "repo-import" key)))
 
 (defn cancel-stage!
   "Post: the stage and its directory are gone, unless `import-staged!` holds the
@@ -417,8 +569,8 @@
    Pre : `repo-id` is a `repo` topic `user-id` owns.
    Post: {:ok true :topic-id commit-id :sha S :report {…}} for a new commit;
          {:ok true :unchanged? true :topic-id commit-id :sha S} when that sha is
-         already a child (§4.6 6.3); or {:ok false :error S}. Nothing is written
-         on failure, and the extracted tree is gone on every path."
+         already a child (§4.6 6.3); {:ok false :cancelled? true}; or
+         {:ok false :error S}. Nothing is written on failure or cancel, and the extracted tree is gone on every path."
   [user-id repo-id]
   (if-let [{:keys [repo-url forge ref selection]} (db/get-repo-import user-id repo-id)]
     (let [{:keys [origin path]} (forge/parse-repository-input repo-url)
@@ -435,7 +587,7 @@
                     (set-phase! user-id key "creating topics")
                     (let [r (create-commit-subtree! user-id (archive-root dir)
                               {:forge forge :repo-url repo-url :path path :ref ref :sha sha}
-                              selection repo-id)]
+                              selection repo-id #(throw-if-cancelled! user-id key))]
                       (when (:ok r)
                         (commands/bump! user-id :import-document))
                       (assoc r :sha sha))

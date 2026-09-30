@@ -100,6 +100,11 @@
           ;; `host/owner/name` -> error, written before membership drops so the
           ;; reporter closes a failed run as failed. A later success clears it.
           :repo-import-errors (atom {})
+          ;; `host/owner/name` -> fn that marks the run cancelled. Neither the
+          ;; archive read nor the insert transaction can be interrupted from
+          ;; outside, so cancelling is the mark below, read by the run itself.
+          :repo-import-cancellers (atom {})
+          :repo-import-cancelled (atom #{})
           :toasts           (atom []))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;

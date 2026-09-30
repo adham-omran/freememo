@@ -15,7 +15,12 @@
    its frame ends — Cancel, Escape, a closed tab — unless the import holds it
    (`repo-import/cancel-stage!`), so an abandoned picker leaves nothing on disk
    (§4.3 3.2.3). A session nothing released is swept after six hours
-   (§4.3 3.2.4)."
+   (§4.3 3.2.4).
+
+   While a step runs, `!running` names it, and every exit goes through
+   `request-exit!` (plans/repo-import-progress.md §4). A running download has
+   one exit, which abandons it. A running import has two: Close, after which the
+   import continues and ends in a toast, and Cancel import, which rolls it back."
   (:require
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
@@ -31,7 +36,8 @@
    [freememo.util :as util]
    #?(:clj [freememo.forge :as forge])
    #?(:clj [freememo.forge-tokens :as tokens])
-   #?(:clj [freememo.repo-import :as repo-import])))
+   #?(:clj [freememo.repo-import :as repo-import])
+   #?(:clj [freememo.user-state :as us])))
 
 ;; ── Server wrappers ────────────────────────────────────────────────
 
@@ -41,8 +47,37 @@
 (defn staged-tree* [user-id stage-id]
   #?(:clj (repo-import/staged-tree user-id stage-id) :cljs nil))
 
-(defn import-staged!* [user-id stage-id selection]
-  #?(:clj (repo-import/import-staged! user-id stage-id selection) :cljs nil))
+(defn await-import!*
+  "Post: `import-staged!`'s result. The run belongs to the server, so cancelling
+   this wait — the picker closed — leaves the import running."
+  [user-id stage-id selection]
+  #?(:clj (deref (repo-import/start-import! user-id stage-id selection)) :cljs nil))
+
+(defn download-phase*
+  "Post: the phase of the download `form` started, or nil."
+  [phases form]
+  #?(:clj (get phases (repo-import/form-work-key form)) :cljs nil))
+
+(defn import-phase*
+  "Post: the phase of the import of the staged `source`, or nil."
+  [phases source]
+  #?(:clj (get phases (repo-import/source-work-key source)) :cljs nil))
+
+(defn exit-running-step!*
+  "Pre : `running` is the value of `!running` when the user asked to leave.
+   Post: a running download is abandoned; a running import is abandoned for
+         `exit` :cancel and backgrounded for :close. Returns :done."
+  [user-id running exit]
+  #?(:clj (do (case (:step running)
+                :download (repo-import/cancel-import! user-id
+                            (repo-import/form-work-key (:form running)))
+                :import (if (= :cancel exit)
+                          (repo-import/cancel-import! user-id
+                            (repo-import/source-work-key (:source running)))
+                          (repo-import/background-import! user-id (:stage-id running)))
+                nil)
+              :done)
+     :cljs nil))
 
 (defn cancel-stage!* [user-id stage-id]
   #?(:clj (repo-import/cancel-stage! user-id stage-id) :cljs nil))
@@ -70,6 +105,47 @@
                 []))
             (catch Exception _ []))
      :cljs []))
+
+;; ── Running steps ──────────────────────────────────────────────────
+
+(def ^:private phase-labels
+  "The phases `repo-import` publishes, as the modal words them."
+  {"resolving" "Finding the commit…"
+   "downloading" "Downloading the archive…"
+   "extracting" "Unpacking the archive…"
+   "creating topics" "Creating topics…"})
+
+(e/defn RunStatus
+  "A spinner, the phase, and one line on what the user may do meanwhile."
+  [phase hint]
+  (dom/div
+    (dom/props {:class "forge-import__status" :role "status"})
+    (dom/p
+      (dom/props {:class "forge-import__phase"})
+      (dom/span (dom/props {:class "spinner"}))
+      (dom/text (get phase-labels phase "Starting…")))
+    (dom/p (dom/props {:class "hint"}) (dom/text hint))))
+
+(e/defn MarkRunning
+  "Post: `!running` holds `running` for the life of the calling frame."
+  [!running running]
+  (e/client
+    (e/on-unmount #(reset! !running nil))
+    (reset! !running running)))
+
+(e/defn ExitRun
+  "Carry out the exit the user asked for while a step ran, then close.
+   The server call returns before `close!` runs, because closing unmounts the
+   frame that makes it."
+  [user-id !running exit close!]
+  (e/client
+    (let [[t ?error] (e/Token exit)]
+      (when t
+        (e/on-unmount close!)
+        (let [running (e/snapshot (e/watch !running))
+              kind (second exit)]
+          (case (e/server (e/Offload #(exit-running-step!* user-id running kind)))
+            (t)))))))
 
 ;; ── Form ───────────────────────────────────────────────────────────
 
@@ -102,10 +178,12 @@
   "The first stage: which repository, at which ref.
    Post: a successful download moves `!stage` to :picking with the stage result.
          A failure keeps what the user typed; Forms5 prints its message, and an
-         already-imported repository also gets an Open repository button."
-  [user-id !stage close! open-topic! use-zip!]
+         already-imported repository also gets an Open repository button.
+         While the download runs, its phase shows and Cancel abandons it."
+  [user-id !stage !running request-exit! open-topic! use-zip!]
   (e/client
-    (let [!forge (atom "github")
+    (let [running (e/watch !running)
+          !forge (atom "github")
           forge (e/watch !forge)
           !host (atom (kinds/default-host "github"))
           host (e/watch !host)
@@ -140,8 +218,10 @@
                             (forms/SubmitButton! :label "Download" :class "btn btn-primary")
                             (do (dom/button
                                   (dom/props {:type "button" :class "btn btn-secondary"})
-                                  (dom/text "Cancel")
-                                  (dom/On "click" (fn [_] (close!)) nil))
+                                  (dom/text (if (= :download (:step running))
+                                              "Cancel download"
+                                              "Cancel"))
+                                  (dom/On "click" (fn [_] (request-exit! :cancel)) nil))
                                 (e/amb))))))
                     :Parse (e/fn [fields _tempid]
                              [`StageRepository {:forge (e/watch !forge)
@@ -150,6 +230,25 @@
                                                 :ref (:ref fields)}])
                     :type :command
                     :show-buttons false)]
+      (e/for [[token [_ form]] (e/diff-by first (e/as-vec commits))]
+        ;; `form` is fixed per commit, so a keystroke while the download runs
+        ;; cannot restart it.
+        (let [phase (e/server (download-phase* (e/watch (us/get-atom user-id :importing-repos))
+                                form))
+              r (e/server (e/Offload #(stage-repository!* user-id form)))]
+          (MarkRunning !running {:step :download :form form})
+          (RunStatus phase "A large repository can take a few minutes.")
+          (case r
+            (cond
+              (:ok r)
+              (do (e/on-unmount #(reset! !stage {:stage :picking :staged r}))
+                  (token))
+
+              (:cancelled? r) (token)
+
+              :else
+              (case (reset! !failure r)
+                (token (:error r)))))))
       ;; The failure's MESSAGE is Forms5's to print: the token is spent with it,
       ;; and the form shows it in `p[data-role=errormessage]`. Only the action a
       ;; message cannot carry is rendered here.
@@ -163,17 +262,7 @@
       (dom/button
         (dom/props {:type "button" :class "forge-import__link"})
         (dom/text "Upload a .zip file instead")
-        (dom/On "click" (fn [_] (use-zip!)) nil))
-      (e/for [[token [_ form]] (e/diff-by first (e/as-vec commits))]
-        ;; `form` is fixed per commit, so a keystroke while the download runs
-        ;; cannot restart it.
-        (let [r (e/server (e/Offload #(stage-repository!* user-id form)))]
-          (case r
-            (if (:ok r)
-              (do (e/on-unmount #(reset! !stage {:stage :picking :staged r}))
-                  (token))
-              (case (reset! !failure r)
-                (token (:error r))))))))))
+        (dom/On "click" (fn [_] (use-zip!)) nil)))))
 
 ;; ── Picker ─────────────────────────────────────────────────────────
 
@@ -206,12 +295,15 @@
    checkboxes (§4.3 3.3).
 
    Pre : `staged` is a successful `stage-repository!` result.
-   Post: Import creates the rows and opens the commit. Every other way out
+   Post: Import creates the rows and opens the commit. While it runs, Close
+         leaves it running and Cancel import rolls it back. Every other way out
          releases the stage."
-  [user-id staged close! open-topic!]
+  [user-id staged !running request-exit! open-topic!]
   (e/client
     (let [stage-id (:stage-id staged)
-          {:keys [path ref sha]} (:source staged)
+          source (:source staged)
+          {:keys [path ref sha]} source
+          importing? (= :import (:step (e/watch !running)))
           ;; SERVER-FORM bindings: the file list stays on the server, and only
           ;; window rows, the extension counts and one number cross.
           picked (e/server (e/Offload #(staged-tree* user-id stage-id)))
@@ -329,6 +421,10 @@
           (dom/div
             (dom/props {:class "forge-import__error" :role "alert"})
             (dom/text failure)))
+        (when importing?
+          (RunStatus (e/server (import-phase* (e/watch (us/get-atom user-id :importing-repos))
+                                 source))
+            "You can close this window. The import continues, and a notice appears when it is done."))
         (dom/div
           (dom/props {:class "forge-import__actions"})
           ;; The button's props stay static. A `:disabled` derived from
@@ -346,16 +442,26 @@
                                         :else nil))]
               (if blocked
                 (t (reset! !failure blocked))
-                (let [r (e/server (e/Offload #(import-staged!* user-id stage-id selection)))]
+                (let [r (e/server (e/Offload #(await-import!* user-id stage-id selection)))]
+                  (MarkRunning !running {:step :import :stage-id stage-id :source source})
                   (case r
-                    (if (:ok r)
+                    (cond
+                      (:ok r)
                       (do (e/on-unmount #(open-topic! (:topic-id r)))
                           (t))
-                      (t (reset! !failure (:error r)))))))))
+
+                      (:cancelled? r) (t)
+
+                      :else (t (reset! !failure (:error r)))))))))
+          (when importing?
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-secondary"})
+              (dom/text "Close")
+              (dom/On "click" (fn [_] (request-exit! :close)) nil)))
           (dom/button
             (dom/props {:type "button" :class "btn btn-secondary"})
-            (dom/text "Cancel")
-            (dom/On "click" (fn [_] (close!)) nil))))
+            (dom/text (if importing? "Cancel import" "Cancel"))
+            (dom/On "click" (fn [_] (request-exit! :cancel)) nil))))
       ;; LAST form, so its value is the body's value and it gates no frame.
       ;; Releases the stage when this picker ends; `cancel-stage!` leaves a
       ;; stage alone while `import-staged!` holds it.
@@ -366,25 +472,41 @@
 (e/defn ForgeImportModal
   "Pre : `!show` is the Import page's open-source atom.
    Post: closing writes false to it; `Upload a .zip file instead` writes
-         :code-zip, which opens the archive upload."
+         :code-zip, which opens the archive upload.
+   Invariant: after the user asks to leave a running step, the modal never
+         navigates. A backgrounded import reports through a toast instead, so
+         the user gets exactly one of the two."
   [!show user-id navigate!]
   (e/client
     (let [!stage (atom {:stage :form})
           stage (e/watch !stage)
+          !running (atom nil)
+          !leaving? (atom false)
+          !exit (atom nil)
+          exit (e/watch !exit)
           close! (fn [] (reset! !show false))
           open-topic! (fn [topic-id]
-                        (reset! !show false)
-                        (navigate! :viewer (nav/nav-topic topic-id nil)))
+                        (when-not @!leaving?
+                          (reset! !show false)
+                          (navigate! :viewer (nav/nav-topic topic-id nil))))
+          request-exit! (fn [kind]
+                          ;; Escape and the backdrop pass :close. For a download
+                          ;; that still abandons it: a download has no background.
+                          (if @!running
+                            (do (reset! !leaving? true)
+                                (swap! !exit (fn [[n _]] [(inc (or n 0)) kind])))
+                            (close!)))
           use-zip! (fn [] (reset! !show :code-zip))]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1"})
-        (modal-shell/ModalEscape close! "Import a repository")
-        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (close!))) nil)
+        (modal-shell/ModalEscape #(request-exit! :close) "Import a repository")
+        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (request-exit! :close))) nil)
         (dom/div
           (dom/props {:class "modal-content modal-lg forge-import"})
           (dom/h3
             (dom/props {:class "forge-import__title"})
             (dom/text "Import a repository"))
           (case (:stage stage)
-            :picking (StagePicker user-id (:staged stage) close! open-topic!)
-            (ForgeForm user-id !stage close! open-topic! use-zip!)))))))
+            :picking (StagePicker user-id (:staged stage) !running request-exit! open-topic!)
+            (ForgeForm user-id !stage !running request-exit! open-topic! use-zip!))))
+      (ExitRun user-id !running exit close!))))

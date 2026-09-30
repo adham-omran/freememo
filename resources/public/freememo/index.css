@@ -8125,6 +8125,9 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     padding: 0; border: none; background: none; cursor: pointer;
     font: inherit; font-size: 13px; color: var(--color-primary); text-decoration: underline;
 }
+.forge-import__status { margin-top: var(--sp-3); }
+.forge-import__status p { margin: 0; }
+.forge-import__phase { font-size: 14px; }
 .forge-picker { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
 .forge-picker__source { margin: 0; font-size: 13px; color: var(--color-text-secondary); overflow-wrap: anywhere; }
 .forge-picker__heading { display: flex; align-items: baseline; gap: var(--sp-3); font-size: 13px; font-weight: 600; }

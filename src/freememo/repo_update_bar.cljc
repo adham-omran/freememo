@@ -40,9 +40,10 @@
 
 (defn result-message
   "Post: one line for the user about an `update-repository!` result."
-  [{:keys [ok unchanged? sha error report]}]
+  [{:keys [ok cancelled? unchanged? sha error report]}]
   (let [short-sha (when sha (subs sha 0 (min 7 (count sha))))]
     (cond
+      cancelled? "Update cancelled."
       (not ok) error
       unchanged? (str "Already at " short-sha ". Nothing changed.")
       :else (str "Added commit " short-sha " with " (:topics-created report) " topics."))))
@@ -84,7 +85,7 @@
             (dom/text (str phase "…"))))
         (when result
           (dom/span
-            (dom/props {:class (if (:ok result)
+            (dom/props {:class (if (or (:ok result) (:cancelled? result))
                                  "repo-update-bar__result"
                                  "repo-update-bar__result repo-update-bar__result--error")
                         :role "status"})

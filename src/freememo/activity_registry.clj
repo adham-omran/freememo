@@ -367,6 +367,9 @@
     :tier :server :subject :none :work-key identity
     :state-key :importing-repos :key-fn identity
     :entry->state (fn [phase] {:phase phase})
+    ;; Cooperative: the run reads the mark per archive buffer and per insert
+    ;; batch (plans/repo-import-progress.md §1).
+    :canceller-key :repo-import-cancellers :cancelled-key :repo-import-cancelled
     ;; Without this a failed download closes as a success (§4.3 3.8).
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :repo-import-errors) work-key))}})

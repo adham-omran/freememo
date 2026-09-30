@@ -344,8 +344,11 @@
    Post: a temp File holding the archive. The caller owns it and MUST delete it.
    Invariant: heap holds one copy buffer; the body streams to disk.
    Invariant: past `max-archive-bytes` or `max-download-ms` the transfer stops,
-         the partial file is deleted, and ::forge-failure is thrown."
-  ^File [forge origin token path sha]
+         the partial file is deleted, and ::forge-failure is thrown.
+   Invariant: `cancelled?` is read after every buffer; once it answers true the
+         transfer stops the same way, with `:reason :cancelled`. An interrupt
+         cannot do this: the socket read ignores it."
+  ^File [forge origin token path sha cancelled?]
   (let [what (str "the archive of " path)
         resp (-> (request! (archive-url forge origin path sha)
                    {:headers (assoc base-headers "Accept" "*/*")
@@ -364,6 +367,9 @@
                         (throw (failure (str "The download of " what " stopped: " (.getMessage e))
                                  {:reason :unreachable}))))]
               (when (pos? n)
+                (when (cancelled?)
+                  (throw (failure (str "The download of " what " was cancelled.")
+                           {:reason :cancelled})))
                 (let [total (+ total n)]
                   (when (> total max-archive-bytes)
                     (throw (failure (str "The archive of " path " is larger than "
