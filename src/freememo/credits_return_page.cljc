@@ -38,20 +38,27 @@
 
 #?(:clj
    (defn auto-reconcile-flow
-     "Flow of attempt numbers: up to `retry-max-attempts` reconcile attempts,
-      `retry-delay-ms` apart. Each attempt reconciles the order at Wayl then bumps
-      :credits-refresh so the page re-queries. A completing/failing attempt flips
-      the page off the pending branch, which unmounts the consumer and cancels this
-      flow — including any in-flight sleep. Idempotent: complete-credit-order! is
-      row-locked, so racing the webhook never double-credits."
+     "Continuous flow of the last attempt number, 0 before the first attempt:
+      up to `retry-max-attempts` reconcile attempts, `retry-delay-ms` apart. Each
+      attempt reconciles the order at Wayl then bumps :credits-refresh so the page
+      re-queries. A completing/failing attempt flips the page off the pending
+      branch, which unmounts the consumer and cancels this flow — including any
+      in-flight sleep. Idempotent: complete-credit-order! is row-locked, so racing
+      the webhook never double-credits.
+
+      The initial 0 is load-bearing. `e/input` throws `Uninitialized flow.` at
+      mount for a flow with no value yet, and the first attempt is a sleep away —
+      that killed the session for every pending or unknown order."
      [user-id reference-id]
-     (m/ap
-       (loop [n 1]
-         (m/? (m/sleep retry-delay-ms))
-         (m/? (m/via m/blk (credits/reconcile-order! reference-id)))
-         (commands/bump! user-id :credits-granted)
-         (m/amb n
-           (if (< n retry-max-attempts) (recur (inc n)) (m/amb)))))))
+     (->> (m/ap
+            (loop [n 1]
+              (m/? (m/sleep retry-delay-ms))
+              (m/? (m/via m/blk (credits/reconcile-order! reference-id)))
+              (commands/bump! user-id :credits-granted)
+              (m/amb n
+                (if (< n retry-max-attempts) (recur (inc n)) (m/amb)))))
+          (m/reductions (fn [_ n] n) 0)
+          (m/relieve {})))) ; discrete → continuous for e/input; keeps latest
 
 (e/defn CreditsReturnPage [user-id navigate!]
   (e/client
