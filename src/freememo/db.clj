@@ -3625,7 +3625,7 @@
      0)))
 
 (defn list-credit-transactions
-  "User's credit ledger newest-first, for the Settings → Account 'AI costs' view.
+  "User's credit ledger newest-first, for the Settings → Usage 'AI costs' view.
    Optional filters (nil/blank = no constraint): `kind`/`endpoint`/`model`
    exact-match; `since-days` keeps rows newer than N days; `min-amount` keeps
    rows whose magnitude |amount_iqd| >= min-amount (e.g. 500 finds 500+ debits

@@ -13,6 +13,7 @@
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
    [freememo.forge-settings-section :refer [ForgeTokensSection]]
+   [freememo.settings-group :as group]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
    [freememo.settings-tab :as settings-tab]
@@ -20,10 +21,12 @@
    #?(:clj [freememo.config :as config])))
 
 
-;; Section anchor ids + sidebar labels, in display order.
-;; Storage is folded into the Account tab.
+;; Section anchor ids + sidebar labels, in display order. Each label is also
+;; its tab's title (`SettingsTab`). Usage holds credits, storage and AI costs:
+;; the questions about what the account spends, apart from who is signed in.
 (def section-defs
   [{:id "settings-account" :label "Account"}
+   {:id "settings-usage" :label "Usage"}
    {:id "settings-ai" :label "AI Features"}
    {:id "settings-appearance" :label "Appearance"}
    {:id "settings-anki" :label "Anki Sync"}
@@ -43,6 +46,12 @@
 
 (defn valid-section-id? [id]
   (boolean (some #(= id (:id %)) section-defs)))
+
+(defn section-label
+  "Pre : `id` is in `section-defs`.
+   Post: that tab's label, which is also its title."
+  [id]
+  (some #(when (= id (:id %)) (:label %)) section-defs))
 
 (defn init-active-from-hash!
   "On page mount, if `location.hash` names a section, set the active tab to it.
@@ -98,8 +107,7 @@
           !probe-data    (atom nil)     ; map on :ok, string on :error
           probe-data     (e/watch !probe-data)]
       (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Zotero"))
+        (dom/props {:class "zotero-section"})
 
         ;; Intro
         (dom/div
@@ -393,18 +401,17 @@
 
 (e/defn AppearanceSection
   "Settings → Appearance. Theme, card text size, code-block text size,
-   and the link-Import navigation toggle. Wrapped by the caller
-   in the tab-visibility div, same convention as AIFeaturesSection.
+   and the link-Import navigation toggle. `SettingsTab` gives it its frame
+   and title, same convention as AIFeaturesSection.
 
    The link toggle lives here rather than in a section of its own because
-   `Settings sections` is a Coverage-counts figure — an eighth section would
+   `Settings sections` is a Coverage-counts figure — a tenth section would
    fail `coverage-counts.spec.mjs` until docs/post-deploy-checklist.md moved
    with it, and one checkbox does not earn a section."
   [user-id]
   (e/client
     (dom/div
-      (dom/props {:class "card"})
-      (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
+      (dom/props {:class "appearance-section"})
       (ThemeField user-id)
       (CardFontSizeField user-id)
       (CodeBlockFontSizeField user-id)
@@ -437,17 +444,15 @@
           !auto-mode (atom server-auto-mode)
           auto-mode (e/watch !auto-mode)]
       (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+        (dom/props {:class "anki-sync-section"})
 
         ;; plans/getting-started-checklist.md 8.4.1
         (AnkiConnectGuide user-id nil)
 
         ;; ── Auto-load section ──────────────────────────────────────
-        (dom/div
-          (dom/props {:class "anki-settings-section"})
-          (dom/h4 (dom/props {:class "anki-settings-section-title"})
-            (dom/text "Auto-load Settings"))
+        (dom/section
+          (dom/props {:class "settings-group"})
+          (group/GroupHeading "Auto-load Settings")
 
           ;; Auto-load Settings — controls what the Anki Sync modal restores on open
           (dom/div
@@ -501,6 +506,108 @@
    {:key "Shift+Tab" :desc "Outdent the line (in a rich-text editor)"}
    {:key "Escape, then Tab" :desc "Leave a rich-text editor"}])
 
+(e/defn AccountSection
+  "Settings → Account: who is signed in, email updates, the export, and the
+   deployed build. What the account spends is on the Usage tab."
+  [user-id username]
+  (e/client
+    (dom/div
+      (dom/props {:class "account-section"})
+      (dom/div
+        (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"}})
+        (dom/span
+          (dom/props {:style {:font-size "14px" :color "var(--color-text-label)"}})
+          (dom/text "Logged in as ")
+          (dom/strong (dom/text username)))
+        (dom/form
+          (dom/props {:action "/api/logout" :method "post" :style {:margin "0"}})
+          (dom/button
+            (dom/props {:type "submit"
+                        :class "btn btn-danger"
+                        :style {:padding "6px 14px" :font-size "13px"}})
+            (dom/text "Logout"))))
+
+      (EmailUpdatesField user-id)
+
+      ;; Account export — the bytes the account holds (§5.7.1).
+      (AccountTransferSection user-id)
+
+      ;; About — deployed build commit (baked at build time; "dev" locally)
+      (let [commit (e/server (config/git-commit))]
+        (dom/div
+          (dom/props {:style {:margin-top "16px" :padding-top "12px"
+                              :border-top "1px solid var(--color-bg-subtle)"
+                              :font-size "12px" :color "var(--color-text-label)"}})
+          (dom/text (str "freememo · " commit)))))))
+
+(e/defn UsageSection
+  "Settings → Usage: the credit balance, storage, and the AI cost ledger.
+
+   Credits render on official deployments only. They sit here rather than in
+   AI Features because storage rent spends credits with LLM features off —
+   see freememo.credits-section."
+  [user-id base-url client-country]
+  (e/client
+    (dom/div
+      (dom/props {:class "usage-section"})
+      (when (e/server (config/credits-enabled?))
+        (CreditsSection user-id base-url client-country))
+      (StorageSection user-id)
+      (CostHistorySection user-id))))
+
+(e/defn KeyboardShortcutsSection
+  "Settings → Keyboard Shortcuts. Read-only."
+  []
+  (e/client
+    ;; Derived from the registry, never transcribed. A hand-written
+    ;; table here stated Cmd+Shift+E/G/S/D for a whole release after
+    ;; those chords shortened, and listed six of the nine bound
+    ;; commands. See plans/short-keyboard-chords.md.
+    (let [shortcuts (concat
+                      (->> (commands/bindings)
+                           (map (fn [[id bind]]
+                                  {:key  (commands/display-chord id bind)
+                                   :desc (:label (commands/command id))}))
+                           (sort-by :desc))
+                      ;; The two cloze chords are editor-local — bound on
+                      ;; the cloze field's own Quill keyboard module, not
+                      ;; in freememo.commands — so they appear in no
+                      ;; registry-derived list and have to be written out
+                      ;; here. See editor-actions/install-cloze-bindings!.
+                      [{:key (commands/display-chord
+                               :cloze-inc (:inc editor-actions/cloze-chords))
+                        :desc "New cloze deletion (in a cloze field)"}
+                       {:key (commands/display-chord
+                               :cloze-eq (:eq editor-actions/cloze-chords))
+                        :desc "Same cloze number (in a cloze field)"}]
+                      ;; Editor-local too: a11y/install-tab-indent! and
+                      ;; a11y/install-editor-escape!.
+                      editor-keys)]
+      (dom/table
+        (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
+        (e/for-by :key [s shortcuts]
+          (dom/tr
+            (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
+              (dom/text (:key s)))
+            (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
+              (dom/text (:desc s)))))))))
+
+(e/defn SettingsTab
+  "One tab's frame: the card, the tab's id, and its title from `section-defs`.
+   The only owner of a `.card` in Settings. Section components render their
+   groups inside it, so no tab nests a card in a card
+   (plans/scannable-settings-toolbar-accent.md 1.7).
+
+   Pre : `id` is in `section-defs`. `Body` is an e/fn of no arguments.
+   Post: the frame shows only while `active` is `id`. Hiding it does not
+         unmount `Body`, so each section's server reads run once."
+  [active id Body]
+  (e/client
+    (dom/div
+      (dom/props {:class "card" :id id :style (tab-style active id)})
+      (dom/h3 (dom/props {:class "section-title"}) (dom/text (section-label id)))
+      (Body))))
+
 (e/defn SettingsPage [user-id username enc-key base-url client-country]
   (e/client
     (init-active-from-hash!)
@@ -514,126 +621,16 @@
         ;; BELOW: content panel — only the active tab is visible (display:none others)
         (dom/div
           (dom/props {:class "settings-content"})
-
-      ;; ── Account tab (includes Storage usage) ──
-          (dom/div
-            (dom/props {:class "card" :id "settings-account"
-                        :style (tab-style active "settings-account")})
-            (dom/h3 (dom/props {:class "section-title"}) (dom/text "Account"))
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"}})
-              (dom/span
-                (dom/props {:style {:font-size "14px" :color "var(--color-text-label)"}})
-                (dom/text "Logged in as ")
-                (dom/strong (dom/text username)))
-              (dom/form
-                (dom/props {:action "/api/logout" :method "post" :style {:margin "0"}})
-                (dom/button
-                  (dom/props {:type "submit"
-                              :class "btn btn-danger"
-                              :style {:padding "6px 14px" :font-size "13px"}})
-                  (dom/text "Logout"))))
-
-        ;; Email updates toggle
-            (EmailUpdatesField user-id)
-
-        ;; Credit balance + top-up (official deployments only). Sits here rather
-        ;; than in AI Features because storage rent spends credits with LLM
-        ;; features off — see freememo.credits-section.
-            (when (e/server (config/credits-enabled?))
-              (CreditsSection user-id base-url client-country))
-
-        ;; Storage usage (formerly its own tab; now part of Account)
-            (StorageSection user-id)
-
-        ;; Account export — sits under Storage because both answer questions
-        ;; about the bytes the account holds (§5.7.1).
-            (AccountTransferSection user-id)
-
-        ;; AI cost history — the user's credit ledger (searchable/filterable)
-            (CostHistorySection user-id)
-
-        ;; About — deployed build commit (baked at build time; "dev" locally)
-            (let [commit (e/server (config/git-commit))]
-              (dom/div
-                (dom/props {:style {:margin-top "16px" :padding-top "12px"
-                                    :border-top "1px solid var(--color-bg-subtle)"
-                                    :font-size "12px" :color "var(--color-text-label)"}})
-                (dom/text (str "freememo · " commit)))))
-
-
-          (dom/div
-            (dom/props {:id "settings-ai"
-                        :style (tab-style active "settings-ai")})
-            ;; Duplicate detection lives inside AI Features, in Advanced's
-            ;; Knowledge graph group (freememo.dedup-section).
-            (AIFeaturesSection user-id enc-key))
-
-      ;; ── Appearance section ──
-          (dom/div
-            (dom/props {:id "settings-appearance"
-                        :style (tab-style active "settings-appearance")})
-            (AppearanceSection user-id))
-
-      ;; ── Anki Sync section ──
-          (dom/div
-            (dom/props {:id "settings-anki"
-                        :style (tab-style active "settings-anki")})
-            (AnkiSyncSection user-id))
-
-      ;; ── Zotero section ─────────────────────────────────────────
-          (dom/div
-            (dom/props {:id "settings-zotero"
-                        :style (tab-style active "settings-zotero")})
-            (ZoteroSection user-id))
-
-      ;; ── Git Forges section (plans/git-forge-integration.md §4.2) ──
-          (dom/div
-            (dom/props {:id "settings-forges"
-                        :style (tab-style active "settings-forges")})
-            (ForgeTokensSection user-id))
-
-      ;; ── Browser Extension section ──────────────────────────────
-          (dom/div
-            (dom/props {:id "settings-extension"
-                        :style (tab-style active "settings-extension")})
-            (BrowserExtensionSection user-id))
-
-      ;; ── Keyboard Shortcuts section (read-only) ──
-          (dom/div
-            (dom/props {:class "card" :id "settings-keyboard"
-                        :style (tab-style active "settings-keyboard")})
-            (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
-            ;; Derived from the registry, never transcribed. A hand-written
-            ;; table here stated Cmd+Shift+E/G/S/D for a whole release after
-            ;; those chords shortened, and listed six of the nine bound
-            ;; commands. See plans/short-keyboard-chords.md.
-            (let [shortcuts (concat
-                              (->> (commands/bindings)
-                                   (map (fn [[id bind]]
-                                          {:key  (commands/display-chord id bind)
-                                           :desc (:label (commands/command id))}))
-                                   (sort-by :desc))
-                              ;; The two cloze chords are editor-local — bound on
-                              ;; the cloze field's own Quill keyboard module, not
-                              ;; in freememo.commands — so they appear in no
-                              ;; registry-derived list and have to be written out
-                              ;; here. See editor-actions/install-cloze-bindings!.
-                              [{:key (commands/display-chord
-                                       :cloze-inc (:inc editor-actions/cloze-chords))
-                                :desc "New cloze deletion (in a cloze field)"}
-                               {:key (commands/display-chord
-                                       :cloze-eq (:eq editor-actions/cloze-chords))
-                                :desc "Same cloze number (in a cloze field)"}]
-                              ;; Editor-local too: a11y/install-tab-indent! and
-                              ;; a11y/install-editor-escape!.
-                              editor-keys)]
-                
-                (dom/table
-                  (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
-                  (e/for-by :key [s shortcuts]
-                    (dom/tr
-                      (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
-                        (dom/text (:key s)))
-                      (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
-                        (dom/text (:desc s)))))))))))))
+          (SettingsTab active "settings-account" (e/fn [] (AccountSection user-id username)))
+          (SettingsTab active "settings-usage"
+            (e/fn [] (UsageSection user-id base-url client-country)))
+          ;; Duplicate detection lives inside AI Features, in Advanced's
+          ;; Knowledge graph group (freememo.dedup-section).
+          (SettingsTab active "settings-ai" (e/fn [] (AIFeaturesSection user-id enc-key)))
+          (SettingsTab active "settings-appearance" (e/fn [] (AppearanceSection user-id)))
+          (SettingsTab active "settings-anki" (e/fn [] (AnkiSyncSection user-id)))
+          (SettingsTab active "settings-zotero" (e/fn [] (ZoteroSection user-id)))
+          ;; plans/git-forge-integration.md §4.2
+          (SettingsTab active "settings-forges" (e/fn [] (ForgeTokensSection user-id)))
+          (SettingsTab active "settings-extension" (e/fn [] (BrowserExtensionSection user-id)))
+          (SettingsTab active "settings-keyboard" (e/fn [] (KeyboardShortcutsSection))))))))

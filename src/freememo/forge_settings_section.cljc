@@ -107,8 +107,7 @@
           !outcome (atom nil)
           outcome (e/watch !outcome)]
       (dom/div
-        (dom/props {:class "card forge-tokens-section"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Git Forges"))
+        (dom/props {:class "forge-tokens-section"})
         (dom/p
           (dom/props {:class "hint"})
           (dom/text (str "A token lets FreeMemo download private repositories. FreeMemo only reads. "

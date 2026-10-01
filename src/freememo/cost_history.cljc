@@ -1,5 +1,5 @@
 (ns freememo.cost-history
-  "Settings → Account 'AI costs' card: the user's credit ledger as a searchable,
+  "Settings → Usage 'AI costs' group: the user's credit ledger as a searchable,
    filterable, virtual-scrolled table. Read-only view over credit_transactions,
    scoped to the current user. The table is freememo.tape-table/TapeTable, the
    shared component: a header table above a capped scroll box, 15 mounted rows,
@@ -12,6 +12,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.card-models :as card-models]
    [freememo.ocr-models :as ocr-models]
+   [freememo.settings-group :as group]
    [freememo.tape-table :as tape]
    [freememo.util :as util]
    [clojure.string :as str]
@@ -152,7 +153,7 @@
             (dom/span (dom/props {:data-tooltip "input / output / cached tokens"})
               (dom/text toks))))))))
 (e/defn CostHistorySection
-  "AI costs card for the Account settings tab. Read-only; user-scoped."
+  "AI costs group for the Usage settings tab. Read-only; user-scoped."
   [user-id]
   (e/client
     (let [!kind (atom "")     kind (e/watch !kind)
@@ -181,9 +182,9 @@
           loading? (nil? result-count)
           rc (or result-count 0)
           reset-key [kind endpoint model preset min-amount-debounced q-debounced]]
-      (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI costs"))
+      (dom/section
+        (dom/props {:class "settings-group"})
+        (group/GroupHeading "AI costs")
         (dom/div (dom/props {:class "hint" :style {:margin-bottom "10px"}})
           (dom/text "Your AI usage charges and top-ups. Amounts are in credits (IQD); hover an amount for the USD approximation."))
 

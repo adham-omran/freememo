@@ -25,8 +25,8 @@
           ;; A fresh id per launch so e/Token re-opens on each confirmed start.
           start! (fn [] (reset! !fire {:id (str (random-uuid))}))]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-primary"
-                    :style {:font-weight "500"}
+        ;; A ghost button: Generate is the toolbar's one filled accent.
+        (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Transcribe"
                     :disabled transcribing?})
         (tooltip/Tooltip! "Transcribe the audio into the editor")

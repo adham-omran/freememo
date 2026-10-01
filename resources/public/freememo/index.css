@@ -760,16 +760,22 @@ html:has(> body > .app-shell) > body {
    Document-Options modal (C5), so their former inline tiers no longer hide
    anything; tier 3 is now a reserved no-op the detector skips:
    - collapse-0: nothing hidden, all labels visible
-   - collapse-1: labels + citation hidden (icon-only buttons)
-   - collapse-2: + Document-meta group hidden (.toolbar-collapse-docmeta)
+   - collapse-1: labels + citation hidden (icon-only buttons), except the
+     labels marked `.icon-label--tier-2`
+   - collapse-2: + those labels + Document-meta group hidden (.toolbar-collapse-docmeta)
    - collapse-3: (reserved — no additional inline element)
    - collapse-4: (reserved — CardCount moved into the Generate dropdown menu)
    - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
    - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
    - collapse-7: + Sync dropdown trigger hidden (.toolbar-collapse-sync) */
 
-/* Labels hide at tier ≥1 */
-.toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .icon-label {
+/* Labels hide at tier ≥1. A `.icon-label--tier-2` label stays one tier longer:
+   Extract is a ghost button beside the filled Generate, and its words are
+   what keep it from reading as a stray icon at the ordinary desktop tier
+   (plans/scannable-settings-toolbar-accent.md 2.6). `:where` keeps the first
+   selector at 0,3,0, so the overflow panel's 0,4,0 rule below still wins. */
+.toolbar-container:where(.collapse-1) .icon-label:not(.icon-label--tier-2),
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .icon-label {
     display: none;
 }
 
@@ -993,13 +999,16 @@ html:has(> body > .app-shell) > body {
     padding: 10px 14px; border-radius: var(--radius-md);
     background: var(--color-info-bg); color: var(--color-text-label);
 }
-.ai-group { margin-bottom: var(--sp-6); }
-.ai-group__heading {
+/* A group inside a Settings tab (plans/scannable-settings-toolbar-accent.md 1.1).
+   The tab's `.card` is the only box. A group separates by its heading rule and
+   its h4 title, so every group shares the card's left edge. */
+.settings-group { margin-bottom: var(--sp-6); }
+.settings-group__heading {
     display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
     padding-bottom: var(--sp-2); margin-bottom: var(--sp-4);
     border-bottom: 2px solid var(--color-border);
 }
-.ai-group__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
+.settings-group__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
 
 /* Two-column setting rows: what the setting is on the left, its control on the
    right. The label carries `for`, so clicking the words focuses the control. */
@@ -1012,9 +1021,12 @@ html:has(> body > .app-shell) > body {
     padding: var(--sp-3) 0;
     border-top: 1px solid var(--color-bg-hover);
 }
-.ai-group__heading + .setting-row,
-.ai-group__heading + .setting-rows > .setting-row:first-child,
-.card > .setting-row:first-of-type { border-top: none; }
+/* The first row under a heading draws no rule: the heading already has one.
+   A tab's section component puts its own root element between the card's
+   title and the row, hence the `* >` step. */
+.settings-group__heading + .setting-row,
+.settings-group__heading + .setting-rows > .setting-row:first-child,
+.card > .section-title + * > .setting-row:first-child { border-top: none; }
 .setting-row--switch { grid-template-columns: minmax(0, 1fr) auto; }
 .setting-row__text .label { margin-bottom: 2px; font-weight: 600; color: var(--color-text-primary); }
 .setting-row__text .hint { margin-top: 2px; line-height: 1.45; }
@@ -1029,7 +1041,7 @@ html:has(> body > .app-shell) > body {
     background: var(--color-bg-input); color: var(--color-text-primary);
 }
 .setting-row__unit { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
-.ai-group .settings-accordion { margin-top: var(--sp-3); }
+.settings-group .settings-accordion { margin-top: var(--sp-3); }
 .ai-subgroup { margin-top: var(--sp-5); }
 .ai-subgroup__title { margin: 0 0 var(--sp-1); font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
 .ai-subgroup__lead { margin: 0 0 var(--sp-2); font-size: 12px; line-height: 1.5; color: var(--color-text-hint); }
@@ -5437,36 +5449,6 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border-bottom-color: var(--color-primary);
 }
 
-/* ── Anki Sync tab — section visual distinction ───────────────────
-   Scoped to #settings-anki so the visual treatment cannot leak into
-   other settings tabs. Each top-level group (Source / Bibliography /
-   Images / Auto-load / Field Defaults) lives inside its own card-style
-   container with a tinted background, soft border, and an h4 title. */
-#settings-anki .anki-settings-section {
-    background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--sp-3) var(--sp-4);
-    margin-bottom: var(--sp-4);
-}
-
-#settings-anki .anki-settings-section:last-child {
-    margin-bottom: 0;
-}
-
-#settings-anki .anki-settings-section-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    margin: 0 0 var(--sp-3) 0;
-    padding-bottom: var(--sp-1);
-    border-bottom: 1px solid var(--color-border);
-}
-
-#settings-anki .anki-settings-section .field:last-child {
-    margin-bottom: 0;
-}
-
 /* Settings accordion (native <details>) for long, advanced prompts */
 .settings-accordion {
     border: 1px solid var(--color-border);
@@ -8327,6 +8309,16 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     font-size: 14px;
 }
 .anki-connect-guide__title { font-size: 14px; font-weight: 700; margin: 0 0 var(--sp-2); }
+/* In Settings the guide is a group of the Anki tab, not a box inside its card
+   (plans/scannable-settings-toolbar-accent.md 1.4.2). The sync modal keeps the
+   bordered callout. The title copies `.settings-group__heading` and
+   `.settings-group__title`. */
+#settings-anki .anki-connect-guide { border: 0; border-radius: 0; padding: 0; margin-bottom: var(--sp-6); }
+#settings-anki .anki-connect-guide__title {
+    font-weight: 600; color: var(--color-text-primary);
+    padding-bottom: var(--sp-2); margin-bottom: var(--sp-4);
+    border-bottom: 2px solid var(--color-border);
+}
 .anki-connect-guide__steps { margin: 0 0 var(--sp-2); padding-left: 20px; }
 .anki-connect-guide__steps li { margin-bottom: var(--sp-2); line-height: 1.5; }
 .anki-connect-guide__note { font-size: 13px; color: var(--color-text-secondary); margin: 0; }

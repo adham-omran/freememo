@@ -7,13 +7,14 @@
    AI feature, so a user with LLM features off could run to zero, lose video
    playback, and have no way to see a balance or top it up. Credits are an
    account concern with two spend sources — AI actions and stored bytes — so the
-   panel belongs in the Account tab beside Storage and the cost ledger.
+   panel belongs in the Usage tab beside Storage and the cost ledger.
 
    Self-host (CREDITS_ENABLED unset) never renders this; the AI card shows
    provider-key status instead, which genuinely is an AI concern."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.settings-group :as group]
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
@@ -61,55 +62,58 @@
                               (config/presets)))
           !checkout-error (atom nil)
           checkout-error (e/watch !checkout-error)]
-      (dom/div
-        (dom/props {:class "field"
-                    :style {:padding "14px" :background "var(--color-bg-subtle)"
-                            :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
+      (dom/section
+        (dom/props {:class "settings-group"})
+        (group/GroupHeading "Credits")
         (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
-                              :margin-bottom "10px"}})
-          (dom/span
-            (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
-            (dom/text "Credit Balance"))
-          (dom/span
-            (dom/props {:style {:font-size "16px" :font-weight "600"
-                                :color (if (and balance (> balance 0))
-                                         "var(--color-text-primary)" "var(--color-danger)")}})
-            (dom/text (str (or balance 0) " credits"))))
-
-        ;; What spends credits. Storage is named with its rate because it is the
-        ;; one charge that accrues with no user action — an AI charge follows a
-        ;; button press, rent does not.
-        (dom/div
-          (dom/props {:class "hint" :style {:margin-bottom "10px"}})
-          (dom/text (if rate-label
-                      (str "Spent by OCR and flashcard generation, and by stored videos at "
-                        rate-label ".")
-                      "Spent by OCR and flashcard generation.")))
-
-        (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
-          (e/for [{:keys [iqd usd-str]} (e/diff-by :iqd presets)]
-            (dom/button
-              (dom/props {:type "button" :class "btn btn-secondary"
-                          :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
-              (dom/text (str iqd " credits" (when usd-str (str " (" usd-str ")"))))
-              (let [ev (dom/On "click" identity nil)
-                    [t _] (e/Token ev)]
-                (when t
-                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id iqd base-url client-country)))]
-                    (case r
-                      (if (:ok r)
-                        (do (navigate-external! (:url r)) (t))
-                        (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
-
-        (dom/div
-          (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
-                                            :color "var(--color-text-secondary)"}})
-          (dom/text "USD prices shown here are approximate and may be adjusted if we change AI models. The amount you pay is the credits amount shown."))
-
-        (when checkout-error
+          (dom/props {:class "field"
+                      :style {:padding "14px" :background "var(--color-bg-subtle)"
+                              :border-radius "var(--radius-md)"}})
           (dom/div
-            (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
-            (dom/text checkout-error)))))))
+            (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
+                                :margin-bottom "10px"}})
+            (dom/span
+              (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
+              (dom/text "Credit Balance"))
+            (dom/span
+              (dom/props {:style {:font-size "16px" :font-weight "600"
+                                  :color (if (and balance (> balance 0))
+                                           "var(--color-text-primary)" "var(--color-danger)")}})
+              (dom/text (str (or balance 0) " credits"))))
+
+          ;; What spends credits. Storage is named with its rate because it is the
+          ;; one charge that accrues with no user action — an AI charge follows a
+          ;; button press, rent does not.
+          (dom/div
+            (dom/props {:class "hint" :style {:margin-bottom "10px"}})
+            (dom/text (if rate-label
+                        (str "Spent by OCR and flashcard generation, and by stored videos at "
+                          rate-label ".")
+                        "Spent by OCR and flashcard generation.")))
+
+          (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
+            (e/for [{:keys [iqd usd-str]} (e/diff-by :iqd presets)]
+              (dom/button
+                (dom/props {:type "button" :class "btn btn-secondary"
+                            :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
+                (dom/text (str iqd " credits" (when usd-str (str " (" usd-str ")"))))
+                (let [ev (dom/On "click" identity nil)
+                      [t _] (e/Token ev)]
+                  (when t
+                    (let [r (e/server (e/Offload #(credits/start-checkout! user-id iqd base-url client-country)))]
+                      (case r
+                        (if (:ok r)
+                          (do (navigate-external! (:url r)) (t))
+                          (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
+
+          (dom/div
+            (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
+                                              :color "var(--color-text-secondary)"}})
+            (dom/text "USD prices shown here are approximate and may be adjusted if we change AI models. The amount you pay is the credits amount shown."))
+
+          (when checkout-error
+            (dom/div
+              (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
+              (dom/text checkout-error))))))))

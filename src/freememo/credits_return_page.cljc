@@ -130,7 +130,7 @@
                       :style {:margin-top "20px" :padding "8px 20px"}})
           (dom/text "Back to Settings")
           ;; Full navigation so SettingsPage's init-active-from-hash! runs and
-          ;; lands on the AI Features section (where credits live).
+          ;; lands on the Usage tab, where credits live.
           (dom/On "click"
-            (fn [_] (set! (.. js/window -location -href) "/settings#settings-ai"))
+            (fn [_] (set! (.. js/window -location -href) "/settings#settings-usage"))
             nil))))))

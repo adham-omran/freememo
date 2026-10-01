@@ -22,15 +22,16 @@
           error (e/watch !error)
           chord (commands/display-chord :extract)]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-primary"
-                    :style {:font-weight "500"}
+        ;; A ghost button: Generate is the toolbar's one filled accent
+        ;; (plans/scannable-settings-toolbar-accent.md §2).
+        (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Extract"})
         (dom/props {:data-tour "extract"})
         (tooltip/Tooltip! (if (= context-mode :extract)
                             (str "Extract selected text as a child topic (" chord ")")
                             (str "Extract selected text as a topic (" chord ")")))
         (icons/Icon :scissors :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Extract"))
+        (dom/span (dom/props {:class "icon-label icon-label--tier-2"}) (dom/text "Extract"))
         (let [node dom/node]
           (bus/publish-invoker! :extract (fn [] (.click node)))
           (e/on-unmount (fn [] (bus/retract-invoker! :extract))))

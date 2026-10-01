@@ -40,9 +40,7 @@
   [user-id]
   (e/client
     (dom/div
-      (dom/props {:class "card"})
-      (dom/h3 (dom/props {:class "section-title"}) (dom/text "Browser Extension"))
-
+      (dom/props {:class "browser-extension-section"})
       (dom/p
         (dom/props {:style {:margin "0 0 12px" :color "var(--color-text-muted)"
                             :font-size "13px" :line-height "1.5"}})

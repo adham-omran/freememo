@@ -1,11 +1,11 @@
 (ns freememo.ai-features-section
-  "AI Features card on the Settings page: LLM toggle, provider-key status, card
+  "AI Features tab on the Settings page: LLM toggle, provider-key status, card
    model, reasoning, verbosity, scan DPI, transcription language, system + OCR
    prompts. Extracted from settings_page so each e/defn stays under the JVM 64KB
    bytecode limit.
 
    The credit balance and top-up presets are NOT here — they moved to
-   freememo.credits-section, rendered from the Account tab, because storage rent
+   freememo.credits-section, rendered from the Usage tab, because storage rent
    spends credits whether or not AI features are enabled."
   (:require
    [hyperfiddle.electric3 :as e]
@@ -89,7 +89,7 @@
         (dom/div
           (dom/props {:class "hint"})
           (dom/text (if credits-enabled?
-                      "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Account tab."
+                      "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Usage tab."
                       "Scanning, card generation, the assistant, quiz grading and the knowledge graph call OpenRouter, which needs an API key. Reading and Anki sync work without one."))))
       (dom/div
         (dom/props {:class "setting-row__control"})
@@ -106,7 +106,7 @@
 (e/defn ProviderKeyStatusField
   "Self-host mode's OpenRouter API-key status card. Credits mode has no
    provider key of its own — the platform holds it — and shows the balance in
-   the Account tab instead (freememo.credits-section)."
+   the Usage tab instead (freememo.credits-section)."
   [api-key-configured?]
   (e/client
     (dom/div
@@ -752,7 +752,7 @@
 (e/defn AdvancedCards [user-id level card-model-ids card-label-of]
   (e/client
     (dom/section
-      (dom/props {:class "ai-group"})
+      (dom/props {:class "settings-group"})
       (views/GroupHeading "Flashcards" level)
       (CardModelField user-id card-model-ids card-label-of)
       (ReasoningField user-id :cards)
@@ -765,7 +765,7 @@
 (e/defn AdvancedScan [user-id level]
   (e/client
     (dom/section
-      (dom/props {:class "ai-group"})
+      (dom/props {:class "settings-group"})
       (views/GroupHeading "Page scanning" level)
       (DefaultOcrModelField user-id)
       (ScanDpiField user-id)
@@ -774,7 +774,7 @@
 (e/defn AdvancedAssistant [user-id level card-model-ids card-label-of]
   (e/client
     (dom/section
-      (dom/props {:class "ai-group"})
+      (dom/props {:class "settings-group"})
       (views/GroupHeading "Reading assistant" level)
       (AssistantModelField user-id card-model-ids card-label-of)
       (ReasoningField user-id :assistant)
@@ -784,7 +784,7 @@
 (e/defn AdvancedQuiz [user-id level credits-enabled? card-model-ids card-label-of]
   (e/client
     (dom/section
-      (dom/props {:class "ai-group"})
+      (dom/props {:class "settings-group"})
       (views/GroupHeading "Quiz grading" level)
       (KgModelField user-id :grade "Answer grading model" card-model-ids card-label-of)
       (CardQuizGradingField user-id credits-enabled?))))
@@ -792,7 +792,7 @@
 (e/defn AdvancedKg [user-id level card-model-ids card-label-of]
   (e/client
     (dom/section
-      (dom/props {:class "ai-group"})
+      (dom/props {:class "settings-group"})
       (views/GroupHeading "Knowledge graph" level)
       (KgModelsField user-id card-model-ids card-label-of)
       (DedupSection user-id))))
@@ -812,7 +812,7 @@
       (AdvancedQuiz user-id (get tiers :quiz) credits-enabled? card-model-ids card-label-of)
       (AdvancedKg user-id (get tiers :kg) card-model-ids card-label-of)
       (dom/section
-        (dom/props {:class "ai-group"})
+        (dom/props {:class "settings-group"})
         (views/GroupHeading "Transcription" nil)
         (TranscribeLanguageField user-id)))))
 
@@ -832,13 +832,11 @@
           view (e/watch !view)]
 
       (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI Features"))
-
+        (dom/props {:class "ai-features-section"})
         (LlmToggleField user-id credits-enabled? !llm-enabled llm-enabled)
 
         (when llm-enabled
-          ;; Self-host only. The credits panel moved to the Account tab: storage
+          ;; Self-host only. The credits panel moved to the Usage tab: storage
           ;; rent debits credits with LLM features off, so gating the balance on
           ;; this toggle would hide it from a user who is still being charged.
           (when-not credits-enabled?

@@ -1,10 +1,11 @@
 (ns freememo.storage-section
-  "Storage usage card. Extracted from settings_page so each e/defn stays under
-   the JVM 64KB bytecode limit. Reactive on the user's :refresh atom — bumps
-   on upload/delete propagate here."
+  "Storage usage group on the Settings Usage tab. Extracted from settings_page
+   so each e/defn stays under the JVM 64KB bytecode limit. Reactive on the
+   user's :refresh atom — bumps on upload/delete propagate here."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.settings-group :as group]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.storage-meter :as meter])
@@ -57,9 +58,9 @@
                           (>= pct 80)  "var(--color-warning, #c98a00)"
                           :else        "var(--color-primary-text)")
           bar-width-pct (if (>= pct 100) 100 pct)]
-      (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Storage"))
+      (dom/section
+        (dom/props {:class "settings-group"})
+        (group/GroupHeading "Storage")
         (dom/div
           (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)" :margin-bottom "8px"}})
           (dom/text (str used-mb " / " cap-mb " used"))

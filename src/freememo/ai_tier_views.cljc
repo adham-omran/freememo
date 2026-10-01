@@ -203,8 +203,8 @@
   [title level]
   (e/client
     (dom/div
-      (dom/props {:class "ai-group__heading"})
-      (dom/h4 (dom/props {:class "ai-group__title"}) (dom/text title))
+      (dom/props {:class "settings-group__heading"})
+      (dom/h4 (dom/props {:class "settings-group__title"}) (dom/text title))
       (when (some? level)
         (dom/span
           (dom/props {:class (str "ai-level-chip"

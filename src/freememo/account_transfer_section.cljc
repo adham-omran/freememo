@@ -1,5 +1,5 @@
 (ns freememo.account-transfer-section
-  "Account export card (plans/user-data-export-import.md §5.7.1). Extracted from
+  "Account export group (plans/user-data-export-import.md §5.7.1). Extracted from
    settings_page so each e/defn stays under the JVM 64KB bytecode limit, matching
    `storage-section` and `credits-section`.
 
@@ -15,6 +15,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.settings-group :as group]
    #?(:clj [freememo.account-export :as account-export])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
@@ -39,9 +40,9 @@
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           summary (e/server (e/Offload #(export-summary* refresh user-id)))]
-      (dom/div
-        (dom/props {:class "card"})
-        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Export your data"))
+      (dom/section
+        (dom/props {:class "settings-group"})
+        (group/GroupHeading "Export your data")
         (dom/div
           (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"
                               :margin-bottom "10px"}})

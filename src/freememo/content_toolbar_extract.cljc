@@ -191,7 +191,8 @@
         (let [!delete-state (atom nil)
               delete-state (e/watch !delete-state)]
           (dom/button
-            (dom/props {:class "btn btn-sm btn-danger-fill toolbar-overflow-item"
+            ;; Ghost red. The confirm dialog below keeps the fill.
+            (dom/props {:class "btn btn-sm btn-danger toolbar-overflow-item"
                         :style {:padding "4px 10px" :font-size "12px"}
                         :aria-label "Delete"})
             (tooltip/Tooltip! "Delete this extract and its cards")
