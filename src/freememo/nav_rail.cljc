@@ -490,34 +490,36 @@
                 :else (RailItem item active? nil (fn [] (navigate! tab)))))))))))
 
 (defn open-page-help!
-  "Open the Help section for the page in view, or all of Help when the page
-   has none (plans/searchable-help.md 5.1, 5.2). `help-slug` is
-   help-content/slug-for-tab of the routed tab."
-  [navigate! help-slug]
+  "Show the Help section for the page in view, over the page, or open all of
+   Help when the page has none (plans/searchable-help.md 5.2). `help-slug` is
+   help-content/slug-for-tab of the routed tab; !page-help-slug is the shell
+   atom help-page/PageHelpModal watches.
+   Post: @!page-help-slug = help-slug when there is one; otherwise /help opens."
+  [navigate! help-slug !page-help-slug]
   (if help-slug
-    (navigate! :help (nav/nav-help help-slug))
+    (reset! !page-help-slug help-slug)
     (navigate! :help)))
 
 (e/defn PageHelpButton
   "Help for this page: a foot button under Help, not a `utilities` entry, so it
    is not a destination and moves no Nav destinations count (D7). It marks no
-   route active."
-  [help-slug navigate!]
+   route active, and it opens a modal rather than leaving the page."
+  [help-slug navigate! !page-help-slug]
   (e/client
     (dom/button
       (dom/props {:class "nav-rail__item"})
       (RailIcon :info)
       (RailLabel "Help for this page")
-      (dom/On "click" (fn [_] (open-page-help! navigate! help-slug)) nil))))
+      (dom/On "click" (fn [_] (open-page-help! navigate! help-slug !page-help-slug)) nil))))
 
-(e/defn RailFoot [user-id active help-slug navigate! !undo-modal-open? !activity-open?]
+(e/defn RailFoot [user-id active help-slug navigate! !undo-modal-open? !activity-open? !page-help-slug]
   (e/client
     (dom/div
       (dom/props {:class "nav-rail__foot"})
       (e/for [item (e/diff-by :tab utilities)]
         (let [tab (:tab item)]
           (RailItem item (= tab active) nil (fn [] (navigate! tab)))
-          (when (= tab :help) (PageHelpButton help-slug navigate!))))
+          (when (= tab :help) (PageHelpButton help-slug navigate! !page-help-slug))))
       (ActionsNavButton !undo-modal-open?)
       (ActivityNavButton user-id !activity-open?))))
 
@@ -526,8 +528,9 @@
    route branch, so it never remounts on navigation (1.1.3).
 
    `route` is router5's full route. `!undo-modal-open?` and `!activity-open?`
-   are the shell atoms Actions and Activity toggle."
-  [user-id route navigate! !undo-modal-open? !activity-open?]
+   are the shell atoms Actions and Activity toggle. `!page-help-slug` holds
+   the section Help for this page shows, or nil."
+  [user-id route navigate! !undo-modal-open? !activity-open? !page-help-slug]
   (e/client
     (let [;; Synchronous, like Main's theme read, so the value is most likely
           ;; in the same frame as the shell and a kept rail does not shift
@@ -589,5 +592,5 @@
 
             (RailDestinations active continue-target due navigate!)
             (RailFoot user-id active (help/slug-for-tab (route-tab route))
-              navigate! !undo-modal-open? !activity-open?)
+              navigate! !undo-modal-open? !activity-open? !page-help-slug)
             (KeepOpenButton kept? toggle-kept)))))))

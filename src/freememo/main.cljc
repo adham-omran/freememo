@@ -22,7 +22,7 @@
             [freememo.graph-page :refer [GraphPage]]
             [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
             [freememo.search-page :refer [SearchPage]]
-            [freememo.help-page :refer [HelpPage]]
+            [freememo.help-page :refer [HelpPage PageHelpModal]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
             [freememo.legal-copy :as legal]
@@ -305,6 +305,10 @@
                     ;; Undo/Actions modal open-state (shared by nav button + modal)
                     !undo-modal-open? (atom false)
 
+                    ;; Help for this page: the section slug the modal shows, or
+                    ;; nil while closed (rail button + help-page/PageHelpModal)
+                    !page-help-slug (atom nil)
+
                     ;; Activity monitor open-state (shared by the rail's Activity
                     ;; item + the popover). The popover is a sibling of the page
                     ;; column, anchored to the rail's docked edge in index.css.
@@ -357,7 +361,7 @@
                 ;; The nav rail, then the page column (plans/nav-stage-rail.md
                 ;; 1.1.1). The rail sits outside every route branch, so it
                 ;; mounts once and never remounts on navigation.
-                (NavRail user-id r/route navigate! !undo-modal-open? !activity-open?)
+                (NavRail user-id r/route navigate! !undo-modal-open? !activity-open? !page-help-slug)
 
                 (dom/div
                   (dom/props {:class "app-column"})
@@ -458,6 +462,9 @@
 
                 ;; Actions history modal (undo-newest is a :queue command now)
                 (UndoHistoryModal user-id !undo-modal-open?)
+
+                ;; Help for this page: the routed tab's Help section, over the page
+                (PageHelpModal !page-help-slug navigate!)
 
                 ;; The getting-started spotlight. Last, so it paints over the
                 ;; page, and z-index keeps it under the toasts

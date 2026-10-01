@@ -88,3 +88,17 @@
   (testing "1.4.3: the label reads the chord from the registry"
     ;; util/mac-platform? is false on the JVM, so this is the non-macOS form.
     (is (= "Ctrl+." (commands/display-chord :toggle-nav-rail)))))
+
+(deftest help-for-this-page-opens-a-modal-or-falls-back-to-help
+  (testing "a page with a Help section shows it over the page"
+    (let [!slug (atom nil)
+          navigations (atom [])]
+      (rail/open-page-help! #(swap! navigations conj %&) "import-file" !slug)
+      (is (= "import-file" @!slug))
+      (is (empty? @navigations) "the page stays where it is")))
+  (testing "a page with no section opens all of Help"
+    (let [!slug (atom nil)
+          navigations (atom [])]
+      (rail/open-page-help! #(swap! navigations conj %&) nil !slug)
+      (is (nil? @!slug))
+      (is (= [[:help]] @navigations)))))

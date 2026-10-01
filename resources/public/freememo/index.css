@@ -1970,6 +1970,42 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     color: var(--color-text-secondary);
     margin-bottom: 20px;
 }
+/* Help for this page (help-page/PageHelpModal): one Help section over the page. */
+.page-help-modal {
+    width: min(640px, 95vw);
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+.page-help-modal__header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 0.5px solid var(--color-border-light);
+}
+.page-help-modal__kicker {
+    flex: 1;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+}
+.page-help-modal__close {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0.5px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+.page-help-modal__body { padding: 16px 20px; overflow: auto; }
+.page-help-modal__body .help-section { margin-bottom: 0; }
 .help-clear {
     border: none;
     background: none;

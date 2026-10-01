@@ -8,6 +8,9 @@
   (:require
    [freememo.command-bus :as bus]
    [freememo.help-content :as help]
+   [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
+   [freememo.navigation :as nav]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.router5 :as r]))
@@ -116,3 +119,41 @@
         ;; Last form: its value is the body's, so it is never skipped, and it
         ;; gates no frame. Re-runs on every slug change (2.2).
         (scroll-to-section! slug)))))
+
+(e/defn PageHelpModal
+  "Help for this page, over the page itself: the Help section for the routed
+   tab, so a user reads it without leaving what they were doing. The rail's
+   Help for this page button opens it (freememo.nav-rail).
+
+   !page-help-slug holds the slug of the section to show, or nil when closed.
+   The rail sets it from the page in view at click time, so a later route
+   change neither hides the modal nor reopens it.
+
+   Post: renders while @!page-help-slug names a section. Closing, Escape, a
+         backdrop click and Open in Help all reset it to nil. Open in Help
+         also navigates to /help/<slug>."
+  [!page-help-slug navigate!]
+  (e/client
+    (when-let [{:keys [slug] :as section} (help/section-by-slug (e/watch !page-help-slug))]
+      (let [close! (fn [] (reset! !page-help-slug nil))]
+        (dom/div
+          (dom/props {:class "modal-backdrop"})
+          (dom/On "click" (fn [_] (close!)) nil)
+          (modal/ModalEscape close! "Help for this page")
+          (dom/div
+            (dom/props {:class "modal-content page-help-modal"})
+            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+            (dom/div
+              (dom/props {:class "page-help-modal__header"})
+              (dom/span (dom/props {:class "page-help-modal__kicker"}) (dom/text "Help for this page"))
+              (dom/button
+                (dom/props {:type "button" :class "help-clear"})
+                (dom/text "Open in Help")
+                (dom/On "click" (fn [_] (close!) (navigate! :help (nav/nav-help slug))) nil))
+              (dom/button
+                (dom/props {:type "button" :aria-label "Close" :class "page-help-modal__close"})
+                (icons/Icon :x :size 14)
+                (dom/On "click" (fn [_] (close!)) nil)))
+            (dom/div
+              (dom/props {:class "page-help-modal__body"})
+              (HelpSection section false))))))))
