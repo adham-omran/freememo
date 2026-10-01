@@ -503,8 +503,8 @@
 (def editor-keys
   "Rich-text editor keys for the shortcuts table. They are bound in each
    editor, not in freememo.commands, so no registry-derived list has them."
-  [{:key "Tab" :desc "Indent the line (in a rich-text editor)"}
-   {:key "Shift+Tab" :desc "Outdent the line (in a rich-text editor)"}
+  [{:key "Tab" :desc "Indent the line (in the document editor)"}
+   {:key "Shift+Tab" :desc "Outdent the line (in the document editor)"}
    {:key "Escape, then Tab" :desc "Leave a rich-text editor"}])
 
 (e/defn AccountSection

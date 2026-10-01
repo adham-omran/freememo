@@ -57,14 +57,18 @@
              (.setAttribute b "aria-label" lbl)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Quill keyboard contract. Tab and Shift+Tab belong to the editor: they indent
-;; and outdent. Escape is the way out, which WCAG 2.1.2 permits because the
-;; editor announces it (`editor-hint-id`). See plans/bullet-indent-tab-behavior.md.
+;; Quill keyboard contract. Each editor takes ONE of two Tab contracts:
+;;   - install-tab-indent! (the document editor): Tab and Shift+Tab indent and
+;;     outdent. Escape is the way out, which WCAG 2.1.2 permits because the
+;;     editor announces it (`editor-hint-id`).
+;;   - free-quill-tab! (card fields): Tab moves focus like any control, and the
+;;     format menu's indent buttons indent.
+;; install-editor-escape! serves both. See plans/bullet-indent-tab-behavior.md.
 ;; ---------------------------------------------------------------------------
 
 (def editor-hint-id
-  "Id of the one visually hidden element every editor root names in
-   aria-describedby."
+  "Id of the one visually hidden element that every Tab-indenting editor
+   root names in aria-describedby."
   "editor-keyboard-hint")
 
 (def editor-hint-text
@@ -94,35 +98,6 @@
            (do (.format editor "indent" delta "user")
                false))))))
 
-(defn install-tab-indent!
-  "Make Tab indent and Shift+Tab outdent every selected line, with the caret
-   anywhere in the line.
-
-   Pre  : `editor` is an initialized Quill instance (bindings registered).
-   Post : bindings[\"Tab\"] is, in order: indent, outdent, then Quill's own
-          code-block and table Tab bindings. Quill's `tab` binding (insert a
-          tab character) and `remove tab` binding are gone. So a Tab keydown
-          in the editor is always prevented and never moves focus; in a code
-          block it indents the code, and in a table it moves to the next cell.
-   Inv  : at level 8 Tab, and at level 0 Shift+Tab, change nothing but still
-          take the key — the editor owns Tab on every line.
-          Quill's `match` requires an omitted modifier to be absent, so the
-          explicit `:shiftKey false` keeps the two bindings apart."
-  [editor]
-  #?(:clj nil
-     :cljs
-     (let [^js ed editor
-           ^js bindings (.-bindings (.-keyboard ed))
-           kept (filter quill-keeps-tab? (array-seq (or (aget bindings "Tab") #js [])))]
-       (aset bindings "Tab"
-         (into-array
-           (concat [#js {:key "Tab" :shiftKey false :handler (line-indent-handler ed "+1")}
-                    #js {:key "Tab" :shiftKey true  :handler (line-indent-handler ed "-1")}]
-                   kept)))
-       ;; Quill 2 keys bindings by key name; older code paths used keycode 9.
-       (js-delete bindings "tab")
-       (js-delete bindings "9"))))
-
 #?(:cljs
    (defn- ensure-editor-hint!
      "Append the shared hint element to document.body once. A foreign node is
@@ -135,13 +110,63 @@
          (set! (.-textContent hint) editor-hint-text)
          (.appendChild (.-body js/document) hint)))))
 
+(defn free-quill-tab!
+  "Remove every Quill Tab binding, so Tab and Shift+Tab move focus like any
+   control. The card fields take this contract: a modal of several fields is
+   navigated with Tab, and the format menu's indent buttons indent.
+
+   Pre  : `editor` is an initialized Quill instance (bindings registered).
+   Post : no Quill binding matches Tab; keydown Tab is not prevented by Quill.
+   Inv  : exclusive with `install-tab-indent!` — an editor takes one."
+  [editor]
+  #?(:clj nil
+     :cljs
+     (let [^js bindings (.-bindings (.-keyboard ^js editor))]
+       ;; Quill 2 keys bindings by key name; older code paths used keycode 9.
+       (js-delete bindings "Tab")
+       (js-delete bindings "tab")
+       (js-delete bindings "9"))))
+
+(defn install-tab-indent!
+  "Make Tab indent and Shift+Tab outdent every selected line, with the caret
+   anywhere in the line, and announce the way out.
+
+   Pre  : `editor` is an initialized Quill instance (bindings registered).
+   Post : the editor root names the keyboard hint in aria-describedby, because
+          Tab no longer leaves this editor.
+          bindings[\"Tab\"] is, in order: indent, outdent, then Quill's own
+          code-block and table Tab bindings. Quill's `tab` binding (insert a
+          tab character) and `remove tab` binding are gone. So a Tab keydown
+          in the editor is always prevented and never moves focus; in a code
+          block it indents the code, and in a table it moves to the next cell.
+   Inv  : at level 8 Tab, and at level 0 Shift+Tab, change nothing but still
+          take the key — the editor owns Tab on every line.
+          Quill's `match` requires an omitted modifier to be absent, so the
+          explicit `:shiftKey false` keeps the two bindings apart.
+          Exclusive with `free-quill-tab!` — an editor takes one."
+  [editor]
+  #?(:clj nil
+     :cljs
+     (let [^js ed editor
+           ^js bindings (.-bindings (.-keyboard ed))
+           kept (filter quill-keeps-tab? (array-seq (or (aget bindings "Tab") #js [])))]
+       (ensure-editor-hint!)
+       (.setAttribute (.-root ed) "aria-describedby" editor-hint-id)
+       (aset bindings "Tab"
+         (into-array
+           (concat [#js {:key "Tab" :shiftKey false :handler (line-indent-handler ed "+1")}
+                    #js {:key "Tab" :shiftKey true  :handler (line-indent-handler ed "-1")}]
+                   kept)))
+       ;; Quill 2 keys bindings by key name; older code paths used keycode 9.
+       (js-delete bindings "tab")
+       (js-delete bindings "9"))))
+
 (defn install-editor-escape!
   "Escape inside the editor first closes an open editor popover, and otherwise
    leaves the editor, so the next Tab reaches the control after it.
 
    Pre  : `editor` is an initialized Quill instance.
-   Post : the editor root names the keyboard hint in aria-describedby.
-          Escape whose target is inside the root never reaches an ancestor —
+   Post : Escape whose target is inside the root never reaches an ancestor —
           so an enclosing modal's ModalEscape does not close on it. It either
           closes the open popovers (focus stays) or gives the Quill container
           tabindex=-1 and focuses it. The container drops the tabindex when it
@@ -156,8 +181,6 @@
      (let [^js ed editor
            ^js root (.-root ed)
            ^js container (.-container ed)]
-       (ensure-editor-hint!)
-       (.setAttribute root "aria-describedby" editor-hint-id)
        (.addEventListener container "keydown"
          (fn [^js e]
            (when (and (= "Escape" (.-key e))

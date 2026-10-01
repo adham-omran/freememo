@@ -87,6 +87,22 @@
     "<path d=\"M12.1 6.9 A3.1 3.1 0 0 1 12.1 11.1\"/>"
     "<path d=\"M13.9 5.1 A5.5 5.5 0 0 1 13.9 12.9\"/></svg>"))
 
+;; Indent arrows — three text lines with an arrow beside them, pointing out
+;; (increase) or back (decrease). Same 18-viewBox stroke construction as
+;; image-glyph. The arrows are drawn for LTR text. In an RTL line the indent
+;; still moves the line away from its start edge, so the arrow points the
+;; other way from the move.
+(defn- indent-glyph [arrow-points]
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
+    "<line x1=\"8.5\" y1=\"4.5\" x2=\"15.5\" y2=\"4.5\"/>"
+    "<line x1=\"8.5\" y1=\"9\" x2=\"15.5\" y2=\"9\"/>"
+    "<line x1=\"8.5\" y1=\"13.5\" x2=\"15.5\" y2=\"13.5\"/>"
+    "<line x1=\"2.5\" y1=\"9\" x2=\"6\" y2=\"9\"/>"
+    "<polyline points=\"" arrow-points "\"/></svg>"))
+
+(def ^:private increase-indent-glyph (indent-glyph "4.3 7 6.3 9 4.3 11"))
+(def ^:private decrease-indent-glyph (indent-glyph "4.2 7 2.2 9 4.2 11"))
+
 ;; Sparkles — matches freememo.icons :sparkles (24-viewBox Lucide path); marks
 ;; the Generate-here action on the card-gen row.
 (def ^:private sparkles-glyph
@@ -445,6 +461,10 @@
     ;; Row 3 — block-level: lists, align, direction, highlight, table
     (.appendChild row-blockfmt (glyph-button "•—" "Bullet list" (after #(toggle-value! q (get-rng) "list" "bullet"))))
     (.appendChild row-blockfmt (glyph-button "1." "Numbered list" (after #(toggle-value! q (get-rng) "list" "ordered"))))
+    ;; Every selected line moves one level. Card fields have no other way to
+    ;; indent: Tab moves between fields there (a11y/free-quill-tab!).
+    (.appendChild row-blockfmt (glyph-button decrease-indent-glyph "Decrease indent" (after #(set-format! q (get-rng) "indent" "-1"))))
+    (.appendChild row-blockfmt (glyph-button increase-indent-glyph "Increase indent" (after #(set-format! q (get-rng) "indent" "+1"))))
     (.appendChild row-blockfmt (:wrap align-dd))
     (.appendChild row-blockfmt (glyph-button "⇄" "Right-to-left" (after #(toggle-value! q (get-rng) "direction" "rtl"))))
     (.appendChild row-blockfmt (glyph-button "⊞" "Insert table" (after #(insert-table! q (get-rng)))))
