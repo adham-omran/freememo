@@ -173,10 +173,17 @@
   #"\[evidence:([A-Za-z0-9_-]+)\]")
 
 (def ^:private evidence-system-instructions
+  ;; The last three sentences exist because the sources come before the
+  ;; transcript (`answer-request`). An answer in the transcript keeps its raw
+  ;; tokens. After a page change, its E3 named a block of the old page, but the
+  ;; E3 in the sources above it is a block of the new page.
   (str "\n\n# Evidence citations\n\n"
     "Cite supplied sources only with their exact token, such as [evidence:E1]. "
     "Do not invent evidence keys. Use the narrowest source block that contains the claim. "
-    "Place each citation after the claim it supports."))
+    "Place each citation after the claim it supports. "
+    "Sources are supplied again for each request. "
+    "An earlier answer can discuss text that is not supplied now. "
+    "Its evidence keys then named other text, so never copy a key from an earlier answer."))
 
 (defn- source-revision
   "Stable revision text for one retained source snapshot."
@@ -516,18 +523,22 @@
     (or ref-topic-ids [])))
 
 (defn- run-source-packet
-  "Resolve current reading sources, @ references, and grounded fact evidence.
-   Post: every source shown to the model has one retained evidence record."
+  "Resolve current reading sources, grounded fact evidence, and @ references.
+   Keys run through the current topic, then the facts, then the references.
+   The facts message names its own key, so a key numbered after the references
+   would change that message on every turn that adds one.
+   Post: every source shown to the model has one retained evidence record.
+   :current-messages are the current topic's source turns, and
+   :reference-messages are the @ references' source turns."
   [user-id ctx mode ref-topic-ids]
   (let [root (db/get-topic (:root-id ctx))
         root-title (or (:topics/title root) "Untitled")
         current (if (:pdf? ctx)
                   (pdf-context-packet ctx root-title 1)
                   (topic-context-packet user-id ctx root-title 1))
-        refs (reference-context-packet user-id ref-topic-ids (:next-index current))
         grounding (grounding-system-suffix user-id ctx mode)
         facts-source (when-not (str/blank? grounding)
-                       {:citation-key (evidence-key (:next-index refs))
+                       {:citation-key (evidence-key (:next-index current))
                         :document-topic-id (:root-id ctx)
                         :page-topic-id (:page-topic-id ctx)
                         :page-number (:center-page ctx)
@@ -535,10 +546,14 @@
                         :display-label "document-level evidence"
                         :source-revision (source-revision root)
                         :quoted-text (evidence-excerpt grounding)
-                        :snapshot-content grounding})]
-    {:messages (into (:messages current) (:messages refs))
-     :evidence (cond-> (into (:evidence current) (:evidence refs))
-                 facts-source (conj facts-source))
+                        :snapshot-content grounding})
+        refs (reference-context-packet user-id ref-topic-ids
+               (cond-> (:next-index current) facts-source inc))]
+    {:current-messages (:messages current)
+     :reference-messages (:messages refs)
+     :evidence (-> (:evidence current)
+                 (cond-> facts-source (conj facts-source))
+                 (into (:evidence refs)))
      :grounding-suffix (when grounding
                          (str grounding "\n\nEvidence key for these established facts: "
                            "[evidence:" (:citation-key facts-source) "]."))}))
@@ -559,8 +574,12 @@
 
 (defn- answer-request
   "Render the exact provider request for one new answer.
-   Stable instructions and the latest checkpoint form the request prefix.
-   Later transcript, current sources, and the new user turn follow it."
+   A provider caches the start of a request that repeats the previous one, so
+   each part goes before every part that changes more often: instructions, the
+   current topic's sources, the facts, the checkpoint, the transcript after it,
+   then this turn's @ references and the new user turn. While the learner stays
+   on one page, the previous request is a prefix of this one, minus its
+   references and its user turn. See plans/assistant-request-prefix-cache.md."
   [user-id chat page-topic-id user-text ref-topic-ids model-fields web-search-supported?]
   (let [chat-id (:assistant_chats/id chat)
         root-topic-id (:assistant_chats/root_topic_id chat)
@@ -571,17 +590,19 @@
         system-content (str (mode-system-prompt (:id mode))
                          (mission-suffix user-id root-topic-id)
                          evidence-system-instructions)
-        prefix (cond-> [{:role "system" :content system-content}]
-                 checkpoint (conj {:role "system"
-                                    :content (str "# Conversation checkpoint\n\n"
-                                               (:summary checkpoint))}))
-        later-transcript (transcript-messages-after-checkpoint chat-id checkpoint)
-        dynamic-grounding (when-let [grounding (:grounding-suffix sources)]
-                            [{:role "system" :content grounding}])
-        messages (into (into (into (into prefix later-transcript)
-                                dynamic-grounding)
-                         (:messages sources))
-                   [{:role "user" :content user-text}])]
+        facts-message (when-let [grounding (:grounding-suffix sources)]
+                        {:role "system" :content grounding})
+        checkpoint-message (when checkpoint
+                             {:role "system"
+                              :content (str "# Conversation checkpoint\n\n"
+                                         (:summary checkpoint))})
+        messages (-> [{:role "system" :content system-content}]
+                   (into (:current-messages sources))
+                   (cond-> facts-message (conj facts-message)
+                           checkpoint-message (conj checkpoint-message))
+                   (into (transcript-messages-after-checkpoint chat-id checkpoint))
+                   (into (:reference-messages sources))
+                   (conj {:role "user" :content user-text}))]
     {:provider-request (cond-> (assoc model-fields
                                  :stream true
                                  :session_id (:assistant_chats/provider_session_id chat)
@@ -819,6 +840,12 @@
                                            1000000)
                             :web-search-requests
                             (:web-search-requests metadata)
+                            ;; Loki can then show prompt-cache reads, which
+                            ;; were otherwise only in the database.
+                            :input-tokens (:input-tokens metadata)
+                            :cached-tokens (:cached-tokens metadata)
+                            :cache-write-tokens (:cache-write-tokens metadata)
+                            :cost-usd (:cost-usd metadata)
                             :response-chars (count (or (:response_text run) ""))
                             :publish-count @publish-count*}}
             "Assistant run reached a terminal state"))
