@@ -849,6 +849,11 @@
   (e/amb
     (e/for [[token _] (forms/Button! [::add-keep]
                          :label "Add & Keep" :class "btn btn-secondary"
+                         :data-add-keep true
+                         :data-tooltip (str "Add and keep the modal open ("
+                                         (commands/display-chord
+                                           :add-keep (:add-keep modal/add-card-chords))
+                                         ")")
                          :style {:border-radius "var(--radius-sm)"})]
       (case (reset! !request (assoc (snapshot!) :id (str (random-uuid))))
         (token)))))
@@ -975,7 +980,7 @@
                     :tabindex "-1"})
         (modal/ModalEscape (fn [] (close!)) modal-title)
         (dom/On "keydown"
-          (fn [e] (modal/mod-enter-request-submit! e))
+          (fn [e] (modal/mod-enter-add-card! e))
           nil)
         (dom/div
           (dom/props {:class "card-modal-inner"
@@ -1084,6 +1089,8 @@
                               (dom/props {:style {:display "flex" :flex-wrap "wrap" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
                               (e/amb
                                 (forms/SubmitButton! :label (if copy? "Save" "Add") :class "btn btn-primary"
+                                  :data-tooltip (commands/display-chord
+                                                  :add (:add modal/add-card-chords))
                                   :style {:border-radius "var(--radius-sm)" :order "1"})
                                 (when-not copy?
                                   (FreezeCardField !freeze-side))
