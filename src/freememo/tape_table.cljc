@@ -36,6 +36,25 @@
    fixed, whatever the viewport height. Matches library_cards."
   1.5)
 
+(def ^:private empty-rows
+  "Minimum height of the scroll container, in rows, while the count is 0.
+
+   The container takes its height from its content, and at count 0 that content
+   is a table of height 0 and the empty overlay. The overlay is absolutely
+   positioned, so it adds no height. With no minimum, the container shrinks to
+   its 1px bottom border, and `overflow-y: auto` clips the message. Measured on
+   2026-10-01 on the Settings AI costs card with an empty ledger: the body was
+   1px tall, the overlay 48px tall, and no text showed.
+
+   Two rows is 82px, so the overlay is 81px tall inside the 1px border. A line of
+   the message is 18px, and the overlay's 24px top and bottom padding is inside
+   that box, so up to 4 lines fit. At 360px width the Quiz messages wrap to 2
+   lines and show in full (measured 2026-10-01).
+
+   A parent that stretches the container needs none of this. The Knowledge views
+   stretch it to its 410px cap, so their message always showed."
+  2)
+
 (e/defn TapeTable
   "Fixed header + virtual-scrolled body over `item-count` rows.
 
@@ -75,7 +94,9 @@
          `visible-rows × row-height` tall, less the 1px `.table-frame-body` bottom
          border, so it shows 10 rows with the last one clipped by that 1px;
          total scroll height equals item-count rows; the body table is mounted at
-         every count; header and body column boundaries agree in Blink and WebKit."
+         every count; at count 0 the container is at least `empty-rows` rows
+         tall, so `empty-message` shows; header and body column boundaries agree
+         in Blink and WebKit."
   [headers grid-cols item-count reset-key empty-message Row]
   (e/client
     (dom/table
@@ -93,7 +114,9 @@
       ;; table normally, and the window shrinks with it.
       ;; position:relative is inline, not on the shared .tape-scroll class — the
       ;; overlay below needs it and ten other sites share that class.
-      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
+      ;; min-height is NOT here: it depends on item-count, so the props map
+      ;; below owns it. Two maps that both set it race at mount.
+      (dom/props {:style {:flex "1" :overflow-y "auto"
                           :max-height (str (* visible-rows row-height) "px")
                           :scrollbar-gutter "stable" :position "relative"}})
       (let [[offset limit] (Scroll-window row-height item-count dom/node
@@ -103,8 +126,13 @@
                     ;; C1c per-row transform positioning (see .tape-scroll in
                     ;; index.css): --count → table height (the scroll range),
                     ;; --grid-cols → the row grid.
+                    ;; min-height keeps the empty overlay visible at count 0
+                    ;; (see `empty-rows`). At any other count it is 0, as it was.
                     :style {:--count item-count :--row-height (str row-height "px")
-                            :--grid-cols grid-cols}})
+                            :--grid-cols grid-cols
+                            :min-height (if (zero? item-count)
+                                          (str (* empty-rows row-height) "px")
+                                          "0")}})
         (dom/table
           (dom/props {:class "tape-table-body" :style {:width "100%"}})
           (e/for [i (Tape offset limit)]
