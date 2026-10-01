@@ -4631,6 +4631,11 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     padding: 8px;
 }
 
+/* The transcript's rows have their own element so Electric's mount point never
+   mixes them with the empty state (assistant_transcript.cljc). It makes no box,
+   so each row stays a flex item of the transcript. */
+.assistant-panel__rows { display: contents; }
+
 .assistant-panel__hint {
     color: var(--color-text-secondary);
     font-size: 13px;

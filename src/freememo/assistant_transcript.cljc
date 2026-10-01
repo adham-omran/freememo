@@ -68,7 +68,29 @@
         ;; It also stops a completed echo reappearing after a chat switch.
         (when (and echo echo-arrived?)
           (reset! !echo nil))
-        (if (zero? message-count)
+        ;; The rows live in their OWN element, mounted always, and no branch
+        ;; chooses between them and the empty state. They used to be the else
+        ;; branch of an `if` on `(zero? message-count)`, directly inside this div.
+        ;; Opening a chat from the picker switched that branch from the starters
+        ;; to every row at once, and the next send then mounted the echo after
+        ;; them. Electric's mount point for this div lost count there: it
+        ;; detached every row node while the row frames stayed mounted, so the
+        ;; transcript stayed empty until a reload. Measured: 0 of 10 rows in the
+        ;; DOM after the send, `e/Count` at 10, every removed node detached, and
+        ;; no foreign node in the div. Which step inside Electric miscounts is
+        ;; not identified. A chat whose rows arrived one send at a time never
+        ;; tripped it. playwright/probe-assistant-evidence-payload.mjs drives it.
+        ;;
+        ;; Here each child of this div is at most one node. The loop's only
+        ;; siblings are its own rows. `display: contents` keeps the rows as
+        ;; flex items of the transcript.
+        (dom/div
+          (dom/props {:class "assistant-panel__rows"})
+          (e/for [display-message message-rows]
+            (transcript-entry/AssistantTranscriptEntry
+              display-message user-id page-topic-id root-topic-id sending?
+              !details-run !evidence !error)))
+        (when (zero? message-count)
           (if (and (not sending?) (nil? echo))
             (rows/EmptyChatStarters mode-entry web-search? !submit !active !refs)
             ;; A send whose first rows have not crossed yet. The transcript must
@@ -76,11 +98,7 @@
             ;; rendering nothing is the blank white panel this branch produced.
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
-              (dom/text "Starting…")))
-          (e/for [display-message message-rows]
-            (transcript-entry/AssistantTranscriptEntry
-              display-message user-id page-topic-id root-topic-id sending?
-              !details-run !evidence !error)))
+              (dom/text "Starting…"))))
         (when-let [echo-text (:text echo)]
           (dom/div
             (dom/props {:class "assistant-msg assistant-msg--user"})
