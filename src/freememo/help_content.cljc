@@ -578,6 +578,29 @@
    :settings   [:none "No Settings section yet."]
    :credits    [:none "No Credits section yet."]})
 
+(def kind->slug
+  "Topic kind → the Help section that explains it. One viewer route serves
+   every kind, so Help for this page reads the kind of the topic in view
+   (plans/help-for-viewer-topic-kind.md 1.1). help_content_test asserts its
+   keys equal freememo.topic-kinds/all."
+  {"pdf"            "studying-a-pdf"
+   "page"           "studying-a-pdf"
+   "basic"          "studying-a-pdf"
+   "epub"           "import-file"
+   "markdown"       "import-file"
+   "web"            "import-link"
+   "wikipedia"      "import-link"
+   "supermemo"      "import-supermemo"
+   "video"          "import-video"
+   "video-playlist" "import-video"
+   "audio"          "import-audio"
+   "score"          "score-cards"
+   "poem"           "import-poem"
+   "code"           "learning-a-codebase"
+   "repo"           "learning-a-codebase"
+   "commit"         "learning-a-codebase"
+   "dir"            "learning-a-codebase"})
+
 (def undocumented
   "Registry ids no step documents, each with its reason. `:pending` means Help
    owes the command a step. help_content_test caps the number of `:pending`
@@ -659,6 +682,20 @@
   [tab]
   (let [v (get tab->slug tab)]
     (when (string? v) v)))
+
+(defn slug-for-viewer
+  "The Help section for the viewer in `viewer-mode`, showing a topic of `kind`.
+
+   Pre : `viewer-mode` is :learn-session, :subset-review or :topic. `kind` is a
+         topic kind or nil.
+   Post: a session gets its own section, whatever item it shows. A topic gets
+         its kind's section, or the viewer tab's when the kind is nil or
+         unknown."
+  [viewer-mode kind]
+  (case viewer-mode
+    :learn-session "reviewing"
+    :subset-review "finding-and-organizing"
+    (or (get kind->slug kind) (slug-for-tab :viewer))))
 
 (def ^:private command->slug
   "Registry id → the slug of the FIRST section, in reading order, with a step

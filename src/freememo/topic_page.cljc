@@ -12,10 +12,25 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.command-bus :as bus]
    [freememo.topic-state :as ts]
    [freememo.document-body :refer [DocumentRoot]]))
 
 ;; ---------------------------------------------------------------------------
+(e/defn PublishTopicKind
+  "Publish the kind of the topic in view as :topic-kind, which Help for this
+   page reads at click time (plans/help-for-viewer-topic-kind.md 3.1). Renders
+   nothing.
+
+   Post: while `kind` is non-nil, (:topic-kind @bus/!ctx) is `kind`. On
+         unmount the key is retracted (command-bus's publisher contract). On a
+         topic switch the previous kind stays until the new read lands (3.2)."
+  [kind]
+  (e/client
+    (e/on-unmount #(bus/retract-ctx! [:topic-kind]))
+    (when (some? kind)
+      (bus/publish-ctx! {:topic-kind kind}))))
+
 (e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page]
   (e/client
     (dom/div
@@ -40,4 +55,6 @@
         (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page)
               layout   (ts/DocumentLayoutState resolved)
               view     (ts/DocumentViewState resolved topic-id (:focus? layout))]
-          (DocumentRoot (merge resolved layout view)))))))
+          (DocumentRoot (merge resolved layout view))
+          ;; Last, so its value is the body's and it is never skipped.
+          (PublishTopicKind (:kind resolved)))))))

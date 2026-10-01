@@ -102,3 +102,28 @@
       (rail/open-page-help! #(swap! navigations conj %&) nil !slug)
       (is (nil? @!slug))
       (is (= [[:help]] @navigations)))))
+
+(deftest the-viewer-route-names-its-mode
+  ;; plans/help-for-viewer-topic-kind.md 4.1
+  (is (= :learn-session (rail/viewer-mode '(viewer learn-session))))
+  (is (= :subset-review (rail/viewer-mode '(viewer subset-review 7))))
+  (is (= :topic (rail/viewer-mode '(viewer topic 5))))
+  (is (= :topic (rail/viewer-mode '(viewer)))))
+
+(deftest help-for-this-page-follows-the-topic-kind
+  ;; plans/help-for-viewer-topic-kind.md 4.2
+  (testing "a topic shows its kind's section"
+    (is (= "import-video" (rail/page-help-slug '(viewer topic 5) {:topic-kind "video"})))
+    (is (= "import-poem" (rail/page-help-slug '(viewer topic 5) {:topic-kind "poem"}))))
+  (testing "a session shows the session's section, whatever item it holds"
+    (is (= "reviewing" (rail/page-help-slug '(viewer learn-session) {:topic-kind "video"})))
+    (is (= "finding-and-organizing" (rail/page-help-slug '(viewer subset-review 7) {:topic-kind "pdf"}))))
+  (testing "no kind published falls back to the viewer tab's section"
+    (is (= "studying-a-pdf" (rail/page-help-slug '(viewer topic 5) {}))))
+  (testing "other tabs keep the tab mapping"
+    (is (= "finding-and-organizing" (rail/page-help-slug '(library documents) {:topic-kind "video"})))
+    (is (nil? (rail/page-help-slug '(settings) {}))))
+  (testing "the click opens the chosen section over the page"
+    (let [!slug (atom nil)]
+      (rail/open-page-help! (fn [& _]) (rail/page-help-slug '(viewer topic 5) {:topic-kind "video"}) !slug)
+      (is (= "import-video" @!slug)))))

@@ -7,7 +7,8 @@
    [clojure.test :refer [deftest is testing]]
    [freememo.commands :as commands]
    [freememo.help-content :as help]
-   [freememo.page-title-format :as page-title-format]))
+   [freememo.page-title-format :as page-title-format]
+   [freememo.topic-kinds :as topic-kinds]))
 
 (def ^:private slugs (map :slug help/sections))
 
@@ -93,3 +94,19 @@
   (is (= "studying-a-pdf" (help/slug-for-command :scan)))
   (is (= "syncing-to-anki" (help/slug-for-command :anki-sync)))
   (is (nil? (help/slug-for-command :debit-credits))))
+
+(deftest every-topic-kind-maps-to-a-section
+  ;; plans/help-for-viewer-topic-kind.md 1.1, 5.1. A new kind joins
+  ;; topic-kinds/all and fails here until Help maps it.
+  (is (= topic-kinds/all (set (keys help/kind->slug))))
+  (doseq [[kind slug] help/kind->slug]
+    (is (help/section-by-slug slug) (str kind " maps to unknown slug " slug))))
+
+(deftest the-viewer-section-depends-on-mode-and-kind
+  ;; plans/help-for-viewer-topic-kind.md 1.2
+  (is (= "reviewing" (help/slug-for-viewer :learn-session "video")))
+  (is (= "finding-and-organizing" (help/slug-for-viewer :subset-review "pdf")))
+  (is (= "import-audio" (help/slug-for-viewer :topic "audio")))
+  (is (= "studying-a-pdf" (help/slug-for-viewer :topic nil)))
+  (is (= "studying-a-pdf" (help/slug-for-viewer :topic "nonsense")))
+  (is (= "studying-a-pdf" (help/slug-for-tab :viewer)) "1.3: the tab fallback is unchanged"))

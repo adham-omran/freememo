@@ -73,6 +73,17 @@
   (let [[page] route]
     (if page (keyword (str page)) :home)))
 
+(defn viewer-mode
+  "What a /viewer route shows: :learn-session, :subset-review, or :topic for a
+   topic and a bare /viewer. The one parse of the viewer's second segment.
+   Pre: `route` is router5's route."
+  [route]
+  (let [[_ sub] route]
+    (case (some-> sub str)
+      "learn-session" :learn-session
+      "subset-review" :subset-review
+      :topic)))
+
 (defn active-item
   "The rail item a route marks active (1.7.1).
 
@@ -81,10 +92,9 @@
          which no item leads to. Otherwise the tab keyword, so a topic and a
          bare /viewer both give :viewer, which is Continue."
   [route]
-  (let [[_ sub] route
-        tab (route-tab route)]
+  (let [tab (route-tab route)]
     (cond
-      (and (= tab :viewer) (#{"learn-session" "subset-review"} (some-> sub str))) :learn
+      (and (= tab :viewer) (not= :topic (viewer-mode route))) :learn
       (= tab :credits) nil
       :else tab)))
 
@@ -489,10 +499,22 @@
                 (= tab :learn) (LearnItem item active? due navigate!)
                 :else (RailItem item active? nil (fn [] (navigate! tab)))))))))))
 
+(defn page-help-slug
+  "The Help section for the page in view, chosen at click time
+   (plans/help-for-viewer-topic-kind.md 4.2). On the viewer it reads the
+   viewer mode from `route` and the topic kind from `ctx`, the bus context
+   topic-page/PublishTopicKind writes. Elsewhere it maps the tab.
+   Post: a section slug, or nil when the page has no section."
+  [route ctx]
+  (let [tab (route-tab route)]
+    (if (= tab :viewer)
+      (help/slug-for-viewer (viewer-mode route) (:topic-kind ctx))
+      (help/slug-for-tab tab))))
+
 (defn open-page-help!
   "Show the Help section for the page in view, over the page, or open all of
    Help when the page has none (plans/searchable-help.md 5.2). `help-slug` is
-   help-content/slug-for-tab of the routed tab; !page-help-slug is the shell
+   page-help-slug's answer for the page in view; !page-help-slug is the shell
    atom help-page/PageHelpModal watches.
    Post: @!page-help-slug = help-slug when there is one; otherwise /help opens."
   [navigate! help-slug !page-help-slug]
@@ -504,22 +526,24 @@
   "Help for this page: a foot button under Help, not a `utilities` entry, so it
    is not a destination and moves no Nav destinations count (D7). It marks no
    route active, and it opens a modal rather than leaving the page."
-  [help-slug navigate! !page-help-slug]
+  [route navigate! !page-help-slug]
   (e/client
     (dom/button
       (dom/props {:class "nav-rail__item"})
       (RailIcon :info)
       (RailLabel "Help for this page")
-      (dom/On "click" (fn [_] (open-page-help! navigate! help-slug !page-help-slug)) nil))))
+      (dom/On "click"
+        (fn [_] (open-page-help! navigate! (page-help-slug route @bus/!ctx) !page-help-slug))
+        nil))))
 
-(e/defn RailFoot [user-id active help-slug navigate! !undo-modal-open? !activity-open? !page-help-slug]
+(e/defn RailFoot [user-id active route navigate! !undo-modal-open? !activity-open? !page-help-slug]
   (e/client
     (dom/div
       (dom/props {:class "nav-rail__foot"})
       (e/for [item (e/diff-by :tab utilities)]
         (let [tab (:tab item)]
           (RailItem item (= tab active) nil (fn [] (navigate! tab)))
-          (when (= tab :help) (PageHelpButton help-slug navigate! !page-help-slug))))
+          (when (= tab :help) (PageHelpButton route navigate! !page-help-slug))))
       (ActionsNavButton !undo-modal-open?)
       (ActivityNavButton user-id !activity-open?))))
 
@@ -591,6 +615,6 @@
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
             (RailDestinations active continue-target due navigate!)
-            (RailFoot user-id active (help/slug-for-tab (route-tab route))
+            (RailFoot user-id active route
               navigate! !undo-modal-open? !activity-open? !page-help-slug)
             (KeepOpenButton kept? toggle-kept)))))))
