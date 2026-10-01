@@ -181,6 +181,37 @@
          (.requestSubmit form)))))
 #?(:clj (defn mod-enter-request-submit! [_e] nil))
 
+(def add-card-chords
+  "The Add-Card modal's two chords as `freememo.commands` bind specs, keyed by
+   button. The DISPLAY side of what `mod-enter-add-card!` handles, kept here so
+   the button tooltips and the Settings shortcuts table cannot drift from the
+   keys that fire. `meta` reads as Cmd on macOS and Ctrl elsewhere, matching the
+   handler's `(or metaKey ctrlKey)`.
+
+   No reader conditional: shared vocabulary read from client scope, so both
+   peers must see plain literals."
+  {:add      "meta+enter"
+   :add-keep "meta+shift+enter"})
+
+;; Cmd/Ctrl+Enter → requestSubmit, as mod-enter-request-submit!. With Shift it
+;; clicks the `[data-add-keep]` button instead (Add & Keep). A modal with no
+;; such button — the Add-Card modal in copy mode — falls through to the submit,
+;; which is what Cmd+Shift+Enter did before this chord existed. `:not([disabled])`
+;; lets a chord during an in-flight Add & Keep fall through to nothing rather
+;; than queue a second request. Top-level platform-split defn for the same
+;; capture-symmetry reason as mod-enter-submit!.
+#?(:cljs
+   (defn mod-enter-add-card! [e]
+     (if-let [keep-btn (and (= (.-key e) "Enter")
+                            (or (.-metaKey e) (.-ctrlKey e))
+                            (.-shiftKey e)
+                            (.querySelector (.-currentTarget e)
+                              "button[data-add-keep]"))]
+       (do (.preventDefault e)
+           (when-not (.-disabled keep-btn) (.click keep-btn)))
+       (mod-enter-request-submit! e))))
+#?(:clj (defn mod-enter-add-card! [_e] nil))
+
 ;; Cmd/Ctrl+Enter → click the enclosing container's primary button. Third sibling
 ;; to the two above, and the one a surface built from Forms5 `Button!` needs:
 ;; `Button!` hands back no node to capture (so `!primary-btn` has nothing to hold)

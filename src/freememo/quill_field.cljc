@@ -505,8 +505,9 @@
            (table-ui/init! ed)
            ;; The custom menu replaces the hidden Bubble tooltip.
            (a11y/label-quill-toolbar! (.-parentElement container))
-           ;; Tab indents the line; Escape leaves the editor.
-           (a11y/install-tab-indent! ed)
+           ;; Tab moves to the next field, as in any form; the format menu's
+           ;; indent buttons indent. Escape leaves the editor.
+           (a11y/free-quill-tab! ed)
            (a11y/install-editor-escape! ed)
            ;; Add cloze shortcuts only to a cloze field.
            (when cloze? (editor-actions/install-cloze-bindings! ed))

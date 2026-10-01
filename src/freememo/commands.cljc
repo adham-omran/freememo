@@ -606,6 +606,7 @@
                           ;; below would render them "PG-UP" / "PG-DOWN".
                           "pg-up"   (if mac? "⇞" "PgUp")
                           "pg-down" (if mac? "⇟" "PgDn")
+                          "enter"   (if mac? "↩" "Enter")
                           (str/upper-case p)))]
        (str/join (if mac? "" "+") (map part (str/split eff #"\+")))))))
 

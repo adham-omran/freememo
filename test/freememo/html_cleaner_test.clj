@@ -126,14 +126,18 @@
     :html "<p>Kaleida was funded to {{c1::$40 million}} in {{c2::1991}}</p>"
     :keeps ["{{c1::$40 million}}" "{{c2::1991}}"]}
 
-   ;; Not in the menu, but Tab and Shift+Tab apply indent
-   ;; (a11y/install-tab-indent!), and pasting Quill HTML reaches both. Both are
-   ;; inside Quill's own whitelists — indent.ts:126, font.ts:81.
+   ;; The menu's Decrease/Increase indent buttons and the document editor's Tab
+   ;; (a11y/install-tab-indent!) apply indent. Pasting Quill HTML reaches font.
+   ;; Both are inside Quill's own whitelists — indent.ts:126, font.ts:81.
    {:control "Indent 1 / 5 / 8 on list items"
     :html (str "<ol><li data-list=\"ordered\" class=\"ql-indent-1\">a</li>"
             "<li data-list=\"ordered\" class=\"ql-indent-5\">b</li>"
             "<li data-list=\"ordered\" class=\"ql-indent-8\">c</li></ol>")
     :keeps ["ql-indent-1" "ql-indent-5" "ql-indent-8"]}
+
+   {:control "Increase indent on a paragraph"               ; format_menu.cljs
+    :html "<p class=\"ql-indent-2\">indented</p>"
+    :keeps ["ql-indent-2"]}
 
    {:control "Font serif / monospace"
     :html (str "<span class=\"ql-font-serif\">a</span>"

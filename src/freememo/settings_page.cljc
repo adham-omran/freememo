@@ -16,6 +16,7 @@
    [freememo.settings-group :as group]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
+   [freememo.modal-shell :as modal]
    [freememo.settings-tab :as settings-tab]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])))
@@ -502,8 +503,8 @@
 (def editor-keys
   "Rich-text editor keys for the shortcuts table. They are bound in each
    editor, not in freememo.commands, so no registry-derived list has them."
-  [{:key "Tab" :desc "Indent the line (in a rich-text editor)"}
-   {:key "Shift+Tab" :desc "Outdent the line (in a rich-text editor)"}
+  [{:key "Tab" :desc "Indent the line (in the document editor)"}
+   {:key "Shift+Tab" :desc "Outdent the line (in the document editor)"}
    {:key "Escape, then Tab" :desc "Leave a rich-text editor"}])
 
 (e/defn AccountSection
@@ -579,7 +580,14 @@
                         :desc "New cloze deletion (in a cloze field)"}
                        {:key (commands/display-chord
                                :cloze-eq (:eq editor-actions/cloze-chords))
-                        :desc "Same cloze number (in a cloze field)"}]
+                        :desc "Same cloze number (in a cloze field)"}
+                       ;; Modal-local: modal-shell/mod-enter-add-card!.
+                       {:key (commands/display-chord
+                               :add (:add modal/add-card-chords))
+                        :desc "Add the card (in the Add Card modal)"}
+                       {:key (commands/display-chord
+                               :add-keep (:add-keep modal/add-card-chords))
+                        :desc "Add the card and keep the modal open"}]
                       ;; Editor-local too: a11y/install-tab-indent! and
                       ;; a11y/install-editor-escape!.
                       editor-keys)]

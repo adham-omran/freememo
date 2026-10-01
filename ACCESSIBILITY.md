@@ -47,8 +47,9 @@ sufficient — the manual checks below cover what axe cannot see.
 | Open a review day from the heatmap | `Tab` to an active day → `Enter` or `Space` |
 | Resize panels/panes | `Tab` to the divider (`role=separator`) → arrow keys; double-click still resets the main split |
 | Command palette | `Cmd+K`; `↑`/`↓` or `Ctrl-n`/`Ctrl-p` (also `Cmd-p`) move selection; `Enter` runs; `Escape` closes. `Cmd-n` is browser-reserved (new window) and cannot be bound. |
-| Indent in a rich-text editor | `Tab` indents the line and `Shift+Tab` outdents it. In a code block they indent the code. In a table they move between cells. |
-| Leave a rich-text editor | `Escape` → `Tab` (or `Shift+Tab`). `Escape` first closes an open editor popover. Focus moves to the editor's frame, so `Tab` reaches the next control. Each editor announces this through `aria-describedby`. WCAG 2.1.2 permits a non-standard exit when the page announces it. In a dialog, a second `Escape` closes the dialog. |
+| Indent in the document editor | `Tab` indents the line and `Shift+Tab` outdents it. In a code block they indent the code. In a table they move between cells. |
+| Indent in a card field | `Tab` and `Shift+Tab` move between the fields. Select text, then use the format menu's Decrease indent and Increase indent buttons. |
+| Leave a rich-text editor | `Escape` → `Tab` (or `Shift+Tab`). `Escape` first closes an open editor popover. Focus moves to the editor's frame, so `Tab` reaches the next control. The document editor announces this through `aria-describedby`, because `Tab` does not leave it. WCAG 2.1.2 permits a non-standard exit when the page announces it. In a dialog, a second `Escape` closes the dialog. |
 | Close any modal | `Escape`; focus returns to the element that opened it |
 
 Focus is always visible: a 2px ring, drawn inset inside table cells (their
