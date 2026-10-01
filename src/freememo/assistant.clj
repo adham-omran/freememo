@@ -344,72 +344,93 @@
         " If the learner asks about a part that was not sent, say that it is past "
         "what you read. Do not say that the file does not contain it."))))
 
-(defn- topic-context-packet
-  "Build block-level sources for the current non-PDF topic.
+(def ^:private max-reference-file-chars
+  "Upper bound on the characters of one @-referenced repo file. A run can carry
+   several references beside the current topic, so a referenced file gets the
+   budget of one PDF window (`max-window-chars`), not the budget of the file the
+   learner reads (`max-repo-file-chars`)."
+  max-window-chars)
+
+(defn- topic-parts
+  "The sources `topic` gives, in order, as {:blocks :location :note} parts.
    A repo file keeps its source in `topic_code` and the learner's notes about it
    in `topics.content`, so it gives two sources: the file, then the notes. Each
    has its own title, so the model can tell them apart. A repo file's
    `page_number` is its place in the tree, not a page, so no label shows it.
-   Only the file has a budget (`max-repo-file-chars`). When it is cut, its
-   source turn ends with a note that says so."
-  [user-id ctx root-title first-index]
-  (let [topic (some-> (:page-topic-id ctx) db/get-topic)
-        file? (repo-file? topic)
+   Only the file has a budget, `file-budget` characters. When it is cut, its
+   part carries a note that says so. Any other topic gives its content under
+   `title`.
+   The current topic and an @ reference both read through this fn, so a repo
+   file reads the same way in both."
+  [user-id topic document-topic-id title file-budget]
+  (let [file? (repo-file? topic)
         path (:topics/repo_path topic)
-        location {:document-topic-id (:root-id ctx)
+        location {:document-topic-id document-topic-id
                   :page-topic-id (:topics/id topic)
                   :page-number (when-not file? (:topics/page_number topic))
                   :source-revision (source-revision topic)}
-        [kept omitted] (when file?
-                         (within-budget
-                           (some-> (repo-file-html user-id topic)
-                             evidence-excerpt/evidence-blocks)
-                           max-repo-file-chars))
-        parts (cond-> []
-                file? (conj {:blocks kept
-                             :location (assoc location :document-title path)
-                             :note (cut-note path kept omitted)})
-                topic (conj {:blocks (some-> (:topics/content topic) str/trim not-empty
-                                       evidence-excerpt/evidence-blocks)
-                             :location (assoc location :document-title
-                                         (if file? (str path " — learner's notes") root-title))}))]
-    (reduce
-      (fn [{:keys [messages evidence next-index] :as packet} {:keys [blocks note] :as part}]
-        (let [sources (blocks-evidence blocks (:location part) next-index)
-              rendered (evidence-message-content sources)]
-          (if (str/blank? rendered)
-            packet
-            {:messages (conj messages {:role "user"
-                                       :content (cond-> rendered
-                                                  note (str "\n\n" note))})
-             :evidence (into evidence sources)
-             :next-index (+ next-index (count sources))})))
-      {:messages [] :evidence [] :next-index first-index}
-      parts)))
+        notes (some-> (:topics/content topic) str/trim not-empty
+                evidence-excerpt/evidence-blocks)]
+    (if file?
+      (let [[kept omitted] (within-budget
+                             (some-> (repo-file-html user-id topic)
+                               evidence-excerpt/evidence-blocks)
+                             file-budget)]
+        [{:blocks kept
+          :location (assoc location :document-title path)
+          :note (cut-note path kept omitted)}
+         {:blocks notes
+          :location (assoc location :document-title (str path " — learner's notes"))}])
+      [{:blocks notes :location (assoc location :document-title title)}])))
+
+(defn- add-parts
+  "Append each part of `parts` to `packet` as its evidence and one rendered
+   source turn, which ends with the part's note when it has one. A part whose
+   blocks render blank adds nothing."
+  [packet parts]
+  (reduce
+    (fn [{:keys [messages evidence next-index] :as packet} {:keys [blocks note] :as part}]
+      (let [sources (blocks-evidence blocks (:location part) next-index)
+            rendered (evidence-message-content sources)]
+        (if (str/blank? rendered)
+          packet
+          {:messages (conj messages {:role "user"
+                                     :content (cond-> rendered
+                                                note (str "\n\n" note))})
+           :evidence (into evidence sources)
+           :next-index (+ next-index (count sources))})))
+    packet
+    parts))
+
+(defn- topic-context-packet
+  "Build block-level sources for the current non-PDF topic (`topic-parts`).
+   A repo file here has the budget `max-repo-file-chars`."
+  [user-id ctx root-title first-index]
+  (add-parts {:messages [] :evidence [] :next-index first-index}
+    (when-let [topic (some-> (:page-topic-id ctx) db/get-topic)]
+      (topic-parts user-id topic (:root-id ctx) root-title max-repo-file-chars))))
 
 (defn- reference-context-packet
-  "Build retained block-level sources for owned @ references."
+  "Build retained block-level sources for owned @ references (`topic-parts`).
+   A referenced topic is its own document, so a citation opens it. A referenced
+   repo file has the budget `max-reference-file-chars`.
+   A reference that gives no text is logged. The model then reads nothing for
+   it and the learner sees no error, so the log is the only trace."
   [user-id ref-topic-ids first-index]
   (reduce
-    (fn [{:keys [messages evidence next-index]} topic-id]
-      (if-let [topic (db/get-topic-for-user user-id topic-id)]
-        (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
-          (let [title (or (:topics/title topic) "Untitled")
-                sources (content-evidence content
-                          {:document-topic-id topic-id
-                           :page-topic-id topic-id
-                           :page-number (:topics/page_number topic)
-                           :document-title title
-                           :source-revision (source-revision topic)}
-                          next-index)
-                rendered (evidence-message-content sources)]
-            (if (str/blank? rendered)
-              {:messages messages :evidence evidence :next-index next-index}
-              {:messages (conj messages {:role "user" :content rendered})
-               :evidence (into evidence sources)
-               :next-index (+ next-index (count sources))}))
-          {:messages messages :evidence evidence :next-index next-index})
-        {:messages messages :evidence evidence :next-index next-index}))
+    (fn [packet topic-id]
+      (let [topic (db/get-topic-for-user user-id topic-id)
+            after (add-parts packet
+                    (when topic
+                      (topic-parts user-id topic topic-id
+                        (or (:topics/title topic) "Untitled")
+                        max-reference-file-chars)))]
+        (when (= (:next-index packet) (:next-index after))
+          (tel/log! {:level :warn :id ::reference-without-text
+                     :data {:user-id user-id :topic-id topic-id
+                            :kind (:topics/kind topic)}}
+            "An @ reference gave the assistant no text"))
+        after))
     {:messages [] :evidence [] :next-index first-index}
     (or ref-topic-ids [])))
 
@@ -1012,24 +1033,45 @@
                              :message (or (:error result) "Card capture failed.")}))
     result))
 
+(def ^:private max-referenceable-files
+  "Most repo files the @ picker lists for one query. A repository can hold
+   thousands of files, so the learner narrows the list by typing."
+  50)
+
 (defn referenceable-docs
-  "Return root documents that a learner can reference from a chat.
+  "Return what a learner can reference from a chat: root documents, then repo
+   files.
+
+   A repository root holds no text of its own. Its files live in `topic_code`
+   under commit and directory nodes, so a reference to the root gave the model
+   nothing. The list offers the files instead, from the newest commit of each
+   repository, and only those with stored source. A blank query lists no files:
+   the panel computes this list while the menu is closed, and a bare `@` would
+   bury the documents under files the learner did not ask for.
 
    Pre: `query` is the unfinished text after `@`, or an empty string.
-   Post: the result excludes the open document and keeps newest-first order.
+   Post: the documents exclude the open document and every repository root, in
+         newest-first order. At most `max-referenceable-files` files follow
+         them, each titled `<repo title>/<path>`.
    Invariant: every result has an `:id` and a displayable `:title`."
   ([user-id current-root-topic-id]
    (referenceable-docs user-id current-root-topic-id ""))
   ([user-id current-root-topic-id query]
-   (let [needle (str/lower-case (or query ""))]
-     (into []
-       (comp
-         (remove #(= current-root-topic-id (:topics/id %)))
-         (map (fn [topic]
-                {:id (:topics/id topic)
-                 :title (or (:topics/title topic) "Untitled")}))
-         (filter #(str/includes? (str/lower-case (:title %)) needle)))
-       (db/get-root-topics user-id)))))
+   (let [needle (str/lower-case (or query ""))
+         documents (into []
+                     (comp
+                       (remove #(= current-root-topic-id (:topics/id %)))
+                       (remove #(= "repo" (:topics/kind %)))
+                       (map (fn [topic]
+                              {:id (:topics/id topic)
+                               :title (or (:topics/title topic) "Untitled")}))
+                       (filter #(str/includes? (str/lower-case (:title %)) needle)))
+                     (db/get-root-topics user-id))]
+     (if (str/blank? needle)
+       documents
+       (into documents
+         (map (fn [{:keys [id label]}] {:id id :title label}))
+         (db/get-referenceable-repo-files user-id needle max-referenceable-files))))))
 
 ;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
 

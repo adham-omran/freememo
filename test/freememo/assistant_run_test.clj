@@ -196,7 +196,8 @@
                 (fn [_]
                   [{:topics/id 9 :topics/title "Open document"}
                    {:topics/id 2 :topics/title "Frontend Design"}
-                   {:topics/id 1 :topics/title "Backend Notes"}])]
+                   {:topics/id 1 :topics/title "Backend Notes"}])
+                db/get-referenceable-repo-files (fn [_ _ _] [])]
     (is (= [{:id 2 :title "Frontend Design"}]
           (assistant/referenceable-docs "learner" 9 "FRONT")))
     (is (= [{:id 2 :title "Frontend Design"}

@@ -9600,6 +9600,46 @@
      topic-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn get-referenceable-repo-files
+  "Repo files that `user-id` can @-reference from an assistant chat.
+   Pre : `needle` is lower case and not blank.
+   Post: at most `limit` rows {:id :label}. Each is a live file with stored
+         source in the NEWEST live commit of a live repository. `:label` is
+         `<repo title>/<repo_path>` and contains `needle`. Newest repository
+         first, then shallower paths first, then by path.
+   Invariant: one statement. The walk visits only `dir` and `code` nodes under
+         those commits, so it never reads an older commit or a learner's
+         extract. The label the picker shows is the string the needle matched."
+  [user-id needle limit]
+  (jdbc/execute! ds
+    ["WITH RECURSIVE newest AS (
+        SELECT DISTINCT ON (r.id) c.id, r.id AS repo_id,
+               coalesce(r.title, 'Untitled') AS repo_title
+          FROM topics r JOIN topics c ON c.parent_id = r.id
+         WHERE r.user_id = ? AND r.parent_id IS NULL AND r.kind = 'repo'
+           AND r.staged_delete_id IS NULL
+           AND c.kind = 'commit' AND c.staged_delete_id IS NULL
+         ORDER BY r.id, c.id DESC),
+      sub AS (
+        SELECT id, repo_id, repo_title FROM newest
+        UNION ALL
+        SELECT t.id, sub.repo_id, sub.repo_title
+          FROM topics t JOIN sub ON t.parent_id = sub.id
+         WHERE t.kind IN ('dir', 'code') AND t.staged_delete_id IS NULL),
+      files AS (
+        SELECT t.id, sub.repo_id, t.repo_path, sub.repo_title || '/' || t.repo_path AS label
+          FROM sub JOIN topics t ON t.id = sub.id
+         WHERE t.kind = 'code' AND t.repo_path IS NOT NULL
+           AND EXISTS (SELECT 1 FROM topic_code tc WHERE tc.topic_id = t.id))
+      SELECT id, label FROM files
+       WHERE strpos(lower(label), ?) > 0
+       ORDER BY repo_id DESC,
+                length(repo_path) - length(replace(repo_path, '/', '')),
+                repo_path
+       LIMIT ?"
+     user-id needle limit]
+    {:builder-fn rs/as-unqualified-maps}))
+
 (defn get-repo-file-origin
   "Where `user-id`'s repo file `topic-id` came from, for building links out of it
    (plans/markdown-rendered-code-pane.md §1.5).
