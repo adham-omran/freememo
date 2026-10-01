@@ -22,6 +22,7 @@
    [freememo.commands :as commands]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
+   [freememo.repo-markdown :as repo-md]
    [freememo.text :as text]
    [freememo.toasts :as toasts]
    [freememo.db :as db]
@@ -196,14 +197,14 @@
       section-title (str section-title " · " excerpt)
       :else (str "Source " excerpt))))
 
-(defn- content-evidence
-  "Build block-level evidence for one retained HTML source.
+(defn- blocks-evidence
+  "Build evidence for `blocks` from `evidence-excerpt/evidence-blocks`.
    `:snapshot-content` is the text the model reads, and it is never HTML. A model
    copies an entity such as `&lt;` into its answer verbatim, and the answer's
    Markdown renderer then shows the entity instead of `<`. `:quoted-html` keeps
    the markup for the citation display."
-  [content {:keys [document-topic-id page-topic-id page-number document-title
-                   source-revision]} first-index]
+  [blocks {:keys [document-topic-id page-topic-id page-number document-title
+                  source-revision]} first-index]
   (mapv
     (fn [offset block]
       {:citation-key (evidence-key (+ first-index offset))
@@ -218,7 +219,12 @@
        :quoted-html (:html block)
        :snapshot-content (:text block)})
     (range)
-    (evidence-excerpt/evidence-blocks content)))
+    blocks))
+
+(defn- content-evidence
+  "Build block-level evidence for one retained HTML source."
+  [content location first-index]
+  (blocks-evidence (evidence-excerpt/evidence-blocks content) location first-index))
 
 (defn- evidence-message-content [sources]
   (->> sources
@@ -274,23 +280,112 @@
      :evidence evidence
      :next-index (+ first-index (count evidence))}))
 
+(defn- repo-file?
+  "True for a file imported from a git forge. Same test as topic-state's
+   `:is-code?`: `kg-code` also writes kind code, with its source in `content`."
+  [topic]
+  (and (= "code" (:topics/kind topic)) (some? (:topics/repo_path topic))))
+
+(defn- repo-file-html
+  "The source of repo file `topic` as HTML that `content-evidence` can split, or
+   nil for an empty leaf.
+   A Markdown file renders as the code pane's rendered view does, so its blocks
+   carry section titles and heading anchors. Its links stay unresolved, because
+   the model reads only the text. Any other file is one escaped `pre`."
+  [user-id topic]
+  (when-let [{:keys [source lang]} (db/get-topic-code user-id (:topics/id topic))]
+    (if (= "markdown" lang)
+      (repo-md/render source (:topics/repo_path topic) (constantly {}) nil)
+      (str "<pre>" (text/escape-html source) "</pre>"))))
+
+(def ^:private max-repo-file-chars
+  "Upper bound on the characters of one repo file's text in one run. A file is
+   stored up to 1 MB (`repo-import/max-source-bytes`), and the smallest context
+   in the model catalog is about 131K tokens. Source code runs near three
+   characters per token, so this bound keeps the file under about 80K tokens and
+   leaves the rest for the persona, the transcript and the answer. It counts the
+   text the model reads, not the per-block source labels."
+  240000)
+
+(defn- within-budget
+  "Split `blocks` where their `:text` passes `budget` characters.
+   Post: [kept omitted], in order. `kept` is the longest prefix that fits, and
+         it holds the first block, so a file is never sent as nothing."
+  [blocks budget]
+  (loop [kept [] total 0 [block & more :as remaining] blocks]
+    (let [total' (+ total (count (:text block)))]
+      (if (and block (or (empty? kept) (<= total' budget)))
+        (recur (conj kept block) total' more)
+        [kept (vec remaining)]))))
+
+(def ^:private max-noted-sections
+  "Most section names that a cut note lists."
+  40)
+
+(defn- cut-note
+  "What the model reads after a repo file that `within-budget` cut, or nil when
+   nothing was cut. It names the sections that were left out, wholly or in
+   part, so the model says that a section is past what it read. Without the
+   note, the model says that the file has no such section."
+  [path kept omitted]
+  (when (seq omitted)
+    (let [chars #(reduce + (map (comp count :text) %))
+          sent (chars kept)
+          sections (distinct (keep :section-title omitted))
+          listed (take max-noted-sections sections)
+          unlisted (- (count sections) (count listed))]
+      (str "Note: " path " is too long to read in one turn. The sources above are "
+        "its first " sent " of " (+ sent (chars omitted)) " characters. "
+        "The rest of the file was not sent."
+        (when (seq listed)
+          (str " Sections not sent, wholly or in part: " (str/join "; " listed)
+            (when (pos? unlisted) (str "; and " unlisted " more"))
+            "."))
+        " If the learner asks about a part that was not sent, say that it is past "
+        "what you read. Do not say that the file does not contain it."))))
+
 (defn- topic-context-packet
-  "Build block-level sources for the current non-PDF topic."
-  [ctx root-title first-index]
-  (if-let [topic (some-> (:page-topic-id ctx) db/get-topic)]
-    (if-let [content (some-> (:topics/content topic) str/trim not-empty)]
-      (let [sources (content-evidence content
-                      {:document-topic-id (:root-id ctx)
-                       :page-topic-id (:topics/id topic)
-                       :page-number (:topics/page_number topic)
-                       :document-title root-title
-                       :source-revision (source-revision topic)}
-                      first-index)
-            rendered (evidence-message-content sources)]
-        {:messages (if (str/blank? rendered) [] [{:role "user" :content rendered}])
-         :evidence sources :next-index (+ first-index (count sources))})
-      {:messages [] :evidence [] :next-index first-index})
-    {:messages [] :evidence [] :next-index first-index}))
+  "Build block-level sources for the current non-PDF topic.
+   A repo file keeps its source in `topic_code` and the learner's notes about it
+   in `topics.content`, so it gives two sources: the file, then the notes. Each
+   has its own title, so the model can tell them apart. A repo file's
+   `page_number` is its place in the tree, not a page, so no label shows it.
+   Only the file has a budget (`max-repo-file-chars`). When it is cut, its
+   source turn ends with a note that says so."
+  [user-id ctx root-title first-index]
+  (let [topic (some-> (:page-topic-id ctx) db/get-topic)
+        file? (repo-file? topic)
+        path (:topics/repo_path topic)
+        location {:document-topic-id (:root-id ctx)
+                  :page-topic-id (:topics/id topic)
+                  :page-number (when-not file? (:topics/page_number topic))
+                  :source-revision (source-revision topic)}
+        [kept omitted] (when file?
+                         (within-budget
+                           (some-> (repo-file-html user-id topic)
+                             evidence-excerpt/evidence-blocks)
+                           max-repo-file-chars))
+        parts (cond-> []
+                file? (conj {:blocks kept
+                             :location (assoc location :document-title path)
+                             :note (cut-note path kept omitted)})
+                topic (conj {:blocks (some-> (:topics/content topic) str/trim not-empty
+                                       evidence-excerpt/evidence-blocks)
+                             :location (assoc location :document-title
+                                         (if file? (str path " — learner's notes") root-title))}))]
+    (reduce
+      (fn [{:keys [messages evidence next-index] :as packet} {:keys [blocks note] :as part}]
+        (let [sources (blocks-evidence blocks (:location part) next-index)
+              rendered (evidence-message-content sources)]
+          (if (str/blank? rendered)
+            packet
+            {:messages (conj messages {:role "user"
+                                       :content (cond-> rendered
+                                                  note (str "\n\n" note))})
+             :evidence (into evidence sources)
+             :next-index (+ next-index (count sources))})))
+      {:messages [] :evidence [] :next-index first-index}
+      parts)))
 
 (defn- reference-context-packet
   "Build retained block-level sources for owned @ references."
@@ -326,7 +421,7 @@
         root-title (or (:topics/title root) "Untitled")
         current (if (:pdf? ctx)
                   (pdf-context-packet ctx root-title 1)
-                  (topic-context-packet ctx root-title 1))
+                  (topic-context-packet user-id ctx root-title 1))
         refs (reference-context-packet user-id ref-topic-ids (:next-index current))
         grounding (grounding-system-suffix user-id ctx mode)
         facts-source (when-not (str/blank? grounding)
