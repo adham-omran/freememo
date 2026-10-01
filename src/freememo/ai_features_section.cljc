@@ -659,11 +659,10 @@
           ;; don't clobber the user's draft mid-edit), committed once on "change"
           ;; (blur).
           (dom/textarea
-            (dom/props {:rows "20"
+            (dom/props {:rows "20" :class "input"
                         :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
-                                :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                                :background "var(--color-bg-subtle)" :resize "vertical"
-                                :color "var(--color-text-primary)"}})
+                                :padding "10px" :border-radius "var(--radius-sm)"
+                                :background "var(--color-bg-subtle)" :resize "vertical"}})
             (when-not (dom/Focused?) (set! (.-value dom/node) (str sys-prompt)))
             (let [committed (dom/On "change" #(-> % .-target .-value) nil)
                   [t _] (e/Token committed)]
@@ -718,11 +717,10 @@
           ;; don't clobber the user's draft mid-edit), committed once on "change"
           ;; (blur).
           (dom/textarea
-            (dom/props {:rows "10"
+            (dom/props {:rows "10" :class "input"
                         :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
-                                :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                                :background "var(--color-bg-subtle)" :resize "vertical"
-                                :color "var(--color-text-primary)"}})
+                                :padding "10px" :border-radius "var(--radius-sm)"
+                                :background "var(--color-bg-subtle)" :resize "vertical"}})
             (when-not (dom/Focused?) (set! (.-value dom/node) (str ocr-prompt)))
             (let [committed (dom/On "change" #(-> % .-target .-value) nil)
                   [t _] (e/Token committed)]

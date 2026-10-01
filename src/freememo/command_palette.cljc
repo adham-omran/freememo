@@ -187,11 +187,7 @@
             (dom/input
               (dom/props {:placeholder "Type a command or search…"
                           :aria-label "Command palette"
-                          :style {:padding "14px 16px" :font-size "15px"
-                                  :border "none" :outline "none"
-                                  :border-bottom "0.5px solid var(--color-border-light)"
-                                  :background "transparent"
-                                  :color "var(--color-text-primary)"}})
+                          :class "command-palette-input"})
               ;; rAF focus-on-mount: HTML :autofocus is inert on dynamically
               ;; inserted elements (see modal-shell/focus-on-mount!). e/snapshot
               ;; fires once at mount; the rAF defer lets FocusReturn's

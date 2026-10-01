@@ -589,8 +589,9 @@
         (dom/textarea
           (dom/props {:placeholder "Paste your Markdown here..."
                       :value (or (e/watch !md-text) "")
+                      :class "input"
                       :style {:flex "1" :min-height "200px" :max-height "400px" :overflow-y "auto"
-                              :padding "var(--sp-3)" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                              :padding "var(--sp-3)" :border-radius "var(--radius-sm)"
                               :font-size "13px" :font-family "monospace" :line-height "1.5" :margin-bottom "var(--sp-4)"
                               :background "var(--color-bg-subtle)" :resize "vertical"}})
           (dom/On "input" (fn [e] (reset! !md-text (-> e .-target .-value))) nil)))

@@ -33,14 +33,16 @@
 
     --color-border: light-dark(#e0e0e0, #374151);
     --color-border-light: light-dark(#ddd, #374151);
-    /* Launcher-card border (WCAG 1.4.11, non-text contrast ≥3:1). `--color-border`
-       measures 1.26:1 on the light card and 1.72:1 on the dark one, so a card
-       whose whole affordance IS its outline needs its own token. Browser-measured:
-       3.32:1 light (#868e96 on #fff), 3.52:1 dark (#737d8c on #1f2937); both also
-       clear 3:1 against the page background, so the token holds wherever a card
-       sits. Do NOT raise --color-border to reach this — every table, input and
-       toolbar in the app reads it. */
-    --color-border-card: light-dark(#868e96, #737d8c);
+    /* A border that must reach 3:1 (WCAG 1.4.11, non-text contrast): a text
+       input or select whose border is its only identifier, and a panel or card
+       whose outline IS its affordance. `--color-border` measures 1.32:1 on a white
+       input and 1.42:1 on the dark one. This token measures 3.32:1 light
+       (#868e96 on #fff) and 3.52:1 dark (#737d8c on #1f2937). It clears 3:1 on
+       the page, subtle, hover and info backgrounds too, so it holds wherever a
+       control sits (plans/scannable-settings-toolbar-accent.md §3). The name
+       follows IBM Carbon's `border-strong`. Do NOT raise --color-border to reach
+       this — every table and toolbar in the app reads it. */
+    --color-border-strong: light-dark(#868e96, #737d8c);
     --color-bg-page: light-dark(#f8fafc, #111827);
     --color-bg-card: light-dark(#fff, #1f2937);
     --color-bg-subtle: light-dark(#f9fafb, #1a2332);
@@ -295,7 +297,7 @@ html:has(> body > .app-shell) > body {
 /* ── Inputs ────────────────────────────────────────────────────── */
 .input {
     padding: 7px 10px;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
     font-family: inherit;
     font-size: 14px;
@@ -304,14 +306,15 @@ html:has(> body > .app-shell) > body {
     box-sizing: border-box;
     transition: border-color 150ms ease;
 }
-.input:hover { border-color: light-dark(#999, #6b7280); }
+/* Hover darkens the border, never lightens it: 4.83:1 light, 5.78:1 dark. */
+.input:hover { border-color: light-dark(#6b7280, #9ca3af); }
 .input:focus { border-color: var(--color-primary); }
 
 .input-full { width: 100%; }
 
 .select {
     padding: 7px 10px;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
     font-size: 14px;
     background: var(--color-bg-card);
@@ -319,7 +322,7 @@ html:has(> body > .app-shell) > body {
     min-width: 160px;
     transition: border-color 150ms ease;
 }
-.select:hover { border-color: light-dark(#999, #6b7280); }
+.select:hover { border-color: light-dark(#6b7280, #9ca3af); }
 
 /* ── Labels / Hints ────────────────────────────────────────────── */
 .label {
@@ -913,7 +916,7 @@ html:has(> body > .app-shell) > body {
     text-align: left; font: inherit; cursor: pointer;
     color: var(--color-text-primary);
     background: var(--color-bg-card);
-    border: 1px solid var(--color-border-card);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg);
 }
 .ai-level-card:hover:not(.ai-level-card--selected) { background: var(--color-bg-hover); }
@@ -1037,7 +1040,7 @@ html:has(> body > .app-shell) > body {
 .setting-row__control .select { width: 100%; min-width: 0; }
 .setting-row__number {
     width: 64px; font-size: 14px; padding: 6px 8px;
-    border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    border: 1px solid var(--color-border-strong); border-radius: var(--radius-md);
     background: var(--color-bg-input); color: var(--color-text-primary);
 }
 .setting-row__unit { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
@@ -1873,6 +1876,23 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    ~one row — a self-sustaining ±row oscillation. The scroll owns its position. */
 .tape-scroll,
 .tape-scroll * { overflow-anchor: none; }
+
+/* TagInput's text field (anki_sync_form.cljc). The chip row around it carries
+   `.input`, so the row draws the field's boundary and the field draws none. */
+.tag-input-field {
+    border: none; outline: none;
+    font-size: 14px; flex: 1; min-width: 80px; padding: 2px;
+    background: transparent; color: var(--color-text-primary);
+}
+
+/* The palette's query field. The modal frames it, and the rule under it
+   separates it from the list, so it draws no border of its own. */
+.command-palette-input {
+    padding: 14px 16px; font-size: 15px;
+    border: none; outline: none;
+    border-bottom: 0.5px solid var(--color-border-light);
+    background: transparent; color: var(--color-text-primary);
+}
 
 /* Command palette rows use the shared virtual-scroll table shape. The list
    holds every available command, while Tape mounts only the visible window. */
@@ -2762,7 +2782,7 @@ input[type="password"]:not(.input):hover,
 input[type="number"]:not(.input):hover,
 select:not(.select):hover,
 textarea:hover {
-    border-color: light-dark(#999, #6b7280);
+    border-color: light-dark(#6b7280, #9ca3af);
 }
 
 /* ── Tablet (≤1024px) ────────────────────────────────────────── */
@@ -3280,7 +3300,7 @@ textarea:hover {
     width: 100%;
     box-sizing: border-box;
     padding: 5px 8px;
-    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border: 1px solid var(--color-border-strong, light-dark(#868e96, #737d8c));
     border-radius: 6px;
     background: var(--color-bg-input, light-dark(#fff, #171717));
     color: inherit;
@@ -4812,7 +4832,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     display: flex;
     min-width: 0;
     padding: 2px 4px;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: 14px;
     background: var(--color-bg-card, #fff);
 }
@@ -5386,7 +5406,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 /* QuillField inside card-edit modal */
 .quill-field-wrapper {
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: 4px;
     overflow: hidden;
 }
@@ -6275,7 +6295,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     padding: var(--sp-5);
     text-align: center;
     cursor: pointer;
-    border: 2px dashed var(--color-border-card);
+    border: 2px dashed var(--color-border-strong);
     border-radius: var(--radius-lg);
     background: var(--color-bg-card);
     transition: border-color 0.15s, background 0.15s;
@@ -6369,7 +6389,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     padding: var(--sp-4);
     cursor: pointer;
     text-align: left;
-    border: 1px solid var(--color-border-card);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
     background: var(--color-bg-card);
     color: var(--color-text-primary);
@@ -8207,7 +8227,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 /* ── Getting-started checklist (plans/getting-started-checklist.md §5) ── */
 
 .getting-started {
-    border: 1px solid var(--color-border-card);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg);
     background: var(--color-bg-card);
     padding: var(--sp-4);
@@ -8302,7 +8322,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 /* ── AnkiConnect setup guide (plans/getting-started-checklist.md §9) ── */
 
 .anki-connect-guide {
-    border: 1px solid var(--color-border-card);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-md);
     padding: var(--sp-3) var(--sp-4);
     margin-bottom: var(--sp-4);

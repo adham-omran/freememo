@@ -54,11 +54,14 @@
       (dom/div
         (dom/props {:style {:position "relative"}})
         ;; Input row with chips
+        ;; `.input` draws the field's 3:1 boundary around the chips and the
+        ;; text field together.
         (dom/div
-          (dom/props {:style {:display "flex" :flex-wrap "wrap" :align-items "center"
+          (dom/props {:class "input"
+                      :style {:display "flex" :flex-wrap "wrap" :align-items "center"
                               :gap "var(--sp-1)" :padding "var(--sp-1) 6px"
-                              :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                              :font-size "14px" :min-height "30px" :background "var(--color-bg-card)"}})
+                              :border-radius "var(--radius-sm)"
+                              :font-size "14px" :min-height "30px"}})
           ;; Chips
           (e/for [t (e/diff-by identity tags)]
             (dom/span
@@ -78,8 +81,7 @@
             (dom/props {:type "text"
                         :value search
                         :placeholder (if (seq tags) "" "Add tags...")
-                        :style {:border "none" :outline "none" :font-size "14px"
-                                :flex "1" :min-width "80px" :padding "2px"}})
+                        :class "tag-input-field"})
             (dom/On "focus" (fn [_] (reset! !focused true)
                               (reset! !active-idx -1)) nil)
             (dom/On "blur"

@@ -144,10 +144,9 @@
               (fn [_] (when (and (> page-number 1) (> total 0))
                         (nav! (dec page-number) :prev))) nil)))
         (dom/input
-          (dom/props {:type "text" :value input-val
+          (dom/props {:type "text" :value input-val :class "input"
                       :style {:width "40px" :text-align "center" :padding "4px"
-                              :border "1px solid var(--color-border)"
-                              :border-radius "3px" :font-size "14px"}})
+                              :border-radius "3px"}})
           (dom/On "focus" (fn [_] (reset! !inp-focused true)) nil)
           (dom/On "blur"
             (fn [e]
@@ -291,10 +290,9 @@
           (dom/text "−")
           (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
         (dom/input
-          (dom/props {:type "text" :value zoom-val :title "Zoom level (%)"
+          (dom/props {:type "text" :value zoom-val :title "Zoom level (%)" :class "input"
                       :style {:width "52px" :text-align "center" :padding "4px"
-                              :border "1px solid var(--color-border)"
-                              :border-radius "3px" :font-size "14px"}})
+                              :border-radius "3px"}})
           (dom/On "focus" (fn [_] (reset! !zoom-focused true)) nil)
           (dom/On "blur"
             ;; Read the typed value BEFORE clearing focus — clearing it first lets

@@ -305,9 +305,9 @@
               ;; client-side before saving so the displayed digits snap to the
               ;; clamped value immediately.
               (dom/input
-                (dom/props {:type "number" :min "10" :max "20"
+                (dom/props {:type "number" :min "10" :max "20" :class "input"
                             :style {:width "56px" :font-size "13px" :padding "4px 6px"
-                                    :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+                                    :border-radius "var(--radius-sm)"}})
                 (when-not (dom/Focused?) (set! (.-value dom/node) (str font-size)))
                 (let [committed (dom/On "change" #(-> % .-target .-value) nil)
                       [t _] (e/Token committed)]

@@ -39,8 +39,8 @@
             (dom/input
               (dom/props {:type "number" :min "1" :max "365"
                           :value (e/watch !postpone-days)
-                          :style {:width "60px" :padding "4px 8px" :font-size "14px"
-                                  :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+                          :class "input"
+                          :style {:width "60px" :padding "4px 8px" :border-radius "var(--radius-sm)"}})
               (dom/On "input" (fn [e] (reset! !postpone-days (-> e .-target .-value))) nil))
             (dom/span
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
