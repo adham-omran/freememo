@@ -91,3 +91,15 @@
           "(commands/bump-channels! user-id #{:assistant-stream})"))
     (is (str/includes? assistant-source "100000000"))
     (is (str/includes? commands-source ":assistant-stream"))))
+
+(deftest transcript-rows-never-share-a-branch-with-the-empty-state
+  (testing "the row loop is always mounted, in an element of its own"
+    (let [source (slurp "src/freememo/assistant_transcript.cljc")]
+      (is (str/includes? source
+            "(dom/props {:class \"assistant-panel__rows\"})\n          (e/for [display-message message-rows]"))
+      (is (str/includes? source "(when (zero? message-count)"))
+      (is (not (str/includes? source "(if (zero? message-count)"))
+        "a branch from the starters to every row at once is what detached the rows")
+      (is (str/includes? (slurp "resources/public/freememo/index.css")
+            ".assistant-panel__rows { display: contents; }")
+        "the wrapper must not change the transcript's flex layout"))))

@@ -3495,14 +3495,24 @@
      user-id run-uuid]
     {:builder-fn rs/as-unqualified-maps}))
 
-(defn get-assistant-evidence-for-chat
-  "All retained evidence for an owned chat, ordered by run and insertion."
+(defn get-cited-assistant-evidence-for-chat
+  "The retained evidence of an owned chat that its answers cite, ordered by run
+   and insertion. A row is cited when its run's response text holds the token
+   `[evidence:<key>]`, the form `assistant/evidence-token-pattern` matches.
+
+   A run retains every block it showed the model, and for a repo file that is
+   the whole file: about 3000 rows and 700 KB for a 240 KB Markdown file. An
+   answer links a handful. The transcript re-reads this on every stream update,
+   so reading every row cost a full chat's evidence per update. A filtered row's
+   quote columns are never read."
   [user-id chat-id]
   (jdbc/execute! ds
     [(str "SELECT e.*, r.run_uuid FROM assistant_evidence e "
        "JOIN assistant_runs r ON r.id = e.run_id "
        "JOIN assistant_chats c ON c.id = r.chat_id "
-       "WHERE c.user_id = ? AND c.id = ? ORDER BY r.id, e.id")
+       "WHERE c.user_id = ? AND c.id = ? "
+       "AND strpos(r.response_text, '[evidence:' || e.citation_key || ']') > 0 "
+       "ORDER BY r.id, e.id")
      user-id chat-id]
     {:builder-fn rs/as-unqualified-maps}))
 

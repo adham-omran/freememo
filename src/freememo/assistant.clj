@@ -1183,12 +1183,24 @@
 (def ^:private retained-html-pattern
   #"(?is)<(?:blockquote|code|div|figure|h[1-6]|li|ol|p|pre|table|td|th|tr|ul)\b")
 
-(defn- evidence-wire-row [row]
+(defn- cited-keys
+  "The evidence keys that `answer` cites with a complete `[evidence:<key>]`
+   token. A token still streaming in cites nothing yet."
+  [answer]
+  (into #{} (map second) (re-seq evidence-token-pattern (or answer ""))))
+
+(defn- evidence-wire-row
+  "One evidence row as the browser gets it, with ONE quote form. The evidence
+   dialog shows `:quoted_html` when it exists and falls back to `:quoted_text`,
+   so a row with HTML sends no text. The text is what the model read, and the
+   database keeps it for the run details."
+  [row]
   (let [wire-row (select-keys row evidence-wire-keys)]
     (cond
       (:quoted_html row)
-      (assoc wire-row :quoted_html
-        (cleaner/clean-html-fragment (:quoted_html row)))
+      (-> wire-row
+        (dissoc :quoted_text)
+        (assoc :quoted_html (cleaner/clean-html-fragment (:quoted_html row))))
 
       (and (:quoted_text row) (re-find retained-html-pattern (:quoted_text row)))
       (assoc wire-row :quoted_text (text/strip-html (:quoted_text row)))
@@ -1207,6 +1219,13 @@
    Pre: message comes from messages*. The answer content is trusted Markdown,
    but its HTML is not trusted.
    Post: returns a wire-safe row with one render mode. Rich HTML is sanitized.
+   `:assistant_run/evidence` holds only the rows the answer cites.
+
+   The browser reads evidence in one place: the citation click, which opens the
+   row the clicked link names. An answer links only what it cites. This row
+   used to carry the run's whole evidence, which for a repo file is the whole
+   file twice, as text and as HTML. Each stream update re-sent the answer's
+   row, so every update was a 700 KB WebSocket message.
 
    A streaming answer renders through the SAME mode as its terminal answer.
    Formatting only at the end made the panel show unformatted Markdown source
@@ -1217,10 +1236,14 @@
    unclosed fence formats itself once its closing fence lands."
   [message]
   (let [wire-message (select-keys message transcript-wire-keys)
+        cited? (cited-keys (:assistant_messages/content message))
         wire-message (if (contains? wire-message :assistant_run/evidence)
                        (update wire-message :assistant_run/evidence
                          (fn [rows]
-                           (mapv evidence-wire-row rows)))
+                           (into []
+                             (comp (filter #(cited? (:citation_key %)))
+                               (map evidence-wire-row))
+                             rows)))
                        wire-message)
         assistant? (= "assistant" (:assistant_messages/role message))]
     (if-not assistant?
@@ -1266,7 +1289,8 @@
 
 (defn messages*
   "Transcript and checkpoint events for an owned chat. `_rev` forces re-query.
-   Active answer rows read their durable response text from the run authority."
+   Active answer rows read their durable response text from the run authority.
+   An answer row carries only the evidence its text cites."
   [_rev user-id chat-id]
   (when (and chat-id (db/get-assistant-chat user-id chat-id))
     (let [messages (db/get-assistant-messages chat-id)
@@ -1275,7 +1299,7 @@
                                           (when-let [message-id (:assistant_message_id run)]
                                             [message-id run]))) runs)
           evidence-by-run (group-by :run_uuid
-                            (db/get-assistant-evidence-for-chat user-id chat-id))
+                            (db/get-cited-assistant-evidence-for-chat user-id chat-id))
           message-events
           (mapv (fn [message]
                   (if-let [run (get run-by-message (:assistant_messages/id message))]

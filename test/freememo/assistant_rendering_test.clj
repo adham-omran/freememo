@@ -76,15 +76,43 @@
       (is (not (str/includes? html "<script"))))))
 
 (deftest formatted-evidence-is-sanitized-for-the-browser
-  (let [message (assoc-in (assistant-message "streaming" "Working")
-                  [:assistant_run/evidence 0 :quoted_html]
-                  "<p onclick=\"steal()\">Retained<script>steal()</script></p>")
+  (let [message (-> (assistant-message "streaming" "Working [evidence:E1]")
+                  (assoc-in [:assistant_run/evidence 0 :quoted_html]
+                    "<p onclick=\"steal()\">Retained<script>steal()</script></p>")
+                  (assoc-in [:assistant_run/evidence 0 :quoted_text] "Retained"))
         [source] (:assistant_run/evidence (assistant/transcript-message-view message))]
     (is (= "<p>Retained</p>" (:quoted_html source)))
+    (is (not (contains? source :quoted_text))
+      "the evidence dialog shows the HTML when it exists, so the text stays home")
     (is (not (contains? source :created_at)))))
 
+(deftest the-browser-gets-only-the-evidence-an-answer-cites
+  (testing "a run retains every block it showed the model, and an answer links few"
+    (let [block (fn [k] {:citation_key k :document_topic_id 12 :anchor (str "s-" k)
+                         :display_label (str "Section " k)
+                         :quoted_text (apply str (repeat 2000 "x"))
+                         :quoted_html (str "<p>" (apply str (repeat 2000 "x")) "</p>")})
+          message (assoc (assistant-message "completed"
+                           "Scope [evidence:E2]. Types [evidence:E40].")
+                    :assistant_run/evidence (mapv #(block (str "E" %)) (range 1 3001)))
+          view (assistant/transcript-message-view message)]
+      (is (= ["E2" "E40"] (mapv :citation_key (:assistant_run/evidence view))))
+      (is (< (count (pr-str view)) 20000)
+        "3000 retained blocks once crossed the wire with every answer")))
+  (testing "a token still arriving cites nothing yet, and a half key matches no row"
+    (let [message (assistant-message "streaming" "Scope [evidence:E")]
+      (is (= [] (:assistant_run/evidence (assistant/transcript-message-view message))))))
+  (testing "E1 is not cited by E12"
+    (let [message (update (assistant-message "completed" "See [evidence:E12].")
+                    :assistant_run/evidence conj
+                    {:citation_key "E12" :document_topic_id 12
+                     :display_label "twelve"})]
+      (is (= ["E12"] (mapv :citation_key
+                       (:assistant_run/evidence
+                         (assistant/transcript-message-view message))))))))
+
 (deftest old-html-in-the-text-field-becomes-safe-plain-text
-  (let [message (assoc-in (assistant-message "streaming" "Working")
+  (let [message (assoc-in (assistant-message "streaming" "Working [evidence:E1]")
                   [:assistant_run/evidence 0 :quoted_text]
                   "<h2>Introduction</h2><p>Retained <strong>evidence</strong>.</p><li>cut")
         [source] (:assistant_run/evidence (assistant/transcript-message-view message))]
