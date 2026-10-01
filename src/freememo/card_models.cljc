@@ -241,3 +241,21 @@
    uses its configured fallback search engine."
   [id]
   (boolean (resolve-model id)))
+
+(def ^:private cache-breakpoint-model-ids
+  "Models whose prompt cache needs an explicit `cache_control` breakpoint.
+   Measured 2026-10-01 on gemini-3.8-flash: with no breakpoint, a repeated
+   13,500-token prefix read 0 cached tokens on Vertex and on AI Studio. With
+   one, it read the whole prefix. OpenRouter bills the request that creates the
+   cache at 5 minutes of storage plus a cache read, so even a first turn costs
+   less. claude-sonnet-5 also needs a breakpoint, but its write costs 1.25
+   times the input price. See plans/assistant-request-prefix-cache.md §12."
+  #{"gemini-3.8-flash"
+    "gemini-3.5-flash-lite"})
+
+(defn cache-breakpoint?
+  "True when requests to the effective model should carry a `cache_control`
+   breakpoint.
+   Pre: `id` is a stored model id or nil. Post: false for an unknown id."
+  [id]
+  (some-> id resolve-model :id cache-breakpoint-model-ids boolean))
