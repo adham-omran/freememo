@@ -5524,6 +5524,37 @@
                          [:<= :page_number end-page]]
                  :order-by [[:page_number :asc]]})))
 
+(defn- epub-chapter-where
+  "The rows that are chapters of EPUB `epub-id`. A chapter is a `basic` child
+   whose `page_number` is its 1-based index (`insert-epub-topic!`). A staged
+   chapter is not one."
+  [epub-id]
+  [:and [:= :parent_id epub-id] [:= :kind "basic"]
+   [:is-not :page_number nil] [:is :staged_delete_id nil]])
+
+(defn get-epub-chapters
+  "The chapters of EPUB `epub-id` numbered `start` to `end`, in order.
+   Post: rows {:topics/id :topics/page_number :topics/title :topics/content
+         :topics/created_at}."
+  [epub-id start end]
+  (jdbc/execute! ds
+    (sql/format {:select [:id :page_number :title :content :created_at]
+                 :from [:topics]
+                 :where [:and (epub-chapter-where epub-id)
+                         [:>= :page_number start] [:<= :page_number end]]
+                 :order-by [[:page_number :asc]]})))
+
+(defn get-epub-reading-chapter
+  "The index of the first chapter of EPUB `epub-id` that is not done, or nil
+   when every chapter is done or the book has none."
+  [epub-id]
+  (:min (jdbc/execute-one! ds
+          (sql/format {:select [[[:min :page_number] :min]]
+                       :from [:topics]
+                       :where [:and (epub-chapter-where epub-id)
+                               [:or [:is :status nil] [:<> :status "done"]]]})
+          {:builder-fn rs/as-unqualified-maps})))
+
 ;; ---------------------------------------------------------------------------
 ;; Flashcard operations
 ;; ---------------------------------------------------------------------------

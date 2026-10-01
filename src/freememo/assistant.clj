@@ -68,8 +68,9 @@
   50)
 
 (def ^:private max-window-chars
-  "Upper bound on the combined characters of the PDF page window in one send.
-   Farthest pages are dropped first; the current page is never dropped."
+  "Upper bound on the combined characters of one window of PDF pages or EPUB
+   chapters (`window-packet`). Farthest units are dropped first. The center
+   unit is never dropped, but it is cut when it alone passes the bound."
   40000)
 
 (defn- resolve-context
@@ -235,51 +236,6 @@
              (:snapshot-content source))))
     (str/join "\n\n")))
 
-(defn- pdf-context-packet
-  "Build block-level evidence and one rendered source turn for the current PDF.
-   Pre: ctx identifies a PDF page. Post: {:messages :evidence :next-index}.
-   Every source block has one evidence key. The page budget matches the legacy
-   reading window."
-  [ctx root-title first-index]
-  (let [center (:center-page ctx)
-        window (:window ctx)
-        pages (if center
-                (db/get-context-pages (:root-id ctx) (max 1 (- center window)) (+ center window))
-                [])
-        candidates (->> pages
-                     (keep (fn [page]
-                             (when-let [text (some-> (:topics/content page) str/trim not-empty)]
-                               {:topic page :page (:topics/page_number page) :text text})))
-                     (sort-by #(Math/abs (- (int (:page %)) (int center)))))
-        kept (->> candidates
-               (reduce (fn [{:keys [pages total]} page]
-                         (let [length (count (:text page))]
-                           (if (or (empty? pages) (<= (+ total length) max-window-chars))
-                             {:pages (conj pages page) :total (+ total length)}
-                             {:pages pages :total total})))
-                 {:pages [] :total 0})
-               :pages
-               (sort-by :page)
-               vec)
-        evidence (loop [[{:keys [topic page text]} & remaining] kept
-                        next-index first-index
-                        result []]
-                   (if-not topic
-                     result
-                     (let [sources (content-evidence text
-                                     {:document-topic-id (:root-id ctx)
-                                      :page-topic-id (:topics/id topic)
-                                      :page-number page
-                                      :document-title root-title
-                                      :source-revision (source-revision topic)}
-                                     next-index)]
-                       (recur remaining (+ next-index (count sources))
-                         (into result sources)))))
-        content (evidence-message-content evidence)]
-    {:messages (if (str/blank? content) [] [{:role "user" :content content}])
-     :evidence evidence
-     :next-index (+ first-index (count evidence))}))
-
 (defn- repo-file?
   "True for a file imported from a git forge. Same test as topic-state's
    `:is-code?`: `kg-code` also writes kind code, with its source in `content`."
@@ -310,7 +266,7 @@
 (defn- within-budget
   "Split `blocks` where their `:text` passes `budget` characters.
    Post: [kept omitted], in order. `kept` is the longest prefix that fits, and
-         it holds the first block, so a file is never sent as nothing."
+         it holds the first block, so a source is never sent as nothing."
   [blocks budget]
   (loop [kept [] total 0 [block & more :as remaining] blocks]
     (let [total' (+ total (count (:text block)))]
@@ -323,26 +279,132 @@
   40)
 
 (defn- cut-note
-  "What the model reads after a repo file that `within-budget` cut, or nil when
-   nothing was cut. It names the sections that were left out, wholly or in
-   part, so the model says that a section is past what it read. Without the
-   note, the model says that the file has no such section."
-  [path kept omitted]
+  "What the model reads after a source that `within-budget` cut, or nil when
+   nothing was cut. `title` names the source: a repo file's path, a PDF page or
+   an EPUB chapter. The note names the sections that were left out, wholly or
+   in part, so the model says that a section is past what it read. Without the
+   note, the model says that the source has no such section."
+  [title kept omitted]
   (when (seq omitted)
     (let [chars #(reduce + (map (comp count :text) %))
           sent (chars kept)
           sections (distinct (keep :section-title omitted))
           listed (take max-noted-sections sections)
           unlisted (- (count sections) (count listed))]
-      (str "Note: " path " is too long to read in one turn. The sources above are "
+      (str "Note: " title " is too long to read in one turn. The sources above are "
         "its first " sent " of " (+ sent (chars omitted)) " characters. "
-        "The rest of the file was not sent."
+        "The rest of it was not sent."
         (when (seq listed)
           (str " Sections not sent, wholly or in part: " (str/join "; " listed)
             (when (pos? unlisted) (str "; and " unlisted " more"))
             "."))
         " If the learner asks about a part that was not sent, say that it is past "
-        "what you read. Do not say that the file does not contain it."))))
+        "what you read. Do not say that the source does not contain it."))))
+
+(defn- window-packet
+  "Build block-level evidence and one rendered source turn for a window of
+   numbered units: the pages of a PDF, or the chapters of an EPUB.
+   Pre: each unit is {:number :html :label :location}. :location is the unit's
+        `blocks-evidence` location, and :label names the unit in a cut note.
+        A unit with blank html adds nothing.
+   Post: {:messages :evidence :next-index}. Every source block has one evidence
+        key. Units go nearest `center` first while their html fits in
+        `max-window-chars`, and the turn shows them in number order. The
+        nearest unit always goes. When it alone passes the budget, only its
+        leading blocks that fit go (`within-budget`), and the turn ends with a
+        `cut-note`, so the model does not take the cut for the end of the
+        text."
+  [units center first-index]
+  (let [candidates (->> units
+                     (keep (fn [unit]
+                             (when-let [html (some-> (:html unit) str/trim not-empty)]
+                               (assoc unit :html html))))
+                     (sort-by #(Math/abs (- (int (:number %)) (int center)))))
+        kept (->> candidates
+               (reduce (fn [{:keys [units total]} unit]
+                         (let [length (count (:html unit))]
+                           (if (or (empty? units) (<= (+ total length) max-window-chars))
+                             {:units (conj units unit) :total (+ total length)}
+                             {:units units :total total})))
+                 {:units [] :total 0})
+               :units
+               (sort-by :number))
+        ;; Only the nearest unit can pass the budget, and then it is the only
+        ;; unit kept, so cutting each unit on its own is exact.
+        {:keys [evidence notes]}
+        (reduce (fn [{:keys [evidence] :as acc} {:keys [html label location]}]
+                  (let [[blocks omitted] (within-budget
+                                           (evidence-excerpt/evidence-blocks html)
+                                           max-window-chars)]
+                    (-> acc
+                      (update :evidence into
+                        (blocks-evidence blocks location (+ first-index (count evidence))))
+                      (update :notes conj (cut-note label blocks omitted)))))
+          {:evidence [] :notes []}
+          kept)
+        content (evidence-message-content evidence)]
+    {:messages (if (str/blank? content)
+                 []
+                 [{:role "user"
+                   :content (str/join "\n\n" (cons content (remove nil? notes)))}])
+     :evidence evidence
+     :next-index (+ first-index (count evidence))}))
+
+(defn- pdf-context-packet
+  "Build the sources for a window of PDF pages (`window-packet`): the current
+   PDF, or a PDF the learner @-references.
+   Pre: ctx carries the PDF's :root-id, a :center-page and a :window.
+   Post: {:messages :evidence :next-index}. The page budget matches the legacy
+   reading window. A page with no text, such as one nobody scanned, adds
+   nothing."
+  [ctx root-title first-index]
+  (let [center (:center-page ctx)
+        window (:window ctx)]
+    (window-packet
+      (when center
+        (map (fn [page]
+               (let [n (:topics/page_number page)]
+                 {:number n
+                  :html (:topics/content page)
+                  :label (str root-title ", page " n)
+                  :location {:document-topic-id (:root-id ctx)
+                             :page-topic-id (:topics/id page)
+                             :page-number n
+                             :document-title root-title
+                             :source-revision (source-revision page)}}))
+          (db/get-context-pages (:root-id ctx) (max 1 (- center window)) (+ center window))))
+      center first-index)))
+
+(defn- epub-reference-packet
+  "Build the sources for an @-referenced EPUB `book` (`window-packet`).
+   The root holds no text. Each chapter is a `basic` child, and its
+   `page_number` is the chapter index (`db/insert-epub-topic!`).
+   No reading position is stored for a book, so the window centers on the first
+   chapter the learner has not marked done. When every chapter is done, it
+   centers on chapter 1. The width is the learner's assistant window setting,
+   counted in chapters.
+   Each chapter is its own document, so a citation opens the chapter. A chapter
+   index is not a page, so no label shows it."
+  [user-id book first-index]
+  (let [book-id (:topics/id book)
+        book-title (or (:topics/title book) "Untitled")
+        center (or (db/get-epub-reading-chapter book-id) 1)
+        window (settings/get-assistant-pdf-window user-id)]
+    (window-packet
+      (map (fn [chapter]
+             (let [title (str book-title " — "
+                           (or (:topics/title chapter)
+                             (str "Chapter " (:topics/page_number chapter))))]
+               {:number (:topics/page_number chapter)
+                :html (:topics/content chapter)
+                :label title
+                :location {:document-topic-id (:topics/id chapter)
+                           :page-topic-id (:topics/id chapter)
+                           :page-number nil
+                           :document-title title
+                           :source-revision (source-revision chapter)}}))
+        (db/get-epub-chapters book-id (max 1 (- center window)) (+ center window)))
+      center first-index)))
 
 (def ^:private max-reference-file-chars
   "Upper bound on the characters of one @-referenced repo file. A run can carry
@@ -410,27 +472,46 @@
     (when-let [topic (some-> (:page-topic-id ctx) db/get-topic)]
       (topic-parts user-id topic (:root-id ctx) root-title max-repo-file-chars))))
 
+(defn- one-reference-packet
+  "The sources that one owned @-referenced `topic` gives, keyed from
+   `first-index`. A referenced topic is its own document, so a citation opens it.
+   A PDF root holds no text. Its text is in its pages, so it reads as the open
+   PDF does: the learner's reading window, centered on the page they last read.
+   A PDF they never opened centers on page 1. An EPUB root holds no text
+   either, and reads as a window of its chapters (`epub-reference-packet`).
+   Any other topic reads through `topic-parts`, and a repo file there has the
+   budget `max-reference-file-chars`."
+  [user-id topic first-index]
+  (let [topic-id (:topics/id topic)
+        title (or (:topics/title topic) "Untitled")]
+    (case (:topics/kind topic)
+      "pdf" (pdf-context-packet {:root-id topic-id
+                                 :center-page (settings/get-last-page user-id topic-id)
+                                 :window (settings/get-assistant-pdf-window user-id)}
+              title first-index)
+      "epub" (epub-reference-packet user-id topic first-index)
+      (add-parts {:messages [] :evidence [] :next-index first-index}
+        (topic-parts user-id topic topic-id title max-reference-file-chars)))))
+
 (defn- reference-context-packet
-  "Build retained block-level sources for owned @ references (`topic-parts`).
-   A referenced topic is its own document, so a citation opens it. A referenced
-   repo file has the budget `max-reference-file-chars`.
+  "Build retained block-level sources for owned @ references, in their order.
    A reference that gives no text is logged. The model then reads nothing for
    it and the learner sees no error, so the log is the only trace."
   [user-id ref-topic-ids first-index]
   (reduce
-    (fn [packet topic-id]
+    (fn [{:keys [messages evidence next-index]} topic-id]
       (let [topic (db/get-topic-for-user user-id topic-id)
-            after (add-parts packet
-                    (when topic
-                      (topic-parts user-id topic topic-id
-                        (or (:topics/title topic) "Untitled")
-                        max-reference-file-chars)))]
-        (when (= (:next-index packet) (:next-index after))
+            one (if topic
+                  (one-reference-packet user-id topic next-index)
+                  {:messages [] :evidence [] :next-index next-index})]
+        (when (empty? (:evidence one))
           (tel/log! {:level :warn :id ::reference-without-text
                      :data {:user-id user-id :topic-id topic-id
                             :kind (:topics/kind topic)}}
             "An @ reference gave the assistant no text"))
-        after))
+        {:messages (into messages (:messages one))
+         :evidence (into evidence (:evidence one))
+         :next-index (:next-index one)}))
     {:messages [] :evidence [] :next-index first-index}
     (or ref-topic-ids [])))
 
@@ -1038,6 +1119,13 @@
    thousands of files, so the learner narrows the list by typing."
   50)
 
+(def ^:private unreferenceable-kinds
+  "Root kinds the @ picker never offers, because a reference to one sends the
+   model no text. A repository root holds none: `referenceable-docs` offers
+   its files instead. A score holds a sheet-music PDF and a recording. No
+   import makes text from either."
+  #{"repo" "score"})
+
 (defn referenceable-docs
   "Return what a learner can reference from a chat: root documents, then repo
    files.
@@ -1050,9 +1138,10 @@
    bury the documents under files the learner did not ask for.
 
    Pre: `query` is the unfinished text after `@`, or an empty string.
-   Post: the documents exclude the open document and every repository root, in
-         newest-first order. At most `max-referenceable-files` files follow
-         them, each titled `<repo title>/<path>`.
+   Post: the documents exclude the open document and every root of an
+         `unreferenceable-kinds` kind, in newest-first order. At most
+         `max-referenceable-files` files follow them, each titled
+         `<repo title>/<path>`.
    Invariant: every result has an `:id` and a displayable `:title`."
   ([user-id current-root-topic-id]
    (referenceable-docs user-id current-root-topic-id ""))
@@ -1061,7 +1150,7 @@
          documents (into []
                      (comp
                        (remove #(= current-root-topic-id (:topics/id %)))
-                       (remove #(= "repo" (:topics/kind %)))
+                       (remove #(unreferenceable-kinds (:topics/kind %)))
                        (map (fn [topic]
                               {:id (:topics/id topic)
                                :title (or (:topics/title topic) "Untitled")}))

@@ -101,6 +101,7 @@
                   (fn [_]
                     [{:topics/id 9 :topics/kind "pdf" :topics/title "Open document"}
                      {:topics/id 1 :topics/kind "repo" :topics/title "adham/grid"}
+                     {:topics/id 11 :topics/kind "score" :topics/title "Grid sonata"}
                      {:topics/id 7 :topics/kind "web" :topics/title "Grid layout notes"}])
                   db/get-referenceable-repo-files
                   (fn [user-id needle limit]
@@ -109,12 +110,13 @@
       {:docs (assistant/referenceable-docs 5 9 query)
        :file-calls @!file-calls})))
 
-(deftest the-picker-offers-repo-files-and-never-a-repository-root
+(deftest the-picker-offers-repo-files-and-no-root-without-text
   (let [{:keys [docs file-calls]} (picker "GRID")]
     (is (= [{:id 7 :title "Grid layout notes"}
             {:id 42 :title "adham/grid/docs/ir-spec.md"}]
           docs)
-      "documents first, then files; the root matches the query and is still left out")
+      (str "documents first, then files. The repository root and the score both "
+        "match the query, and neither is offered."))
     (is (= [[5 "grid" 50]] file-calls) "the needle reaches the query in lower case")))
 
 (deftest a-blank-query-lists-documents-only
