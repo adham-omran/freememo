@@ -523,22 +523,19 @@
     (or ref-topic-ids [])))
 
 (defn- run-source-packet
-  "Resolve current reading sources, grounded fact evidence, and @ references.
-   Keys run through the current topic, then the facts, then the references.
-   The facts message names its own key, so a key numbered after the references
-   would change that message on every turn that adds one.
+  "Resolve grounded fact evidence, current reading sources, and @ references.
+   Keys follow the order of the request: the facts, then the current topic,
+   then the references. The facts message names its own key, so a key numbered
+   after any source would change that message whenever the source did.
    Post: every source shown to the model has one retained evidence record.
    :current-messages are the current topic's source turns, and
    :reference-messages are the @ references' source turns."
   [user-id ctx mode ref-topic-ids]
   (let [root (db/get-topic (:root-id ctx))
         root-title (or (:topics/title root) "Untitled")
-        current (if (:pdf? ctx)
-                  (pdf-context-packet ctx root-title 1)
-                  (topic-context-packet user-id ctx root-title 1))
         grounding (grounding-system-suffix user-id ctx mode)
         facts-source (when-not (str/blank? grounding)
-                       {:citation-key (evidence-key (:next-index current))
+                       {:citation-key (evidence-key 1)
                         :document-topic-id (:root-id ctx)
                         :page-topic-id (:page-topic-id ctx)
                         :page-number (:center-page ctx)
@@ -547,12 +544,15 @@
                         :source-revision (source-revision root)
                         :quoted-text (evidence-excerpt grounding)
                         :snapshot-content grounding})
-        refs (reference-context-packet user-id ref-topic-ids
-               (cond-> (:next-index current) facts-source inc))]
+        first-source-index (if facts-source 2 1)
+        current (if (:pdf? ctx)
+                  (pdf-context-packet ctx root-title first-source-index)
+                  (topic-context-packet user-id ctx root-title first-source-index))
+        refs (reference-context-packet user-id ref-topic-ids (:next-index current))]
     {:current-messages (:messages current)
      :reference-messages (:messages refs)
-     :evidence (-> (:evidence current)
-                 (cond-> facts-source (conj facts-source))
+     :evidence (-> (if facts-source [facts-source] [])
+                 (into (:evidence current))
                  (into (:evidence refs)))
      :grounding-suffix (when grounding
                          (str grounding "\n\nEvidence key for these established facts: "
@@ -572,15 +572,33 @@
               :content (:assistant_messages/content message)})))
     (db/get-assistant-messages chat-id)))
 
+(defn- with-cache-breakpoint
+  "`messages` with a `cache_control` breakpoint on the last one. Its text
+   becomes one text part, so the text the model reads does not change.
+   OpenRouter uses only the last breakpoint for Gemini, and caches every
+   message up to it. Empty `messages` stay empty."
+  [messages]
+  (if (seq messages)
+    (update messages (dec (count messages))
+      (fn [{:keys [content] :as message}]
+        (assoc message :content [{:type "text" :text content
+                                  :cache_control {:type "ephemeral"}}])))
+    messages))
+
 (defn- answer-request
   "Render the exact provider request for one new answer.
    A provider caches the start of a request that repeats the previous one, so
-   each part goes before every part that changes more often: instructions, the
-   current topic's sources, the facts, the checkpoint, the transcript after it,
-   then this turn's @ references and the new user turn. While the learner stays
-   on one page, the previous request is a prefix of this one, minus its
-   references and its user turn. See plans/assistant-request-prefix-cache.md."
-  [user-id chat page-topic-id user-text ref-topic-ids model-fields web-search-supported?]
+   the stable parts come first: instructions, facts, checkpoint, and the current
+   topic's sources. The transcript after the checkpoint follows, then this
+   turn's @ references and the new user turn. While the learner stays on one
+   page, the previous request is a prefix of this one, minus its references and
+   its user turn.
+   Gemini caches only up to an explicit breakpoint. When `cache-breakpoint?`,
+   the last current-topic source turn carries one. Every system message comes
+   before it, because Gemini fixes its system instruction with the cache.
+   See plans/assistant-request-prefix-cache.md."
+  [user-id chat page-topic-id user-text ref-topic-ids model-fields web-search-supported?
+   cache-breakpoint?]
   (let [chat-id (:assistant_chats/id chat)
         root-topic-id (:assistant_chats/root_topic_id chat)
         mode (modes/resolve-mode (:assistant_chats/mode chat))
@@ -597,9 +615,10 @@
                               :content (str "# Conversation checkpoint\n\n"
                                          (:summary checkpoint))})
         messages (-> [{:role "system" :content system-content}]
-                   (into (:current-messages sources))
                    (cond-> facts-message (conj facts-message)
                            checkpoint-message (conj checkpoint-message))
+                   (into (cond-> (:current-messages sources)
+                           cache-breakpoint? with-cache-breakpoint))
                    (into (transcript-messages-after-checkpoint chat-id checkpoint))
                    (into (:reference-messages sources))
                    (conj {:role "user" :content user-text}))]
@@ -929,7 +948,8 @@
                             (answer-request user-id chat page-topic-id user-text
                               ref-topic-ids model-fields
                               (card-models/web-search-supported?
-                                (:id entry))))
+                                (:id entry))
+                              (card-models/cache-breakpoint? run-model-id)))
                  run-uuid (str (random-uuid))
                  created (db/create-assistant-answer-run!
                            chat-id user-text client-id
