@@ -481,7 +481,9 @@
      :go-import     {:label "Go to Import"   :class :nav :nav-tab :import}
      :go-settings   {:label "Go to Settings" :class :nav :nav-tab :settings}
      :go-curriculum {:label "Go to Curriculum" :class :nav :nav-tab :curriculum}
-     :open-topic    {:label "Open topic"     :class :nav :nav-tab :viewer
+     :go-graph      {:label "Go to Graph"    :class :nav :nav-tab :graph}
+     :go-help       {:label "Go to Help"     :class :nav :nav-tab :help}
+     :open-topic   {:label "Open topic"     :class :nav :nav-tab :viewer
                      :data {:topic-id :payload} :palette-hidden true}
      :start-learn-session {:label "Start learn session" :class :nav :nav-tab :viewer}
      :open-subset-review  {:label "Review subset" :class :nav :nav-tab :viewer

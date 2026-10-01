@@ -9,6 +9,8 @@
 ;; {:type :subset-review   :root-id _ :root-name _}
 ;; Search nav type (tab :search):
 ;; {:type :search-query    :query "text"}
+;; Help nav type (tab :help):
+;; {:type :help            :slug "section-slug"}
 
 ;; Cross-topic page handoff: a PDF-page extract's "Go to page" button sets this
 ;; before navigating to the PDF root; the destination TopicPage consumes it once
@@ -32,6 +34,12 @@
 
 (defn nav-search-query [query]
   {:type :search-query :query query})
+
+(defn nav-help
+  "/help/<slug>: one Help section. Pre: `slug` is a section's `:slug`
+   (freememo.help-content); an unknown one shows the whole page."
+  [slug]
+  {:type :help :slug slug})
 
 (defn set-url-page!
   "Reflect the current PDF page in the address bar as /viewer/topic/<root>/<page>.

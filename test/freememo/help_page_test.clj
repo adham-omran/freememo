@@ -3,13 +3,13 @@
   (:require
    [clojure.set :as set]
    [clojure.test :refer [deftest is testing]]
-   [freememo.help-page :as help]))
+   [freememo.help-content :as help]))
 
 (defn- workflow-step-labels [title]
-  (some->> help/workflows
+  (some->> help/sections
     (some #(when (= title (:title %)) %))
     :steps
-    (map first)
+    (map :label)
     set))
 
 (deftest recent-feature-workflows-are-covered

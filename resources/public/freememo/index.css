@@ -1934,6 +1934,52 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     color: var(--color-text-hint);
     font-size: 12px;
 }
+/* A row's cell holds the row button and, for a command a Help step documents,
+   the ? button beside it (plans/searchable-help.md 4.3). A sibling, not a
+   child, so its click never reaches the row. */
+.command-palette-list table td.command-palette-cell {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+}
+.command-palette-cell .command-palette-row { flex: 1; min-width: 0; }
+.command-palette-help {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border: 0.5px solid var(--color-border-light);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--color-text-hint);
+    font-size: 12px;
+    cursor: pointer;
+}
+.command-palette-help:hover { color: var(--color-text-primary); }
+
+/* Help page (plans/searchable-help.md 2.2, 3). */
+.help-search { width: 100%; margin-bottom: 20px; }
+.help-section { margin-bottom: 28px; scroll-margin-top: 16px; }
+.help-section--target {
+    border-left: 3px solid var(--color-primary);
+    padding-left: 12px;
+    margin-left: -15px;
+}
+.help-notice {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+    margin-bottom: 20px;
+}
+.help-clear {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--color-primary-text);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
 
 .tape-scroll table {
     display: block;

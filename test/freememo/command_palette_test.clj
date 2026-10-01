@@ -12,5 +12,32 @@
         rows (with-redefs [bus/available? (fn [_ _] true)]
                (palette/palette-rows :viewer {} ""))]
     (is (> (count expected) 12))
-    (is (= expected (set (map :id (butlast rows)))))
+    (is (= expected (set (keep :id (remove :help-slug (butlast rows))))))
     (is (= :search (:id (last rows))))))
+
+(defn- rows-for [query]
+  (with-redefs [bus/available? (fn [_ _] true)]
+    (palette/palette-rows :viewer {} query)))
+
+(deftest help-rows-follow-commands-and-precede-search
+  ;; plans/searchable-help.md 4.1
+  (let [rows (rows-for "anki")
+        kinds (map #(cond (:search-row %) :search (:help-slug %) :help :else :command) rows)]
+    (is (some #{:help} kinds))
+    (is (= kinds (sort-by {:command 0 :help 1 :search 2} kinds))
+      "commands, then help rows, then the search row")
+    (is (some #(= "Syncing to Anki" (:label %)) (filter :help-slug rows)))))
+
+(deftest a-help-row-matches-on-a-step-label
+  (is (= ["Importing content"] (map :label (filter :help-slug (rows-for "zotero")))))
+  (is (empty? (filter :help-slug (rows-for "xyzzy")))))
+
+(deftest a-title-match-ranks-before-a-step-label-match
+  (let [help-labels (map :label (filter :help-slug (rows-for "quiz")))]
+    (is (= "Testing yourself — Quiz & Timed Quiz" (first help-labels)))))
+
+(deftest shift-enter-target
+  (let [scan (some #(when (= :scan (:id %)) %) (rows-for "scan"))
+        search-row (last (rows-for "scan"))]
+    (is (= "studying-a-pdf" (palette/row-help-slug scan)))
+    (is (nil? (palette/row-help-slug search-row)))))

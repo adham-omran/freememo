@@ -24,6 +24,7 @@
    [freememo.activity-panel :refer [ActivityNavButton]]
    [freememo.command-bus :as bus]
    [freememo.commands :as commands]
+   [freememo.help-content :as help]
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
    [freememo.undo-history-modal :refer [ActionsNavButton]]
@@ -66,6 +67,12 @@
   [{:tab :help :label "Help" :icon :circle-help}
    {:tab :settings :label "Settings" :icon :settings}])
 
+(defn route-tab
+  "The routed tab of router5's `route`: its first segment, or :home for /."
+  [route]
+  (let [[page] route]
+    (if page (keyword (str page)) :home)))
+
 (defn active-item
   "The rail item a route marks active (1.7.1).
 
@@ -74,8 +81,8 @@
          which no item leads to. Otherwise the tab keyword, so a topic and a
          bare /viewer both give :viewer, which is Continue."
   [route]
-  (let [[page sub] route
-        tab (if page (keyword (str page)) :home)]
+  (let [[_ sub] route
+        tab (route-tab route)]
     (cond
       (and (= tab :viewer) (#{"learn-session" "subset-review"} (some-> sub str))) :learn
       (= tab :credits) nil
@@ -482,13 +489,35 @@
                 (= tab :learn) (LearnItem item active? due navigate!)
                 :else (RailItem item active? nil (fn [] (navigate! tab)))))))))))
 
-(e/defn RailFoot [user-id active navigate! !undo-modal-open? !activity-open?]
+(defn open-page-help!
+  "Open the Help section for the page in view, or all of Help when the page
+   has none (plans/searchable-help.md 5.1, 5.2). `help-slug` is
+   help-content/slug-for-tab of the routed tab."
+  [navigate! help-slug]
+  (if help-slug
+    (navigate! :help (nav/nav-help help-slug))
+    (navigate! :help)))
+
+(e/defn PageHelpButton
+  "Help for this page: a foot button under Help, not a `utilities` entry, so it
+   is not a destination and moves no Nav destinations count (D7). It marks no
+   route active."
+  [help-slug navigate!]
+  (e/client
+    (dom/button
+      (dom/props {:class "nav-rail__item"})
+      (RailIcon :info)
+      (RailLabel "Help for this page")
+      (dom/On "click" (fn [_] (open-page-help! navigate! help-slug)) nil))))
+
+(e/defn RailFoot [user-id active help-slug navigate! !undo-modal-open? !activity-open?]
   (e/client
     (dom/div
       (dom/props {:class "nav-rail__foot"})
       (e/for [item (e/diff-by :tab utilities)]
         (let [tab (:tab item)]
-          (RailItem item (= tab active) nil (fn [] (navigate! tab)))))
+          (RailItem item (= tab active) nil (fn [] (navigate! tab)))
+          (when (= tab :help) (PageHelpButton help-slug navigate!))))
       (ActionsNavButton !undo-modal-open?)
       (ActivityNavButton user-id !activity-open?))))
 
@@ -559,5 +588,6 @@
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
             (RailDestinations active continue-target due navigate!)
-            (RailFoot user-id active navigate! !undo-modal-open? !activity-open?)
+            (RailFoot user-id active (help/slug-for-tab (route-tab route))
+              navigate! !undo-modal-open? !activity-open?)
             (KeepOpenButton kept? toggle-kept)))))))

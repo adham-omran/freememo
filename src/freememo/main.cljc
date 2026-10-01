@@ -144,6 +144,10 @@
                              'exam (:form-id nav-map)
                              'sitting (:sitting-id nav-map))
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
+       ;; /help/<slug>. A symbol, so the segment reads as a bare word in the
+       ;; URL; HelpPage reads it back after `r/pop`. A sub-route, so the
+       ;; Routes count stays 14 (plans/searchable-help.md 2.1).
+       :help (list 'help (symbol (:slug nav-map)))
        :library-cards (list 'library 'cards)
        ;; Entities/Questions carry an OPTIONAL doc-id: arriving from a document
        ;; keeps the sub-view scoped to it. Branch rather than emit a trailing nil —
@@ -398,7 +402,9 @@
                           (KnowledgePage user-id navigate!)))
                       (when (= active-tab :graph) (GraphPage user-id navigate!))
                       (when (= active-tab :quiz) (QuizPage user-id navigate!))
-                      (when (= active-tab :help) (HelpPage))
+                      (when (= active-tab :help)
+                        (r/pop ; consume 'help; HelpPage reads the slug segment
+                          (HelpPage)))
                       (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                       (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                       (when (= active-tab :learn) (LearnPage user-id navigate! nil))
