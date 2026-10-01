@@ -12,7 +12,7 @@
         rows (with-redefs [bus/available? (fn [_ _] true)]
                (palette/palette-rows :viewer {} ""))]
     (is (> (count expected) 12))
-    (is (= expected (set (keep :id (remove :help-slug (butlast rows))))))
+    (is (= expected (set (map :id (butlast rows)))))
     (is (= :search (:id (last rows))))))
 
 (defn- rows-for [query]
@@ -29,8 +29,15 @@
     (is (some #(= "Syncing to Anki" (:label %)) (filter :help-slug rows)))))
 
 (deftest a-help-row-matches-on-a-step-label
-  (is (= ["Importing content"] (map :label (filter :help-slug (rows-for "zotero")))))
+  ;; No title holds "transcribe"; the Audio and Video sections each have a
+  ;; step label that does.
+  (is (= ["Import audio" "Import video"] (map :label (filter :help-slug (rows-for "transcribe")))))
   (is (empty? (filter :help-slug (rows-for "xyzzy")))))
+
+(deftest a-blank-query-lists-no-help-rows
+  ;; plans/help-import-sources.md 3.1
+  (is (empty? (filter :help-slug (rows-for ""))))
+  (is (empty? (filter :help-slug (rows-for "  ")))))
 
 (deftest a-title-match-ranks-before-a-step-label-match
   (let [help-labels (map :label (filter :help-slug (rows-for "quiz")))]

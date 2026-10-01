@@ -84,7 +84,7 @@
 (def ^:private pending-ceiling
   "6.4. The number of commands Help still owes a step. Lower it when a step
    lands. Never raise it: a new command owes Help a step, not a :pending."
-  51)
+  38)
 
 (deftest pending-help-only-shrinks
   (is (<= (count (filter #(= :pending (val %)) help/undocumented)) pending-ceiling)))

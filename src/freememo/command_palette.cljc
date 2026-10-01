@@ -58,15 +58,19 @@
 (defn help-rows
   "One row per Help section matching `query`, best first, in reading order
    within a tier. A section matches on its title by match-score, or on a
-   resolved step label by substring. Rows carry :help-slug and no :id."
+   resolved step label by substring. Rows carry :help-slug and no :id.
+   Post: no rows for a blank query, so an empty palette lists commands only
+   (plans/help-import-sources.md 3.1)."
   [query]
-  (->> help/sections
+  (if (str/blank? query)
+    []
+    (->> help/sections
     (keep (fn [{:keys [slug title] :as section}]
             (when-let [score (or (match-score title query)
                                (when (help/step-label-hit? section query)
                                  step-label-tier))]
               {:help-slug slug :label title :score score})))
-    (sort-by :score)))
+      (sort-by :score))))
 
 (defn palette-rows
   "Every available command on `active-tab` that matches `query`, best first,

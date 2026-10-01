@@ -29,6 +29,22 @@
            "Grade it" "Cancel or archive" "Understand credits"}
          "Finding & organizing"
          #{"Use the Library on a phone"}
+         ;; plans/help-import-sources.md 4.3 — each import source's first step.
+         "Importing content"                         #{"Drop or browse" "Which source should I use?"}
+         "Import a PDF, EPUB, HTML or Markdown file" #{"Pick the file"}
+         "Import a SuperMemo collection"             #{"Zip the collection"}
+         "Import a Sphinx documentation site"        #{"Zip the built site"}
+         "Move your account to another FreeMemo"     #{"Export"}
+         "Import from a link"                        #{"Fetch"}
+         "Import audio"                              #{"Upload"}
+         "Import video"                              #{"Add the files"}
+         "Write a new topic"                         #{"Create"}
+         "Paste HTML or Markdown"                    #{"Open Paste"}
+         "Sheet-music (Score) cards"                 #{"Create it"}
+         "Import from Zotero"                        #{"Set it up once"}
+         "Import code"                               #{"From a forge"}
+         "Import a poem"                             #{"Get a package"}
+         "Live Document"                             #{"Start one"}
          "Control FreeMemo with the keyboard"
          #{"Start with focus" "Move between controls" "Activate controls"
            "Open any tab" "Use the command palette ({toggle-palette})"

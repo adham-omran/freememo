@@ -34,24 +34,234 @@
              :commands #{}}]}
    {:slug "importing-content"
     :title "Importing content"
-    :intro "Get PDFs, EPUBs, articles, and photos in. Everything starts on the Import tab."
-    :steps [{:label "Upload a file"
-             :detail "Import → Upload. Drop a PDF, EPUB, HTML, Markdown, or code-repo (.zip) file (or click to browse); PDFs, EPUBs, and code repos ask \"Import as …\" first. Drag-and-drop onto the modal works too."
-             :commands #{:import-upload :import-file}}
-            {:label "Import from a link"
-             :detail "Import → Link, paste a web or Wikipedia URL, and Fetch. A URL that resolves to a PDF or EPUB is offered for import."
+    :intro "Everything starts on the Import tab. Drop a file on it, paste on it, or pick a source card. The sections after this one cover each source."
+    :steps [{:label "Drop or browse"
+             :detail "Drop a file anywhere on the Import page, or click Browse files. The box reads Drop a file, paste a link, or paste text. The chips under it name each accepted type and its size limit."
+             :commands #{}}
+            {:label "Paste on the page"
+             :detail "Paste anywhere on the Import page, outside a text field. A web address on its own starts a link import at once. HTML or a copied web page opens Paste as HTML. Other text opens Paste as Markdown. Give it a title, then Import."
+             :commands #{}}
+            {:label "Drop several files"
+             :detail "Several videos import together and can become one playlist. Files of different kinds are refused. Of several other files, FreeMemo imports only the first."
+             :commands #{}}
+            {:label "Find the other sources"
+             :detail "Link, Audio and Video are the main cards. More sources opens New Topic, Paste, Score, Zotero, Code, Poem and Live Document."
+             :commands #{}}
+            {:label "Which source should I use?"
+             :detail "A PDF, EPUB, HTML or Markdown file: drop it. A SuperMemo collection: zip its folder and drop it. A built Sphinx site: zip it and drop it. A FreeMemo account export: drop the .zip. A web page or Wikipedia article: Link. A recording: Audio. A video: Video. Your own text: New Topic or Paste. Sheet music and a recording: Score. A paper in Zotero: Zotero. A code repository: Code. A poem package: Poem. Pages on paper: Live Document."
+             :commands #{}}]}
+   {:slug "import-file"
+    :title "Import a PDF, EPUB, HTML or Markdown file"
+    :intro "Bring in a document from your computer. It opens in the Viewer."
+    :steps [{:label "Pick the file"
+             :detail "Drop it on the Import page, or click Browse files. PDF, EPUB, HTML (.html, .htm) and Markdown (.md, .markdown) are accepted. The default limits are 100 MB for PDF, HTML and Markdown, and 4 GB for EPUB."
+             :commands #{:import-upload :import-file :import-document}}
+            {:label "Confirm the type"
+             :detail "A PDF or an EPUB asks you to confirm: Import as PDF or Import as EPUB. An HTML or Markdown file asks for a title, then Import."
+             :commands #{}}
+            {:label "Shrink EPUB images (optional)"
+             :detail "Before you import an EPUB, ▸ Advanced → Images offers Reduce size, the default, or Strip images, which keeps the text only."
+             :commands #{}}
+            {:label "What you get"
+             :detail "A PDF becomes one topic with a child topic for each page. An EPUB becomes one topic with a child topic for each chapter. An HTML or Markdown file becomes one topic."
+             :commands #{}}]}
+   {:slug "import-supermemo"
+    :title "Import a SuperMemo collection"
+    :intro "Move a SuperMemo 17, 18 or 19 collection into FreeMemo, with its tree, its cards and the schedule of its topics."
+    :steps [{:label "Zip the collection"
+             :detail "Make a .zip or .7z of the collection folder. It must hold info/contents.dat and info/ElementInfo.dat."
+             :commands #{}}
+            {:label "Drop it"
+             :detail "Drop the archive on the Import page, then Import as SuperMemo Collection. An archive can be up to 16 GB."
+             :commands #{:import-supermemo}}
+            {:label "What carries over"
+             :detail "Topics and tasks become topics with the same titles. Folders (concept groups) are removed, and their children move up. Items become cards on the nearest topic. References become sources. Images, colours, fonts and extract highlights are kept. Each topic keeps its interval, A-factor, review dates and repetition history. The order of the priority queue becomes FreeMemo priority."
+             :commands #{}}
+            {:label "What stays behind"
+             :detail "Grades, lapses, the repetition history of items, U-factors, element layout, concepts, tasklists, subsets and the SuperMemo algorithm state."
+             :commands #{}}
+            {:label "After the import"
+             :detail "FreeMemo opens the root topic. It shows no summary of what it imported."
+             :commands #{}}]}
+   {:slug "import-sphinx"
+    :title "Import a Sphinx documentation site"
+    :intro "Read a project's built Sphinx documentation as a topic tree."
+    :steps [{:label "Zip the built site"
+             :detail "Make a .zip of the built HTML site. It must hold .buildinfo, objects.inv and searchindex.js."
+             :commands #{}}
+            {:label "Drop it"
+             :detail "Drop the .zip on the Import page, then Import as Documentation Site."
+             :commands #{}}
+            {:label "What you get"
+             :detail "Each page becomes a topic, nested the way the site's folders are. Links between pages open the imported topics. The index, search and 404 pages are skipped."
+             :commands #{}}]}
+   {:slug "import-account"
+    :title "Move your account to another FreeMemo"
+    :intro "Copy your whole account from one FreeMemo server to another."
+    :steps [{:label "Export"
+             :detail "Settings → Account → Download export (.zip). The file holds your documents and their files, your cards and their schedule, the knowledge graph, and your settings. A large account takes a while to start downloading."
+             :commands #{}}
+            {:label "Import"
+             :detail "On the other server, drop the .zip on the Import page, then Import as FreeMemo Account Export."
+             :commands #{:import-account}}
+            {:label "What happens"
+             :detail "The import adds to the account there. It replaces nothing, and a setting that already exists keeps its value. FreeMemo then opens the Library."
+             :commands #{}}
+            {:label "Importing again"
+             :detail "An export that was already imported is refused. An interrupted import continues when you drop the same file again."
+             :commands #{}}]}
+   {:slug "import-link"
+    :title "Import from a link"
+    :intro "Bring in a web page, a Wikipedia article, or a PDF or EPUB on the web. A link import uses no credits."
+    :steps [{:label "Fetch"
+             :detail "Import → Link, paste the address, and Fetch. An address pasted on the Import page starts the import at once."
              :commands #{:import-link}}
-            {:label "Import from Zotero"
-             :detail "Import → Zotero opens your library; filter and click an item to pull its PDF. First turn it on in Settings → Zotero (Enable Zotero import, then Test Connection) with the FreeMemo for Zotero plugin installed."
+            {:label "What is accepted"
+             :detail "Wikipedia articles, mobile links included, and any public web page. An arXiv PDF link imports the arXiv abstract page. A link to a PDF or an EPUB asks you to confirm, as a file does."
+             :commands #{}}
+            {:label "What is refused"
+             :detail "Links to images, audio, video, JSON, XML, plain text and ZIP files. FreeMemo does not follow redirects, so paste the final address. Some sites block fetching: copy the page in your browser and use Paste."
+             :commands #{}}
+            {:label "A link you imported before"
+             :detail "FreeMemo opens the topic you already have. It makes no second copy."
+             :commands #{}}]}
+   {:slug "import-audio"
+    :title "Import audio"
+    :intro "Bring in a recording, then transcribe it into text you can study."
+    :steps [{:label "Upload"
+             :detail "Import → Audio, drop or pick the file, then Import as Audio. MP3, M4A, WAV, FLAC and OGG are accepted, up to 25 MB. An MP4 or WebM file goes to Video."
+             :commands #{:import-audio}}
+            {:label "Transcribe"
+             :detail "The topic starts empty. Transcribe on the toolbar writes the transcript into the editor. If the editor already holds text, FreeMemo asks before it replaces it. Transcription uses credits and stops after 120 seconds."
+             :commands #{:transcribe}}
+            {:label "Set the language"
+             :detail "Settings → AI Features → Transcription language. Auto-detect is the default. Pick the language when Auto-detect gets short or quiet audio wrong."
+             :commands #{}}]}
+   {:slug "import-video"
+    :title "Import video"
+    :intro "Bring in one video or a playlist, with a transcript you can read and extract from."
+    :steps [{:label "Add the files"
+             :detail "Import → Video, then drop files or click the box. MP4, MKV, WebM, OGV and MOV are accepted, up to 8 GB each. ＋ Add more adds files. FreeMemo takes files only. It cannot import a YouTube or other video link."
+             :commands #{:import-video}}
+            {:label "Choose Upload as"
+             :detail "Separate documents makes one topic for each video. New playlist makes a playlist topic with the videos under it. Add to existing playlist adds them to a playlist you have."
+             :commands #{}}
+            {:label "Transcribe after upload"
+             :detail "On by default, with an estimate of the credits it uses. Turn it off to transcribe later."
+             :commands #{}}
+            {:label "Upload"
+             :detail "Upload starts it. You can close the dialog, and the upload continues in Activity. A file that is not MP4 is converted after upload. Stored video uses credits over time, and playback stops when storage credit runs out."
+             :commands #{}}
+            {:label "Use the transcript"
+             :detail "The transcript pane lists the segments. Click one to jump to it. Transcribe or Re-transcribe makes the transcript. Copy puts it in the editor."
+             :commands #{:process-video}}
+            {:label "Extract a range"
+             :detail "Drag on the waveform to mark a range. ▶ range plays it and ⟲ loop repeats it. Extract range makes a child topic for that range, with its part of the transcript."
+             :commands #{:extract-video}}]}
+   {:slug "new-topic"
+    :title "Write a new topic"
+    :intro "Start a topic with no imported content, and write in it."
+    :steps [{:label "Create"
+             :detail "Import → More sources → New Topic, type a title, and Create. A blank title becomes New Topic. The empty topic opens in the Viewer."
+             :commands #{:new-topic}}]}
+   {:slug "import-paste"
+    :title "Paste HTML or Markdown"
+    :intro "Bring in text you copied, as Markdown or as a web page."
+    :steps [{:label "Open Paste"
+             :detail "Import → More sources → Paste, or paste on the Import page."
+             :commands #{:import-paste}}
+            {:label "Fill it in"
+             :detail "Pick the Format: Markdown, the default, or HTML. Give a Title. For HTML, you can add a Source URL (optional). Paste the content, then Import."
+             :commands #{}}
+            {:label "What you get"
+             :detail "HTML becomes a web topic with its scripts removed. An empty title is taken from the first heading. Markdown becomes a Markdown topic."
+             :commands #{}}]}
+   {:slug "score-cards"
+    :title "Sheet-music (Score) cards"
+    :intro "Turn a score PDF and a recording into audio ↔ notation cards."
+    :steps [{:label "Create it"
+             :detail "Import → More sources → Score. Pick the Sheet music (PDF) and the Recording, then Import Score. The recording can be up to 200 MB."
+             :commands #{:import-score}}
+            {:label "Select the audio"
+             :detail "Drag directly on the waveform strip to mark the passage you want to hear."
+             :commands #{}}
+            {:label "Mark the notation"
+             :detail "Click Notation, drag a rectangle over the matching bars on the page, then Done."
+             :commands #{}}
+            {:label "Add the card"
+             :detail "Add card ▾ → Audio front, Sheet front, or Both. Both makes two Anki notes that share the same media."
+             :commands #{:add-score-group}}
+            {:label "Edit a card"
+             :detail "Click a score card's row to edit it. Update cards saves the change, and Duplicate makes a copy."
+             :commands #{:update-score-group}}]}
+   {:slug "import-zotero"
+    :title "Import from Zotero"
+    :intro "Bring in a PDF from your own Zotero library, with its citation."
+    :steps [{:label "Set it up once"
+             :detail "Settings → Zotero → Download FreeMemo for Zotero (.xpi). In Zotero, Tools → Plugins → gear icon → Install Plugin From File. In Zotero → Settings → Advanced, allow other applications on this computer to communicate with Zotero. Then turn on Enable Zotero import and press Test Connection."
+             :commands #{}}
+            {:label "Pick an item"
+             :detail "Import → More sources → Zotero. Zotero must be running on this computer. Filter the list, then click an item. If it has several PDFs, pick one."
              :commands #{:import-zotero}}
-            {:label "Live Document"
-             :detail "Import → Live Document makes a PDF you keep adding to. Tap ＋ to upload or take photos, rotate and crop each in the editor, then Done to append them as pages; HEIC photos convert automatically."
-             :commands #{:create-live-doc :append-images}}]}
+            {:label "What you get"
+             :detail "The PDF opens in the Viewer, and its Zotero citation becomes the document's bibliography. Only PDFs import. Zotero 7 to 10 are supported."
+             :commands #{}}]}
+   {:slug "learning-a-codebase"
+    :title "Import code"
+    :intro "Study a code repository as a topic tree. Import it from GitHub, GitLab or Forgejo, or upload a .zip."
+    :steps [{:label "From a forge"
+             :detail "Import → More sources → Code. Pick the Forge and the Host. A self-hosted server works. Enter the Repository as owner/name, or paste its address. Leave Branch, tag or commit empty for the default branch. Then Download."
+             :commands #{:import-code}}
+            {:label "Private repositories"
+             :detail "Add a token in Settings → Git Forges, then Save token. FreeMemo only reads. A public repository needs no token."
+             :commands #{}}
+            {:label "Choose what to import"
+             :detail "Pick the Directories and the File extensions, then Import. A file whose extension you leave out is still a topic, with no source. One import can make up to 20,000 topics. You can close the dialog, and a notice appears when the import is done."
+             :commands #{}}
+            {:label "What you get"
+             :detail "A topic for the repository, one for the commit, one for each directory and one for each file. Only file topics come up for review. The source shows in a read-only code pane: select lines and Copy to notes. A forge import extracts no code facts."
+             :commands #{}}
+            {:label "Update"
+             :detail "On the repository topic, Update adds the newest commit as a new commit topic, with the same selection."
+             :commands #{}}
+            {:label "From a .zip"
+             :detail "In the Code dialog, click Upload a .zip file instead, or drop the .zip on the Import page. Only Clojure files (.clj, .cljc, .cljs) are kept, one topic for each file. `git archive --format=zip -o repo.zip HEAD` makes a clean .zip."
+             :commands #{}}
+            {:label "Code facts (.zip only)"
+             :detail "Extract facts into the knowledge graph is off by default. Turn it on to analyse the code in the background. Definitions, calls, requires, arglists and docstrings then appear in Facts for the repository. You can also do this later from the Knowledge tab."
+             :commands #{}}]}
+   {:slug "import-poem"
+    :title "Import a poem"
+    :intro "Read an Arabic poem verse by verse, with notes from its commentaries, and make cards from it."
+    :steps [{:label "Get a package"
+             :detail "A poem package is a .zip with manifest.json, verses.json, notes.json and sources.json at its root. FreeMemo checks the package and names the first rule it breaks."
+             :commands #{}}
+            {:label "Import it"
+             :detail "Import → More sources → Poem, pick the .zip, then Import as Poem. The summary shows the title, the poet, the meter and the number of verses and notes."
+             :commands #{:import-poem}}
+            {:label "Read it"
+             :detail "The poem is one read-only topic. Tap a word to open الشرح (Commentary) in the right panel, with the word's gloss and الإعراب (grammatical analysis). Each note names the book and page it came from."
+             :commands #{:show-poem-panel}}
+            {:label "Make cards"
+             :detail "In the word view, بطاقة البيت (verse card) hides the second half of the verse. بطاقة المعنى (meaning card) and بطاقة الإعراب (analysis card) ask about the word. حفظ البيت (save verse) makes an extract. اشرح هذا البيت (explain this verse) shows the meaning and commentary of the verse."
+             :commands #{}}]}
+   {:slug "live-document"
+    :title "Live Document"
+    :intro "Photograph pages into a PDF you keep adding to."
+    :steps [{:label "Start one"
+             :detail "Import → More sources → Live Document. FreeMemo creates a document named Live Document and the date, and opens it."
+             :commands #{:create-live-doc}}
+            {:label "Add photos"
+             :detail "＋ Add photos, then Upload images or Take photo. HEIC photos are converted."
+             :commands #{:append-images}}
+            {:label "Edit, then add"
+             :detail "↻ Rotate 90° turns a photo, and dragging crops it. Done adds the photos as pages. Nothing uploads before Done. Later, ＋ on the toolbar adds more."
+             :commands #{}}]}
    {:slug "studying-a-pdf"
     :title "Studying a PDF"
     :intro "Turn a PDF into studied, card-ready material, one page at a time."
     :steps [{:label "Import it"
-             :detail "Import tab → Upload (PDF or EPUB) or Link (a web or Wikipedia URL). Drag-and-drop works too."
+             :detail "Drop the PDF on the Import tab, or click Browse files. Link imports a PDF from the web."
              :commands #{}}
             {:label "Read & navigate"
              :detail "Open it from Library, or from Continue in the sidebar. The page arrows or the page box move you; the zoom menu fits width or whole page."
@@ -194,21 +404,6 @@
             {:label "Curate"
              :detail "Add a card from a text selection ({add-new}) — the passage is marked in the editor — edit any card's question/answer or cloze, or delete the weak ones."
              :commands #{:add-new :add-card :edit-card :delete-card}}]}
-   {:slug "score-cards"
-    :title "Sheet-music (Score) cards"
-    :intro "Turn a score PDF and a recording into audio ↔ notation cards."
-    :steps [{:label "Create it"
-             :detail "Import → Score, drop the sheet-music PDF and the recording, then Import Score."
-             :commands #{:import-score}}
-            {:label "Select the audio"
-             :detail "Drag directly on the waveform strip to mark the passage you want to hear."
-             :commands #{}}
-            {:label "Mark the notation"
-             :detail "Click Notation, drag a rectangle over the matching bars on the page, then Done."
-             :commands #{}}
-            {:label "Add the card"
-             :detail "Add card ▾ → Audio front, Sheet front, or Both."
-             :commands #{:add-score-group}}]}
    {:slug "image-occlusion-cards"
     :title "Image-occlusion cards"
     :intro "Hide parts of an image and quiz yourself on what's under the mask."
@@ -277,21 +472,6 @@
              :commands #{}}
             {:label "Curate questions"
              :detail "Questions: click a row to edit its question and reference answer, or × to reject it."
-             :commands #{}}]}
-   {:slug "learning-a-codebase"
-    :title "Learning a codebase"
-    :intro "Turn a code repository into a topic tree and a fact graph you can browse and quiz. v1 analyzes Clojure sources (.clj/.cljc/.cljs)."
-    :steps [{:label "Zip the source"
-             :detail "Make a .zip of the repo. `git archive --format=zip -o repo.zip HEAD` is cleanest — tracked files only, no .git or build output. Only Clojure files are analyzed; anything else is ignored."
-             :commands #{}}
-            {:label "Upload it"
-             :detail "Import → Upload, pick the .zip, and confirm \"Import as Code Repository\". Drag-and-drop works too."
-             :commands #{:import-code}}
-            {:label "What you get"
-             :detail "A root topic named after the repo, one child topic per source file (source shown as a syntax-highlighted code block), and code facts distilled in the background — a toast reports when they're ready."
-             :commands #{}}
-            {:label "Browse & quiz"
-             :detail "Facts (defined-in, calls, requires, arglists, docstrings) land under Knowledge → Facts for the repo. Generate questions and quiz against them like any other graph."
              :commands #{}}]}
    {:slug "quiz"
     :title "Testing yourself — Quiz & Timed Quiz"
@@ -417,24 +597,14 @@
    :copy-card                 :pending
    :delete-document           :pending
    :dismiss                   :pending
-   :extract-video             :pending
    :find-next-marked-card     :pending
    :find-next-remarked-card   :pending
    :find-next-suspended-card  :pending
    :flag-question             :pending
-   :import-account            :pending
-   :import-audio              :pending
-   :import-document           :pending
-   :import-paste              :pending
-   :import-poem               :pending
-   :import-supermemo          :pending
-   :import-video              :pending
    :insert-audio              :pending
-   :new-topic                 :pending
    :open-activity             :pending
    :open-undo-history         :pending
    :parse-questions           :pending
-   :process-video             :pending
    :push-biblio               :pending
    :refetch-biblio            :pending
    :remove-pin                :pending
@@ -445,7 +615,6 @@
    :set-page-done             :pending
    :set-pdf-done              :pending
    :show-getting-started      :pending
-   :show-poem-panel           :pending
    :suspend-question          :pending
    :sweep-duplicates          :pending
    :sweep-duplicates-all      :pending
@@ -453,11 +622,9 @@
    :toggle-focus-reader       :pending
    :toggle-left-pane          :pending
    :toggle-pin-placement      :pending
-   :transcribe                :pending
    :undismiss                 :pending
    :undo-entry                :pending
-   :update-occlusion          :pending
-   :update-score-group        :pending})
+   :update-occlusion          :pending})
 
 ;; ── Lookups ────────────────────────────────────────────────────────────────
 
