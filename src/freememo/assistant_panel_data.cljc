@@ -92,10 +92,12 @@
           (e/server
             (mapv
               (fn [chat]
-                {:id (:assistant_chats/id chat)
-                 :label (or (:assistant_chats/title chat) "Untitled")
-                 :mode (:assistant_chats/mode chat)
-                 :web-search? (:assistant_chats/web_search chat)})
+                {:id (:id chat)
+                 :label (or (:title chat) "Untitled")
+                 :mode (:mode chat)
+                 :web-search? (:web_search chat)
+                 :activity-ms (:activity_ms chat)
+                 :pinned-ms (:pinned_ms chat)})
               (assistant/chats* assistant-rev user-id root-topic-id)))
           active-run
           (e/server
@@ -123,6 +125,7 @@
           web-search-supported?
           (card-models/web-search-supported? model-id)]
       {:chat-options chat-options
+       :active-title (:label active-chat)
        :active-run active-run
        :details details
        :sending? (some? active-run)

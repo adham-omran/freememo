@@ -1,9 +1,15 @@
 (ns freememo.assistant-panel
-  "AI assistant panel content: chat picker, New Chat, transcript, and composer.
+  "AI assistant panel content: chat bar, history view, transcript, and composer.
 
-   Chats are per-document. Sending with no active chat creates one first. Each
-   submitted turn creates a durable streamed run. Reading sources stay outside
-   the transcript and remain available in the answer details.
+   Chats are per-document. Sending with no active chat creates one with that
+   first message. Each submitted turn creates a durable streamed run. Reading
+   sources stay outside the transcript and remain available in the answer
+   details.
+
+   The active chat, the history view's open flag, the bar's rename flag and the
+   chat-action queue belong to RightSidePanel, which outlives this component
+   across a panel collapse and a poem tab switch. They arrive as positional
+   parameters.
 
    Chat controls subscribe to :assistant-mutations. The transcript also watches
    :assistant-stream for bounded durable partial text.
@@ -13,11 +19,11 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.assistant-chat-history :as history]
    [freememo.assistant-composer :as composer]
    [freememo.assistant-diagnostics :as diagnostics]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-data :as panel-data]
-   [freememo.assistant-panel-rows :as rows]
    [freememo.assistant-evidence :as evidence]
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
@@ -34,10 +40,12 @@
   [draft]
   (panel-data/active-document-mention? draft))
 
-(e/defn AssistantPanel [page-topic-id root-topic-id user-id]
+(e/defn AssistantPanel
+  "Pre: `seeded?` is true once the last-chat seed has answered."
+  [page-topic-id root-topic-id user-id seeded?
+   !active !history-open? !renaming-active? !chat-action]
   (e/client
-    (let [!active (atom nil)
-          active (e/watch !active)
+    (let [active (e/watch !active)
           !draft (atom "")
           draft (e/watch !draft)
           !submit (atom nil)
@@ -127,14 +135,14 @@
       (dom/div
         (dom/props {:class "assistant-panel"})
 
-        ;; Row 2: ＋ New + the chat picker.
-        (rows/ChatRow user-id root-topic-id chat-options pending-mode pending-web-search?
-          !active !draft !error)
+        (history/ChatBarWithHistory root-topic-id chat-options active
+          (:active-title data)
+          !active !history-open? !renaming-active? !chat-action !draft !error)
         (transcript/AssistantTranscript
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
            :page-topic-id page-topic-id :root-topic-id root-topic-id
-           :web-search? web-search?}
+           :web-search? web-search? :seeded? seeded?}
           !submit !active !refs !details-run !evidence !error !echo)
 
         (run-details/RunDetailsModal !details-run details user-id)
