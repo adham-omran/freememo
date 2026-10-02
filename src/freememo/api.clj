@@ -37,6 +37,7 @@
    [freememo.epub-http :as epub-http]
    [freememo.upload-http :as upload-http]
    [freememo.video-http :as video-http]
+   [freememo.reading-position-http :as reading-position-http]
    [freememo.web-import :as web-import]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -1198,6 +1199,9 @@
    {:method :post :path "/api/video/finalize"   :handler #'video-http/finalize-handler   :body :small}
    {:method :post :path "/api/video/abort"      :handler #'upload-http/abort-handler     :body :small}
    {:method :post :path "/api/video/position"   :handler #'video-http/position-handler   :body :small}
+   ;; Reading position (plans/reading-position-memory.md §4.1). A beacon, for
+   ;; the reason the video position above is one.
+   {:method :post :path "/api/reading-position" :handler #'reading-position-http/position-handler :body :small}
    ;; Archive chunked upload (plans/supermemo-import-large-archives.md §6.1).
    ;; Same three-call shape as video and the same reason for it: a 7.5 GB
    ;; SuperMemo collection cannot go through a 100 MB request cap. `chunk` IS

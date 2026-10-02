@@ -428,6 +428,11 @@
                            ;; unmount and read only on the next mount. Bumping
                            ;; here would re-render the player mid-playback.
                            :table #{:topic_videos} :views #{}}
+     ;; Same shape as :save-video-position, for the same reason: a beacon on a
+     ;; scroll pause and on leave, read only on the next mount
+     ;; (plans/reading-position-memory.md §4 4.5, 4.6).
+     :save-reading-position {:label "Save reading position" :class :mutation :palette-hidden true
+                             :table #{:reading_positions} :views #{}}
      ;; Both write `flashcards` — see the note on `:save-biblio`.
      :push-biblio     {:label "Copy bibliography to extracts" :class :mutation :palette-hidden true
                        :table #{:sources :topics :flashcards}

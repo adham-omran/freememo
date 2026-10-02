@@ -612,6 +612,7 @@
    :debit-credits             "Bookkeeping after a charge. No user action runs it."
    :open-topic                "Opens a topic from a link. It is not a step a user takes."
    :save-video-position       "Saved on pause and on leaving. No user action runs it."
+   :save-reading-position     "Saved on a scroll pause and on leaving. No user action runs it."
    :set-setting               "The write behind every Settings control. The Settings page is its UI."
    :add-pin                   :pending
    :apply-code-language       :pending

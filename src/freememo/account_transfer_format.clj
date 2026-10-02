@@ -81,7 +81,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 40 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 41 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -101,6 +101,7 @@
    :video_transcripts
    :video_segments
    :topic_pins
+   :reading_positions
    :neoreader_highlights
    :occlusion_groups
    :score_groups
@@ -295,6 +296,12 @@
 
    :topic_pins {:where (str "t.topic_id IN (" owned-topics ")")
                 :params 1 :order "t.id"}
+
+   ;; Keyed on (topic_id, surface) with no id column. The anchor holds a block
+   ;; index and a text fingerprint, never an id or HTML, so it needs no remap
+   ;; (plans/reading-position-memory.md §4 6.4).
+   :reading_positions {:where (str "t.topic_id IN (" owned-topics ")")
+                       :params 1 :order "t.topic_id, t.surface"}
 
    ;; Scoped through the document as well as the user, so a highlight whose
    ;; book is staged for deletion stays behind with it. `chapter_topic_id` is

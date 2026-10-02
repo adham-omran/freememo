@@ -12,6 +12,7 @@
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.command-bus :as bus])
    #?(:cljs [freememo.editor-links :as editor-links])
+   #?(:cljs [freememo.reading-position :as rp])
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
    #?(:cljs [freememo.formula-ui :as formula-ui])
@@ -369,7 +370,11 @@
            ;; Skipped without KaTeX so an unresolvable span cannot lose its
            ;; data-value on the next save.
            for-editor (if math? (math/stored->editor-html cleaned-html) cleaned-html)
-           delta (.convert clipboard #js {:html for-editor})]
+           delta (.convert clipboard #js {:html for-editor})
+           ;; Read before the flush below spends it: a link fragment owns this
+           ;; build's scroll, so the reading position must not restore over it
+           ;; (plans/reading-position-memory.md §4 5.3).
+           fragment? (boolean (not-empty @!pending-anchor))]
        (when (seq cleaned-html)
          (.setContents editor delta))
        ;; A `/viewer/topic/<id>#sec` click left its anchor behind, because the
@@ -470,6 +475,9 @@
        ;; Content is in the DOM (setContents above) and !editor-state is set, so
        ;; a reader woken by this bump can find the editor and its markers.
        (swap! !content-generation inc)
+       ;; Same moment, for the reading position: this topic's body is in the
+       ;; DOM (plans/reading-position-memory.md §4 3.6.1).
+       (rp/installed! "editor" topic-id (.-root editor) fragment?)
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
@@ -525,8 +533,12 @@
    the root's raw innerHTML would compare against Quill's RENDERED form, whose
    KaTeX subtrees make the lengths differ on every call once a document contains
    math — replacing the content, and losing scroll position and highlights, on
-   every reactive `initial-html` change."
-  [html]
+   every reactive `initial-html` change.
+
+   `content-topic-id` is the topic `html` was fetched for. A real replacement
+   reports it to the reading position, which restores only against its own
+   topic's content (plans/reading-position-memory.md §4 3.6.1, 3.7)."
+  [html content-topic-id]
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor math?]} @!editor-state]
@@ -549,7 +561,8 @@
              ;; Inside the `when`, never beside it: the skip above is what keeps
              ;; scroll, and a bump there would report an install that never
              ;; happened. See !content-generation.
-             (swap! !content-generation inc)))
+             (swap! !content-generation inc)
+             (rp/installed! "editor" content-topic-id (.-root ed))))
          true))))
 
 (defn update-topic-id!

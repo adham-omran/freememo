@@ -75,6 +75,7 @@
    :topic_code {:topic_id :topics}
    :repo_selections {:topic_id :topics}
    :topic_pins {:topic_id :topics :media_id :media}
+   :reading_positions {:topic_id :topics}
    :neoreader_highlights {:root_topic_id :topics :chapter_topic_id :topics}
    :occlusion_groups {:image_media_id :media}
    :score_groups {:clip_media_id :media}
@@ -123,6 +124,8 @@
    the schema forbids or a dangling id the schema cannot see."
   {:poem_packages #{:topic_id}
    :topic_pins #{:topic_id :media_id}
+   ;; Half of the primary key. A position for no topic is no position.
+   :reading_positions #{:topic_id}
    ;; topic_id is the PRIMARY KEY of both tables. A row whose topic did not
    ;; translate has no identity at all, so it is dropped and reported.
    :topic_code #{:topic_id}

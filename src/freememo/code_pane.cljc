@@ -29,10 +29,12 @@
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.math :as math]
+   [freememo.reading-position-view :refer [ReadingPosition]]
    [freememo.rich-text-editor :as editor]
    [freememo.video-format :refer [format-bytes]]
    #?(:cljs [goog.object :as gobj])
    #?(:cljs [freememo.editor-links :as editor-links])
+   #?(:cljs [freememo.reading-position :as rp])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.repo-markdown :as repo-md])
    #?(:clj [freememo.settings :as settings])))
@@ -45,13 +47,17 @@
 (defn get-topic-code*
   "The pane's content for `topic-id`.
    Pre : `topic-id` is a code topic.
-   Post: {:path :source :lang :byte-size} when `user-id` owns the topic, else
-         nil. `:source` is nil for an empty leaf."
+   Post: {:topic-id :path :source :lang :byte-size} when `user-id` owns the
+         topic, else nil. `:source` is nil for an empty leaf. `:topic-id` is
+         `topic-id`: the read latches across a file switch, and the reading
+         position must tell the old file's source from the new one's
+         (plans/reading-position-memory.md §4 3.7)."
   [_refresh user-id topic-id]
   #?(:clj (when-let [topic (db/get-topic topic-id)]
             (when (= user-id (:topics/user_id topic))
               (let [code (db/get-topic-code user-id topic-id)]
-                {:path (:topics/repo_path topic)
+                {:topic-id topic-id
+                 :path (:topics/repo_path topic)
                  :source (:source code)
                  :lang (:lang code)
                  :byte-size (:byte_size code)})))
@@ -148,18 +154,21 @@
   (str "<pre><code>" (str/escape text {\& "&amp;" \< "&lt;" \> "&gt;"}) "</code></pre>"))
 
 (defn render-source!
-  "Write `source` into the `<code>` element `node`.
-   Post: the node's text equals `source`. It is highlighted when highlight.js
-         carries `lang` and `source` is within `highlight-max-chars`; highlight.js
-         escapes what it emits. Returns nil."
-  [node source lang]
+  "Write the source of `body` into the `<code>` element `node`.
+   Pre : `body` is {:topic-id :source}, both from one `get-topic-code*` read.
+   Post: the node's text equals the source. It is highlighted when highlight.js
+         carries `lang` and the source is within `highlight-max-chars`;
+         highlight.js escapes what it emits. The reading position learns that
+         this node now holds that topic's source. Returns nil."
+  [node {:keys [topic-id source]} lang]
   #?(:cljs
      (let [source (or source "")
            hljs (gobj/get js/window "hljs")]
        (if (and hljs lang (<= (count source) highlight-max-chars) (.getLanguage hljs lang))
          (set! (.-innerHTML node)
            (gobj/get (.highlight hljs source #js {:language lang :ignoreIllegals true}) "value"))
-         (set! (.-textContent node) source)))
+         (set! (.-textContent node) source))
+       (rp/installed! "code-source" topic-id node))
      :clj nil)
   nil)
 
@@ -168,6 +177,13 @@
   ;; the navigation, because the target's HTML has not arrived yet, and
   ;; `show-rendered!` spends it. The notes editor keeps its own, and would
   ;; spend this one first against the wrong root if the two were shared.
+  (atom nil))
+
+(defonce ^:private !spent-hash
+  ;; [topic-id hash] of the address-bar fragment `show-rendered!` last landed
+  ;; on. A fragment wins once (plans/reading-position-memory.md §4 5.3): every
+  ;; later render of that topic, such as a switch back from the source view,
+  ;; opens at the reader's saved place instead of jumping to the fragment again.
   (atom nil))
 
 (defn- highlight-fences!
@@ -187,20 +203,28 @@
   nil)
 
 (defn show-rendered!
-  "Write the rendered Markdown `html` into `node`.
+  "Write the rendered Markdown of `rendered` into `node`.
+   Pre : `rendered` is {:topic-id :html}, both from one read.
    Post: math is typeset (once KaTeX is available), fences are highlighted, and
          a fragment left by a cross-file link — or the address bar's, on a
-         direct load — is scrolled to once. Returns nil."
-  [node html]
+         direct load — is scrolled to once. The address bar's fragment is spent
+         for that topic. The reading position learns that `node` now holds the
+         topic's document, and that a fragment owns this render's scroll when
+         one was scrolled to. Returns nil."
+  [node {:keys [topic-id html]}]
   #?(:cljs
      (do (math/set-html! node html)
          (highlight-fences! node)
          (when (seq html)
            (let [hash (some-> (.. js/window -location -hash) (subs 1) js/decodeURIComponent
-                        not-empty)]
-             (when-let [id (or (some-> @!pending-anchor not-empty) hash)]
+                        not-empty)
+                 hash (when (and hash (not= [topic-id hash] @!spent-hash)) hash)
+                 id (or (some-> @!pending-anchor not-empty) hash)]
+             (when hash (reset! !spent-hash [topic-id hash]))
+             (when id
                (reset! !pending-anchor nil)
-               (js/requestAnimationFrame #(editor-links/scroll-to-anchor! node id))))))
+               (js/requestAnimationFrame #(editor-links/scroll-to-anchor! node id)))
+             (rp/installed! "code-rendered" topic-id node (some? id)))))
      :clj nil)
   nil)
 
@@ -272,14 +296,15 @@
 
 (e/defn RenderedMarkdown
   "The rendered view of a Markdown file (§2).
-   Pre : `html` is `rendered-markdown*`'s result, a server value."
-  [html]
+   Pre : `rendered` is {:topic-id :html}, `:html` being `rendered-markdown*`'s
+         result. A server value."
+  [rendered]
   (e/client
     (dom/div
       (dom/props {:class "code-pane-rendered" :tabindex "0"})
       (let [node dom/node]
         (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
-        (show-rendered! node html)))))
+        (show-rendered! node rendered)))))
 
 (e/defn CodePane
   "Pre : dctx/page-topic-id names a code topic (dctx/is-code?).
@@ -314,7 +339,11 @@
           show-source? (or (not markdown?) (= "source" view))
           ;; SERVER-FORM binding, gated inside: the HTML crosses once, and only
           ;; while the rendered view shows (§2.2).
-          html (e/server (when rendered? (e/Offload #(rendered-markdown* user-id topic-id))))
+          ;; The HTML travels with the topic it was rendered for, for the same
+          ;; reason `get-topic-code*` returns `:topic-id`.
+          rendered (e/server (when rendered?
+                               (e/Offload #(when-let [h (rendered-markdown* user-id topic-id)]
+                                             {:topic-id topic-id :html h}))))
           !notice (atom nil)
           notice (e/watch !notice)]
       (e/drain
@@ -366,11 +395,18 @@
             (dom/text (str "No source is stored for this file. Its extension was not "
                         "selected at import, or the file is binary or larger than 1 MB.")))
 
-          rendered? (RenderedMarkdown html)
+          rendered? (RenderedMarkdown rendered)
 
           show-source?
           (dom/pre
             (dom/props {:class "code-pane-source" :dir "ltr" :tabindex "0"})
             (dom/code
               (dom/props {:class "hljs"})
-              (render-source! dom/node (e/server (:source code)) lang))))))))
+              (render-source! dom/node (e/server (select-keys code [:topic-id :source])) lang)))))
+
+      ;; One position per view (plans/reading-position-memory.md §4 3.5.4). A
+      ;; view switch changes the key, so the old view's tracker flushes and the
+      ;; new view's restores. No view shows while a Markdown file's saved view
+      ;; is unknown, so no tracker mounts then.
+      (let [surface (cond rendered? "code-rendered" show-source? "code-source")]
+        (ReadingPosition surface (when (and source? surface) topic-id))))))

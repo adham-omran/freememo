@@ -69,4 +69,4 @@
           (let [dirty (e/watch editor/!dirty-html)
                 ready? (e/watch editor/!editor-ready?)]
             (when (and ready? (not (and dirty (= (:topic-id dirty) doc-id))))
-              (editor/set-content! initial-html))))))))
+              (editor/set-content! initial-html dctx/effective-content-topic-id))))))))

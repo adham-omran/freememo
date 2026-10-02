@@ -2114,6 +2114,30 @@
                       ON activities(outcome, terminated_at)
                       WHERE terminated_at IS NOT NULL"]))
 
+(defn- setup-schema-reading-positions!
+  "Where a reader left each scrollable surface of a topic
+   (plans/reading-position-memory.md §4.1). Must run after setup-schema-topics!.
+
+   No `user_id`: the topic's owner is the row's owner, and a second copy of that
+   fact could disagree with it. `ON DELETE CASCADE` takes the rows with their
+   topic on a hard delete and on the staged-delete purge, which a `settings` key
+   per topic never did.
+
+   `anchor` is `{i, fp, frac}` from `freememo.reading-anchor`. `fraction` is the
+   progress through the surface, kept for a progress display that does not
+   exist yet (§4 0.3)."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS reading_positions (
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      surface TEXT NOT NULL
+        CHECK (surface IN ('editor', 'poem', 'code-rendered', 'code-source')),
+      anchor JSONB NOT NULL,
+      fraction REAL NOT NULL CHECK (fraction BETWEEN 0 AND 1),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (topic_id, surface)
+    )"]))
+
 (defn- setup-schema-document-summaries!
   "Install the maintained root-document progress read model.
 
@@ -2785,6 +2809,7 @@
   (setup-schema-curriculum!)
   (setup-schema-activity-monitor!)
   (setup-schema-document-summaries!)
+  (setup-schema-reading-positions!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
 
@@ -4599,6 +4624,46 @@
     (nil? v) nil
     (instance? PGobject v) (json/parse-string (.getValue ^PGobject v) true)
     :else v))
+
+;; ---------------------------------------------------------------------------
+;; Reading positions — plans/reading-position-memory.md §4.1
+;; ---------------------------------------------------------------------------
+;; Below `->jsonb` and `pgobject->clj` for the same reason as the poem package
+;; fns: no caller ever holds a PGobject (§4 1.5).
+
+(defn save-reading-position!
+  "Upsert where the reader left `surface` of `topic-id`.
+
+   Pre : `anchor` is `{:i :fp :frac}` and `fraction` is in [0, 1] — the HTTP
+         handler validates both; `surface` is one of `reading-anchor/surfaces`.
+   Post: one row for (topic-id, surface) when `user-id` owns the topic, else no
+         change. Returns the update count.
+   Inv : ownership is a clause of the statement, so a forged topic id writes
+         nothing. No audit line: a scroll pause is not an action a user takes,
+         and it repeats every few seconds of reading."
+  [user-id topic-id surface anchor fraction]
+  (:next.jdbc/update-count
+   (jdbc/execute-one! ds
+     ["INSERT INTO reading_positions (topic_id, surface, anchor, fraction, updated_at)
+       SELECT t.id, ?, ?, ?, now() FROM topics t WHERE t.id = ? AND t.user_id = ?
+       ON CONFLICT (topic_id, surface) DO UPDATE
+         SET anchor = excluded.anchor, fraction = excluded.fraction,
+             updated_at = excluded.updated_at"
+      surface (->jsonb anchor) (double fraction) topic-id user-id])))
+
+(defn get-reading-position
+  "Where the reader left `surface` of `topic-id`.
+   Post: {:anchor {:i :fp :frac} :fraction} when `user-id` owns the topic and a
+         row exists, else nil. `:anchor` is a Clojure map, never a PGobject,
+         because the value crosses the Electric wire."
+  [user-id topic-id surface]
+  (when-let [row (jdbc/execute-one! ds
+                   ["SELECT r.anchor, r.fraction FROM reading_positions r
+                     JOIN topics t ON t.id = r.topic_id
+                     WHERE r.topic_id = ? AND r.surface = ? AND t.user_id = ?"
+                    topic-id surface user-id])]
+    {:anchor (pgobject->clj (:reading_positions/anchor row))
+     :fraction (some-> (:reading_positions/fraction row) double)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Poem packages — the structured body of a kind `poem` topic
