@@ -5026,6 +5026,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border-radius: 6px;
     color: var(--color-text-primary);
     background-color: transparent;
+    font-family: inherit;
     font-size: 11px;
     text-overflow: ellipsis;
 }
