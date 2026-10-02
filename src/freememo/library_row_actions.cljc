@@ -15,7 +15,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.navigation :as nav]
    [freememo.icons :as icons]
-   [freememo.document-options :refer [DocumentOptionsButton]]
+   [freememo.document-options :refer [DocumentOptionsModal DocumentOptionsTrigger]]
    [freememo.tooltip :as tooltip]
    [freememo.neoreader-kinds :as nrkinds]
    #?(:cljs [freememo.neoreader-picker :as neoreader])))
@@ -77,6 +77,11 @@
   (e/client
     (let [!open (atom false)
           open (e/watch !open)
+          ;; Document options, mounted outside the menu: the menu closes on
+          ;; Escape and on an outside mousedown, which would tear the modal
+          ;; down under a save in flight.
+          !options-open (atom false)
+          options-open? (e/watch !options-open)
           ;; fixed coords, recomputed from the trigger rect on each open
           !pos (atom {:top 0 :right 0})
           pos (e/watch !pos)]
@@ -188,11 +193,17 @@
                       (reset! !open false))
                     nil)))
 
-              ;; Document options — root only. Reuses the viewer's button+modal
-              ;; unit restyled as a menu row (show-edit? false drops the
-              ;; Edit-bibliography sub-action, which has no modal on this
-              ;; surface; !show-bib is then unused, so nil). At root the viewer's
-              ;; bib/root/priority targets all collapse to this row's id.
+              ;; Document options — root only. The trigger closes this menu and
+              ;; opens the modal mounted below.
               (when is-root
-                (DocumentOptionsButton user-id id (= kind "pdf") id id id nil false
-                  "toolbar-dropdown-item"))))))))))
+                (DocumentOptionsTrigger !options-open "toolbar-dropdown-item"
+                  (fn [] (reset! !open false))))))))
+
+        ;; Portal into <body>, for the transform reason above. At root every
+        ;; Document options target is this row's id. viewer? false drops
+        ;; Dismiss (this menu has its own) and Edit (no bibliography modal
+        ;; here), so !show-bib is nil.
+        (when options-open?
+          (binding [dom/node js/document.body]
+            (DocumentOptionsModal user-id {:root-id id :bib-id id :review-id id :item-id id}
+              (= kind "pdf") !options-open nil false)))))))

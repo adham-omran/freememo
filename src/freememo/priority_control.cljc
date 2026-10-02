@@ -13,8 +13,7 @@
    Priority: 0 = highest … 100 = lowest, three decimal places. Reads default
    to 50. freememo.priority owns the domain and the rounding.
 
-   Mounted twice (inline beside History + overflow proxy); they are never
-   co-visible, so each owns its own mirror and reconciles to the DB via :refresh."
+   Mounted once, in the Document options modal, which names it in its row."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -77,7 +76,9 @@
         (let [v (reset! !mirror priority)] (when v nil)))
       (NumberStepper mirror-val
         priority/priority-min priority/priority-max priority/priority-decimals
-        topic-id "Priority" "Priority" nil nil
+        ;; No visible label: the Document options row that hosts this control
+        ;; names it. The input keeps "Priority" as its accessible name.
+        topic-id nil "Priority" nil nil
         !mirror
         (e/fn [nv]
           (e/server (e/Offload #(update-priority!* user-id topic-id nv))))))))

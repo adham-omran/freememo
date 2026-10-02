@@ -1044,6 +1044,29 @@ html:has(> body > .app-shell) > body {
     background: var(--color-bg-input); color: var(--color-text-primary);
 }
 .setting-row__unit { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+/* A row whose control needs the full width, such as a textarea: label and hint
+   above, control below. */
+.setting-row--stacked { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-1); }
+.setting-row--stacked > .label { margin-bottom: 0; font-weight: 600; color: var(--color-text-primary); }
+.setting-row--stacked > .hint { margin-top: 0; line-height: 1.45; }
+
+/* Document options — the Settings groups and rows inside a modal
+   (plans/document-options-autosave-sheet.md). */
+.doc-options { max-height: 85vh; overflow-y: auto; }
+.doc-options__title { margin: 0 0 var(--sp-4); font-size: 16px; }
+.doc-options .setting-row__control .input { width: 100%; min-width: 0; }
+.doc-options textarea.input {
+    width: 100%; min-height: 72px; resize: vertical; box-sizing: border-box;
+}
+/* A field saves on every keystroke, so the global busy fill would flash while
+   the user types. The status line under the field reports the save instead. */
+.doc-options textarea[aria-busy="true"],
+.doc-options select[aria-busy="true"] { background-color: var(--color-bg-input); }
+.doc-options__status { min-height: 1.4em; font-size: 12px; color: var(--color-text-hint); }
+.doc-options__error { color: var(--color-danger-text); }
+.doc-options__citation { margin: 0 0 var(--sp-3); font-size: 13px; color: var(--color-text-secondary); }
+.doc-options__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.doc-options__footer { display: flex; justify-content: flex-end; }
 .settings-group .settings-accordion { margin-top: var(--sp-3); }
 .ai-subgroup { margin-top: var(--sp-5); }
 .ai-subgroup__title { margin: 0 0 var(--sp-1); font-size: 13px; font-weight: 600; color: var(--color-text-primary); }

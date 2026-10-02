@@ -77,7 +77,7 @@
   "The Enable-LLM-features checkbox. `!llm-enabled`/`llm-enabled` stay owned by
    the parent — the rest of the section's fields are gated on this value via
    `when`, so the atom can't move into this field alone (mirrors how
-   ContentToolbar passes `!show-bib` into DocumentOptionsButton)."
+   DocumentToolbars passes `!show-bib` into DocumentOptionsModal)."
   [user-id credits-enabled? !llm-enabled llm-enabled]
   (e/client
     (dom/div
