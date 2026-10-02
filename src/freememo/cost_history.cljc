@@ -30,6 +30,8 @@
    "cards.fact-select" "Fact selection"
    "cards.grade"       "Card grading"
    "assistant.chat"    "Assistant chat"
+   "assistant.side"    "Assistant side question"
+   "assistant.compact" "Assistant context compaction"
    "kg.grade"          "KG grading"
    "kg.distill"        "KG distill"
    "kg.questions"      "KG questions"

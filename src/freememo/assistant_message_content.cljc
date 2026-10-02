@@ -23,13 +23,23 @@
              nil)
      :clj nil))
 
+(defn- announce-rendered!
+  "Tell listeners above `node` that its answer HTML is final. The answer
+   selection menu repaints annotation highlights on it, because a rewritten
+   leaf has new text nodes and the old ranges collapsed. CLJ no-op."
+  [node]
+  #?(:cljs (.dispatchEvent node (js/CustomEvent. "assistant-answer-rendered"
+                                  #js {:bubbles true}))
+     :clj nil))
+
 (e/defn AssistantRichTextLeaf [safe-html]
   (e/client
     (dom/div
       (dom/props {:class "assistant-msg__rich-text"})
       ;; Contract: Electric owns this div. math/set-html! owns every descendant.
       (let [node dom/node]
-        (math/set-html! node safe-html #(pin-transcript! node))))))
+        (math/set-html! node safe-html
+          #(do (pin-transcript! node) (announce-rendered! node)))))))
 
 (e/defn AssistantAnswerContent [message !evidence]
   (e/client
@@ -37,7 +47,12 @@
           content (:assistant_messages/content message)
           render-mode (:assistant_messages/render-mode message)]
       (dom/div
-        (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
+        ;; The answer selection menu reads both data attributes: the id names
+        ;; the answer an annotation belongs to, and the status says whether
+        ;; the leaf is still being rewritten.
+        (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"
+                    :data-message-id (:assistant_messages/id message)
+                    :data-run-status status})
         (dom/On "click"
           (fn [event]
             (when-let [citation (evidence/clicked-citation event)]

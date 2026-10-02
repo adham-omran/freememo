@@ -3,36 +3,49 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [clojure.string :as str]
+   [freememo.assistant-annotations :as annotations]
+   [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-composer :as composer]
    [freememo.assistant-diagnostics :as diagnostics]
    [freememo.interaction-trail :as trail]
    #?(:clj [freememo.assistant :as assistant])))
 
 (e/defn SubmitEffect
-  [{:keys [submit refs user-id root-topic-id page-topic-id]}
-   token !draft !refs !echo !active !error]
+  [{:keys [submit refs annotation-state user-id root-topic-id page-topic-id]}
+   token !draft !refs !echo !active !error !annotations]
   (e/client
     (when token
-      (let [{:keys [id text chat mode web-search?] ref-ids :refs} submit
+      (let [{:keys [id text chat mode web-search?] ref-ids :refs
+             wire-annotations :annotations} submit
             refs-snapshot (e/snapshot refs)
-            compact? (= "/compact" (str/trim text))]
-        (if (str/blank? text)
+            annotation-snapshot (e/snapshot annotation-state)
+            annotated? (boolean (seq wire-annotations))
+            compact? (and (not annotated?) (= "/compact" (str/trim text)))]
+        (if (and (str/blank? text) (not annotated?))
           (token)
           (case
             (trail/record! :assistant
               {:action (if compact? :compact :submit)
                :client-id id :chat-id chat :topic-id root-topic-id
-               :page-topic-id page-topic-id :reference-count (count ref-ids)})
+               :page-topic-id page-topic-id :reference-count (count ref-ids)
+               :annotation-count (count wire-annotations)})
             (do
               (composer/replace-composer-draft! !draft "")
               (reset! !refs [])
-              (reset! !echo (when-not compact? {:id id :text text}))
+              (reset! !annotations answer-selection/empty-annotations)
+              ;; The echo is the text the server stores, so the row that
+              ;; retires it shows the same words.
+              (reset! !echo (when-not compact?
+                              {:id id
+                               :text (if annotated?
+                                       (annotations/user-message wire-annotations text)
+                                       text)}))
               (let [result
                     (e/server
                       (e/Offload
                         #(assistant/submit-chat-input!
                            user-id root-topic-id page-topic-id chat mode web-search?
-                           text ref-ids id)))]
+                           text ref-ids id wire-annotations)))]
                 (case result
                   (case
                     (diagnostics/replace-state!
@@ -51,5 +64,6 @@
                           (reset! !error (:error result))
                           (composer/replace-composer-draft! !draft text)
                           (reset! !refs refs-snapshot)
+                          (reset! !annotations annotation-snapshot)
                           (reset! !echo nil)))
                       (token))))))))))))

@@ -18,6 +18,7 @@
    [freememo.focus-reader :as focus-reader]
    [freememo.rich-text-editor :as editor]
    [clojure.string :as str]
+   [freememo.topic-kinds :as topic-kinds]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])
@@ -44,11 +45,7 @@
                ;; Score topics ride the PDF viewer machinery: their role='main'
                ;; blob is the sheet-music PDF, so they resolve as their own
                ;; pdf-root. Score-specific UI gates on :is-score? on top.
-               pdf-root-id (cond
-                             (= kind "pdf") topic-id
-                             (= kind "score") topic-id
-                             (and (= kind "page") (= root-kind "pdf")) root-id
-                             :else nil)
+               pdf-root-id (topic-kinds/pdf-root-id kind topic-id root-kind root-id)
                pdf-root-topic (cond (= kind "pdf") topic
                                     (= kind "score") topic
                                     (and (= kind "page") (= root-kind "pdf")) (or root topic)
