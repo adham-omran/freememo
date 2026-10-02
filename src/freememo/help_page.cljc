@@ -121,13 +121,15 @@
         (scroll-to-section! slug)))))
 
 (e/defn PageHelpModal
-  "Help for this page, over the page itself: the Help section for the routed
-   tab, so a user reads it without leaving what they were doing. The rail's
-   Help for this page button opens it (freememo.nav-rail).
+  "One Help section over the page itself, so a user reads it without leaving
+   what they were doing. Two openers set it: the rail's Help for this page
+   button (freememo.nav-rail), with the routed tab's section, and the command
+   palette's ? button and Shift+Enter (freememo.command-palette), with the
+   section of the row.
 
    !page-help-slug holds the slug of the section to show, or nil when closed.
-   The rail sets it from the page in view at click time, so a later route
-   change neither hides the modal nor reopens it.
+   Each opener sets it at click time, so a later route change neither hides
+   the modal nor reopens it.
 
    Post: renders while @!page-help-slug names a section. Closing, Escape, a
          backdrop click and Open in Help all reset it to nil. Open in Help
@@ -139,13 +141,13 @@
         (dom/div
           (dom/props {:class "modal-backdrop"})
           (dom/On "click" (fn [_] (close!)) nil)
-          (modal/ModalEscape close! "Help for this page")
+          (modal/ModalEscape close! "Help")
           (dom/div
             (dom/props {:class "modal-content page-help-modal"})
             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
             (dom/div
               (dom/props {:class "page-help-modal__header"})
-              (dom/span (dom/props {:class "page-help-modal__kicker"}) (dom/text "Help for this page"))
+              (dom/span (dom/props {:class "page-help-modal__kicker"}) (dom/text "Help"))
               (dom/button
                 (dom/props {:type "button" :class "help-clear"})
                 (dom/text "Open in Help")

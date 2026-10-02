@@ -6,7 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
-   [freememo.rich-text-editor :as editor]
+   [freememo.selected-passage :as selected-passage]
    [freememo.card-modals :refer [AddCardModal]]
    [freememo.command-bus :as bus]
    [freememo.commands :as commands]
@@ -39,13 +39,13 @@
             ;; Gold is Generate's mark: "a card was made from this passage".
             ;; Gated on the SAME condition as the capture below, so the
             ;; highlight is present iff the selection reached the modal —
-            ;; a whitespace-only range leaves neither.
-            (let [{:keys [html text index length]} (editor/get-selection-html!)
-                  taken? (not (str/blank? text))]
+            ;; a whitespace-only range leaves neither. A code-pane selection
+            ;; is taken first and marks nothing (freememo.selected-passage).
+            (let [passage (selected-passage/current)
+                  taken? (not (str/blank? (:text passage)))]
               (when taken?
-                (editor/highlight-range! index length
-                  :color "var(--color-highlight-gold)"))
-              (reset! !prefill {:primary (if taken? html "")}))
+                (selected-passage/mark! passage :color "var(--color-highlight-gold)"))
+              (reset! !prefill {:primary (if taken? (:html passage) "")}))
             (reset! !show-add true))
           nil))
       (when show-add

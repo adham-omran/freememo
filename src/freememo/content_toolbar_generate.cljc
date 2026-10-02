@@ -6,10 +6,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [clojure.string :as str]
-   [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [PromptDialog]]
    [freememo.content-toolbar-helpers :as helpers]
-   [freememo.code-pane :as code-pane]
+   [freememo.selected-passage :as selected-passage]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
    [freememo.commands :as commands]
@@ -88,15 +87,13 @@
                 (e/on-unmount (fn [] (bus/retract-invoker! :generate))))
               (dom/On "click"
                 (fn [_]
-                  ;; The code pane's selection wins over the editor's (§4.4 4.6).
-                  (if-let [pane-html (code-pane/pane-selection-html)]
-                    (reset! !gen-click {:id (str (random-uuid)) :selection-html pane-html})
-                    (let [sel (editor/get-selection-html!)]
-                      (when sel
-                        (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                      (reset! !gen-click {:id (str (random-uuid))
-                                          :selection-html (when (and sel (not (str/blank? (:text sel))))
-                                                            (:html sel))}))))
+                  ;; The code pane's selection wins over the editor's (§4.4 4.6);
+                  ;; freememo.selected-passage owns that order.
+                  (let [passage (selected-passage/current)]
+                    (selected-passage/mark! passage :color "var(--color-highlight-gold)")
+                    (reset! !gen-click {:id (str (random-uuid))
+                                        :selection-html (when-not (str/blank? (:text passage))
+                                                          (:html passage))})))
                 nil)))
 
           ;; Generate with Prompt button
@@ -111,13 +108,10 @@
               (bus/publish-invoker! :gen-prompt (fn [] (.click node)))
               (e/on-unmount (fn [] (bus/retract-invoker! :gen-prompt))))
             (dom/On "click" (fn [_]
-                              (if-let [pane-html (code-pane/pane-selection-html)]
-                                (reset! !captured-selection pane-html)
-                                (let [sel (editor/get-selection-html!)]
-                                  (when sel
-                                    (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                                  (reset! !captured-selection (when (and sel (not (str/blank? (:text sel))))
-                                                                (:html sel)))))
+                              (let [passage (selected-passage/current)]
+                                (selected-passage/mark! passage :color "var(--color-highlight-gold)")
+                                (reset! !captured-selection (when-not (str/blank? (:text passage))
+                                                              (:html passage))))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
               nil))))

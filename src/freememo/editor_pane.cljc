@@ -182,7 +182,9 @@
           ;; A dedicated flag, not a read of !editor-state — see that var.
           editor-live? (e/watch editor/!editor-ready?)]
     (dom/div
-      (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
+      ;; `editor-pane` is what `.editor-hidden` hides (document-view/ContentColumn).
+      (dom/props {:class "editor-pane"
+                  :style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
 
       ;; -----------------------------------------------------------------------

@@ -306,7 +306,7 @@
                     !undo-modal-open? (atom false)
 
                     ;; Help for this page: the section slug the modal shows, or
-                    ;; nil while closed (rail button + help-page/PageHelpModal)
+                    ;; nil while closed (rail button, command palette + help-page/PageHelpModal)
                     !page-help-slug (atom nil)
 
                     ;; Activity monitor open-state (shared by the rail's Activity
@@ -458,7 +458,7 @@
                 ;; Command architecture: queue-invocation bridge + palette
                 (bus/QueueInvoker user-id)
                 (GlobalQuizInvokers navigate!)
-                (CommandPalette active-tab)
+                (CommandPalette active-tab !page-help-slug)
 
                 ;; Actions history modal (undo-newest is a :queue command now)
                 (UndoHistoryModal user-id !undo-modal-open?)

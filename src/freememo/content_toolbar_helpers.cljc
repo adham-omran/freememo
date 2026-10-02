@@ -165,13 +165,15 @@
                 {:success false :error (.getMessage e)})))
      :cljs nil))
 
-(defn create-rendered-markdown-extract!
-  "`create-extract-topic-safe!` for a selection in the code pane's rendered
-   Markdown view (plans/markdown-rendered-code-pane.md §4.2).
-   Pre : `html` is that selection, from `code-pane/rendered-selection-html`.
+(defn create-code-pane-extract!
+  "`create-extract-topic-safe!` for a selection in the code pane, either view
+   (plans/markdown-rendered-code-pane.md §4.2, plans/editor-pane-toggle.md §5.4).
+   Pre : `html` is that selection, from `selected-passage/current` — rendered
+         Markdown, or the source view's escaped code block.
    Post: as `create-extract-topic-safe!`. The extract holds the selection with
-         its tables lowered and its fences as Quill code blocks, so the first
-         edit in Quill does not flatten it."
+         its tables lowered and each `pre` a Quill code block, so the first
+         edit in Quill does not flatten it. A source-view block has no
+         language and reads `plain`."
   [parent-id user-id html title]
   #?(:clj (create-extract-topic-safe! parent-id user-id
             (repo-md/selection->extract-html html) title)

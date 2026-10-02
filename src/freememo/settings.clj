@@ -699,6 +699,23 @@
       (tel/error! {:id ::save-focus-reader} e)
       {:success false})))
 
+;; Each document with a source pane stores one hidden-editor flag
+;; (plans/editor-pane-toggle.md). `doc-id` is the PDF root on a PDF — the
+;; focus-reader scope, because the two flags exclude each other — and the
+;; document root otherwise. A missing row means the editor shows.
+(defn get-editor-hidden [user-id doc-id]
+  (try
+    (= "true" (db/get-setting user-id (str "editor_hidden_" doc-id)))
+    (catch Exception _ false)))
+
+(defn save-editor-hidden [user-id doc-id hidden?]
+  (try
+    (db/set-setting user-id (str "editor_hidden_" doc-id) (str (boolean hidden?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-editor-hidden} e)
+      {:success false})))
+
 ;; Each repo Markdown file stores how the code pane shows it: "rendered" or
 ;; "source" (plans/markdown-rendered-code-pane.md §3). Unset reads "rendered".
 (def code-views #{"rendered" "source"})
