@@ -9,6 +9,8 @@
    Help rows (plans/searchable-help.md 4.1) follow the commands: one per
    freememo.help-content section that matches. A command a Help step documents
    carries :command-help-slug, which Shift+Enter and the row's ? button open.
+   Every Help open shows the section in help-page/PageHelpModal over the
+   current page; the palette never navigates to /help.
 
    Contract: palette-rows is the single row-list derivation — the render body
    and the keydown handler MUST both call it with the same inputs, or Enter
@@ -20,7 +22,6 @@
             [freememo.commands :as commands]
             [freememo.command-bus :as bus]
             [freememo.help-content :as help]
-            [freememo.navigation :as nav]
             [freememo.scroll :refer [Scroll-window]]
             [freememo.modal-shell :as modal-shell]))
 
@@ -96,16 +97,16 @@
   (or (:help-slug row) (:command-help-slug row)))
 
 (defn- open-help!
-  "Close the palette and open /help/<slug>. Runs at event time, so it reads
-   the navigate! the shell last published."
-  [slug]
+  "Close the palette and show section `slug` in the Help modal.
+   `!help-slug` is the shell atom help-page/PageHelpModal watches.
+   Post: @!open? is false and @!help-slug is `slug`. The route does not change."
+  [!help-slug slug]
   (close!)
-  (when-let [navigate! (:navigate! @bus/!ctx)]
-    (navigate! :help (nav/nav-help slug))))
+  (reset! !help-slug slug))
 
-(defn- run-row! [row query]
+(defn- run-row! [row query !help-slug]
   (cond
-    (:help-slug row) (open-help! (:help-slug row))
+    (:help-slug row) (open-help! !help-slug (:help-slug row))
     (= :search (:id row)) (do (close!) (bus/dispatch! :search {:text query} :palette))
     :else (do (close!) (bus/dispatch! (:id row) nil :palette))))
 
@@ -143,7 +144,7 @@
       (browser-reserved: new window) — Ctrl-n is the binding that always
       works; Cmd-P is interceptable and preventDefault suppresses the print
       dialog."
-     [active-tab !query !idx e]
+     [active-tab !query !idx !help-slug e]
      (let [rows (palette-rows active-tab @bus/!ctx @!query)
            n (count rows)
            k (.-key e)
@@ -158,57 +159,64 @@
                           (let [i (min @!idx (dec n))]
                             (when-let [row (and (>= i 0) (nth rows i nil))]
                               (if (.-shiftKey e)
-                                (when-let [slug (row-help-slug row)] (open-help! slug))
-                                (run-row! row @!query)))))
+                                (when-let [slug (row-help-slug row)] (open-help! !help-slug slug))
+                                (run-row! row @!query !help-slug)))))
          (= k "Tab")    (modal-shell/trap-tab! (.-currentTarget e) e)
          :else nil)))
    :clj
-   (defn- on-palette-key [_active-tab _!query _!idx _e] nil))
+   (defn- on-palette-key [_active-tab _!query _!idx _!help-slug _e] nil))
 
 (e/defn PaletteRow
-  "One palette row: the row button, and for a command a Help step documents,
-   the ? button beside it. Its own e/defn so CommandPaletteRows stays shallow
-   enough for Electric's macroexpander on a default JVM stack."
-  [palette-item i row-count selection-index query-atom]
+  "One palette row: the row button, then the ? slot. The slot holds a ? button
+   for a command a Help step documents, and is an empty slot of the same width
+   on every other row, so the shortcut column lines up on every row. The cell,
+   not the button, carries the selection, so one highlight covers both. Its own
+   e/defn so CommandPaletteRows stays shallow enough for Electric's
+   macroexpander on a default JVM stack."
+  [palette-item i row-count selection-index query-atom !help-slug]
   (e/client
-    (dom/tr
-      (dom/props {:style {:--order i}})
-      (dom/td
-        (dom/props {:class "command-palette-cell"})
-        (dom/button
+    (let [slug (:command-help-slug palette-item)]
+      (dom/tr
+        (dom/props {:style {:--order i}})
+        (dom/td
           (dom/props {:class (if (= (:idx palette-item) selection-index)
-                              "command-palette-row command-palette-row--selected"
-                              "command-palette-row")
-                      :type "button"
-                      :aria-posinset (str (inc i))
-                      :aria-setsize (str row-count)})
-          (dom/span
-            (dom/props {:class "command-palette-label"})
-            (dom/text (:label palette-item)))
-          (when-let [bind (format-bind (:id palette-item) (:bind palette-item))]
-            (dom/span
-              (dom/props {:class "command-palette-shortcut"})
-              (dom/text bind)))
-          (when (:help-slug palette-item)
-            (dom/span
-              (dom/props {:class "command-palette-shortcut"})
-              (dom/text "Help")))
-          (dom/On "click"
-            (fn [_] (run-row! palette-item @query-atom))
-            nil))
-        ;; A sibling of the row button, never inside it, so its click cannot
-        ;; reach the row's handler (4.3.2). Shift+Enter is the keyboard path,
-        ;; so Tab skips it (4.3.3).
-        (when-let [slug (:command-help-slug palette-item)]
+                               "command-palette-cell command-palette-cell--selected"
+                               "command-palette-cell")})
           (dom/button
-            (dom/props {:class "command-palette-help" :type "button"
+            (dom/props {:class "command-palette-row"
+                        :type "button"
+                        :aria-posinset (str (inc i))
+                        :aria-setsize (str row-count)})
+            (dom/span
+              (dom/props {:class "command-palette-label"})
+              (dom/text (:label palette-item)))
+            (when-let [bind (format-bind (:id palette-item) (:bind palette-item))]
+              (dom/span
+                (dom/props {:class "command-palette-shortcut"})
+                (dom/text bind)))
+            (when (:help-slug palette-item)
+              (dom/span
+                (dom/props {:class "command-palette-shortcut"})
+                (dom/text "Help")))
+            (dom/On "click"
+              (fn [_] (run-row! palette-item @query-atom !help-slug))
+              nil))
+          ;; A sibling of the row button, never inside it, so its click cannot
+          ;; reach the row's handler (4.3.2). Shift+Enter is the keyboard path,
+          ;; so Tab skips it (4.3.3). Always mounted, with computed props: Tape
+          ;; recycles this frame across rows, and a conditional mount would
+          ;; rebuild the node on every swap.
+          (dom/button
+            (dom/props {:class (if slug "command-palette-help" "command-palette-help command-palette-help--none")
+                        :type "button"
                         :tabindex "-1"
-                        :aria-label (str "Help: " (:title (help/section-by-slug slug)))
-                        :data-tooltip "Help (Shift+Enter)"})
+                        :disabled (nil? slug)
+                        :aria-hidden (if slug "false" "true")
+                        :aria-label (when slug (str "Help: " (:title (help/section-by-slug slug))))})
             (dom/text "?")
-            (dom/On "click" (fn [_] (open-help! slug)) nil)))))))
+            (dom/On "click" (fn [_] (when slug (open-help! !help-slug slug))) nil)))))))
 
-(e/defn CommandPaletteRows [palette-items selection-index query-atom filter-key]
+(e/defn CommandPaletteRows [palette-items selection-index query-atom filter-key !help-slug]
   "Render the command palette's virtualized result list."
   (e/client
     (let [row-height 40
@@ -227,13 +235,14 @@
             (e/for [i (Tape offset limit)]
               (let [palette-item (nth palette-items i nil)]
                 (when palette-item
-                  (PaletteRow palette-item i row-count selection-index query-atom))))))))))
+                  (PaletteRow palette-item i row-count selection-index query-atom !help-slug))))))))))
 
 ;; ── Component ──────────────────────────────────────────────────────────────
 
 (e/defn CommandPalette
-  "The palette modal. Renders nothing while closed."
-  [active-tab]
+  "The palette modal. Renders nothing while closed. `!help-slug` is the shell
+   atom help-page/PageHelpModal watches; a Help open sets it."
+  [active-tab !help-slug]
   (e/client
     (when (e/watch !open?)
       (let [!query (atom "")
@@ -253,7 +262,7 @@
                                 :overflow "hidden" :display "flex"
                                 :flex-direction "column"}})
             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-            (dom/On "keydown" (fn [e] (on-palette-key active-tab !query !idx e)) nil)
+            (dom/On "keydown" (fn [e] (on-palette-key active-tab !query !idx !help-slug e)) nil)
 
             (dom/input
               (dom/props {:placeholder "Type a command or search…"
@@ -270,4 +279,13 @@
                   (reset! !idx 0))
                 nil))
 
-            (CommandPaletteRows rows idx !query query)))))))
+            (CommandPaletteRows rows idx !query query !help-slug)
+
+            ;; The keys the rows answer to. Shift+Enter has no other visible
+            ;; cue, and the ? button carries no tooltip because the list's
+            ;; scroll box would clip it.
+            (dom/div
+              (dom/props {:class "command-palette-footer" :aria-hidden "true"})
+              (dom/span (dom/kbd (dom/text "\u21b5")) (dom/text "Run"))
+              (dom/span (dom/kbd (dom/text "\u21e7\u21b5")) (dom/text "Help"))
+              (dom/span (dom/kbd (dom/text "Esc")) (dom/text "Close")))))))))
