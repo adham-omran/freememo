@@ -7,6 +7,12 @@
    The subtree remounts only when root-topic-id changes. Local chat and panel
    state therefore stays stable during page navigation within one document.
 
+   The assistant's active chat lives here, not in AssistantPanel, together with
+   the history view's open flag, the bar's rename flag and the chat-action
+   queue (plans/assistant-chat-history.md §3.0). This component stays mounted
+   while the panel is collapsed or showing الشرح, so the chat survives both, and
+   the palette's chat commands reach this state with the panel collapsed.
+
    The tab row mirrors the left panel's, down to the settings shape: the chosen
    tab is persisted per document as `right_panel_tab_<pane-scope-id>`. It is
    rendered only for a poem, because a topic with one tab needs no switch."
@@ -15,6 +21,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.hierarchy-side-panel :refer [SidePanelShell]]
    [freememo.assistant-panel :refer [AssistantPanel]]
+   [freememo.assistant-chat-history :as history]
    [freememo.poem-panel :as poem :refer [PoemPanel]]
    [freememo.command-bus :as bus]
    [freememo.viewport :as viewport]
@@ -108,6 +115,15 @@
             !toast-request (atom nil)
             toast-request (e/watch !toast-request)
             [t-toast _] (e/Token toast-request)
+            ;; Assistant chat state (§3.0), owned here so it outlives a panel
+            ;; collapse and a poem tab switch. history/AssistantChatEffects
+            ;; below runs everything that writes it from outside the panel.
+            !active (atom nil)
+            !history-open? (atom false)
+            !renaming-active? (atom false)
+            !chat-action (atom nil)
+            !seeded? (atom false)
+            seeded? (e/watch !seeded?)
             toggle-assistant-pane!
             (e/snapshot
               (fn []
@@ -135,6 +151,9 @@
                            :request-poem-panel! request-poem-panel!})
         (e/on-unmount #(bus/retract-ctx! [:toggle-assistant-pane! :show-right-pane!
                                           :request-poem-panel!]))
+
+        (history/AssistantChatEffects user-id root-topic-id show-right-pane!
+          !active !history-open? !renaming-active? !chat-action !seeded?)
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]
@@ -172,4 +191,5 @@
           (e/fn []
             (if (and poem? (= poem/panel-tab tab))
               (PoemPanel page-topic-id root-topic-id user-id)
-              (AssistantPanel page-topic-id root-topic-id user-id))))))))
+              (AssistantPanel page-topic-id root-topic-id user-id seeded?
+                !active !history-open? !renaming-active? !chat-action))))))))

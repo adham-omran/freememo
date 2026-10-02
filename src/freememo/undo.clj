@@ -45,6 +45,7 @@
                           nil)
     "delete-document" (db/restore-staged-document! user-id entry)
     "delete-curriculum" (curriculum/restore-staged-curriculum! user-id entry)
+    "delete-assistant-chat" (do (db/restore-staged-assistant-chat! user-id entry) nil)
     "move-topic"      (do (db/restore-topic-parent! entry) nil)
     "reject-question" (do (db/restore-rejected-question! (:snapshot entry)) nil)
     "reject-fact"     (do (db/restore-rejected-fact! (:snapshot entry)) nil)

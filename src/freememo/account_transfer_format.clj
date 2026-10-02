@@ -205,6 +205,16 @@
    namespace does not do."
   "SELECT id FROM topics WHERE user_id = ? AND staged_delete_id IS NULL")
 
+(def ^:private owned-chats
+  "Subquery for the assistant chats an export covers: the user's live chats on
+   documents the export also covers. Binds the user twice.
+
+   A staged chat is hidden pending its 12-hour undo window, and `undo_log` is
+   not exported, so it stays behind exactly as a staged topic does. All five
+   assistant scopes read through this one string, so none can drift from it."
+  (str "SELECT id FROM assistant_chats WHERE user_id = ? AND staged_delete_id IS NULL"
+    " AND root_topic_id IN (" owned-topics ")"))
+
 (def ^:private owned-flashcards
   "Subquery for the flashcards an export covers.
    `topic_id` is the owning topic and `root_topic_id` the document. The COALESCE
@@ -380,28 +390,20 @@
                                  WHERE user_id = ? AND staged_delete_id IS NULL)"
     :params 1 :order "t.id"}
 
-   :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
-                     :params 2 :order "t.id"}
+   :assistant_chats {:where (str "t.id IN (" owned-chats ")")
+                     :params 2 :order "t.id" :drop-keys ["staged_delete_id"]}
 
-   :assistant_messages {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
-                                 " WHERE user_id = ? AND root_topic_id IN ("
-                                 owned-topics "))")
+   :assistant_messages {:where (str "t.chat_id IN (" owned-chats ")")
                         :params 2 :order "t.id"}
 
-   :assistant_runs {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
-                             " WHERE user_id = ? AND root_topic_id IN ("
-                             owned-topics "))")
+   :assistant_runs {:where (str "t.chat_id IN (" owned-chats ")")
                     :params 2 :order "t.id"}
 
-   :assistant_checkpoints {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
-                                    " WHERE user_id = ? AND root_topic_id IN ("
-                                    owned-topics "))")
+   :assistant_checkpoints {:where (str "t.chat_id IN (" owned-chats ")")
                            :params 2 :order "t.id"}
 
    :assistant_evidence {:where (str "t.run_id IN (SELECT r.id FROM assistant_runs r"
-                                 " JOIN assistant_chats c ON c.id = r.chat_id"
-                                 " WHERE c.user_id = ? AND c.root_topic_id IN ("
-                                 owned-topics "))")
+                                 " WHERE r.chat_id IN (" owned-chats "))")
                         :params 2 :order "t.id"}
 
    :kg_entities {:where "t.user_id = ?" :params 1 :order "t.id"}

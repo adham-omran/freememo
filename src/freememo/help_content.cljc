@@ -306,8 +306,13 @@
     :title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
     :steps [{:label "Open it"
-             :detail "Open the Assistant panel on the right. New Chat starts a saved conversation about the current document."
-             :commands #{:toggle-assistant-pane}}
+             :detail "Open the Assistant panel on the right. ＋ New clears the panel, and your first message starts a saved conversation about the current document. The panel reopens the chat you last had open."
+             :commands #{:toggle-assistant-pane :new-assistant-chat}}
+            {:label "Find, rename, pin and delete chats"
+             :detail "Select the history button left of the chat title. Chats are grouped as Pinned, Today, Previous 7 days and Older, and the search field filters them by title. Select a title, or press F2 on a row, to rename it. The ⋯ menu or a right-click pins, renames or deletes a chat. A deleted chat can be restored with Undo for 12 hours."
+             :commands #{:show-assistant-history :edit-assistant-chat-title
+                         :delete-active-assistant-chat :rename-assistant-chat
+                         :set-assistant-chat-pinned :delete-assistant-chat}}
             {:label "Set the panel height"
              :detail "Settings → AI Features → Assistant panel height. Content area stops above the card table. Full workspace extends beside it."
              :commands #{}}
@@ -613,6 +618,7 @@
    :open-topic                "Opens a topic from a link. It is not a step a user takes."
    :save-video-position       "Saved on pause and on leaving. No user action runs it."
    :save-reading-position     "Saved on a scroll pause and on leaving. No user action runs it."
+   :mark-assistant-chat-opened "Saved when a chat opens. No user action runs it."
    :set-setting               "The write behind every Settings control. The Settings page is its UI."
    :add-pin                   :pending
    :apply-code-language       :pending

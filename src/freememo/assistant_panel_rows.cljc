@@ -16,62 +16,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.assistant-modes :as modes]
-   [freememo.interaction-trail :as trail]
-   [freememo.typeahead :refer [Typeahead]]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    #?(:clj [freememo.assistant :as assistant])))
-
-(e/defn ChatRow
-  "`＋ New` plus the chat picker.
-
-   The picker is a `Typeahead` over `chat-options`, which is id-keyed on the chat
-   id — the same atom (`!active`) the send effect and `＋ New` write, so an
-   outside write updates the displayed title. Emptying the field and leaving
-   clears the selection: that is the widget's documented postcondition, and it
-   matches the `Chats…` option the `<select>` carried before.
-
-   `pending-mode` seeds a chat created by `＋ New`, so changing the mode and then
-   `＋ New` gives you that persona rather than silently reverting to the default.
-
-   Pre:  `chat-options` is a vec of {:id chat-id :label title}; `pending-mode` is
-         a mode :id.
-   Post: `!active` holds a chat id or nil, never a title."
-  [user-id root-topic-id chat-options pending-mode pending-web-search?
-   !active !draft !error]
-  (e/client
-    (let [!picked (atom nil)
-          picked (e/watch !picked)]
-      (dom/div
-        (dom/props {:class "assistant-panel__bar"})
-        (dom/button
-          (dom/props {:class "btn btn-secondary assistant-panel__new"
-                      :type "button" :title "Start a new chat about this page"})
-          (dom/text "＋ New")
-          (let [ev (dom/On "click" identity nil)
-                [nt _] (e/Token ev)]
-            (when nt
-              (case (trail/record! :assistant
-                      {:action :new-chat :topic-id root-topic-id})
-                (let [cid (e/server (e/Offload
-                                      #(assistant/start-chat!
-                                         user-id root-topic-id pending-mode
-                                         pending-web-search?)))]
-                  (case cid
-                    (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt))))))))
-        (dom/div
-          (dom/props {:class "assistant-panel__chats"})
-          (Typeahead !active chat-options "Search chats…" !picked false))
-        ;; A different chat is a different transcript, so a stale error must not
-        ;; survive the switch. Keyed on the commit atom, not on !active, so it
-        ;; fires once per deliberate pick.
-        (let [[pt _] (e/Token picked)]
-          (when pt
-            (case (trail/record! :assistant
-                    {:action :select-chat :chat-id picked
-                     :topic-id root-topic-id})
-              (case (reset! !error nil)
-                (pt)))))))))
 
 (e/defn ModeRow
   "Select the mode for the open chat or the next new chat."

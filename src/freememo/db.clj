@@ -617,6 +617,21 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_pins_topic ON topic_pins(topic_id)"])
 )
 
+(defn delete-messageless-assistant-chats!
+  "Delete every assistant chat that holds no message. Returns the count.
+
+   A chat now comes into being with its first message, so a chat with none is
+   a legacy \"＋ New\" row or a first send that failed before its cleanup
+   existed. Both are noise in the history view. Runs on every boot and is
+   idempotent: the colour still serving during a blue/green deploy can create
+   one more such row after this boot's pass."
+  []
+  (or (::jdbc/update-count
+        (jdbc/execute-one! ds ["DELETE FROM assistant_chats c
+                                 WHERE NOT EXISTS (SELECT 1 FROM assistant_messages m
+                                                    WHERE m.chat_id = c.id)"]))
+      0))
+
 (defn- setup-schema-assistant!
   "AI assistant chats, message transcripts, durable runs, and evidence.
    Split out of setup-schema (see 7.4); called from it in order."
@@ -652,6 +667,7 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS client_id TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
                       ON assistant_messages(chat_id, id)"])
+  (delete-messageless-assistant-chats!)
   ;; Persona for this chat, an :id from freememo.assistant-modes/registry. Mode
   ;; is per chat so a transcript is one persona end to end. NULL on every chat
   ;; that predates the column, which resolve-mode maps to the Socratic default —
@@ -669,6 +685,12 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ALTER COLUMN provider_session_id SET NOT NULL"])
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_chats_provider_session
                       ON assistant_chats(provider_session_id)"])
+  ;; History view (plans/assistant-chat-history.md §1). TIMESTAMP, matching the
+  ;; table's other two columns; the list query converts all of them to epoch
+  ;; milliseconds at one boundary. last_opened_at is a column rather than a
+  ;; settings key because it moves through an account import with no id remap.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS last_opened_at TIMESTAMP"])
 
   ;; A run is the authority for one answer or one /compact operation. Response
   ;; text is append-only while active. Terminal transitions close that boundary.
@@ -1052,8 +1074,10 @@
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
-         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts')),
-      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact')),
+         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
+         'delete-assistant-chat')),
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
+                    'assistant-chat')),
       entity_refs JSONB NOT NULL,
       snapshot JSONB NOT NULL,
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1070,10 +1094,12 @@
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
-                         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts'))"])
+                         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
+         'delete-assistant-chat'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
-                      CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact'))"])
+                      CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
+                    'assistant-chat'))"])
 
   ;; Staged-delete marker: a topic (and its whole subtree) hidden pending the
   ;; 12h undo window points at the undo_log entry that staged it. ON DELETE
@@ -1083,6 +1109,12 @@
                       REFERENCES undo_log(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_staged_delete
                       ON topics(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+  ;; The same marker on assistant chats. Added here rather than in
+  ;; setup-schema-assistant!, which runs before undo_log exists.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS staged_delete_id BIGINT
+                      REFERENCES undo_log(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_staged_delete
+                      ON assistant_chats(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
 )
 
 (defn- setup-schema-kg!
@@ -3192,7 +3224,10 @@
      :assistant_chats/id)))
 
 (defn get-assistant-chat
-  "Chat row for `chat-id` IFF owned by `user-id`, else nil (ownership gate).
+  "Chat row for `chat-id` IFF owned by `user-id` and not staged for deletion,
+   else nil (ownership gate). Every chat read and write that takes a chat id
+   from the client passes through here, so a staged chat is invisible to all of
+   them.
    Post: {:assistant_chats/id … :assistant_chats/title … :assistant_chats/mode …}
    or nil. :mode may be NULL on a chat that predates the column — callers
    resolve it through assistant-modes/resolve-mode, never read it raw."
@@ -3200,18 +3235,44 @@
   (jdbc/execute-one! ds
     (sql/format {:select [:id :root_topic_id :title :mode :web_search :provider_session_id]
                  :from [:assistant_chats]
-                 :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
+                 :where [:and [:= :id chat-id] [:= :user_id user-id]
+                         [:is :staged_delete_id nil]]})))
+
+(def ^:private local-epoch-ms-sql
+  "Epoch milliseconds of a TIMESTAMP column, read as the server's local time.
+   CURRENT_TIMESTAMP and now() fill these columns in the session time zone, so
+   the same zone converts them back."
+  "(extract(epoch FROM (%s AT TIME ZONE current_setting('TimeZone'))) * 1000)::bigint")
 
 (defn get-assistant-chats
-  "Chats for (user-id, root-topic-id), newest-touched first, without bodies.
-   :mode rides along so the panel reads the active chat's persona out of this
-   already-watched list instead of issuing a second query for it."
+  "Live chats for (user-id, root-topic-id), newest activity first, without bodies.
+   :mode and :web_search ride along so the panel reads the active chat's
+   settings out of this already-watched list instead of a second query.
+   Post: each row carries :activity_ms and :pinned_ms (nil when unpinned) as
+   epoch milliseconds. No TIMESTAMP value is returned, so none crosses the wire."
   [user-id root-topic-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :title :updated_at :mode :web_search]
-                 :from [:assistant_chats]
-                 :where [:and [:= :user_id user-id] [:= :root_topic_id root-topic-id]]
-                 :order-by [[[:coalesce :updated_at :created_at] :desc] [:id :desc]]})))
+    [(str "SELECT id, title, mode, web_search, "
+       (format local-epoch-ms-sql "coalesce(updated_at, created_at)") " AS activity_ms, "
+       (format local-epoch-ms-sql "pinned_at") " AS pinned_ms "
+       "FROM assistant_chats "
+       "WHERE user_id = ? AND root_topic_id = ? AND staged_delete_id IS NULL "
+       "ORDER BY coalesce(updated_at, created_at) DESC, id DESC")
+     user-id root-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-last-opened-assistant-chat-id
+  "The live chat the user opened most recently on this document, or nil.
+   A chat never opened since the column existed has a NULL last_opened_at and
+   is never chosen."
+  [user-id root-topic-id]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM assistant_chats
+            WHERE user_id = ? AND root_topic_id = ? AND staged_delete_id IS NULL
+              AND last_opened_at IS NOT NULL
+            ORDER BY last_opened_at DESC, id DESC LIMIT 1"
+          user-id root-topic-id]
+         {:builder-fn rs/as-unqualified-maps})))
 
 (defn insert-assistant-message!
   "Append a message and touch the parent chat's updated_at. Returns new id.
@@ -3285,83 +3346,91 @@
    Pre: chat-id exists and the caller already passed the ownership and credit
    gates. `run` contains :run-uuid, snapshots, provider session, and model.
    Post: returns {:created true :run-id :run-uuid :user-message-id
-   :assistant-message-id}, or {:created false :active-run-uuid}.
+   :assistant-message-id}, {:created false :active-run-uuid}, or
+   {:created false :chat-missing? true} when the chat is gone or staged.
    Invariant: one chat has at most one active answer or compaction run. This
    transaction owns the chat lock that enforces the invariant."
   [chat-id user-text client-id
    {:keys [run-uuid retry-of-run-uuid provider-session-id requested-model
            request-snapshot source-snapshot evidence]}]
   (jdbc/with-transaction [tx ds]
-    (jdbc/execute-one! tx ["SELECT id FROM assistant_chats WHERE id = ? FOR UPDATE" chat-id])
-    (if-let [active (jdbc/execute-one! tx
-                      [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
-                         "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
-                       chat-id]
-                      {:builder-fn rs/as-unqualified-maps})]
-      {:created false :active-run-uuid (:run_uuid active)}
-      (let [user-message-id
-            (:assistant_messages/id
-              (jdbc/execute-one! tx
-                (sql/format {:insert-into :assistant_messages
-                             :values [{:chat_id chat-id :role "user" :content user-text
-                                       :client_id client-id}]
-                             :returning [:id]})))
-            assistant-message-id
-            (:assistant_messages/id
-              (jdbc/execute-one! tx
-                (sql/format {:insert-into :assistant_messages
-                             :values [{:chat_id chat-id :role "assistant" :content ""}]
-                             :returning [:id]})))
-            run-id
-            (:assistant_runs/id
-              (jdbc/execute-one! tx
-                (sql/format {:insert-into :assistant_runs
-                             :values [{:run_uuid run-uuid
-                                       :chat_id chat-id
-                                       :kind "answer"
-                                       :status "queued"
-                                       :user_message_id user-message-id
-                                       :assistant_message_id assistant-message-id
-                                       :retry_of_run_uuid retry-of-run-uuid
-                                       :provider_session_id provider-session-id
-                                       :requested_model requested-model
-                                       :request_snapshot (->jsonb request-snapshot)
-                                       :source_snapshot (->jsonb (or source-snapshot []))}]
-                             :returning [:id]})))]
-        (insert-assistant-run-evidence! tx run-id evidence)
-        (jdbc/execute! tx ["UPDATE assistant_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-                           chat-id])
-        {:created true :run-id run-id :run-uuid run-uuid
-         :user-message-id user-message-id
-         :assistant-message-id assistant-message-id}))))
+    (if-not (jdbc/execute-one! tx [(str "SELECT id FROM assistant_chats WHERE id = ? "
+                                       "AND staged_delete_id IS NULL FOR UPDATE")
+                                  chat-id])
+      {:created false :chat-missing? true}
+      (if-let [active (jdbc/execute-one! tx
+                        [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
+                           "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
+                         chat-id]
+                        {:builder-fn rs/as-unqualified-maps})]
+        {:created false :active-run-uuid (:run_uuid active)}
+        (let [user-message-id
+              (:assistant_messages/id
+                (jdbc/execute-one! tx
+                  (sql/format {:insert-into :assistant_messages
+                               :values [{:chat_id chat-id :role "user" :content user-text
+                                         :client_id client-id}]
+                               :returning [:id]})))
+              assistant-message-id
+              (:assistant_messages/id
+                (jdbc/execute-one! tx
+                  (sql/format {:insert-into :assistant_messages
+                               :values [{:chat_id chat-id :role "assistant" :content ""}]
+                               :returning [:id]})))
+              run-id
+              (:assistant_runs/id
+                (jdbc/execute-one! tx
+                  (sql/format {:insert-into :assistant_runs
+                               :values [{:run_uuid run-uuid
+                                         :chat_id chat-id
+                                         :kind "answer"
+                                         :status "queued"
+                                         :user_message_id user-message-id
+                                         :assistant_message_id assistant-message-id
+                                         :retry_of_run_uuid retry-of-run-uuid
+                                         :provider_session_id provider-session-id
+                                         :requested_model requested-model
+                                         :request_snapshot (->jsonb request-snapshot)
+                                         :source_snapshot (->jsonb (or source-snapshot []))}]
+                               :returning [:id]})))]
+          (insert-assistant-run-evidence! tx run-id evidence)
+          (jdbc/execute! tx ["UPDATE assistant_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                             chat-id])
+          {:created true :run-id run-id :run-uuid run-uuid
+           :user-message-id user-message-id
+           :assistant-message-id assistant-message-id})))))
 
 (defn create-assistant-compact-run!
   "Create a compaction run without adding a learner or assistant message.
    Pre: chat-id belongs to the caller and request-snapshot names a non-empty
-   covered range. Post: the same creation result shape as answer runs.
+   covered range. Post: the same creation result shape as answer runs,
+   including {:created false :chat-missing? true}.
    Invariant: the chat lock rejects concurrent answer or compact operations."
   [chat-id {:keys [run-uuid provider-session-id requested-model request-snapshot
                    source-snapshot]}]
   (jdbc/with-transaction [tx ds]
-    (jdbc/execute-one! tx ["SELECT id FROM assistant_chats WHERE id = ? FOR UPDATE" chat-id])
-    (if-let [active (jdbc/execute-one! tx
-                      [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
-                         "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
-                       chat-id]
-                      {:builder-fn rs/as-unqualified-maps})]
-      {:created false :active-run-uuid (:run_uuid active)}
-      (let [run-id
-            (:assistant_runs/id
-              (jdbc/execute-one! tx
-                (sql/format {:insert-into :assistant_runs
-                             :values [{:run_uuid run-uuid :chat_id chat-id
-                                       :kind "compact" :status "queued"
-                                       :provider_session_id provider-session-id
-                                       :requested_model requested-model
-                                       :request_snapshot (->jsonb request-snapshot)
-                                       :source_snapshot (->jsonb (or source-snapshot []))}]
-                             :returning [:id]})))]
-        {:created true :run-id run-id :run-uuid run-uuid}))))
+    (if-not (jdbc/execute-one! tx [(str "SELECT id FROM assistant_chats WHERE id = ? "
+                                       "AND staged_delete_id IS NULL FOR UPDATE")
+                                  chat-id])
+      {:created false :chat-missing? true}
+      (if-let [active (jdbc/execute-one! tx
+                        [(str "SELECT run_uuid FROM assistant_runs WHERE chat_id = ? "
+                           "AND status IN ('queued','streaming','stop-requested') LIMIT 1")
+                         chat-id]
+                        {:builder-fn rs/as-unqualified-maps})]
+        {:created false :active-run-uuid (:run_uuid active)}
+        (let [run-id
+              (:assistant_runs/id
+                (jdbc/execute-one! tx
+                  (sql/format {:insert-into :assistant_runs
+                               :values [{:run_uuid run-uuid :chat_id chat-id
+                                         :kind "compact" :status "queued"
+                                         :provider_session_id provider-session-id
+                                         :requested_model requested-model
+                                         :request_snapshot (->jsonb request-snapshot)
+                                         :source_snapshot (->jsonb (or source-snapshot []))}]
+                               :returning [:id]})))]
+          {:created true :run-id run-id :run-uuid run-uuid})))))
 
 (defn append-assistant-run-text!
   "Append one provider delta while the run is active.
@@ -3466,27 +3535,36 @@
         true)
       false)))
 
-(defn stop-assistant-run!
-  "Stop the active run in an owned chat at the last durable text boundary.
+(defn stop-active-run-in!
+  "Stop the active run in an owned chat at the last durable text boundary, on
+   the caller's connectable, so a caller can stop and then act in one
+   transaction.
    Post: {:stopped true :run-uuid} when a transition occurred, else
-   {:stopped false}. The assistant transcript receives exactly response_text."
+   {:stopped false}. The assistant transcript receives exactly response_text.
+   Every later provider write checks for an active status, so no text reaches
+   the message after this commits."
+  [tx user-id chat-id]
+  (if-let [run (jdbc/execute-one! tx
+                  [(str "UPDATE assistant_runs r SET status = 'stopped', "
+                     "stopped_at = CURRENT_TIMESTAMP "
+                     "FROM assistant_chats c WHERE r.chat_id = c.id "
+                     "AND c.user_id = ? AND c.id = ? "
+                     "AND r.status IN ('queued','streaming','stop-requested') "
+                     "RETURNING r.run_uuid, r.assistant_message_id, r.response_text")
+                   user-id chat-id]
+                  {:builder-fn rs/as-unqualified-maps})]
+    (do
+      (when-let [message-id (:assistant_message_id run)]
+        (jdbc/execute! tx ["UPDATE assistant_messages SET content = ? WHERE id = ?"
+                           (:response_text run) message-id]))
+      {:stopped true :run-uuid (:run_uuid run)})
+    {:stopped false}))
+
+(defn stop-assistant-run!
+  "`stop-active-run-in!` in a transaction of its own."
   [user-id chat-id]
   (jdbc/with-transaction [tx ds]
-    (if-let [run (jdbc/execute-one! tx
-                    [(str "UPDATE assistant_runs r SET status = 'stopped', "
-                       "stopped_at = CURRENT_TIMESTAMP "
-                       "FROM assistant_chats c WHERE r.chat_id = c.id "
-                       "AND c.user_id = ? AND c.id = ? "
-                       "AND r.status IN ('queued','streaming','stop-requested') "
-                       "RETURNING r.run_uuid, r.assistant_message_id, r.response_text")
-                     user-id chat-id]
-                    {:builder-fn rs/as-unqualified-maps})]
-      (do
-        (when-let [message-id (:assistant_message_id run)]
-          (jdbc/execute! tx ["UPDATE assistant_messages SET content = ? WHERE id = ?"
-                             (:response_text run) message-id]))
-        {:stopped true :run-uuid (:run_uuid run)})
-      {:stopped false})))
+    (stop-active-run-in! tx user-id chat-id)))
 
 (defn get-active-assistant-run
   "The active run for an owned chat, or nil."
@@ -3595,13 +3673,99 @@
      user-id chat-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn- update-live-chat!
+  "Apply `changes` to one live chat IFF owned by `user-id`.
+   Post: true when a row changed. A foreign or staged chat changes nothing."
+  [user-id chat-id changes]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            (sql/format {:update :assistant_chats
+                         :set changes
+                         :where [:and [:= :id chat-id] [:= :user_id user-id]
+                                 [:is :staged_delete_id nil]]})))))
+
 (defn set-assistant-chat-title!
-  "Rename a chat."
-  [chat-id title]
-  (jdbc/execute! ds
-    (sql/format {:update :assistant_chats
-                 :set {:title title}
-                 :where [:= :id chat-id]})))
+  "Rename a live owned chat. Pre: `title` is trimmed, non-blank and capped by
+   the caller (freememo.assistant/rename-chat!). Post: true when renamed. Does
+   not touch updated_at: a rename is not activity in the chat."
+  [user-id chat-id title]
+  (update-live-chat! user-id chat-id {:title title}))
+
+(defn set-assistant-chat-pinned!
+  "Pin a live owned chat (pinned_at = now) or unpin it (NULL).
+   Post: true when the row changed. updated_at is untouched, so pinning does not
+   move a chat within its date group."
+  [user-id chat-id pinned?]
+  (update-live-chat! user-id chat-id
+    {:pinned_at (if pinned? [:raw "CURRENT_TIMESTAMP"] nil)}))
+
+(defn mark-assistant-chat-opened!
+  "Record that the user opened a live owned chat. Post: true when recorded."
+  [user-id chat-id]
+  (update-live-chat! user-id chat-id {:last_opened_at [:raw "CURRENT_TIMESTAMP"]}))
+
+(defn delete-empty-assistant-chat!
+  "Delete an owned chat IFF it holds no messages.
+   The cleanup for a first send that failed after creating its chat
+   (freememo.assistant/ensure-and-start-answer-run!). The message test makes it
+   safe against a chat that did receive a turn. Post: true when deleted."
+  [user-id chat-id]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["DELETE FROM assistant_chats c
+               WHERE c.id = ? AND c.user_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM assistant_messages m WHERE m.chat_id = c.id)"
+             chat-id user-id]))))
+
+;; Defined with the undo log further down.
+(declare insert-undo-entry-raw! prune-undo-log!)
+
+(defn stage-assistant-chat-for-deletion!
+  "Hide a live owned chat for the 12-hour undo window, stopping its active run.
+
+   Pre: none — a foreign, missing or already staged chat returns nil.
+   Post: {:entry-id :title :stopped?}. In one transaction: the chat row is
+   locked, its active run (if any) is stopped, one delete-assistant-chat undo
+   entry is written and the chat's marker points at it, and the log is pruned.
+   Invariant: the chat lock is the same lock run creation takes, so no run can
+   start between the stop and the stage."
+  [user-id chat-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [chat (jdbc/execute-one! tx
+                      ["SELECT title FROM assistant_chats
+                         WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL
+                         FOR UPDATE"
+                       chat-id user-id]
+                      {:builder-fn rs/as-unqualified-maps})]
+      (let [stopped (stop-active-run-in! tx user-id chat-id)
+            entry-id (insert-undo-entry-raw! tx user-id "delete-assistant-chat"
+                       "assistant-chat" [chat-id] {:title (:title chat)})]
+        (jdbc/execute! tx ["UPDATE assistant_chats SET staged_delete_id = ? WHERE id = ?"
+                           entry-id chat-id])
+        (prune-undo-log! tx user-id)
+        {:entry-id entry-id :title (:title chat) :stopped? (:stopped stopped)}))))
+
+(defn restore-staged-assistant-chat!
+  "Clear the marker that `entry` set on its chat.
+
+   Pre: entry is a live delete-assistant-chat entry for user-id.
+   Post: the chat, its messages and its runs are visible again, unchanged. A
+   stopped run stays stopped.
+   Throws when no row matches: the chat's document was purged and the cascade
+   removed the chat. undo-entry! catches that, reports failure and leaves the
+   entry live. Clearing only the matching marker means an older entry can never
+   undo a newer deletion."
+  [user-id entry]
+  (let [chat-id (first (:entity_refs entry))
+        row (jdbc/execute-one! ds
+              ["UPDATE assistant_chats SET staged_delete_id = NULL
+                 WHERE id = ? AND user_id = ? AND staged_delete_id = ?
+                 RETURNING id"
+               chat-id user-id (:id entry)]
+              {:builder-fn rs/as-unqualified-maps})]
+    (or row
+      (throw (ex-info "Assistant chat not found"
+               {:type ::assistant-chat-not-found :chat-id chat-id})))))
 
 (defn set-assistant-chat-mode!
   "Switch a chat's persona IFF owned by `user-id`.
@@ -8380,11 +8544,13 @@
   (jdbc/execute! conn
     ["DELETE FROM undo_log
       WHERE user_id = ?
-        AND action_type NOT IN ('delete-document', 'delete-curriculum')
+        AND action_type NOT IN ('delete-document', 'delete-curriculum',
+                                'delete-assistant-chat')
         AND (occurred_at < now() - interval '12 hours'
              OR id IN (SELECT id FROM undo_log
                        WHERE user_id = ?
-                         AND action_type NOT IN ('delete-document', 'delete-curriculum')
+                         AND action_type NOT IN ('delete-document', 'delete-curriculum',
+                                'delete-assistant-chat')
                        ORDER BY occurred_at DESC
                        OFFSET 100))"
      user-id user-id]))
@@ -8983,6 +9149,25 @@
             AND occurred_at < now() - interval '12 hours'"])
       n)))
 
+(defn purge-staged-assistant-chats!
+  "Hard-delete chats whose staged undo entries are older than 12 hours, then
+   those entries. The chat goes first because the entry owns its marker. The
+   cascade removes messages, runs, checkpoints and evidence."
+  []
+  (jdbc/with-transaction [tx ds]
+    (let [deleted (jdbc/execute! tx
+                    ["DELETE FROM assistant_chats
+                      WHERE staged_delete_id IN
+                        (SELECT id FROM undo_log
+                          WHERE action_type = 'delete-assistant-chat'
+                            AND occurred_at < now() - interval '12 hours')"])
+          n (or (some-> deleted first ::jdbc/update-count) 0)]
+      (jdbc/execute! tx
+        ["DELETE FROM undo_log
+          WHERE action_type = 'delete-assistant-chat'
+            AND occurred_at < now() - interval '12 hours'"])
+      n)))
+
 (defn purge-orphan-video-objects!
   "§4.7 7.4 — unlink every large object this role owns that no live row
    references: neither a `topic_videos` row nor an in-flight
@@ -9090,6 +9275,7 @@
   []
   (doseq [[label thunk] (into [[::purge-staged-documents purge-staged-documents!]
                                [::purge-staged-curricula purge-staged-curricula!]
+                               [::purge-staged-assistant-chats purge-staged-assistant-chats!]
                                [::reclaim-unowned-videos reclaim-unowned-videos!]
                                [::purge-orphan-video-objects purge-orphan-video-objects!]]
                          @!sweep-jobs)]

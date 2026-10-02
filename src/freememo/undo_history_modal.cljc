@@ -43,6 +43,7 @@
          "reset-prompt"       "Reset a prompt"
          "delete-document"    "Deleted a document"
          "delete-curriculum"  "Deleted a curriculum"
+         "delete-assistant-chat" "Deleted chat"
          "move-topic"         "Moved a topic"
          "reject-question"    "Rejected a question"
          "reject-fact"        "Rejected a fact"
@@ -125,7 +126,9 @@
                                  :label (action-label (:action_type e) (:entity_refs e))
                                  :time-str (format-ts (:occurred_at e))
                                  :card-text (card-cell e)
-                                 :source (if (= "curriculum" et)
+                                 ;; Both snapshot only their title, which is
+                                 ;; the source a reader recognizes.
+                                 :source (if (#{"curriculum" "assistant-chat"} et)
                                            (:title (:snapshot e))
                                            (source-cell titles (entry-source-ids e) (entry-card-count e)))
                                  :superseded? sup?})}))

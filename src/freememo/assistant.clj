@@ -682,28 +682,118 @@
 
 ;; ── Commands ───────────────────────────────────────────────────────────────
 
-(defn start-chat!
-  "Create a chat for (user-id, root-topic-id) in `mode-id`. Returns the new chat
-   id and bumps :assistant-mutations. The page context is resolved for each run.
+(defn- start-chat!
+  "Create a chat titled `title` for (user-id, root-topic-id) in `mode-id`.
+   Returns the new chat id. It bumps nothing: its one caller sends the first
+   message at once, and that send bumps.
    Pre: root-topic-id belongs to user-id. A violation throws because the caller
    supplied a foreign document. `mode-id` can be nil or unrecognized.
    Post: the row's mode is a canonical registry :id, never nil and never junk."
-  ([user-id root-topic-id mode-id]
-   (start-chat! user-id root-topic-id mode-id false))
-  ([user-id root-topic-id mode-id web-search?]
-   (when-not (db/get-topic-for-user user-id root-topic-id)
-     (throw (ex-info "Cannot create a chat for a document the user does not own."
-              {:type ::foreign-chat-document :user-id user-id
-               :root-topic-id root-topic-id})))
-   (let [entry (or (card-models/resolve-model
-                     (settings/get-assistant-model user-id))
-                   (card-models/resolve-model settings/assistant-default-model-id))
-         web-search? (and web-search?
-                          (card-models/web-search-supported? (:id entry)))
-         chat-id (db/create-assistant-chat! user-id root-topic-id "New chat"
-                   (:id (modes/resolve-mode mode-id)) web-search?)]
-     (bump! user-id)
-     chat-id)))
+  [user-id root-topic-id mode-id web-search? title]
+  (when-not (db/get-topic-for-user user-id root-topic-id)
+    (throw (ex-info "Cannot create a chat for a document the user does not own."
+             {:type ::foreign-chat-document :user-id user-id
+              :root-topic-id root-topic-id})))
+  (let [entry (or (card-models/resolve-model
+                    (settings/get-assistant-model user-id))
+                  (card-models/resolve-model settings/assistant-default-model-id))
+        web-search? (and web-search?
+                         (card-models/web-search-supported? (:id entry)))]
+    (db/create-assistant-chat! user-id root-topic-id title
+      (:id (modes/resolve-mode mode-id)) web-search?)))
+
+(def ^:private max-chat-title-chars
+  "Longest title `rename-chat!` stores. A title is one line in a narrow panel,
+   so this bounds a paste, not a typed name."
+  200)
+
+(defn rename-chat!
+  "Rename an owned live chat.
+   Pre: none — the title comes from a text field and is cleaned here.
+   Post: a blank title is a no-op returning {:success true :changed? false}.
+   Otherwise the trimmed title, cut to 200 characters, is stored and
+   :rename-assistant-chat is bumped. A foreign or staged chat returns an error
+   and changes no row."
+  [user-id chat-id title]
+  (let [cleaned (str/trim (str title))
+        cleaned (subs cleaned 0 (min (count cleaned) max-chat-title-chars))]
+    (cond
+      (str/blank? cleaned) {:success true :changed? false}
+      (db/set-assistant-chat-title! user-id chat-id cleaned)
+      (do (commands/bump! user-id :rename-assistant-chat)
+          {:success true :changed? true})
+      :else {:success false :error "Chat not found."})))
+
+(defn set-chat-pinned!
+  "Pin or unpin an owned live chat.
+   Post: pinned_at is now() or NULL; updated_at is untouched.
+   :set-assistant-chat-pinned is bumped on success."
+  [user-id chat-id pinned?]
+  (if (db/set-assistant-chat-pinned! user-id chat-id (boolean pinned?))
+    (do (commands/bump! user-id :set-assistant-chat-pinned)
+        {:success true})
+    {:success false :error "Chat not found."}))
+
+(defn mark-chat-opened!
+  "Record that the user opened an owned live chat, for the last-chat seed.
+   Bumps nothing: :mark-assistant-chat-opened declares no views, because no
+   view orders or filters on last_opened_at."
+  [user-id chat-id]
+  (if (db/mark-assistant-chat-opened! user-id chat-id)
+    (do (commands/bump! user-id :mark-assistant-chat-opened)
+        {:success true})
+    {:success false :error "Chat not found."}))
+
+(defn stage-chat-deletion!
+  "Delete an owned chat with a 12-hour undo window.
+   Pre: none — a foreign, missing or already staged chat returns an error.
+   Post: the chat is hidden from every chat read, no run in it is active, one
+   live undo entry names it, and an Undo toast is queued. A run that was
+   streaming is stopped first: its provider request keeps draining and its
+   credits are spent, but no further text reaches the chat."
+  [user-id chat-id]
+  (if-let [{:keys [entry-id]} (db/stage-assistant-chat-for-deletion! user-id chat-id)]
+    (do
+      (toasts/push! user-id
+        {:level :success
+         :message "Chat deleted. You can undo this for 12 hours."
+         :dedup? false
+         :actions [{:label "Undo" :undo-id entry-id}]})
+      (commands/bump! user-id :delete-assistant-chat)
+      {:success true})
+    {:success false :error "Chat not found."}))
+
+(defn apply-chat-history-action!
+  "Run one request from the history view (freememo.assistant-chat-history).
+   Pre: `op` ∈ #{:open :rename :pin :delete}; :rename carries :title, :pin
+   carries :pinned?.
+   Post: the matching operation's result. A failed rename, pin or delete is
+   also reported as an error toast, because the view that asked may be closed
+   by the time it fails. A failed :open is silent: it only feeds the seed."
+  [user-id {:keys [op chat-id title pinned?]}]
+  (let [result (case op
+                 :open (mark-chat-opened! user-id chat-id)
+                 :rename (rename-chat! user-id chat-id title)
+                 :pin (set-chat-pinned! user-id chat-id pinned?)
+                 :delete (stage-chat-deletion! user-id chat-id))]
+    (when (and (not (:success result)) (not= :open op))
+      (toasts/push! user-id {:level :error :message (:error result)}))
+    result))
+
+(defn last-opened-chat-id*
+  "The chat the history seed reopens on this document, or nil."
+  [user-id root-topic-id]
+  (db/get-last-opened-assistant-chat-id user-id root-topic-id))
+
+(defn chat-liveness*
+  "[chat-id live?] for the panel's active chat. `_rev` forces a re-query on
+   every :assistant-mutations bump, which is how a delete in another tab
+   reaches this one. Post: nil for a nil chat-id; otherwise live? is a boolean,
+   false for a missing, foreign or staged chat. The id rides along so the
+   caller acts only on the answer for the chat it still shows."
+  [_rev user-id chat-id]
+  (when chat-id
+    [chat-id (some? (db/get-assistant-chat user-id chat-id))]))
 
 (defn set-chat-mode!
   "Switch `chat-id`'s persona to `mode-id`.
@@ -973,24 +1063,57 @@
                             :request-snapshot (:provider-request rendered)
                             :source-snapshot (:source-snapshot rendered)
                             :evidence (:evidence rendered)})]
-             (if-not (:created created)
+             (cond
+               (:chat-missing? created)
+               {:error "Chat not found."}
+
+               (not (:created created))
                {:error "This chat already has an active operation."
                 :active-run-uuid (:active-run-uuid created)}
+
+               :else
                (do
-                 (when (= "New chat" (:assistant_chats/title chat))
-                   (db/set-assistant-chat-title! chat-id (title-from user-text)))
                  (bump! user-id)
                  (start-provider-run! user-id chat-id run-uuid "answer" api-key
                    run-model-id (:provider-request rendered) nil)
                  {:ok true :run-uuid run-uuid})))))))))
 
+(defn- start-answer-run-in-new-chat!
+  "Create a chat titled from `user-text` and start its first answer.
+
+   Pre: no chat is selected. Post: on success the chat holds the first turn, is
+   marked opened, and its id is :chat-id. On an error result or a throw, the
+   chat this call created is deleted again and :chat-id is nil, so a failed
+   first send leaves no empty chat behind.
+   Owner: this function created the row, so it removes it. Callers do not."
+  [user-id root-topic-id page-topic-id mode-id web-search? user-text ref-topic-ids
+   client-id]
+  (if (str/blank? user-text)
+    {:error "Message is empty." :chat-id nil}
+    (let [chat-id (start-chat! user-id root-topic-id mode-id web-search?
+                    (title-from user-text))
+          result (try
+                   (start-answer-run! user-id chat-id page-topic-id user-text
+                     ref-topic-ids client-id)
+                   (catch Throwable t
+                     (db/delete-empty-assistant-chat! user-id chat-id)
+                     (throw t)))]
+      (if (:error result)
+        (do (db/delete-empty-assistant-chat! user-id chat-id)
+            (assoc result :chat-id nil))
+        (do (db/mark-assistant-chat-opened! user-id chat-id)
+            (assoc result :chat-id chat-id))))))
+
 (defn ensure-and-start-answer-run!
-  "Start an answer, creating the selected chat when necessary."
+  "Start an answer in `chat-id`, or in a new chat when `chat-id` is nil.
+   See start-answer-run-in-new-chat! for the new-chat contract."
   [user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text ref-topic-ids client-id]
-  (let [resolved-chat-id (or chat-id (start-chat! user-id root-topic-id mode-id web-search?))]
-    (assoc (start-answer-run! user-id resolved-chat-id page-topic-id user-text
+  (if chat-id
+    (assoc (start-answer-run! user-id chat-id page-topic-id user-text
              ref-topic-ids client-id)
-      :chat-id resolved-chat-id)))
+      :chat-id chat-id)
+    (start-answer-run-in-new-chat! user-id root-topic-id page-topic-id mode-id
+      web-search? user-text ref-topic-ids client-id)))
 
 (defn submit-chat-input!
   "Dispatch composer input at the assistant boundary.
@@ -1051,9 +1174,15 @@
                                    :requested-model (:id entry)
                                    :request-snapshot provider-request
                                    :source-snapshot []})]
-            (if-not (:created created)
+            (cond
+              (:chat-missing? created)
+              {:error "Chat not found."}
+
+              (not (:created created))
               {:error "This chat already has an active operation."
                :active-run-uuid (:active-run-uuid created)}
+
+              :else
               (do
                 (bump! user-id)
                 (start-provider-run! user-id chat-id run-uuid "compact" api-key
@@ -1345,7 +1474,8 @@
               (:assistant_run/evidence message))))))))
 
 (defn chats*
-  "Chat list for the panel. `_rev` forces re-query on bump."
+  "Live chats for the panel and its history view, as
+   db/get-assistant-chats returns them. `_rev` forces re-query on bump."
   [_rev user-id root-topic-id]
   (db/get-assistant-chats user-id root-topic-id))
 

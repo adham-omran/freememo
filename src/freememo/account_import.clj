@@ -161,7 +161,7 @@
 (def ^:private dropped-columns
   "Columns removed before insert. `id` everywhere — the target's sequence issues
    it. `staged_delete_id` because `undo_log` is not imported (§5.2.2), so any
-   value would dangle and would also hide the topic or curriculum on arrival.
+   value would dangle and would also hide the topic, curriculum or chat on arrival.
 
    An entry REPLACES the `#{:id}` default, so every entry must name `:id` too.
 
@@ -182,6 +182,7 @@
    ;; table's key is topic_id and it has no id column of its own.
    :topic_code #{:id :source_preview}
    :curricula #{:id :staged_delete_id}
+   :assistant_chats #{:id :staged_delete_id}
    :neoreader_highlights #{:id :quote_hash}
    ;; The reconcile baselines and the conflict flag describe ONE Anki
    ;; collection. On the target they would claim a card is in step with a

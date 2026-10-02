@@ -71,6 +71,7 @@
    "setting"   #{:settings-refresh}
    "document"  #{:card-mutations :tree-mutations :refresh}
    "curriculum" #{:curriculum-mutations :schedule-mutations}
+   "assistant-chat" #{:assistant-mutations}
    "question"  #{:kg-mutations}
    "fact"      #{:kg-mutations}})
 
@@ -122,6 +123,32 @@
                                   :curriculum_grade_revisions :curriculum_unlock_overrides
                                   :undo_log}
                          :views #{:curriculum-mutations :schedule-mutations}}
+     ;; The assistant history view's writes (plans/assistant-chat-history.md
+     ;; §5.2). Each is hidden because it needs a chat id that only the panel
+     ;; holds; the palette reaches them through the :…-assistant-chat… entries
+     ;; below, which act on the panel's active chat. :delete-assistant-chat
+     ;; bumps :undo-mutations too, because its stage writes an undo entry.
+     :rename-assistant-chat {:label "Rename an assistant chat" :class :mutation
+                             :palette-hidden true
+                             :data {:chat-id :payload :title :payload}
+                             :table #{:assistant_chats}
+                             :views #{:assistant-mutations}}
+     :set-assistant-chat-pinned {:label "Pin or unpin an assistant chat" :class :mutation
+                                 :palette-hidden true
+                                 :data {:chat-id :payload :pinned? :payload}
+                                 :table #{:assistant_chats}
+                                 :views #{:assistant-mutations}}
+     :delete-assistant-chat {:label "Delete an assistant chat" :class :mutation
+                             :palette-hidden true
+                             :data {:chat-id :payload}
+                             :table #{:assistant_chats :assistant_runs :undo_log}
+                             :views #{:assistant-mutations :undo-mutations}}
+     ;; Read only by the last-chat seed on the next mount, so it bumps nothing —
+     ;; the shape of :save-reading-position.
+     :mark-assistant-chat-opened {:label "Mark an assistant chat opened" :class :mutation
+                                  :palette-hidden true
+                                  :data {:chat-id :payload}
+                                  :table #{:assistant_chats} :views #{}}
      :rename-block     {:label "Rename curriculum block" :class :mutation
                         :palette-hidden true
                         :data {:block-id :payload :title :payload}
@@ -297,6 +324,18 @@
                       :bind "meta+shift+a" :when #{:viewer} :views #{}}
      :toggle-assistant-pane {:label "Toggle Assistant pane" :class :query :exec :client
                              :when #{:viewer} :views #{}}
+     ;; The assistant chat history (plans/assistant-chat-history.md §5.1).
+     ;; RightSidePanel publishes the context for all four, so each runs with
+     ;; the panel collapsed. The last two act on the active chat, and their
+     ;; preparers hide them while no chat is active.
+     :show-assistant-history {:label "Show chat history" :class :nav :exec :client
+                              :when #{:viewer} :views #{}}
+     :new-assistant-chat {:label "New assistant chat" :class :nav :exec :client
+                          :when #{:viewer} :views #{}}
+     :edit-assistant-chat-title {:label "Rename assistant chat" :class :nav :exec :client
+                                 :when #{:viewer} :views #{}}
+     :delete-active-assistant-chat {:label "Delete assistant chat" :class :nav :exec :client
+                                    :when #{:viewer} :views #{}}
      :toggle-left-pane {:label "Toggle Left pane" :class :query :exec :client
                         :when #{:viewer} :views #{}}
      :show-hierarchy {:label "Show Hierarchy" :class :query :exec :client
