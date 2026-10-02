@@ -23,7 +23,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.command-bus :as bus]
-   [freememo.poem-panel :as panel]))
+   [freememo.poem-panel :as panel]
+   [freememo.reading-position-view :as rpv :refer [ReadingPosition]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Click target resolution
@@ -56,13 +57,17 @@
 (defn poem-header
   "Header scalars for `pkg`: title, poet, بحر, verse count and the short name of
    the book the verse list came from. Derived from a package value already on
-   the server, so five small strings cross the wire instead of the package."
+   the server, so five small strings cross the wire instead of the package.
+   `:topic-id` is the topic the package was read for, which the reading
+   position needs to tell this poem's verses from the previous poem's
+   (plans/reading-position-memory.md §4 3.7)."
   [pkg]
   #?(:clj
      (when pkg
        (let [m (:manifest pkg)
              src (first (filter #(= (:verse_source_id m) (:id %)) (:sources pkg)))]
-         {:title (:title m)
+         {:topic-id (:topic-id pkg)
+          :title (:title m)
           :poet (:poet m)
           :meter (:meter m)
           :verse-count (count (:verses pkg))
@@ -162,7 +167,11 @@
           ;; there is no channel whose bump would mean new verses, and watching
           ;; :refresh would re-query the whole package on every unrelated
           ;; content mutation in the account.
-          pkg (e/server (e/Offload #(panel/get-poem-package* 0 topic-id)))
+          ;; The package carries the topic it was read for. On a switch the
+          ;; read latches the previous poem until the new one lands, and the
+          ;; verse rows update in place, so nothing else can tell the two apart.
+          pkg (e/server (e/Offload #(some-> (panel/get-poem-package* 0 topic-id)
+                                      (assoc :topic-id topic-id))))
           header (e/server (poem-header pkg))
           rows (e/server (e/diff-by :n (verse-rows pkg)))]
 
@@ -199,4 +208,11 @@
             (PoemHeader header)
             (dom/div
               (dom/props {:class "poem-reader__verses"})
-              (PoemBody rows selection topic-id))))))))
+              (PoemBody rows selection topic-id))))
+
+        ;; The reader's place (plans/reading-position-memory.md §4 3.5.4, 3.6.4).
+        ;; The verses are an Electric render, not a plain fn, so the install is
+        ;; reported when the header names a new poem. Rows that land a frame
+        ;; later are the settle window's to absorb (§4 5.5).
+        (rpv/installed! "poem" (:topic-id header) dom/node)
+        (ReadingPosition "poem" topic-id)))))

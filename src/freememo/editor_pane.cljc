@@ -14,6 +14,8 @@
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.merged-page-bridge :refer [MergedPageBridge]]
+   [freememo.reading-anchor :as reading-anchor]
+   [freememo.reading-position-view :refer [ReadingPosition]]
    #?(:cljs [freememo.editor-image-menu :as image-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
@@ -473,5 +475,12 @@
                   (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f))))))))
 
             ;; Image-occlusion authoring modal (context-menu entry point).
-            (OcclusionModal !occlusion-request user-id))))))))
+            (OcclusionModal !occlusion-request user-id))
+
+          ;; The reader's place in the notes (plans/reading-position-memory.md
+          ;; §4 3.5.4). A nil topic mounts no tracker, so a PDF-backed or media
+          ;; kind (§4 0.2) keeps no position and needs no conditional frame.
+          ;; Renders nothing.
+          (ReadingPosition "editor"
+            (when (contains? reading-anchor/editor-kinds dctx/kind) topic-id))))))))
 
