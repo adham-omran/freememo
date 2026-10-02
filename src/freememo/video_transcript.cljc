@@ -35,6 +35,7 @@
    [freememo.video-pane :as vp]
    [freememo.video-format :refer [format-ms]]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.read-region :as read-region])
    #?(:clj [freememo.video :as video])
    #?(:clj [freememo.user-state :as us])))
 
@@ -137,7 +138,8 @@
    mutation happened to re-run the query (precedent:
    hierarchy_side_panel/get-pins-for-topic*)."
   [_refresh topic-id]
-  #?(:clj (vec (db/get-video-transcript topic-id))
+  #?(:clj (read-region/timed-read :video-transcript
+            #(vec (db/get-video-transcript topic-id)))
      :cljs []))
 
 (defn copy-transcript!*
@@ -288,8 +290,11 @@
           topic-id dctx/video-topic-id
           ;; SERVER-FORM binding, not an e/defn call: the vector stays on the
           ;; server and only `(e/server (nth segs i nil))` window rows cross.
+          ;; e/Offload keeps the last result while a restart runs, and this
+          ;; pane is not keyed per video. So after a video-to-video navigation
+          ;; the old transcript stays until the new read returns.
           refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-          segs (e/server (get-transcript* refresh topic-id))
+          segs (e/server (e/Offload #(get-transcript* refresh topic-id)))
           seg-count (e/server (count segs))
           ;; The ONE thing the client needs the whole timeline for. Projected
           ;; server-side so only the ints cross: `(mapv :start_ms …)` on the

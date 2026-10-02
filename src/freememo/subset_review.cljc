@@ -5,11 +5,13 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.topic-page :refer [TopicPage]]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.read-region :as read-region])
    #?(:clj [freememo.user-state :as us])))
 
 ;; Server wrappers — _refresh creates reactive dependency
 (defn get-subset-queue* [_refresh user-id root-id]
-  #?(:clj (vec (db/get-subset-review-queue user-id root-id))
+  #?(:clj (read-region/timed-read :subset-queue
+            #(vec (db/get-subset-review-queue user-id root-id)))
      :cljs nil))
 
 ;; Badge display for topic kinds. No 'page', 'repo', 'commit' or 'dir' branch:
@@ -111,7 +113,7 @@
     (let [!queue-idx (atom 0)
           idx (e/watch !queue-idx)
           refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-          queue-vec (e/server (get-subset-queue* refresh user-id root-id))
+          queue-vec (e/server (e/Offload #(get-subset-queue* refresh user-id root-id)))
           ;; queue-vec is server-sited (form binding) — consume only inside
           ;; (e/server ...) so the subtree never crosses; one row per step.
           total (e/server (count queue-vec))]
