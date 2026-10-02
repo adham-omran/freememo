@@ -82,21 +82,57 @@
   #?(:clj (db/topic-dismissed? root-id)
      :cljs false))
 
+#?(:clj (defonce ^:private edit-seq (java.util.concurrent.atomic.AtomicLong.)))
+
+(defn next-edit-seq!*
+  "Server: a number larger than every one returned before. The service takes
+   one each time an edit's value changes, in the order the values arrive, so
+   a later value always holds the larger number. `_v` is the reactive dep."
+  [_v]
+  #?(:clj (.incrementAndGet ^java.util.concurrent.atomic.AtomicLong edit-seq)
+     :cljs nil))
+
+;; One lock per field, and the number of the newest write that field took.
+;; Cancelling an e/Offload cannot stop a JDBC write that has started, so the
+;; save of older text can still be running when the save of newer text starts.
+#?(:clj (defonce ^:private edit-locks (java.util.concurrent.ConcurrentHashMap.)))
+#?(:clj (defonce ^:private !newest-written (atom {})))
+
+#?(:clj
+   (defn- write-if-newest!
+     "Run write! unless a newer edit of the same field has already written.
+      Pre:  edit-seq comes from next-edit-seq!*.
+      Post: the field's stored value is the one from the largest edit-seq that
+            wrote successfully, whatever order the threads reach the lock in.
+            A skipped write returns {:success true}: a newer value is stored."
+     [field-key edit-seq write!]
+     (locking (.computeIfAbsent ^java.util.concurrent.ConcurrentHashMap edit-locks field-key
+                (reify java.util.function.Function (apply [_ _] (Object.))))
+       (if (< edit-seq (get @!newest-written field-key 0))
+         {:success true}
+         (let [result (write!)]
+           (when (:success result)
+             (swap! !newest-written assoc field-key edit-seq))
+           result)))))
+
 (defn apply-edit!*
   "Server: persist one edit from the modal.
    Pre:  k is a field key the modal emits. v is the value its control holds:
          a string for the text fields and selects, :dismiss or :undismiss for
-         :queue.
-   Post: {:success true} | {:success false :error msg}."
-  [user-id {:keys [root-id item-id]} k v]
-  #?(:clj (case k
-            :goal      (settings/save-learning-goal user-id root-id v)
-            :prompt    (settings/save-custom-prompt user-id item-id v)
-            :use-facts (settings/save-use-facts-for-document user-id root-id
-                         (case v "true" true "false" false nil))
-            :style     (copy/save-style!* user-id root-id v)
-            :queue     (set-learning-queue! user-id root-id v)
-            {:success false :error (str "Unknown field " k)})
+         :queue. edit-seq is next-edit-seq!* for this value.
+   Post: {:success true} | {:success false :error msg}. Of two edits of one
+         field, the one with the larger edit-seq is the one stored."
+  [user-id {:keys [root-id item-id]} k v edit-seq]
+  #?(:clj (write-if-newest! [user-id k (if (= k :prompt) item-id root-id)] edit-seq
+            (fn []
+              (case k
+                :goal      (settings/save-learning-goal user-id root-id v)
+                :prompt    (settings/save-custom-prompt user-id item-id v)
+                :use-facts (settings/save-use-facts-for-document user-id root-id
+                             (case v "true" true "false" false nil))
+                :style     (copy/save-style!* user-id root-id v)
+                :queue     (set-learning-queue! user-id root-id v)
+                {:success false :error (str "Unknown field " k)})))
      :cljs nil))
 
 (defn citation-line*
@@ -369,12 +405,16 @@
       ;; it. That result must not spend the token: the spend would tear down
       ;; the save of the newer value, and the database would keep the older
       ;; one. Each result names the value it saved, and only the result for
-      ;; the current `v` settles the edit.
+      ;; the current `v` settles the edit. The save of the older value can
+      ;; still COMMIT after the newer one, since a cancel cannot stop a
+      ;; started JDBC write; the edit-seq lets apply-edit!* drop that write.
       (e/for [[t edit] (e/diff-by first (e/as-vec edits))]
         (let [[k v] (first edit)
               v (if (= k :queue) (e/snapshot v) v)
-              result (e/server (e/Offload #(assoc (apply-edit!* user-id targets k v)
-                                             :saved-value v)))]
+              result (e/server
+                       (let [edit-seq (next-edit-seq!* v)]
+                         (e/Offload #(assoc (apply-edit!* user-id targets k v edit-seq)
+                                       :saved-value v))))]
           (when (and (some? result) (= v (:saved-value result)))
             (settle-edit! t k v result !values !errors !saved !close-requested)))))))
 
