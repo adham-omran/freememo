@@ -1417,15 +1417,34 @@
       (select-keys [:run_uuid :kind :status]))))
 
 (defn run-details*
-  "Owner-scoped answer details with retained evidence and wire-safe timestamps."
+  "Owner-scoped answer details with wire-safe timestamps.
+
+   The result crosses to the client whole, so it carries no sources. The
+   evidence rows come from `run-sources*`, and `:source_snapshot` is dropped:
+   for a run over one repo file it held 1.1 MB that the modal never read."
   [_rev user-id run-uuid]
   (when run-uuid
-    (when-let [run (db/get-assistant-run user-id run-uuid)]
+    (when-let [run (some-> (db/get-assistant-run user-id run-uuid)
+                     (dissoc :source_snapshot))]
       (let [timestamp-keys [:created_at :started_at :first_token_at :stopped_at
                             :completed_at :failed_at]
             wire-run (reduce (fn [result key]
                                (update result key #(some-> % str)))
                        run timestamp-keys)]
         (assoc wire-run
-          :cost_usd (some-> (:cost_usd wire-run) double)
-          :evidence (db/get-assistant-run-evidence user-id run-uuid))))))
+          :cost_usd (some-> (:cost_usd wire-run) double))))))
+
+(defn run-sources*
+  "Owner-scoped evidence rows of one run, for the Sources table in Answer
+   details. `_rev` forces re-query.
+
+   A run retains every block it showed the model, so a run over one repo file
+   can hold about 3000 rows and 700 KB. These rows are therefore not part of
+   `run-details*`, whose value crosses to the client whole. The caller binds
+   this result as a server form and reads one window row at a time.
+
+   Post: a vector, empty for a nil run or a run the user does not own."
+  [_rev user-id run-uuid]
+  (if run-uuid
+    (vec (db/get-assistant-run-evidence user-id run-uuid))
+    []))
