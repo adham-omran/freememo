@@ -137,7 +137,7 @@
            :web-search? web-search?}
           !submit !active !refs !details-run !evidence !error !echo)
 
-        (run-details/RunDetailsModal !details-run details)
+        (run-details/RunDetailsModal !details-run details user-id)
         (evidence/EvidenceModal !evidence root-topic-id)
 
         (when error

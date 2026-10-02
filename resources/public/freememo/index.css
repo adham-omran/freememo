@@ -4854,14 +4854,19 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border-radius: var(--radius-sm, 4px);
     font-size: 11px;
 }
-.assistant-run-details ul { margin: 0; padding-left: 20px; font-size: 12px; }
-.assistant-run-details__source-revision {
-    margin-top: 2px;
-    color: var(--color-text-secondary);
-    font-size: 11px;
+/* Sources: freememo.tape-table, which owes its caller a flex column with
+   min-height 0. A run can retain thousands of sources, so the list is a
+   virtual scroll and the one opened excerpt paints below it. */
+.assistant-run-details__sources {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
-.assistant-run-details li details { margin-top: 3px; }
-.assistant-run-details li summary { cursor: pointer; color: var(--color-text-secondary); }
+.assistant-run-details__excerpt { margin-top: 10px; font-size: 12px; }
+.assistant-run-details__excerpt-title {
+    color: var(--color-text-secondary);
+    overflow-wrap: anywhere;
+}
 .assistant-run-details__source-quote {
     max-height: 160px;
     margin: 4px 0 8px;
