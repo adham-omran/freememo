@@ -37,9 +37,16 @@
 (e/defn DocumentMainColumn [assistant-inside?]
   (e/client
     (let [card-table-open? dctx/card-table-open?
-          toggle-card-table! dctx/toggle-card-table!]
+          toggle-card-table! dctx/toggle-card-table!
+          ;; Published only on a document with a source pane, so the palette
+          ;; lists :toggle-editor-pane nowhere else (its preparer reads it).
+          toggle-editor-pane! (when dctx/has-source-pane? dctx/toggle-editor-hidden!)
+          editor-hidden? dctx/editor-hidden?]
       (bus/publish-ctx! {:toggle-card-table! toggle-card-table!})
       (e/on-unmount #(bus/retract-ctx! [:toggle-card-table!]))
+      (bus/publish-ctx! {:toggle-editor-pane! toggle-editor-pane!
+                         :editor-hidden? editor-hidden?})
+      (e/on-unmount #(bus/retract-ctx! [:toggle-editor-pane! :editor-hidden?]))
       (dom/div
         (dom/props {:class "document-workspace__main"})
         (DocumentColumns assistant-inside? card-table-open?)

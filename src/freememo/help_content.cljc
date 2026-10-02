@@ -221,6 +221,9 @@
             {:label "What you get"
              :detail "A topic for the repository, one for the commit, one for each directory and one for each file. Only file topics come up for review. The source shows in a read-only code pane: select lines and Copy to notes. A forge import extracts no code facts."
              :commands #{}}
+            {:label "Read without the notes editor"
+             :detail "To give the code pane the full width, run Toggle Editor pane from the command palette. Run it again to show the editor. The choice applies to the whole repository and stays after a reload. Generate, Extract and Add new card still take the text you select in the code pane. The command also works on a PDF and on a video."
+             :commands #{:toggle-editor-pane}}
             {:label "Update"
              :detail "On the repository topic, Update adds the newest commit as a new commit topic, with the same selection."
              :commands #{}}

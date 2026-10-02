@@ -136,6 +136,23 @@
   #?(:clj nil
      :cljs (:editor @!editor-state)))
 
+(defn release-selection!
+  "Drop the document editor's selection, for when its pane is hidden
+   (plans/editor-pane-toggle.md §3.4).
+
+   Pre : none.
+   Post: the editor holds no live range and no cached `!last-selection`, and
+         focus is not inside it — so a card action's Quill fallback reads
+         nothing. A selection elsewhere on the page is left alone: Quill's
+         `setSelection nil` clears the document selection, so it runs only when
+         that selection is the editor's."
+  []
+  #?(:clj nil
+     :cljs (do (when-let [^js ed (current-editor)]
+                 (when (.getSelection ed)
+                   (.setSelection ed nil "silent")))
+               (reset! !last-selection nil))))
+
 ;; The palette's :insert-audio (freememo.commands). It is registered here
 ;; because this namespace owns the one editor the palette can name.
 ;;
@@ -153,7 +170,9 @@
 ;;       caret to index 0 first, and every clip landed at the top.
 #?(:cljs
    (do (bus/register-preparer! :insert-audio
-         (fn [_ctx] (when (current-editor) {})))
+         ;; A hidden editor pane is still mounted, and a clip inserted into it
+         ;; would land where nobody sees it (plans/editor-pane-toggle.md §4.3).
+         (fn [ctx] (when (and (current-editor) (not (:editor-hidden? ctx))) {})))
        (bus/register-handler! :insert-audio
          (fn [_ctx _payload]
            (when-let [^js ed (current-editor)]

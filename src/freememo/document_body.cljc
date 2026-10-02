@@ -26,6 +26,7 @@
           card-font-size dctx/card-font-size
           t-layout dctx/t-layout layout-save dctx/layout-save
           t-focus dctx/t-focus focus-save dctx/focus-save
+          t-editor-hidden dctx/t-editor-hidden editor-hidden-save dctx/editor-hidden-save
           t-last-page dctx/t-last-page last-page-save dctx/last-page-save
           is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?
           assistant-full-height? (e/server
@@ -54,6 +55,19 @@
           (when (some? r)
             (if (:success r) (case r (t-focus)) (t-focus (:error r)))))
         (t-focus))))
+
+    ;; Persist the hidden-editor flag. The save map carries the scope it was
+    ;; set under, so a topic change between the set and this write cannot
+    ;; land it on another document. Size-0 sibling, as above.
+    (e/drain
+     (when t-editor-hidden
+      (let [scope-id (:scope-id editor-hidden-save)
+            hidden? (:hidden? editor-hidden-save)]
+        (if scope-id
+          (let [r (e/server (e/Offload #(settings/save-editor-hidden user-id scope-id hidden?)))]
+            (when (some? r)
+              (if (:success r) (case r (t-editor-hidden)) (t-editor-hidden (:error r)))))
+          (t-editor-hidden)))))
 
     ;; Persist the last page the reader turned to. This lived in PdfPane until
     ;; focus reader, which unmounts the pane — and a writer that unmounts stops
@@ -119,6 +133,9 @@
               dctx/merged? (:merged? m) dctx/merged-page-numbers (:merged-page-numbers m)
               dctx/editor-doc-id (:editor-doc-id m)
               dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)
+              dctx/has-source-pane? (:has-source-pane? m) dctx/editor-hidden? (:editor-hidden? m)
+              dctx/toggle-editor-hidden! (:toggle-editor-hidden! m)
+              dctx/t-editor-hidden (:t-editor-hidden m) dctx/editor-hidden-save (:editor-hidden-save m)
               dctx/t-last-page (:t-last-page m) dctx/last-page-save (:last-page-save m)
               dctx/on-page-change! (:on-page-change! m)
               dctx/reset-split! (:reset-split! m)

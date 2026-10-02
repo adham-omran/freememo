@@ -10,8 +10,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.doc-context :as dctx]
-   [freememo.rich-text-editor :as editor]
-   [freememo.code-pane :as code-pane]
+   [freememo.selected-passage :as selected-passage]
    [freememo.card-models :as card-models]
    [freememo.math :as math]
    [freememo.command-bus :as bus]
@@ -257,14 +256,11 @@
           (e/on-unmount (fn [] (bus/retract-invoker! :compare-card-gen))))
         (dom/On "click"
           (fn [_]
-            ;; Same subject order as Generate: the code pane, then the editor.
-            (if-let [pane-html (code-pane/pane-selection-html)]
-              (reset! !open {:selection-html pane-html})
-              (let [sel (editor/get-selection-html!)]
-                (when sel
-                  (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                (reset! !open {:selection-html (when (and sel (not (str/blank? (:text sel))))
-                                                 (:html sel))}))))
+            ;; Same subject order as Generate: freememo.selected-passage.
+            (let [passage (selected-passage/current)]
+              (selected-passage/mark! passage :color "var(--color-highlight-gold)")
+              (reset! !open {:selection-html (when-not (str/blank? (:text passage))
+                                               (:html passage))})))
           nil))
       (when open
         (CardCompareModal

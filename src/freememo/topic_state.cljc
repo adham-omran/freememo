@@ -16,6 +16,7 @@
    [freememo.bibliography-form :as bibform]
    [freememo.page-merge :as page-merge]
    [freememo.focus-reader :as focus-reader]
+   [freememo.rich-text-editor :as editor]
    [clojure.string :as str]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
@@ -212,6 +213,13 @@
           ;; later page change — one quantity, named once.
           pdf-page-count (:pdf-page-count overview)
           root-topic-id (:root-topic-id overview)
+          ;; A source pane sits beside the editor only on these three (§2.2).
+          ;; `kind` cannot say it: a kg-code topic is kind "code" with no pane.
+          has-source-pane? (or is-pdf? (boolean (:is-video? overview))
+                             (boolean (:is-code? overview)))
+          ;; The PDF root on a PDF, so that it equals focus-scope-id — the two
+          ;; flags exclude each other and must name one document (§1.2).
+          editor-scope-id (when has-source-pane? (or pdf-root-id root-topic-id topic-id))
           ;; Content body fetched separately and gated: PDF panes get their
           ;; text from get-page-text*, so fetching the topic's stored content
           ;; for them was a dead transfer. Score topics ARE pdf-paned but have
@@ -253,6 +261,13 @@
           initial-focus? (e/server
                            (boolean (when focus-scope-id
                                       (e/Offload #(settings/get-focus-reader user-id focus-scope-id)))))
+          ;; The gate is the thunk's first act, so this binding always has a
+          ;; value and never turns pending when the scope appears or goes
+          ;; (see the merged-doc note in DocumentViewState).
+          initial-editor-hidden? (e/server
+                                   (e/Offload #(boolean
+                                                 (when editor-scope-id
+                                                   (settings/get-editor-hidden user-id editor-scope-id)))))
           initial-top-pct (e/server (e/Offload #(settings/get-card-split user-id)))
           initial-card-table-open? (e/server
                                      (e/Offload #(settings/get-card-table-open user-id)))
@@ -277,6 +292,8 @@
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
        :focus-available? focus-available? :focus-scope-id focus-scope-id
+       :has-source-pane? has-source-pane? :editor-scope-id editor-scope-id
+       :initial-editor-hidden? initial-editor-hidden?
        :is-score? is-score?
        :is-poem? (boolean (:is-poem? overview))
        :is-video? (boolean (:is-video? overview))
@@ -308,7 +325,8 @@
   [resolved]
   (e/client
     (let [{:keys [user-id initial-layout initial-focus? focus-available? initial-top-pct
-                  initial-card-table-open?]} resolved
+                  initial-card-table-open? has-source-pane? editor-scope-id
+                  initial-editor-hidden?]} resolved
           ;; Content↕card-table split (global per-user, persisted). Seeded from
           ;; settings; nil → client default. Manual drag + double-click persist
           ;; via !top-pct-save; layout toggle resets live but does not persist.
@@ -360,10 +378,44 @@
           !focus-save (atom nil)
           focus-save (e/watch !focus-save)
           [t-focus _] (e/Token focus-save)
+          ;; Hidden editor pane (plans/editor-pane-toggle.md §2.3). Only
+          ;; documents with a source pane can hide it, so a stored flag on a
+          ;; repo's dir node reads false there and the editor shows.
+          !editor-hidden? (atom (boolean (and has-source-pane? initial-editor-hidden?)))
+          editor-hidden? (e/watch !editor-hidden?)
+          !editor-hidden-save (atom nil)
+          editor-hidden-save (e/watch !editor-hidden-save)
+          [t-editor-hidden _] (e/Token editor-hidden-save)
+          ;; Focus reader hides the source pane and this hides the editor, so
+          ;; on a PDF both on would show nothing. Each setter turns the other
+          ;; flag off, and they are the only writers of the two atoms (§2.4).
+          ;; Inv: never (and @!focus? @!editor-hidden?).
           set-focus! (fn [v]
                        (let [v (boolean (and focus-available? v))]
+                         (when (and v @!editor-hidden?)
+                           (reset! !editor-hidden? false)
+                           (reset! !editor-hidden-save {:scope-id editor-scope-id
+                                                        :hidden? false
+                                                        :id (random-uuid)}))
                          (reset! !focus? v)
                          (reset! !focus-save v)))
+          set-editor-hidden! (fn [v]
+                               (let [v (boolean (and has-source-pane? v))]
+                                 (when (and v @!focus?)
+                                   (reset! !focus? false)
+                                   (reset! !focus-save false))
+                                 ;; Before the pane goes, so no card action
+                                 ;; reads a Quill range nobody can see (§3.4).
+                                 (when v (editor/release-selection!))
+                                 (reset! !editor-hidden? v)
+                                 ;; The scope and a nonce ride along: the atom
+                                 ;; outlives a topic change, and a bare boolean
+                                 ;; equal to the last document's would not
+                                 ;; re-arm the token, so nothing would save.
+                                 (reset! !editor-hidden-save {:scope-id editor-scope-id
+                                                              :hidden? v
+                                                              :id (random-uuid)})))
+          toggle-editor-hidden! (fn [] (set-editor-hidden! (not @!editor-hidden?)))
           !left-pct (atom 50)
           left-pct (e/watch !left-pct)
           !top-split-pct (atom 50)
@@ -392,6 +444,8 @@
        :layout layout :layout-save layout-save :t-layout t-layout :toggle-layout! toggle-layout!
        :top-bottom? (= layout "top-bottom")
        :focus? focus? :focus-save focus-save :t-focus t-focus :set-focus! set-focus!
+       :editor-hidden? editor-hidden? :editor-hidden-save editor-hidden-save
+       :t-editor-hidden t-editor-hidden :toggle-editor-hidden! toggle-editor-hidden!
        :left-pct left-pct :!left-pct !left-pct :top-split-pct top-split-pct :!top-split-pct !top-split-pct
        :transcript-pct transcript-pct :!transcript-pct !transcript-pct})))
 

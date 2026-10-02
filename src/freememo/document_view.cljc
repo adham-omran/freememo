@@ -174,6 +174,7 @@
   (e/client
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id kind dctx/kind
           is-pdf? dctx/is-pdf? top-bottom? dctx/top-bottom?
+          editor-hidden? dctx/editor-hidden?
           effective-content dctx/effective-content navigate! dctx/navigate!]
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
@@ -190,21 +191,33 @@
           ;; The focus-reader class is the ONLY scope for the centered-column
           ;; CSS. `.ql-editor` also styles card fields and every other Quill
           ;; surface, so an unscoped padding rule would reach a card modal.
-          (dom/props {:class (if (and dctx/focus-available? dctx/focus?) "focus-reader-column" "")
+          ;;
+          ;; `editor-hidden` hides the editor and the source|editor handle in
+          ;; CSS, and the binding below widens the source pane. Nothing
+          ;; remounts: Quill, its auto-save and the source pane all survive a
+          ;; toggle (plans/editor-pane-toggle.md §3).
+          (dom/props {:class (cond
+                               (and dctx/focus-available? dctx/focus?) "focus-reader-column"
+                               editor-hidden? "editor-hidden"
+                               :else "")
                       :style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)
                                                 "column"
                                                 "row")
                               :min-height "0" :overflow "hidden"}})
-          (PdfSplitPane)
-          ;; Video topics: the video column (player, waveform, transcript) sits
-          ;; INSIDE this row, so the editor is beside it rather than below it.
-          ;; All four surfaces of §4.8 8.1 remain visible and independently
-          ;; usable; only their arrangement changed.
-          (binding [dctx/video-topic-id page-topic-id]
-            (VideoSplitPane))
-          ;; Files from a git forge: read-only source beside the notes editor.
-          (CodeSplitPane)
+          ;; The three split panes size their source column by these two. The
+          ;; atoms keep the reader's split, so showing the editor restores it.
+          (binding [dctx/left-pct (if editor-hidden? 100 dctx/left-pct)
+                    dctx/top-split-pct (if editor-hidden? 100 dctx/top-split-pct)]
+            (PdfSplitPane)
+            ;; Video topics: the video column (player, waveform, transcript) sits
+            ;; INSIDE this row, so the editor is beside it rather than below it.
+            ;; All four surfaces of §4.8 8.1 remain visible and independently
+            ;; usable; only their arrangement changed.
+            (binding [dctx/video-topic-id page-topic-id]
+              (VideoSplitPane))
+            ;; Files from a git forge: read-only source beside the notes editor.
+            (CodeSplitPane))
           (binding [dctx/topic-id page-topic-id
                     dctx/audio-topic-id (when (= kind "audio") page-topic-id)
                     dctx/is-pdf-page? is-pdf?

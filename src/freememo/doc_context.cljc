@@ -86,6 +86,14 @@
 (e/declare focus?)
 (e/declare focus-available?)
 (e/declare focus-scope-id)
+;; Hidden editor pane (plans/editor-pane-toggle.md). `has-source-pane?` is true
+;; for a PDF, a video and a git forge file — the only views where a pane sits
+;; beside the editor. `editor-hidden?` implies it, and never holds with focus?.
+(e/declare has-source-pane?)
+(e/declare editor-hidden?)
+(e/declare toggle-editor-hidden!)
+(e/declare t-editor-hidden)
+(e/declare editor-hidden-save)
 ;; Merged reading: the whole PDF as one document with a boundary marker per page
 ;; (plans/merged-page-reading.md). True only in focus mode on a real PDF.
 ;; `merged-page-numbers` is what the split needs — the editor cannot report a
