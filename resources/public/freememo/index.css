@@ -770,7 +770,7 @@ html:has(> body > .app-shell) > body {
    - collapse-4: (reserved — CardCount moved into the Generate dropdown menu)
    - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
    - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
-   - collapse-7: + Sync dropdown trigger hidden (.toolbar-collapse-sync) */
+   - collapse-7: + Anki Sync button hidden (.toolbar-collapse-sync) */
 
 /* Labels hide at tier ≥1. A `.icon-label--tier-2` label stays one tier longer:
    Extract is a ghost button beside the filled Generate, and its words are
@@ -810,7 +810,7 @@ html:has(> body > .app-shell) > body {
     display: none !important;
 }
 
-/* Sync dropdown trigger hides at tier 7 */
+/* Anki Sync button hides at tier 7 */
 .toolbar-container.collapse-7 .toolbar-collapse-sync {
     display: none !important;
 }
@@ -1417,20 +1417,8 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     flex-direction: column;
     gap: 2px;
 }
-/* Sync dropdown sits at the right edge of the toolbar — right-align its menu
-   so it doesn't overflow the viewport on narrow screens. */
-.toolbar-sync-dropdown .toolbar-dropdown-menu {
-    left: auto;
-    right: 0;
-}
-/* Keep sync menu items ("Push to Anki (N)…" + shortcut) on one line; the menu
-   grows to fit rather than wrapping the label. */
-.toolbar-sync-dropdown .toolbar-dropdown-item {
-    white-space: nowrap;
-}
-
 /* Copy / Scan / Generate triggers sit toward the right of their bars; right-align
-   their menus (like sync above) so a left-anchored menu can't run past the
+   their menus so a left-anchored menu can't run past the
    toolbar's right edge and get clipped by `.toolbar`'s `overflow-x: clip`. */
 .toolbar-copy-dropdown .toolbar-dropdown-menu,
 .toolbar-scan-dropdown .toolbar-dropdown-menu,

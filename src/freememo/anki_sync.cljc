@@ -9,6 +9,7 @@
    [freememo.anki-sync-panels :as panels]
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.tooltip :as tooltip]))
 
 (e/defn AnkiSyncInnerBody
@@ -54,17 +55,19 @@
     (let [!show-modal (atom false)
           show-modal (e/watch !show-modal)]
 
-      ;; Toolbar button (hidden inside Sync dropdown; the dropdown menu item
-      ;; and the meta+shift+x shortcut invoke it via the :anki-sync command).
+      ;; Toolbar button. The meta+shift+x shortcut and the palette invoke it
+      ;; through the :anki-sync command. `toolbar-collapse-sync` hides it at
+      ;; viewport-tier 7; the modal below is a sibling, so it stays mounted.
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary"
-                    :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}})
-        (tooltip/Tooltip! "Push to Anki" :aria? true)
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-sync-trigger toolbar-collapse-sync"
+                    :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}
+                    :data-tour "anki-sync"})
+        (tooltip/Tooltip! (str "Sync with Anki (" (commands/display-chord :anki-sync) ")") :aria? true)
         (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))
-                      (str "Push to Anki (" unsynced-count ")...")
-                      "Push to Anki...")))
+                      (str "Anki Sync (" unsynced-count ")")
+                      "Anki Sync")))
         (let [node dom/node]
           (bus/publish-invoker! :anki-sync (fn [] (.click node)))
           (e/on-unmount (fn [] (bus/retract-invoker! :anki-sync))))

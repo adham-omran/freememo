@@ -74,7 +74,7 @@
   nil)
 
 (defn show-sync-trigger!
-  "Open the newest document with cards and point at its Anki Sync menu
+  "Open the newest document with cards and point at its Anki Sync button
    (8.3.1, 8.5.4). With no cards yet, say so in a centered card."
   [root-id]
   (if root-id
@@ -82,7 +82,7 @@
         (spotlight/show! {:anchors [:anki-sync]
                           :route-key (spotlight/route-key :viewer root-id)
                           :title "Send cards to Anki"
-                          :body "Open this menu and choose Sync with Anki."}))
+                          :body "Press this button to sync the cards with Anki."}))
     (spotlight/show! {:anchors []
                       :title "Send cards to Anki"
                       :body "Make flashcards in a document first. Then choose Sync with Anki in its toolbar."})))

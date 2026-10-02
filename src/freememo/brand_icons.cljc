@@ -12,7 +12,7 @@
    which render invisibly inside an `<svg>`.
 
    Invariant: no mark in here defines an `id`. Several instances of one mark
-   mount at the same time (the Sync dropdown mounts four), and an `id` on a
+   mount at the same time, and an `id` on a
    `<defs>` child would collide across them — every `url(#…)` in the document
    resolves to whichever instance mounted first, so the marks would silently
    share one paint server."

@@ -1,10 +1,9 @@
 (ns freememo.content-toolbar
   "Unified card generation toolbar for both page-level and extract-level content.
    Orchestrator — delegates to ToolbarSettings, ToolbarActions, GenerateDropdown,
-   and SyncDropdown. Generate + Generate-with-Prompt are consolidated into the
-   Generate dropdown; Export + Pull + Anki Sync are consolidated into the Sync
-   dropdown. The original button e/defns are mounted hidden inside each
-   dropdown so their refs/modals/tokens stay live."
+   and AnkiSyncButton. Generate + Generate-with-Prompt are consolidated into the
+   Generate dropdown. The original button e/defns are mounted hidden inside it
+   so their refs/modals/tokens stay live."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -14,7 +13,7 @@
    [freememo.content-toolbar-actions :as actions]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
-   [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
+   [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
    [freememo.document-options :refer [DocumentOptionsButton]]
    [freememo.transcribe-button :refer [TranscribeButton]]
@@ -302,11 +301,9 @@
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
 
-          ;; 3. Sync dropdown (unboxed, lone trigger) — Export + Pull + Anki Sync.
-          ;; Source buttons mount hidden inside so refs/modals/e/Token paths stay
-          ;; live; .toolbar-collapse-sync sits on the visible trigger inside.
-              (binding [dctx/card-type card-type dctx/unsynced-count unsynced-count]
-                (SyncDropdown))
+          ;; 3. Anki Sync (unboxed, lone button). .toolbar-collapse-sync sits on
+          ;; the button; its modal is a sibling and stays mounted.
+              (AnkiSyncButton user-id root-topic-id card-type unsynced-count)
 
           ;; Divider hides with Sync at tier 7 (no dangling separator).
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-sync"}))
