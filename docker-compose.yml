@@ -1,9 +1,13 @@
   services:
     postgres:
-      # Pinned to the exact minor, not floating `16-alpine`. deploy.sh runs
-      # `up -d postgres` every deploy; an unchanged tag pulls nothing and
-      # recreates nothing, so the minor only moves when this line moves.
+      # Pinned to the exact minor, not floating `16-alpine`, so the minor only
+      # moves when this line moves. deploy.sh no longer starts this service
+      # (deploy.sh:142), so it is the dev database only.
       image: postgres:16.14-alpine
+      # pg_stat_statements counts statements for the done-checks in
+      # plans/server-query-performance.md (1.5). A database still needs
+      # CREATE EXTENSION before it can read the view.
+      command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
       environment:
         POSTGRES_DB: cardmaker
         POSTGRES_USER: cardmaker

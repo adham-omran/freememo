@@ -30,6 +30,7 @@
    #?(:clj [freememo.anki-reconcile-server :as recon-server])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.read-region :as read-region])
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
@@ -403,8 +404,12 @@
              ;; Collapse BEFORE filtering. Filtering first would leave
              ;; :member-ids holding only the members that matched, and the row
              ;; would then delete a subset of its own group.
+             ;; Timed alone, not with the whole thunk: gate 6.0 of
+             ;; plans/server-query-performance.md asks for this call's time.
              all (mapv with-sync-states
-                   (rows/collapse-groups (db/get-user-flashcards user-id)))
+                   (rows/collapse-groups
+                     (read-region/timed-read :library-cards-rows
+                       #(db/get-user-flashcards user-id))))
              ;; Read only when the facet is on, so the ordinary view costs no
              ;; extra query — same rule `overlay-ids-for` follows on the client.
              conflict-ids (when (contains? origins "conflict")
