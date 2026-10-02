@@ -16,6 +16,7 @@
    [freememo.modal-shell :as modal]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.read-region :as read-region])
    ;; Loads the :undo-newest / :undo-entry run-command! methods server-side.
    #?(:clj [freememo.undo :as undo])
    #?(:clj [freememo.user-state :as us])))
@@ -132,7 +133,8 @@
           entries)))))
 
 (defn get-undo-views* [_refresh user-id]
-  #?(:clj (annotate-views (db/get-undo-entries user-id))
+  #?(:clj (read-region/timed-read :undo-history
+            #(annotate-views (db/get-undo-entries user-id)))
      :cljs []))
 
 ;; ---------------------------------------------------------------------------
@@ -197,7 +199,7 @@
   (e/client
     (when (e/watch !open?)
       (let [refresh (e/server (e/watch (us/get-atom user-id :undo-mutations)))
-            rows (e/server (get-undo-views* refresh user-id))
+            rows (e/server (e/Offload #(get-undo-views* refresh user-id)))
             n (e/server (count rows))]
         (dom/div
           (dom/props {:class "modal-backdrop"})

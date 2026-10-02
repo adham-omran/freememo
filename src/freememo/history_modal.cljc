@@ -13,16 +13,19 @@
    [freememo.modal-shell :as modal]
    [freememo.priority :as priority]
    [freememo.tooltip :as tooltip]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.read-region :as read-region])))
 
 ;; Server bridge — same-namespace wrapper keeps `e/server` codepaths short
 ;; and shields the modal from cross-ns atom-resolution issues.
 (defn get-history* [_refresh topic-id]
-  #?(:clj (vec (db/get-topic-history topic-id))
+  #?(:clj (read-region/timed-read :topic-history
+            #(vec (db/get-topic-history topic-id)))
      :cljs []))
 
 (defn get-next* [_refresh topic-id]
-  #?(:clj (db/get-topic-next-review topic-id)
+  #?(:clj (read-region/timed-read :topic-next-review
+            #(db/get-topic-next-review topic-id))
      :cljs nil))
 
 ;; -- Formatters --------------------------------------------------------------
@@ -222,9 +225,9 @@
   (e/client
     (let [open? (e/watch !open?)]
       (when open?
-        (let [next-info (e/server (get-next* refresh topic-id))
+        (let [next-info (e/server (e/Offload #(get-next* refresh topic-id)))
               topic-title (:title next-info)
-              rows (e/server (get-history* refresh topic-id))
+              rows (e/server (e/Offload #(get-history* refresh topic-id)))
               row-count (e/server (count rows))]
           (dom/div
             (dom/props {:class "modal-backdrop" :tabindex "-1"})

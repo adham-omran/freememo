@@ -7917,21 +7917,30 @@
 (defn get-subtree
   "Get a topic and all its descendants via recursive CTE.
    Selects from topics directly (not the CTE alias) so JDBC metadata
-   reports the correct table name and next.jdbc produces :topics/xxx keys."
-  [user-id root-id]
-  (jdbc/execute! ds
-    ["WITH RECURSIVE subtree(id) AS (
+   reports the correct table name and next.jdbc produces :topics/xxx keys.
+
+   Pre : columns, when given, are `topics` column keywords written in code.
+         They reach the SQL text, so they never come from a request.
+   Post: the 2-arity selects t.*. The 3-arity selects only `columns`, so a
+         caller that needs no content reads no `content` or `content_text`."
+  ([user-id root-id]
+   (get-subtree user-id root-id nil))
+  ([user-id root-id columns]
+   (jdbc/execute! ds
+     [(str "WITH RECURSIVE subtree(id) AS (
         SELECT id FROM topics WHERE id = ?
         UNION ALL
         SELECT child.id FROM topics child
         JOIN subtree ON child.parent_id = subtree.id
       )
-      SELECT t.* FROM topics t
+      SELECT " (if columns
+                 (str/join ", " (map #(str "t." (name %)) columns))
+                 "t.*") " FROM topics t
       JOIN subtree s ON t.id = s.id
       WHERE (t.user_id = ? OR t.user_id IS NULL)
         AND t.staged_delete_id IS NULL
-      ORDER BY t.parent_id ASC NULLS FIRST, t.page_number ASC NULLS LAST, t.id ASC"
-     root-id user-id]))
+      ORDER BY t.parent_id ASC NULLS FIRST, t.page_number ASC NULLS LAST, t.id ASC")
+      root-id user-id])))
 
 ;; ---------------------------------------------------------------------------
 ;; Media registry — per-user blobs (images today)
@@ -8231,12 +8240,18 @@
           (recur (conj result node)
             (into (pop stack) children)))))))
 
+(def ^:private subset-review-columns
+  "The `topics` columns get-subset-review-queue reads: the session's fields,
+   the filters' status, kind and last review, and the outstanding test's
+   next review. No content, so the subtree read loads no TOAST."
+  [:id :parent_id :kind :title :status :page_number :last_review_at :next_review_at])
+
 (defn get-subset-review-queue
   "Get the subset review queue for a topic subtree.
    Filters out done items. Annotates :outstanding?.
    When include-reviewed-today? is false (default), also filters out items reviewed today."
   [user-id root-id & {:keys [include-reviewed-today?] :or {include-reviewed-today? false}}]
-  (let [raw (get-subtree user-id root-id)
+  (let [raw (get-subtree user-id root-id subset-review-columns)
         now (java.sql.Timestamp. (System/currentTimeMillis))
         today (java.time.LocalDate/now)]
     (let [active (->> raw
@@ -8249,9 +8264,8 @@
                                  (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate))))
                        active))
           ordered (tree-order-items filtered)]
-      ;; Slim to the fields the review session reads — get-subtree SELECTs
-      ;; t.* (content + content_text included); shipping those for every
-      ;; subtree topic is pure wire waste (TopicPage fetches content by id).
+      ;; Slim to the fields the review session reads. TopicPage fetches
+      ;; content by id, so the session never needs it here.
       (mapv (fn [item]
               (let [nra (:topics/next_review_at item)]
                 (assoc (select-keys item [:topics/id :topics/parent_id :topics/kind
