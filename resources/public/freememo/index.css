@@ -148,6 +148,11 @@ html, body {
     color: var(--color-text-primary);
 }
 
+/* The browser stylesheet gives a button its own font (Arial in Chromium), so a
+   button does not get the body font. This rule makes every button use it. A
+   rule with a class still sets its own font, because it is more specific. */
+button { font-family: inherit; }
+
 /* Signed-in app root (main.cljc). It fills the dynamic viewport. While it is
    mounted, the document itself cannot scroll: a drag past an inner scroller
    made Safari scroll the page, collapse its toolbar, and move the whole app
