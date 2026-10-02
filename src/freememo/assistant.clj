@@ -169,8 +169,17 @@
 
 ;; ── Durable run assembly ───────────────────────────────────────────────────
 
+;; One token can name several keys. The prompt asks for one key per token, but
+;; models write `[evidence:E274, E361]` anyway. A pattern for one key only left
+;; that text raw in the answer, with no link.
 (def ^:private evidence-token-pattern
-  #"\[evidence:([A-Za-z0-9_-]+)\]")
+  #"\[evidence:\s*([A-Za-z0-9_-]+(?:\s*[,;]\s*(?:evidence:\s*)?[A-Za-z0-9_-]+)*)\s*\]")
+
+(defn- token-keys
+  "The citation keys in the key list of one evidence token, in order."
+  [key-list]
+  (map #(str/replace (str/trim %) #"^evidence:\s*" "")
+    (str/split key-list #"[,;]")))
 
 (def ^:private evidence-system-instructions
   ;; The last three sentences exist because the sources come before the
@@ -179,6 +188,7 @@
   ;; E3 in the sources above it is a block of the new page.
   (str "\n\n# Evidence citations\n\n"
     "Cite supplied sources only with their exact token, such as [evidence:E1]. "
+    "Give each key its own token: write [evidence:E1] [evidence:E2], not [evidence:E1, E2]. "
     "Do not invent evidence keys. Use the narrowest source block that contains the claim. "
     "Place each citation after the claim it supports. "
     "Sources are supplied again for each request. "
@@ -661,12 +671,14 @@
   [answer evidence]
   (let [by-key (into {} (map (juxt :citation_key identity)) evidence)]
     (str/replace (or answer "") evidence-token-pattern
-      (fn [[_ citation-key]]
-        (if-let [source (get by-key citation-key)]
-          (if-let [target (citation-target source)]
-            (str "[" (markdown-link-label (:display_label source)) "](" target ")")
-            "")
-          "")))))
+      (fn [[_ key-list]]
+        (str/join "; "
+          (keep (fn [citation-key]
+                  (when-let [source (get by-key citation-key)]
+                    (when-let [target (citation-target source)]
+                      (str "[" (markdown-link-label (:display_label source))
+                        "](" target ")"))))
+            (token-keys key-list)))))))
 
 ;; ── Commands ───────────────────────────────────────────────────────────────
 
@@ -1231,10 +1243,12 @@
   #"(?is)<(?:blockquote|code|div|figure|h[1-6]|li|ol|p|pre|table|td|th|tr|ul)\b")
 
 (defn- cited-keys
-  "The evidence keys that `answer` cites with a complete `[evidence:<key>]`
-   token. A token still streaming in cites nothing yet."
+  "The evidence keys that `answer` cites with a complete evidence token, such
+   as `[evidence:E1]` or `[evidence:E1, E2]`. A token still streaming in cites
+   nothing yet."
   [answer]
-  (into #{} (map second) (re-seq evidence-token-pattern (or answer ""))))
+  (into #{} (mapcat (comp token-keys second))
+    (re-seq evidence-token-pattern (or answer ""))))
 
 (defn- evidence-wire-row
   "One evidence row as the browser gets it, with ONE quote form. The evidence
@@ -1257,8 +1271,9 @@
 (defn- plain-evidence-citations [answer evidence-rows]
   (let [by-key (into {} (map (juxt :citation_key identity)) evidence-rows)]
     (str/replace (or answer "") evidence-token-pattern
-      (fn [[_ citation-key]]
-        (or (:display_label (get by-key citation-key)) "")))))
+      (fn [[_ key-list]]
+        (str/join "; "
+          (keep #(:display_label (get by-key %)) (token-keys key-list)))))))
 
 (defn transcript-message-view
   "Prepare one transcript row for the browser.
