@@ -297,7 +297,10 @@
    "boox_file_"
    ;; `code_view_<code topic id>`: rendered or source, for one repo Markdown
    ;; file (plans/markdown-rendered-code-pane.md §3).
-   "code_view_"])
+   "code_view_"
+   ;; `editor_hidden_<PDF root or document root>`: the viewer's hidden editor
+   ;; pane (plans/editor-pane-toggle.md §1.3).
+   "editor_hidden_"])
 
 ;; ── Media URL rewriting (§5.4.7) ───────────────────────────────────
 

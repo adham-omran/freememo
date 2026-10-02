@@ -312,6 +312,12 @@
                        :when #{:viewer} :views #{}}
      :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
                               :when #{:viewer} :views #{}}
+     ;; One settings row per document, read once at open and never re-queried,
+     ;; so :views stays empty — the same reasoning as :toggle-focus-reader.
+     ;; :when is the tab; command-bus's preparer narrows it to documents with a
+     ;; source pane (plans/editor-pane-toggle.md §4).
+     :toggle-editor-pane {:label "Toggle Editor pane" :class :query :exec :client
+                          :when #{:viewer} :views #{}}
      ;; Three components publish this invoker, and exactly one is ever mounted:
      ;; card-modals/EditCardModal, occlusion-modal (edit mode) and the score
      ;; toolbar. :when is tab-scoped and cannot say "a card editor is open", so

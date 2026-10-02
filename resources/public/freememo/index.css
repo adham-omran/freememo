@@ -1798,6 +1798,18 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     left: 0; right: 0;
     top: -2px; bottom: -2px;
 }
+
+/* Hidden editor pane (plans/editor-pane-toggle.md §3). `.editor-hidden` is set
+   by document-view/ContentColumn on the source|editor row. The child
+   combinator is load-bearing: the source|editor handle is a direct child of
+   that row, while a video's player|transcript handle sits inside the video
+   column and must stay. The editor stays mounted, so Quill and its auto-save
+   survive the toggle. */
+.editor-hidden > .editor-pane,
+.editor-hidden > .split-divider-h,
+.editor-hidden > .split-divider-v {
+    display: none;
+}
 .split-divider-v:hover,
 .split-divider-v:active { background: light-dark(#90caf9, #2563eb); }
 

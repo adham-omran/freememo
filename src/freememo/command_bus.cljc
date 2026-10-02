@@ -356,6 +356,18 @@
     (when-let [toggle! (:toggle-card-table! ctx)]
       (toggle!))))
 
+;; DocumentMainColumn publishes :toggle-editor-pane! only for a document with a
+;; source pane beside the editor (PDF, video, git forge file). :when can name
+;; only a tab, so the preparer is the kind gate: an absent fn hides the command
+;; (plans/editor-pane-toggle.md §4.2).
+(register-preparer! :toggle-editor-pane
+  (fn [ctx] (when (:toggle-editor-pane! ctx) {})))
+
+(register-handler! :toggle-editor-pane
+  (fn [ctx _payload]
+    (when-let [toggle! (:toggle-editor-pane! ctx)]
+      (toggle!))))
+
 (register-handler! :search
   (fn [ctx payload]
     (when-let [navigate! (:navigate! ctx)]

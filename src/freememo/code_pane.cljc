@@ -139,15 +139,13 @@
          (not-empty (.-innerHTML holder))))
      :clj nil))
 
-(defn pane-selection-html
-  "Post: the pane selection in the form it reaches the context builder in
-   (§4.4 4.6.1), or nil when nothing is selected in the pane. From the source
-   view that is an escaped code block. From the rendered view it is the
-   rendered HTML, which the builder sanitizes."
-  []
-  (or (rendered-selection-html)
-    (when-let [text (pane-selection-text)]
-      (str "<pre><code>" (str/escape text {\& "&amp;" \< "&lt;" \> "&gt;"}) "</code></pre>"))))
+(defn source-block-html
+  "Post: `text`, a selection from the source view, as an escaped code block —
+   the form it reaches the context builder in (§4.4 4.6.1) and the form an
+   extract's `repo-md/selection->extract-html` turns into a Quill code block.
+   `freememo.selected-passage` decides when the source view is the surface."
+  [text]
+  (str "<pre><code>" (str/escape text {\& "&amp;" \< "&lt;" \> "&gt;"}) "</code></pre>"))
 
 (defn render-source!
   "Write `source` into the `<code>` element `node`.
@@ -340,8 +338,9 @@
           (when (and markdown? source? view)
             (ViewToggle view set-view!))
           ;; Copy to notes copies source lines, which the rendered view has
-          ;; none of (§2.8).
-          (when-not rendered?
+          ;; none of (§2.8). A hidden editor pane would take the lines out of
+          ;; sight (plans/editor-pane-toggle.md §4.3).
+          (when-not (or rendered? dctx/editor-hidden?)
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary"
                           :aria-label "Copy the selected lines to your notes"})
