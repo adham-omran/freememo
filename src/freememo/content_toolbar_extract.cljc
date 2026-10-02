@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.doc-context :as dctx]
+   [freememo.document-options-targets :as doc-options-targets]
    [freememo.card-components :as card-components]
    [freememo.done-toggle :refer [DoneToggleFace]]
    [freememo.history-modal :refer [HistoryModal]]
@@ -87,8 +88,11 @@
           ;; `(or pdf-root-id root-topic-id)`), so both scope to the document,
           ;; not the page — matching get-learning-queue, which excludes
           ;; kind 'page'. For extract/wiki/epub (extract-status non-nil), each
-          ;; topic is its own review unit.
-          review-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
+          ;; topic is its own review unit. The rule lives in
+          ;; document-options-targets, so History and Priority cannot disagree.
+          review-topic-id (:review-id (doc-options-targets/targets
+                                        {:context-mode dctx/context-mode :extract-status extract-status
+                                         :root-topic-id root-topic-id :topic-id topic-id}))]
 
       ;; History button — visible for all topic kinds (per spec §8.1). Sits
       ;; immediately before Done/Restore so when extract-status is set the

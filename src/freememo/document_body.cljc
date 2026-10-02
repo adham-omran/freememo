@@ -117,6 +117,7 @@
               dctx/queue-ctx (:queue-ctx m) dctx/citation (:citation m) dctx/page-info (:page-info m)
               dctx/pdf-root? (:pdf-root? m) dctx/pdf-status (:pdf-status m) dctx/reading-mode? (:reading-mode? m)
               dctx/!show-bib (:!show-bib m) dctx/show-bib? (:show-bib? m)
+              dctx/!doc-options-open (:!doc-options-open m) dctx/doc-options-open? (:doc-options-open? m)
               dctx/total (:total m) dctx/layout (:layout m) dctx/is-live? (:is-live? m)
               dctx/scan-dpi (:scan-dpi m) dctx/scanning-pages (:scanning-pages m) dctx/ocr-errors (:ocr-errors m)
               dctx/phone? (:phone? m) dctx/!current-page (:!current-page m) dctx/toggle-layout! (:toggle-layout! m)

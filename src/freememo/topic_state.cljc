@@ -623,6 +623,10 @@
           !video-playhead (atom {:topic-id nil :ms nil :seeks 0})
           !show-bib (atom false)
           show-bib? (e/watch !show-bib)
+          ;; Document options modal — owned here beside !show-bib, so the modal
+          ;; mounts outside the content toolbar (plans/document-options-autosave-sheet.md 1.1).
+          !doc-options-open (atom false)
+          doc-options-open? (e/watch !doc-options-open)
           ;; Mobile layout: reading-mode? = phone + learn origin (distraction-free
           ;; incremental-reading view). phone? alone drives PdfToolbar's compact
           ;; layout for every PDF on a phone.
@@ -636,7 +640,9 @@
        :effective-content-topic-id effective-content-topic-id
        :merged? merged? :merged-page-numbers merged-page-numbers
        :editor-doc-id editor-doc-id
-       :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
+       :!show-bib !show-bib :show-bib? show-bib?
+       :!doc-options-open !doc-options-open :doc-options-open? doc-options-open?
+       :phone? phone? :reading-mode? reading-mode?
        :!score-region !score-region :!score-pages !score-pages
        :!score-modal-open? !score-modal-open? :!score-edit !score-edit
        :!video-el !video-el :!video-region !video-region

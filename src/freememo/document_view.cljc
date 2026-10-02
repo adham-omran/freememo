@@ -21,6 +21,8 @@
    [freememo.poem-pane :refer [PoemPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
+   [freememo.document-options :refer [DocumentOptionsModal]]
+   [freememo.document-options-targets :as doc-options-targets]
    [freememo.navigation :as nav]
    [freememo.util :as util]))
 
@@ -290,7 +292,13 @@
           show-bib? dctx/show-bib? total dctx/total layout dctx/layout is-live? dctx/is-live?
           scan-dpi dctx/scan-dpi scanning-pages dctx/scanning-pages ocr-errors dctx/ocr-errors
           phone? dctx/phone? toggle-layout! dctx/toggle-layout!
-          bib-topic-id dctx/bib-topic-id]
+          bib-topic-id dctx/bib-topic-id
+          !doc-options-open dctx/!doc-options-open doc-options-open? dctx/doc-options-open?
+          ;; The toolbar sub-tree's ids, bound below and read by the Document
+          ;; options mount at the end.
+          toolbar-root-id (or pdf-root-id root-topic-id)
+          context-mode (if is-pdf? :page :extract)
+          toolbar-extract-status (when-not is-pdf? extract-status)]
         ;; URL anchor write-back: reflect the live page as /viewer/topic/<root>/<page>
         ;; (real PDF root only — score/page kinds don't honour a URL page on
         ;; restore). replaceState: no history entry, no router re-resolve, no
@@ -313,14 +321,14 @@
         ;; already bound at the root.
         (binding [dctx/topic-id page-topic-id
                   dctx/audio? (= kind "audio")
-                  dctx/root-topic-id (or pdf-root-id root-topic-id)
+                  dctx/root-topic-id toolbar-root-id
                   dctx/page-number (when is-pdf? current-page)
                   dctx/static-content effective-content
-                  dctx/context-mode (if is-pdf? :page :extract)
+                  dctx/context-mode context-mode
                   dctx/context-tooltip (if is-pdf?
                                          "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
                                          "Include context for better cards. With a selection: extract text. Without: original page text.")
-                  dctx/extract-status (when-not is-pdf? extract-status)
+                  dctx/extract-status toolbar-extract-status
                   dctx/origin (:origin queue-ctx)
                   dctx/on-done! (:on-done! queue-ctx)]
           (ToolbarBar))
@@ -357,6 +365,17 @@
                                 bib-topic-id)))]
           (e/for-by identity [_k (when claimed-id [claimed-id])]
             (reset! !show-bib true)))
+
+        ;; Document options — mounted here, outside the content toolbar, whose
+        ;; collapse tiers hide every .icon-label inside .toolbar-container
+        ;; (plans/document-options-autosave-sheet.md 1.2). It never shows with
+        ;; the bibliography modal: its Edit button closes it first.
+        (when doc-options-open?
+          (DocumentOptionsModal user-id
+            (doc-options-targets/targets
+              {:context-mode context-mode :extract-status toolbar-extract-status
+               :root-topic-id toolbar-root-id :topic-id page-topic-id})
+            is-pdf? !doc-options-open !show-bib true))
 
         ;; Bibliography modal — overlays everything when shown
         (when show-bib?

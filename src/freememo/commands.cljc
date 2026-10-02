@@ -429,7 +429,7 @@
                            ;; here would re-render the player mid-playback.
                            :table #{:topic_videos} :views #{}}
      ;; Both write `flashcards` — see the note on `:save-biblio`.
-     :push-biblio     {:label "Push bibliography to children" :class :mutation :palette-hidden true
+     :push-biblio     {:label "Copy bibliography to extracts" :class :mutation :palette-hidden true
                        :table #{:sources :topics :flashcards}
                        :views #{:refresh :card-mutations}}
      :refetch-biblio  {:label "Refetch bibliography" :class :mutation :palette-hidden true

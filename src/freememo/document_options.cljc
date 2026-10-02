@@ -1,18 +1,26 @@
 (ns freememo.document-options
-  "\"Document options\" — per-content processing preferences (Forms5).
-   PDF: quick-text-extraction Style (Client = PDF.js / Remote = PDFBox) and a
-   per-item Custom Prompt. Other kinds: only the Custom Prompt. The per-document
-   OCR and card-generation model pickers were removed on 2026-09-23: the AI level,
-   or the user's own Advanced setting, decides the model for every document.
-   Style persists per-PDF (keyed by root-topic-id); the Custom Prompt persists
-   per-item (keyed by item-topic-id) via settings/save-custom-prompt and is appended
-   to the effective system prompt at card-generation time, inherited nearest-first
-   down the topic tree. Style persists via copy-text/save-style!* (bumps
-   :settings-refresh so Copy-text re-reads)."
+  "\"Document options\" — a sheet of per-document and per-item settings that
+   save as they change (plans/document-options-autosave-sheet.md).
+
+   Four groups: Review (priority, learning queue), Card generation (approved
+   facts, learning goal, custom prompt), Text extraction (PDF only) and
+   Bibliography. Every field is a Forms5 field, or forms-ext/Select!, whose
+   edit reaches ONE service in DocumentOptionsBody. The service persists the
+   edit through apply-edit!* and spends its token.
+
+   Closing is a request. Done, Escape and a backdrop click set
+   !close-requested, and the modal closes once no edit is in flight, so the
+   frame that holds a save is never torn down under it. A failed save drops
+   the request and keeps the modal open on the error.
+
+   The viewer mounts the modal in DocumentToolbars, outside the content
+   toolbar, whose collapse tiers hide every .icon-label inside it. The library
+   row mounts its own copy in <body>."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.forms-ext :as forms-ext]
    [freememo.icons :as icons]
    [freememo.copy-text :as copy]
    [freememo.modal-shell :as modal]
@@ -23,125 +31,122 @@
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.anki-sync-helpers :as anki-helpers])
+   #?(:clj [freememo.bibliography-form :as bibform])
    #?(:clj [freememo.settings :as settings])))
 
 (def ^:private style-options [["ask"    "Ask every time (compare A vs B)"]
                               ["client" "Client (PDF.js, in-browser)"]
                               ["remote" "Remote (PDFBox, server)"]])
 
-;; A1-fallback: Forms5 has no tracked select.
-(e/defn StyleSelect
-  "A1-fallback select (Forms5 has no tracked select). Atom is the truth; the
-   Form's :Parse reads (e/watch !style)."
-  [!style]
-  (let [current (e/watch !style)]
-    (dom/div
-      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-        (dom/text "Quick text extraction"))
-      (dom/select
-        (dom/props {:class "input" :style {:width "100%"}})
-        (dom/On "change" (fn [e] (reset! !style (-> e .-target .-value))) nil)
-        (e/for [[v label] (e/diff-by first style-options)]
-          (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
-    (e/amb)))
-
-(e/defn DocLearningGoalField
-  "Per-document learning goal (root-topic-id): the learner's reason for studying
-   this document. Grounds the Socratic assistant's questions and card generation.
-   Document-scoped, autosaves on blur (textarea 'change'),
-   so it sits outside the PDF/non-PDF Forms. Blank = no goal."
-  [user-id root-topic-id]
-  (e/client
-    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          current (e/server (do settings-refresh (e/Offload #(settings/get-learning-goal user-id root-topic-id))))
-          !goal (atom (e/snapshot (or current "")))
-          goal (e/watch !goal)]
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-          (dom/text "Learning goal"))
-        (dom/textarea
-          (dom/props {:class "input"
-                      :style {:width "100%" :min-height "72px" :resize "vertical"}
-                      :maxlength 2000
-                      :placeholder "Why are you studying this? Grounds the assistant's questions and card generation."
-                      :value goal})
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !goal change-event))
-            (when t
-              (let [r (e/server (e/Offload #(settings/save-learning-goal user-id root-topic-id change-event)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))))))
-
-(e/defn DocUseFactsSelect
-  "Per-document fact usage override. An empty value uses the account default."
-  [user-id root-topic-id]
-  (e/client
-    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          current (e/server (do settings-refresh
-                            (e/Offload #(settings/get-use-facts-for-document
-                                         user-id root-topic-id))))
-          default? (e/server (e/Offload
-                              #(settings/get-use-facts-for-card-generation user-id)))
-          !value (atom (e/snapshot (case current true "true" false "false" "")))
-          value (e/watch !value)]
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label
-          (dom/props {:style {:display "block" :margin-bottom "4px"
-                              :font-weight "500" :font-size "13px"}})
-          (dom/text "Facts for card generation"))
-        (dom/select
-          (dom/props {:class "input" :style {:width "100%"} :value value})
-          (dom/option
-            (dom/props {:value "" :selected (= "" value)})
-            (dom/text (str "Use my default (" (if default? "On" "Off") ")")))
-          (dom/option (dom/props {:value "true" :selected (= "true" value)})
-            (dom/text "On"))
-          (dom/option (dom/props {:value "false" :selected (= "false" value)})
-            (dom/text "Off"))
-          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                [t _] (e/Token change-event)]
-            (dom/props {:disabled (some? t) :aria-busy (some? t)})
-            (when (some? change-event)
-              (reset! !value change-event))
-            (when t
-              (let [override (case change-event "true" true "false" false nil)
-                    r (e/server (e/Offload
-                                 #(settings/save-use-facts-for-document
-                                    user-id root-topic-id override)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))))
-        (dom/div (dom/props {:class "hint"})
-          (dom/text "Turn this off to generate from the document text, even when approved facts exist."))))))
-
-(e/defn CustomPromptField
-  "Editable per-item Custom Prompt, appended to the effective system prompt for
-   this item and everything under it. Tracked Forms5 field (Input! :as :textarea)
-   — contributes its edit into the surrounding Form!'s e/amb; :Parse reads it back
-   from the merged :prompt key. Blank = inherit the nearest ancestor's (or the
-   global) prompt."
-  [prompt]
-  (dom/div
-    (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-    (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-      (dom/text "Custom Prompt"))
-    (forms/Input! :prompt prompt :as :textarea
-      :class "input" :style {:width "100%" :min-height "72px" :resize "vertical"}
-      :maxlength 5000
-      :placeholder "Extra card-generation instructions for this item (and anything under it).")))
+(def ^:private use-facts-options [[""      "Default"]
+                                  ["true"  "On"]
+                                  ["false" "Off"]])
 
 ;; ---------------------------------------------------------------------------
-;; Bibliography section — item-scoped Edit / Refetch / Push-to-children
+;; Server
 ;; ---------------------------------------------------------------------------
 
-(defn push-biblio-to-descendants!*
-  "Server: push the item's effective bibliography into every descendant extract
-   (overwrite-all), then bump :refresh so citations re-read.
+(defn field-values*
+  "Server: the saved value of each autosaving field, as the string its control
+   shows, plus the account default that the facts hint names.
+   Pre:  targets is a document-options-targets/targets map.
+   Post: {:goal :prompt :use-facts :style :default-facts?}. :style is nil for a
+         non-PDF topic."
+  [user-id {:keys [root-id item-id]} pdf?]
+  #?(:clj {:goal (or (settings/get-learning-goal user-id root-id) "")
+           :prompt (or (settings/get-custom-prompt user-id item-id) "")
+           :use-facts (case (settings/get-use-facts-for-document user-id root-id)
+                        true "true"
+                        false "false"
+                        "")
+           :style (when pdf? (or (copy/get-extract-style* nil user-id root-id) "ask"))
+           :default-facts? (boolean (settings/get-use-facts-for-card-generation user-id))}
+     :cljs nil))
+
+#?(:clj
+   (defn- set-learning-queue!
+     "Dismiss or undismiss the document and its subtree, then bump the
+      command's channels. One plain fn, so the write precedes the bump."
+     [user-id root-id action]
+     (if (some? (if (= action :dismiss)
+                  (db/dismiss-topic! user-id root-id)
+                  (db/undismiss-topic! user-id root-id)))
+       (do (commands/bump! user-id action)
+           {:success true})
+       {:success false :error "Could not change the learning queue."})))
+
+(defn queue-dismissed?*
+  "Server: true when the document root is dismissed from the learning queue.
+   `_refresh` is a reactive dep, so the row re-reads after a dismiss bumps it."
+  [_refresh root-id]
+  #?(:clj (db/topic-dismissed? root-id)
+     :cljs false))
+
+#?(:clj (defonce ^:private edit-seq (java.util.concurrent.atomic.AtomicLong.)))
+
+(defn next-edit-seq!*
+  "Server: a number larger than every one returned before. The service takes
+   one each time an edit's value changes, in the order the values arrive, so
+   a later value always holds the larger number. `_v` is the reactive dep."
+  [_v]
+  #?(:clj (.incrementAndGet ^java.util.concurrent.atomic.AtomicLong edit-seq)
+     :cljs nil))
+
+;; One lock per field, and the number of the newest write that field took.
+;; Cancelling an e/Offload cannot stop a JDBC write that has started, so the
+;; save of older text can still be running when the save of newer text starts.
+#?(:clj (defonce ^:private edit-locks (java.util.concurrent.ConcurrentHashMap.)))
+#?(:clj (defonce ^:private !newest-written (atom {})))
+
+#?(:clj
+   (defn- write-if-newest!
+     "Run write! unless a newer edit of the same field has already written.
+      Pre:  edit-seq comes from next-edit-seq!*.
+      Post: the field's stored value is the one from the largest edit-seq that
+            wrote successfully, whatever order the threads reach the lock in.
+            A skipped write returns {:success true}: a newer value is stored."
+     [field-key edit-seq write!]
+     (locking (.computeIfAbsent ^java.util.concurrent.ConcurrentHashMap edit-locks field-key
+                (reify java.util.function.Function (apply [_ _] (Object.))))
+       (if (< edit-seq (get @!newest-written field-key 0))
+         {:success true}
+         (let [result (write!)]
+           (when (:success result)
+             (swap! !newest-written assoc field-key edit-seq))
+           result)))))
+
+(defn apply-edit!*
+  "Server: persist one edit from the modal.
+   Pre:  k is a field key the modal emits. v is the value its control holds:
+         a string for the text fields and selects, :dismiss or :undismiss for
+         :queue. edit-seq is next-edit-seq!* for this value.
+   Post: {:success true} | {:success false :error msg}. Of two edits of one
+         field, the one with the larger edit-seq is the one stored."
+  [user-id {:keys [root-id item-id]} k v edit-seq]
+  #?(:clj (write-if-newest! [user-id k (if (= k :prompt) item-id root-id)] edit-seq
+            (fn []
+              (case k
+                :goal      (settings/save-learning-goal user-id root-id v)
+                :prompt    (settings/save-custom-prompt user-id item-id v)
+                :use-facts (settings/save-use-facts-for-document user-id root-id
+                             (case v "true" true "false" false nil))
+                :style     (copy/save-style!* user-id root-id v)
+                :queue     (set-learning-queue! user-id root-id v)
+                {:success false :error (str "Unknown field " k)})))
+     :cljs nil))
+
+(defn citation-line*
+  "Server: the Bibliography row's citation, or nil when the topic resolves to
+   no source. `_refresh` re-reads it after a bibliography edit.
+   Post: {:text citation :own? true when the topic owns the source} | nil."
+  [_refresh user-id bib-id]
+  #?(:clj (when-let [text (bibform/get-topic-citation* nil user-id bib-id)]
+            {:text text :own? (bib-btn/has-source?* nil user-id bib-id)})
+     :cljs nil))
+
+(defn copy-biblio-to-extracts!*
+  "Server: copy the item's effective bibliography into every descendant extract
+   (overwrite-all), then bump :push-biblio.
    Pre:  user-id, topic-id non-nil.
    Post: {:ok true :count n} | {:ok false :error kw}.
 
@@ -159,19 +164,144 @@
             r)
      :cljs nil))
 
-(defn has-effective-source?*
-  "Server: true iff the topic resolves to any bibliography source (own or
-   inherited). `_refresh` is a reactive dep so the gate re-reads after edits."
-  [_refresh user-id topic-id]
-  #?(:clj (boolean (and user-id topic-id (db/resolve-effective-source-id topic-id)))
-     :cljs false))
+;; ---------------------------------------------------------------------------
+;; Client
+;; ---------------------------------------------------------------------------
 
-(e/defn PushToChildrenButton
+(defn settle-edit!
+  "Spend an edit's token on the server's result. On success the saved value
+   becomes the field's value, so the field does not revert on blur. On failure
+   the error shows under the field and the close request is dropped.
+   One plain fn, so the atoms change before the token spends."
+  [t k v result !values !errors !saved !close-requested]
+  (if (:success result)
+    (do (swap! !values assoc k v)
+        (swap! !errors dissoc k)
+        (swap! !saved conj k)
+        (t))
+    (let [msg (or (:error result) "Could not save.")]
+      (swap! !errors assoc k msg)
+      (swap! !saved disj k)
+      (reset! !close-requested false)
+      (t msg))))
+
+(defn- field-id [k] (str "doc-options-" (name k)))
+
+(e/defn GroupHeading [title]
+  (dom/div (dom/props {:class "settings-group__heading"})
+    (dom/h4 (dom/props {:class "settings-group__title"}) (dom/text title))))
+
+(e/defn RowText
+  "The left side of a row: label, hint, and the field's error when it has one."
+  [label hint for-id error]
+  (dom/div (dom/props {:class "setting-row__text"})
+    (if for-id
+      (dom/label (dom/props {:class "label" :for for-id}) (dom/text label))
+      (dom/div (dom/props {:class "label"}) (dom/text label)))
+    (dom/div (dom/props {:class "hint" :id (when for-id (str for-id "-hint"))})
+      (dom/text hint))
+    (when error
+      (dom/div (dom/props {:class "hint doc-options__error" :role "alert"})
+        (dom/text error)))))
+
+(e/defn QueueRow
+  "Learning queue membership of the whole document. Returns the Dismiss or
+   Undismiss button's edit, {:queue :dismiss|:undismiss}."
+  [user-id root-id error]
+  (e/client
+    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+          dismissed? (e/server (e/Offload #(queue-dismissed?* refresh root-id)))]
+      (dom/div (dom/props {:class "setting-row"})
+        (RowText "Learning queue"
+          (if dismissed?
+            "Dismissed. Its extracts are out of the queue too."
+            "In the learning queue.")
+          nil error)
+        (dom/div (dom/props {:class "setting-row__control"})
+          (forms/Button! {:queue (if dismissed? :undismiss :dismiss)}
+            :label (if dismissed? "Undismiss" "Dismiss")
+            :class "btn btn-sm btn-secondary"))))))
+
+(e/defn ReviewGroup [user-id root-id review-id viewer? errors]
+  (e/client
+    (dom/section (dom/props {:class "settings-group"})
+      (GroupHeading "Review")
+      ;; The stepper saves each step itself (NumberStepper's Save); its writes
+      ;; do not pass through the service.
+      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+        (dom/div (dom/props {:class "setting-row"})
+          (RowText "Priority" "0 comes first, 100 last." nil nil)
+          (dom/div (dom/props {:class "setting-row__control"})
+            (PriorityControl user-id review-id
+              (e/server (e/Offload #(get-topic-priority* refresh review-id)))))))
+      ;; The library row menu has its own Dismiss item.
+      (if viewer? (QueueRow user-id root-id (:queue errors)) (e/amb)))))
+
+(e/defn FieldStatus [saving? saved? error]
+  (dom/div (dom/props {:class (if error
+                                "doc-options__status doc-options__error"
+                                "doc-options__status")
+                       :aria-live "polite"})
+    (dom/text (cond error error
+                    saving? "Saving…"
+                    saved? "Saved"
+                    :else ""))))
+
+(e/defn TextRow
+  "A stacked textarea row. Returns the Input!'s edit."
+  [k label hint maxlength v saved? error]
+  (let [id (field-id k)]
+    (dom/div (dom/props {:class "setting-row setting-row--stacked"})
+      (dom/label (dom/props {:class "label" :for id}) (dom/text label))
+      (dom/div (dom/props {:class "hint" :id (str id "-hint")}) (dom/text hint))
+      (let [edit (forms/Input! k v :as :textarea
+                   :id id :class "input" :rows 3 :maxlength maxlength
+                   :aria-describedby (str id "-hint"))]
+        (FieldStatus (pos? (e/Count edit)) saved? error)
+        edit))))
+
+(e/defn SelectRow
+  "A label-left, select-right row. Returns the Select!'s edit."
+  [k label hint options v error]
+  (let [id (field-id k)]
+    (dom/div (dom/props {:class "setting-row"})
+      (RowText label hint id error)
+      (dom/div (dom/props {:class "setting-row__control"})
+        (forms-ext/Select! k v options
+          :id id :class "input" :aria-describedby (str id "-hint"))))))
+
+(e/defn CardGenerationGroup [values saved errors]
+  (dom/section (dom/props {:class "settings-group"})
+    (GroupHeading "Card generation")
+    (e/amb
+      (SelectRow :use-facts "Use approved facts"
+        (str "Default follows your account setting, which is "
+          (if (:default-facts? values) "On" "Off") ".")
+        use-facts-options (:use-facts values) (:use-facts errors))
+      (TextRow :goal "Learning goal"
+        "Why you study this. The assistant and card generation use it. Applies to the whole document."
+        2000 (:goal values) (contains? saved :goal) (:goal errors))
+      (TextRow :prompt "Custom prompt"
+        "Extra card-generation instructions. Applies to this item and everything under it."
+        5000 (:prompt values) (contains? saved :prompt) (:prompt errors)))))
+
+(e/defn TextExtractionGroup [values errors]
+  (dom/section (dom/props {:class "settings-group"})
+    (GroupHeading "Text extraction")
+    (SelectRow :style "Quick text extraction"
+      "How Copy text reads this PDF. Applies to the whole document."
+      style-options (:style values) (:style errors))))
+
+(e/defn CopyToExtractsButton
   "Copy this item's effective bibliography into every descendant extract
    (overwrite-all), after a confirm. Disabled when the item has no effective
    source or while a roundtrip is in flight; flashes green on success, shows
-   the error text on failure. Mirrors BibliographyButton's token pattern."
-  [user-id bib-topic-id enabled?]
+   the error text on failure.
+
+   Its own token path, not the modal's service: forms/Button! creates the token
+   on the click itself, so it cannot ask the confirm question first
+   (plans/document-options-autosave-sheet.md 3.7.2)."
+  [user-id bib-id enabled?]
   (e/client
     (dom/button
       (let [!flash-success (atom false)
@@ -183,7 +313,6 @@
                           nil)
             [t ?error] (e/Token click-event)]
         (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                    :aria-label "Push bibliography to children"
                     :disabled (or (not enabled?) (some? t))
                     :aria-busy (some? t)
                     :style (when flash-success?
@@ -193,13 +322,13 @@
                               :transition "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease"})})
         (tooltip/Tooltip! "Copy this bibliography to all descendant extracts")
         (icons/Icon :download :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Push to children"))
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Copy to extracts"))
         (when ?error
           (dom/div
-            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px" :margin-top "4px"}})
+            (dom/props {:class "doc-options__error" :style {:font-size "11px" :margin-top "4px"}})
             (dom/text ?error)))
         (when t
-          (let [result (e/server (e/Offload #(push-biblio-to-descendants!* user-id bib-topic-id)))]
+          (let [result (e/server (e/Offload #(copy-biblio-to-extracts!* user-id bib-id)))]
             (when (some? result)
               (if (:ok result)
                 (do (e/on-unmount
@@ -209,203 +338,130 @@
                     (t))
                 (t (str "Failed: " (name (or (:error result) :error))))))))))))
 
-(e/defn BibliographySection
-  "Item-scoped bibliography ops. Edit opens the bibliography modal mounted in
-   TopicPage (closes this options modal first, avoiding modal stacking);
-   Refetch reuses BibliographyButton (own-source gate); Push-to-children copies
-   this item's bibliography down the subtree.
-   Pre: bib-topic-id is the item's bibliography target — for PDF pages this is
-   the document root, since pages own no bibliography."
-  [user-id bib-topic-id !open !show-bib show-edit?]
+(e/defn BibliographyGroup
+  "Citation line, then Edit (viewer only), Refetch and Copy to extracts. Edit
+   closes this modal and opens the bibliography modal mounted beside it.
+   Pre: bib-id is the item's bibliography owner — the root, for a PDF page."
+  [user-id bib-id !open !show-bib viewer?]
   (e/client
-    (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
-          has-source? (e/server (e/Offload #(bib-btn/has-source?* refresh user-id bib-topic-id)))
-          eff-source? (e/server (e/Offload #(has-effective-source?* refresh user-id bib-topic-id)))]
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label
-          (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-          (dom/text "Bibliography"))
-        (dom/div
-          (dom/props {:style {:display "flex" :flex-wrap "wrap" :gap "var(--sp-2)"}})
-          ;; Edit opens the bibliography modal mounted in the viewer (TopicPage);
-          ;; gated off on surfaces that don't mount it (e.g. the library tree).
-          (when show-edit?
+    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+          citation (e/server (e/Offload #(citation-line* refresh user-id bib-id)))]
+      (dom/section (dom/props {:class "settings-group"})
+        (GroupHeading "Bibliography")
+        (dom/p (dom/props {:class "doc-options__citation"})
+          (dom/text (cond (nil? citation) "No bibliography"
+                          (:own? citation) (:text citation)
+                          :else (str (:text citation) " (inherited)"))))
+        (dom/div (dom/props {:class "doc-options__actions"})
+          (when viewer?
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :type "button"})
-              (tooltip/Tooltip! "Edit bibliography" :aria? true)
+              (tooltip/Tooltip! "Edit bibliography")
               (icons/Icon :book-open :size 16)
               (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit"))
               (dom/On "click" (fn [_] (reset! !open false) (reset! !show-bib true)) nil)))
-          (bib-btn/BibliographyButton user-id bib-topic-id has-source? nil)
-          (PushToChildrenButton user-id bib-topic-id eff-source?))))))
+          (bib-btn/BibliographyButton user-id bib-id (boolean (:own? citation)) nil)
+          (CopyToExtractsButton user-id bib-id (some? citation)))
+        (e/amb)))))
 
-(e/defn DocumentOptionsDialog
-  "PDF: Forms5 Style select + per-item Custom Prompt + Submit.
-   Style is document-scoped (keyed by root-topic-id); the prompt is item-scoped
-   (keyed by item-topic-id), tracked via Input! and read back from the merged form
-   fields. A save that fails the prompt length check surfaces the error and leaves
-   the style untouched."
-  [user-id root-topic-id item-topic-id current-style current-prompt !open]
-  (let [!style (atom (e/snapshot (or current-style "ask")))
-        commits (forms/Form! {:prompt (or current-prompt "")}
-                  (e/fn Fields [{:keys [prompt]}]
-                    (e/amb
-                      (StyleSelect !style)
-                      (CustomPromptField prompt)
-                      (dom/div
-                        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-                        (e/amb
-                          (forms/SubmitButton! :label "Save" :class "btn btn-primary" :style {:order "1"})
-                          (dom/button
-                            (dom/props {:class "btn btn-secondary" :type "button"})
-                            (dom/text "Cancel")
-                            (dom/On "click" (fn [_] (reset! !open false)) nil))))))
-                  :Parse (e/fn [merged _tempid]
-                           [`SaveDocOptions {:style (e/watch !style)
-                                             :prompt (:prompt merged)}])
-                  :type :command
-                  :show-buttons false)]
-    (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [{:keys [style prompt]} (nth cmd 1)
-            r (e/server (e/Offload #(let [pr (settings/save-custom-prompt user-id item-topic-id prompt)]
-                                      (if-not (:success pr)
-                                        pr
-                                        (copy/save-style!* user-id root-topic-id style)))))]
-        (when (some? r)
-          (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
-
-(e/defn CustomPromptDialog
-  "Non-PDF: a Forms5 form with just the per-item Custom Prompt (tracked Input!)
-   + Save."
-  [user-id item-topic-id current-prompt !open]
-  (let [commits (forms/Form! {:prompt (or current-prompt "")}
-                  (e/fn Fields [{:keys [prompt]}]
-                    (e/amb
-                      (CustomPromptField prompt)
-                      (dom/div
-                        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-                        (e/amb
-                          (forms/SubmitButton! :label "Save" :class "btn btn-primary" :style {:order "1"})
-                          (dom/button
-                            (dom/props {:class "btn btn-secondary" :type "button"})
-                            (dom/text "Cancel")
-                            (dom/On "click" (fn [_] (reset! !open false)) nil))))))
-                  :Parse (e/fn [merged _tempid]
-                           [`SaveCustomPrompt {:prompt (:prompt merged)}])
-                  :type :command
-                  :show-buttons false)]
-    (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [{:keys [prompt]} (nth cmd 1)
-            r (e/server (e/Offload #(settings/save-custom-prompt user-id item-topic-id prompt)))]
-        (when (some? r)
-          (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
-
-(e/defn DismissButton
-  "Toggle Dismiss for the whole document (root-topic-id + its subtree): remove it
-   from / restore it to the Learning Queue. Reads the current state reactively so
-   the label flips after the roundtrip. The dismiss-vs-undismiss intent is
-   captured at click time so a mid-flight :refresh can't flip which mutation runs."
-  [user-id root-topic-id]
+(e/defn DocumentOptionsBody
+  "The groups, the footer and the edit service, for one set of targets.
+   Pre:  targets is a document-options-targets/targets map. `values` is
+         field-values* for those targets, read once at mount.
+   Post: every field's edit reaches the e/for at the end, which persists it
+         through apply-edit!* and spends its token through settle-edit!.
+   Invariant: the modal closes only while no edit is held (busy? false), so a
+         save in flight is never torn down."
+  [user-id targets pdf? values !open !show-bib viewer? !close-requested]
   (e/client
-    (let [refresh    (e/server (e/watch (us/get-atom user-id :refresh)))
-          dismissed? (e/server (do refresh (e/Offload #(db/topic-dismissed? root-topic-id))))
-          !click     (atom nil)
-          click      (e/watch !click)]
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-          (dom/text "Learning"))
+    (let [!values (atom values)
+          values (e/watch !values)
+          !errors (atom {})
+          errors (e/watch !errors)
+          !saved (atom #{})
+          saved (e/watch !saved)
+          close-requested? (e/watch !close-requested)
+          edits (e/amb
+                  (ReviewGroup user-id (:root-id targets) (:review-id targets) viewer? errors)
+                  (CardGenerationGroup values saved errors)
+                  (if pdf? (TextExtractionGroup values errors) (e/amb))
+                  (BibliographyGroup user-id (:bib-id targets) !open !show-bib viewer?))
+          busy? (pos? (e/Count edits))]
+      (dom/div (dom/props {:class "doc-options__footer"})
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                      :aria-label (if dismissed? "Undismiss" "Dismiss")})
-          (tooltip/Tooltip! (if dismissed?
-                              "Restore this document and its contents to the Learning Queue"
-                              "Remove this document and its contents from the Learning Queue"))
-          (icons/Icon (if dismissed? :rotate-ccw :x) :size 16)
-          (dom/span (dom/props {:class "icon-label"})
-            (dom/text (if dismissed? "Undismiss" "Dismiss")))
-          (dom/On "click" (fn [_] (reset! !click {:dismiss? (not dismissed?) :n (str (random-uuid))})) nil))
-        (let [[t _] (e/Token click)]
-          (when t
-            (let [to-dismiss? (:dismiss? click)]
-              (case (e/server (e/Offload #(do (if to-dismiss?
-                                                (db/dismiss-topic! user-id root-topic-id)
-                                                (db/undismiss-topic! user-id root-topic-id))
-                                              :ok)))
-                (case (e/server (commands/bump! user-id (if to-dismiss? :dismiss :undismiss)))
-                  (t))))))))))
+          (dom/props {:class "btn btn-primary" :type "button"
+                      :aria-busy (and close-requested? busy?)})
+          (dom/text "Done")
+          (dom/On "click" (fn [_] (reset! !close-requested true)) nil)))
+      (when (and close-requested? (not busy?))
+        (reset! !open false))
+      ;; The service. A button's command is snapshotted at the click: the bump
+      ;; that follows a dismiss flips the button's command before the token
+      ;; spends. A text field's value is not, because typing during a save
+      ;; must reach the save that follows.
+      ;;
+      ;; Input! keeps one token while the user types, so `v` can change while
+      ;; a save is in flight, and the result of the older save can arrive after
+      ;; it. That result must not spend the token: the spend would tear down
+      ;; the save of the newer value, and the database would keep the older
+      ;; one. Each result names the value it saved, and only the result for
+      ;; the current `v` settles the edit. The save of the older value can
+      ;; still COMMIT after the newer one, since a cancel cannot stop a
+      ;; started JDBC write; the edit-seq lets apply-edit!* drop that write.
+      (e/for [[t edit] (e/diff-by first (e/as-vec edits))]
+        (let [[k v] (first edit)
+              v (if (= k :queue) (e/snapshot v) v)
+              result (e/server
+                       (let [edit-seq (next-edit-seq!* v)]
+                         (e/Offload #(assoc (apply-edit!* user-id targets k v edit-seq)
+                                       :saved-value v))))]
+          (when (and (some? result) (= v (:saved-value result)))
+            (settle-edit! t k v result !values !errors !saved !close-requested)))))))
 
-(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !open !show-bib show-edit?]
+(e/defn DocumentOptionsModal
+  "The Document options dialog.
+   Pre:  targets is a document-options-targets/targets map. pdf? adds the Text
+         extraction group. viewer? adds Dismiss and Edit, which need the
+         viewer's bibliography modal (!show-bib) — the library row passes false
+         and nil.
+   Post: Done, Escape and a backdrop click request the close; !open goes false
+         once no save is in flight."
+  [user-id targets pdf? !open !show-bib viewer?]
   (e/client
-    (when (e/watch !open)
+    (let [!close-requested (atom false)
+          request-close! (fn [] (reset! !close-requested true))]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1"})
-        (modal/ModalEscape (fn [] (reset! !open false)) "Document options")
-        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (reset! !open false))) nil)
+        (modal/ModalEscape request-close! "Document options")
+        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (request-close!))) nil)
         (dom/div
-          (dom/props {:class "modal-content"
-                      :style {:width "min(520px, 95vw)" :max-height "85vh" :overflow-y "auto"
-                              :display "flex" :flex-direction "column" :padding "16px 20px"}})
+          (dom/props {:class "modal-content modal-lg doc-options"})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-          (dom/h3 (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
-            (dom/text "Document options"))
+          (dom/h3 (dom/props {:class "doc-options__title"}) (dom/text "Document options"))
+          ;; Keyed on the targets: a navigation while the modal is open
+          ;; remounts the body, so no field shows or saves another topic's value.
+          (e/for-by identity [_k [targets]]
+            (let [values (e/server (e/Offload #(field-values* user-id targets pdf?)))]
+              (DocumentOptionsBody user-id targets pdf? (e/snapshot values)
+                !open !show-bib viewer? !close-requested))))))))
 
-          ;; Review priority (C5) — applies to all kinds; the stepper autosaves
-          ;; on change via update-priority!*, independent of the form's Save.
-          (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
-            (dom/div
-              (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-              (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-                (dom/text "Review priority"))
-              (PriorityControl user-id priority-topic-id
-                (e/server (e/Offload #(get-topic-priority* refresh priority-topic-id))))))
-
-          ;; Learning — Dismiss/Undismiss the whole document. Viewer only:
-          ;; show-edit? is true only from the viewer toolbar; the library row
-          ;; ⋯-menu has its own Dismiss item, so gating here avoids a duplicate.
-          (when show-edit?
-            (DismissButton user-id root-topic-id))
-
-          ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
-          (BibliographySection user-id bib-topic-id !open !show-bib show-edit?)
-
-          ;; Fact-aware generation — document-scoped override of the account default.
-          (DocUseFactsSelect user-id root-topic-id)
-
-          ;; Learning goal — document-scoped (root-topic-id); grounds the
-          ;; assistant and card generation.
-          (DocLearningGoalField user-id root-topic-id)
-
-          (if is-pdf?
-            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  current (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id root-topic-id)))
-                  current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]
-              (DocumentOptionsDialog user-id root-topic-id item-topic-id current current-prompt !open))
-            ;; non-PDF: per-item Custom Prompt only, in its own Forms5 form.
-            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]
-              (CustomPromptDialog user-id item-topic-id current-prompt !open))))))))
-
-;; item-topic-id — the topic the Custom Prompt attaches to: the viewed page/extract
-;;                 in the toolbar, the row's id in the library. Distinct from
-;;                 root-topic-id (document-scoped style/OCR); equals the enqueue
-;;                 :topic-id so the edited prompt is the one generation resolves.
-;; show-edit?    — render BibliographySection's Edit button (needs the viewer's
-;;                 bibliography modal); false on surfaces without it.
-;; trigger-class — CSS class for the trigger button; lets a caller (e.g. the
-;;                 library row menu) restyle it as a dropdown row. Defaults to
-;;                 the toolbar's secondary-button look.
-(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !show-bib show-edit? trigger-class]
+(e/defn DocumentOptionsTrigger
+  "The button that opens Document options by setting `!open`.
+   class-name restyles it (the library row menu passes a menu-item class);
+   nil gives the toolbar's secondary button. on-open! (nil-able) runs first,
+   for a caller that closes its own menu."
+  [!open class-name on-open!]
   (e/client
-    (let [!open (atom false)]
-      (dom/button
-        (dom/props {:class (or trigger-class "btn btn-sm btn-secondary")
-                    :aria-label "Document options"})
-        (tooltip/Tooltip! "Per-document options")
-        (icons/Icon :settings :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
-        ;; stop propagation so a click doesn't reach an ancestor row handler
-        ;; (the library tree row navigates on click); inert in the toolbar.
-        (dom/On "click" (fn [e] (.stopPropagation e) (reset! !open true)) nil))
-      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !open !show-bib show-edit?))))
+    (dom/button
+      (dom/props {:class (or class-name "btn btn-sm btn-secondary") :type "button"
+                  :aria-label "Document options"})
+      (tooltip/Tooltip! "Per-document options")
+      (icons/Icon :settings :size 16)
+      (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
+      ;; stop propagation so a click doesn't reach an ancestor row handler
+      ;; (the library tree row navigates on click); inert in the toolbar.
+      (dom/On "click" (fn [e]
+                        (.stopPropagation e)
+                        (when on-open! (on-open!))
+                        (reset! !open true))
+        nil))))

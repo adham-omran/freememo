@@ -15,7 +15,8 @@
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
-   [freememo.document-options :refer [DocumentOptionsButton]]
+   [freememo.document-options :refer [DocumentOptionsTrigger]]
+   [freememo.document-options-targets :as doc-options-targets]
    [freememo.transcribe-button :refer [TranscribeButton]]
    [freememo.jump-to-source-button :refer [JumpToSourcePageButton]]
    #?(:clj [freememo.settings :as user-settings])
@@ -49,8 +50,7 @@
    DocumentMeta, Add-new/Export/Pull/Push/Delete). Split out of ContentToolbar
    per the JVM 64KB method-limit convention (§7.4); always mounted (display via
    CSS/.overflow-open) so its e/Token handlers stay live."
-  [user-id biblio-target-id is-pdf? root-topic-id topic-id review-topic-id
-   !show-bib unsynced-count extract-status !overflow-open]
+  [biblio-target-id is-pdf? unsynced-count extract-status !overflow-open]
   (e/client
     (dom/div (dom/props {:class "toolbar-overflow-panel"})
 
@@ -66,11 +66,12 @@
       ;; Bibliography (Refetch) proxy removed — Refetch folded into the
       ;; Edit-Bibliography modal (C4).
 
-      ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
-      ;; Hosts the Priority field (C5), so it targets review-topic-id.
+      ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+). It only
+      ;; opens the modal, which DocumentToolbars mounts outside this toolbar.
       (dom/div
         (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-        (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
+        (DocumentOptionsTrigger dctx/!doc-options-open nil
+          (fn [] (reset! !overflow-open false))))
 
       (when (and dctx/focus-available? (not is-pdf?))
         (dom/button
@@ -163,7 +164,6 @@
           extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
           citation dctx/citation page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
           reading-mode? dctx/reading-mode?
-          !show-bib dctx/!show-bib
           ;; Unsynced card count. The refresh sum is built on the server, as in
           ;; ContentCardTable, for the reason given there.
           unsynced-count (e/server
@@ -171,16 +171,12 @@
                                        (e/watch (us/get-atom user-id :sync-mutations))
                                        (e/watch (us/get-atom user-id :card-mutations)))]
                              (helpers/get-unsynced-count* rev topic-id)))
-          ;; biblio-target-id: the item that OWNS the bibliography. Extracts and
-          ;; web/epub topics own theirs; PDF pages own none, so they resolve to
-          ;; the document root. Feeds the citation display and the item-scoped
-          ;; Edit/Refetch/Push in Document Options. Server fns resolve the
-          ;; effective source (own, else nearest ancestor) from this id.
-          biblio-target-id (if (= context-mode :page) (or root-topic-id topic-id) topic-id)
-          ;; Review-unit topic: PDF root for pages, the topic itself for
-          ;; extracts — the entity Priority/History act on. Document Options
-          ;; hosts the Priority field (C5); the inline stepper is gone.
-          review-topic-id (if extract-status topic-id (or root-topic-id topic-id))
+          ;; biblio-target-id: the item that OWNS the bibliography — the rule
+          ;; lives in document-options-targets, shared with the Document
+          ;; options mount. Feeds the citation display.
+          biblio-target-id (:bib-id (doc-options-targets/targets
+                                      {:context-mode context-mode :extract-status extract-status
+                                       :root-topic-id root-topic-id :topic-id topic-id}))
           ;; PDF (root or page) → :page context; extract/web/epub → :extract.
           ;; Document-options shows the extraction-style select only for PDFs.
           is-pdf? (= context-mode :page)
@@ -260,8 +256,7 @@
           ;; Overflow panel — display:contents on desktop (items flow inline),
           ;; dropdown on mobile (toggled via .overflow-open on container).
           ;; Always mounted so settings e/Token handlers stay active.
-              (OverflowPanel user-id biblio-target-id is-pdf? root-topic-id topic-id review-topic-id
-                !show-bib unsynced-count extract-status !overflow-open)
+              (OverflowPanel biblio-target-id is-pdf? unsynced-count extract-status !overflow-open)
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:
           ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete
@@ -325,7 +320,7 @@
                   (TranscribeButton user-id topic-id enc-key))
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
-                (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
+                (DocumentOptionsTrigger dctx/!doc-options-open nil nil))
 
               (when (and dctx/focus-available? (not is-pdf?))
                 (FocusReaderToggle "toolbar-collapse-bib"))

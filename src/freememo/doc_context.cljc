@@ -119,6 +119,7 @@
 (e/declare left-pct)
 (e/declare transcript-pct)
 (e/declare show-bib?)
+(e/declare doc-options-open?)
 (e/declare scan-dpi)
 (e/declare scanning-pages)
 (e/declare ocr-errors)
@@ -151,6 +152,8 @@
 
 ;; ── Client atoms (the atom refs themselves, for child mutation) ────────────
 (e/declare !show-bib)
+;; Document options modal, mounted in DocumentToolbars; the toolbar triggers set it.
+(e/declare !doc-options-open)
 (e/declare !current-page)
 (e/declare !total)
 (e/declare !nav-target)

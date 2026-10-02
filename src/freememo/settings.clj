@@ -742,12 +742,21 @@
 (defn get-extract-style [user-id doc-id]
   (db/get-setting user-id (str "extract_style_" doc-id)))
 
+;; Document options saves its fields as the user types. Each keystroke during a
+;; save restarts that save's e/Offload, which interrupts the thread. The JDBC
+;; pool then throws, and Hikari sets the interrupt flag again before it does.
+(defn- cancelled?
+  "True when an e/Offload cancelled the save running on this thread. A
+   cancelled save is not a failure, so the save fns below do not log it."
+  []
+  (.isInterrupted (Thread/currentThread)))
+
 (defn save-extract-style [user-id doc-id style]
   (try
     (db/set-setting user-id (str "extract_style_" doc-id) style)
     {:success true}
     (catch Exception e
-      (tel/error! {:id ::save-extract-style} e)
+      (when-not (cancelled?) (tel/error! {:id ::save-extract-style} e))
       {:success false :error "Failed to save extraction style"})))
 
 ;; Per-document model overrides (card_model_<root>, assistant_model_<root>,
@@ -776,7 +785,7 @@
         (db/set-setting user-id (str "goal_" root-topic-id) v)
         {:success true}
         (catch Exception e
-          (tel/error! {:id ::save-learning-goal} e)
+          (when-not (cancelled?) (tel/error! {:id ::save-learning-goal} e))
           {:success false :error "Failed to save learning goal"})))))
 
 (defn get-use-facts-for-document
@@ -795,7 +804,7 @@
       (case value true "true" false "false" ""))
     {:success true}
     (catch Exception e
-      (tel/error! {:id ::save-use-facts-for-document} e)
+      (when-not (cancelled?) (tel/error! {:id ::save-use-facts-for-document} e))
       {:success false :error "Failed to save the document fact usage setting"})))
 
 (defn effective-use-facts-for-card-generation
@@ -1701,10 +1710,10 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
     (catch clojure.lang.ExceptionInfo e
       (if (input/length-error? (ex-data e))
         {:success false :error (.getMessage e)}
-        (do (tel/error! {:id ::save-custom-prompt} e)
+        (do (when-not (cancelled?) (tel/error! {:id ::save-custom-prompt} e))
             {:success false :error "Failed to save custom prompt"})))
     (catch Exception e
-      (tel/error! {:id ::save-custom-prompt} e)
+      (when-not (cancelled?) (tel/error! {:id ::save-custom-prompt} e))
       {:success false :error "Failed to save custom prompt"})))
 
 (defn get-effective-system-prompt
