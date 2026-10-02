@@ -128,6 +128,26 @@
           [{:citation_key "E1" :document_topic_id 7 :page_number 3
             :display_label "document-level evidence"}]))))
 
+(deftest a-token-with-several-keys-renders-a-link-per-key
+  (let [evidence [{:citation_key "E274" :document_topic_id 7 :page_number 3
+                   :display_label "block 4"}
+                  {:citation_key "E361" :document_topic_id 7 :page_number 5
+                   :display_label "block 9"}]]
+    (is (= "Claim [block 4](/viewer/topic/7/3); [block 9](/viewer/topic/7/5)."
+          (assistant/render-evidence-citations
+            "Claim [evidence:E274, E361]." evidence)))
+    (is (= "Claim [block 9](/viewer/topic/7/5)."
+          (assistant/render-evidence-citations
+            "Claim [evidence:E9; evidence:E361]." evidence)))
+    (testing "the transcript keeps the rows of every key in the token"
+      (is (= #{"E274" "E361"}
+            (set (map :citation_key
+                   (:assistant_run/evidence
+                    (assistant/transcript-message-view
+                      {:assistant_messages/role "user"
+                       :assistant_messages/content "[evidence:E274, E361]"
+                       :assistant_run/evidence evidence})))))))))
+
 (deftest add-card-draft-transitions-keep-the-raw-fields
   (let [!kind (atom "basic")
         !primary (atom "Question")

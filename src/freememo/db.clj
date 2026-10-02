@@ -3497,8 +3497,11 @@
 
 (defn get-cited-assistant-evidence-for-chat
   "The retained evidence of an owned chat that its answers cite, ordered by run
-   and insertion. A row is cited when its run's response text holds the token
-   `[evidence:<key>]`, the form `assistant/evidence-token-pattern` matches.
+   and insertion. A row is cited when its key is in an evidence token of its
+   run's response text, such as `[evidence:E1]` or `[evidence:E1, E2]`. These
+   are the forms `assistant/evidence-token-pattern` matches. A `strpos` for
+   `[evidence:<key>]` missed every key of a grouped token, so those citations
+   rendered as raw text.
 
    A run retains every block it showed the model, and for a repo file that is
    the whole file: about 3000 rows and 700 KB for a 240 KB Markdown file. An
@@ -3511,9 +3514,12 @@
        "JOIN assistant_runs r ON r.id = e.run_id "
        "JOIN assistant_chats c ON c.id = r.chat_id "
        "WHERE c.user_id = ? AND c.id = ? "
-       "AND strpos(r.response_text, '[evidence:' || e.citation_key || ']') > 0 "
+       "AND strpos(r.response_text, e.citation_key) > 0 "
+       "AND r.response_text ~ (? || e.citation_key || ?) "
        "ORDER BY r.id, e.id")
-     user-id chat-id]
+     user-id chat-id
+     "\\[evidence:[^]]*(?<![A-Za-z0-9_-])"
+     "(?![A-Za-z0-9_-])[^]]*\\]"]
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn get-assistant-runs-for-chat
