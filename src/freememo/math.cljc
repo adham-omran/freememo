@@ -59,6 +59,28 @@
   [tex]
   (str "\\(" tex "\\)"))
 
+(defn katex->tex!
+  "Post: each typeset formula under `holder` is its TeX again, as `\\(…\\)`
+   text — the stored form (`freememo.math`), which is inline only. KaTeX keeps
+   the source in a MathML annotation. A formula cut by the selection edge has
+   none and is dropped rather than kept as KaTeX's duplicated render.
+
+   Read a selection through this, never through `Selection.toString()`: that
+   string carries KaTeX's MathML and its glyphs, one character per line
+   (measured in Chromium, plans/assistant-answer-selection-actions.md §2.1).
+   Pre: `holder` is a DETACHED element, such as a div holding `cloneContents`."
+  [holder]
+  #?(:cljs
+     (doseq [el (js/Array.from (.querySelectorAll holder ".katex-display, .katex"))]
+       (when (.contains holder el)
+         (let [tex (some-> (.querySelector el "annotation[encoding=\"application/x-tex\"]")
+                     .-textContent)]
+           (if tex
+             (.replaceWith el (.createTextNode js/document (wrap-tex tex)))
+             (.remove el)))))
+     :clj nil)
+  nil)
+
 (def ^:private display-region-re
   "One `\\[…\\]` display-math region. Group 1 is the TeX body."
   #"\\\[([\s\S]*?)\\\]")

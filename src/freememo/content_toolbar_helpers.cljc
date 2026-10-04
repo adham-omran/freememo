@@ -357,6 +357,15 @@
                   (cond
                     (:success result)
                     (do (commands/bump! uid :generate)
+                      ;; The assistant panel asks for this: its jobs start
+                      ;; far from the toolbar's spinner and card table.
+                      (when (:success-toast? item)
+                        (let [n (count (:ids result))]
+                          (toasts/push! uid
+                            {:level :success
+                             :message (if (zero? n)
+                                        "No new cards: they were all duplicates."
+                                        (str "Added " n " card" (when (not= 1 n) "s") "."))})))
                       (log/log-info (str "Card gen complete topic=" tid)))
 
                     ;; A cancelled run is not a failure. Recording it in `:error`

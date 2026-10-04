@@ -5,15 +5,28 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.assistant-annotations :as annotations]
+   [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-panel-data :as panel-data]
    [freememo.assistant-panel-rows :as rows]
    #?(:clj [freememo.assistant :as assistant])))
 
-(defn- submit-edit [draft-atom active-atom refs-atom mode-id web-search?]
+(defn- submit-edit
+  "The submit payload, or nil when there is nothing to send. Annotations make a
+   send with a blank draft valid: their message is the turn."
+  [draft-atom active-atom refs-atom annotation-items mode-id web-search?]
   (let [text (str/trim @draft-atom)]
-    (when-not (str/blank? text)
+    (when (or (not (str/blank? text)) (seq annotation-items))
       {:id (str (random-uuid)) :text text :chat @active-atom
-       :refs (mapv :id @refs-atom) :mode mode-id :web-search? web-search?})))
+       :refs (mapv :id @refs-atom) :mode mode-id :web-search? web-search?
+       :annotations (annotations/wire-annotations annotation-items)})))
+
+(defn- annotation-preview
+  "One line of an annotation for the composer's list."
+  [{quoted :quote note :note}]
+  (let [clip (fn [s n] (if (> (count s) n) (str (subs s 0 n) "…") s))]
+    (str "“" (clip quoted 80) "”"
+      (when-not (str/blank? note) (str " — " (clip note 80))))))
 
 (defn sync-composer-draft-value!
   "Set the visible composer value after a programmatic draft edit.
@@ -48,11 +61,46 @@
        0)
      :clj nil))
 
+(e/defn ReferencePickEffect
+  "Add the picked document as a reference chip and complete its `@` mention.
+   The server list stays server-sited: `reference-documents` arrives as a
+   positional argument, which does not transfer it, and the indexed lookup
+   transfers only the selected document.
+   Pre:  `picked` is an index into the mention menu, or nil."
+  [picked reference-documents reference-document-count draft
+   !refs !draft !mention-index !at-open? !picked]
+  (e/client
+    (let [[pt _] (e/Token picked)]
+      (when pt
+        (let [document (e/server
+                         (when (pos? reference-document-count)
+                           (nth reference-documents
+                             (mod picked reference-document-count) nil)))]
+          (case document
+            (if document
+              (let [next-draft (panel-data/draft-with-reference
+                                 draft (:title document))]
+                (case (swap! !refs
+                        (fn [references]
+                          (if (some #(= (:id document) (:id %)) references)
+                            references
+                            (conj references {:id (:id document)
+                                              :title (:title document)}))))
+                  (case (e/client (sync-composer-draft-value! next-draft))
+                    (case (reset! !draft next-draft)
+                      (case (reset! !mention-index 0)
+                        (case (reset! !at-open? false)
+                          (case (reset! !picked nil)
+                            (pt))))))))
+              (case (reset! !picked nil)
+                (pt)))))))))
+
 (e/defn AssistantComposer
   [{:keys [at-open? mention-query active-reference-index reference-document-count refs
-           sending? mode-entry web-search? web-search-supported? draft user-id active root-topic-id]}
+           sending? mode-entry web-search? web-search-supported? draft user-id active root-topic-id
+           annotations]}
    reference-documents !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
-   !pending-web-search? !error]
+   !pending-web-search? !error !annotations]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
@@ -85,6 +133,31 @@
                         (case (sync-composer-draft-value! next-draft)
                           (case (reset! !draft next-draft)
                             (remove-token))))))))))))
+      ;; Annotations waiting for the next send (plans/assistant-answer-
+      ;; selection-actions.md §5.4.4). Outside the Input! `e/amb` below, for
+      ;; the prop-loss reason recorded there. Removing one is browser state
+      ;; only, so it needs no token.
+      (when (seq annotations)
+        (dom/element "details"
+          (dom/props {:class "assistant-panel__annotations"})
+          (dom/element "summary"
+            (dom/text (str (count annotations) " annotation"
+                        (when (not= 1 (count annotations)) "s"))))
+          (dom/ul
+            (dom/props {:class "assistant-panel__annotation-list"})
+            (e/for-by :id [item annotations]
+              (dom/li
+                (dom/props {:class "assistant-panel__annotation" :dir "auto"})
+                (dom/span (dom/text (annotation-preview item)))
+                (dom/button
+                  (dom/props {:class "assistant-panel__ref-remove" :type "button"
+                              :title "Remove annotation"
+                              :aria-label "Remove annotation"})
+                  (dom/text "×")
+                  (dom/On "click"
+                    (fn [_] (swap! !annotations answer-selection/remove-annotation
+                              (:id item)))
+                    nil)))))))
       (dom/div
         (dom/props {:class "assistant-panel__composer"})
         (dom/On "input"
@@ -122,7 +195,8 @@
               (do
                 (.preventDefault event)
                 (when-let [edit
-                           (submit-edit !draft !active !refs (:id mode-entry) web-search?)]
+                           (submit-edit !draft !active !refs annotations
+                             (:id mode-entry) web-search?)]
                   (reset! !submit edit)))
 
               (= (.-key event) "@")
@@ -197,7 +271,8 @@
                              (if sending? "btn-secondary" "btn-primary"))
                     :label (if sending? "Stop" "↑")
                     :aria-label (if sending? "Stop response" "Send")
-                    :disabled (and (not sending?) (str/blank? draft)))))]
+                    :disabled (and (not sending?) (str/blank? draft)
+                                (empty? annotations)))))]
           (e/for [[command-token command] (e/diff-by first (e/as-vec commands))]
             (cond
               (map? command)
@@ -207,7 +282,8 @@
               (= [::submit] command)
               (case
                 (when-let [edit
-                           (submit-edit !draft !active !refs (:id mode-entry) web-search?)]
+                           (submit-edit !draft !active !refs annotations
+                             (:id mode-entry) web-search?)]
                   (reset! !submit edit))
                 (command-token))
 

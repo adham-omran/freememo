@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-panel-rows :as rows]
    [freememo.assistant-transcript-entry :as transcript-entry]
    #?(:clj [freememo.assistant :as assistant])
@@ -34,8 +35,9 @@
 
 (e/defn AssistantTranscript
   [{:keys [sending? echo active mode-entry web-search? active-run user-id page-topic-id
-           root-topic-id seeded?]}
-   !submit !active !refs !details-run !evidence !error !echo]
+           root-topic-id seeded? annotations]}
+   !submit !active !refs !details-run !evidence !error !echo
+   !annotations !selection-cards !side]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__transcript"})
@@ -68,6 +70,13 @@
         ;; It also stops a completed echo reappearing after a chat switch.
         (when (and echo echo-arrived?)
           (reset! !echo nil))
+        ;; The answer selection menu, one per transcript (plans/assistant-
+        ;; answer-selection-actions.md §5.1.4). Every argument is stable, so it
+        ;; installs once and tears down with the transcript.
+        (e/on-unmount
+          (answer-selection/install! dom/node !active !annotations
+            !selection-cards !side))
+        (answer-selection/paint! dom/node annotations)
         ;; The rows live in their OWN element, mounted always, and no branch
         ;; chooses between them and the empty state. They used to be the else
         ;; branch of an `if` on `(zero? message-count)`, directly inside this div.

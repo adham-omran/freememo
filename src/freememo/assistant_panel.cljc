@@ -19,15 +19,15 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-chat-history :as history]
    [freememo.assistant-composer :as composer]
-   [freememo.assistant-diagnostics :as diagnostics]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-data :as panel-data]
-   [freememo.assistant-evidence :as evidence]
+   [freememo.assistant-panel-overlays :as overlays]
+   [freememo.assistant-selection-cards :as selection-cards]
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
-   [freememo.assistant-run-details :as run-details]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn mention-query
@@ -52,7 +52,6 @@
           submit (e/watch !submit)
           [t _] (e/Token submit)
           !error (atom nil)
-          error (e/watch !error)
           !details-run (atom nil)
           details-run (e/watch !details-run)
           !evidence (atom nil)
@@ -80,6 +79,14 @@
           ;; stored preference through AssistantPanelData.
           !pending-web-search? (atom false)
           pending-web-search? (e/watch !pending-web-search?)
+          ;; The answer selection menu's three outputs
+          ;; (plans/assistant-answer-selection-actions.md §5). Annotations are
+          ;; tagged with their chat, so a chat switch hides them.
+          !annotations (atom answer-selection/empty-annotations)
+          annotation-state (e/watch !annotations)
+          annotations (answer-selection/visible-annotations annotation-state active)
+          !selection-cards (atom nil)
+          !side (atom nil)
           data (panel-data/AssistantPanelData
                  user-id root-topic-id active details-run pending-mode
                  pending-web-search?)
@@ -101,36 +108,16 @@
           web-search-supported? (:web-search-supported? data)]
 
       (submit-effect/SubmitEffect
-        {:submit submit :refs refs :user-id user-id
+        {:submit submit :refs refs :annotation-state annotation-state :user-id user-id
          :root-topic-id root-topic-id :page-topic-id page-topic-id}
-        t !draft !refs !echo !active !error)
+        t !draft !refs !echo !active !error !annotations)
 
-      ;; Add one selected document as a chip. The server list stays server-sited;
-      ;; indexed lookup transfers only the selected document.
-      (let [[pt _] (e/Token picked)]
-        (when pt
-          (let [document (e/server
-                           (when (pos? reference-document-count)
-                             (nth reference-documents
-                               (mod picked reference-document-count) nil)))]
-            (case document
-              (if document
-                (let [next-draft (panel-data/draft-with-reference
-                                   draft (:title document))]
-                  (case (swap! !refs
-                          (fn [references]
-                            (if (some #(= (:id document) (:id %)) references)
-                              references
-                              (conj references {:id (:id document)
-                                                :title (:title document)}))))
-                    (case (e/client (composer/sync-composer-draft-value! next-draft))
-                      (case (reset! !draft next-draft)
-                        (case (reset! !mention-index 0)
-                          (case (reset! !at-open? false)
-                            (case (reset! !picked nil)
-                              (pt))))))))
-                (case (reset! !picked nil)
-                  (pt)))))))
+      (selection-cards/SelectionCardsEffect user-id page-topic-id !selection-cards !error)
+
+      ;; Add one selected document as a chip. Its own e/defn, so this method
+      ;; stays under the 64KB bytecode limit.
+      (composer/ReferencePickEffect picked reference-documents reference-document-count
+        draft !refs !draft !mention-index !at-open? !picked)
 
       (dom/div
         (dom/props {:class "assistant-panel"})
@@ -142,16 +129,12 @@
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
            :page-topic-id page-topic-id :root-topic-id root-topic-id
-           :web-search? web-search? :seeded? seeded?}
-          !submit !active !refs !details-run !evidence !error !echo)
+           :web-search? web-search? :seeded? seeded? :annotations annotations}
+          !submit !active !refs !details-run !evidence !error !echo
+          !annotations !selection-cards !side)
 
-        (run-details/RunDetailsModal !details-run details user-id)
-        (evidence/EvidenceModal !evidence root-topic-id)
-
-        (when error
-          (dom/div
-            (dom/props {:class "assistant-panel__error"})
-            (dom/text error)))
+        (overlays/PanelOverlays details user-id root-topic-id page-topic-id
+          !details-run !evidence !side !error)
 
         (composer/AssistantComposer
           {:at-open? at-open?
@@ -166,31 +149,11 @@
            :draft draft
            :user-id user-id
            :active active
-           :root-topic-id root-topic-id}
+           :root-topic-id root-topic-id
+           :annotations annotations}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !pending-web-search? !error)
+          !pending-mode !pending-web-search? !error !annotations)
 
-        ;; Diagnostics LAST, and wrapping nothing. This used to be
-        ;; `(case (replace-state! …) (do … (dom/div …)))`, which put the whole
-        ;; panel inside a case branch keyed on a map that changes at exactly the
-        ;; two moments a run starts and settles. Re-selecting the branch remounts
-        ;; it, so both transitions tore down and rebuilt the panel: every
-        ;; (e/server …) read went cold at once — the transcript to zero rows and
-        ;; its empty-chat starters, the model select to zero options — while the
-        ;; atoms in this `let` survived and put the same chat back a round trip
-        ;; later. That was the blank on send and the blank on settle.
-        ;;
-        ;; A `case` is the right tool for SEQUENCING an effect before a token
-        ;; spend. It is the wrong tool for merely keeping one alive: this is a
-        ;; fire-and-forget write whose value nothing needs. As the last form of
-        ;; the body its value IS the body's value, so it cannot be skipped, and
-        ;; it gates no frame.
-        (e/on-unmount #(diagnostics/replace-state! {}))
-        (diagnostics/replace-state!
-          {:topic-id root-topic-id
-           :page-topic-id page-topic-id
-           :chat-id active
-           :run-uuid (:run_uuid active-run)
-           :run-kind (:kind active-run)
-           :run-status (:status active-run)
-           :render-phase (if sending? "streaming" "terminal")})))))
+        ;; Diagnostics LAST, and wrapping nothing: see PanelDiagnostics.
+        (overlays/PanelDiagnostics root-topic-id page-topic-id active active-run
+          sending?)))))

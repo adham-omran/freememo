@@ -11,6 +11,7 @@
    [clojure.string :as str]
    [freememo.openrouter :as openrouter]
    [freememo.settings :as settings]
+   [freememo.assistant-annotations :as annotations]
    [freememo.assistant-evidence :as evidence]
    [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
@@ -20,11 +21,13 @@
    [freememo.config :as config]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
+   [freememo.content-toolbar-helpers :as card-gen]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
    [freememo.repo-markdown :as repo-md]
    [freememo.text :as text]
    [freememo.toasts :as toasts]
+   [freememo.topic-kinds :as topic-kinds]
    [freememo.db :as db]
    [missionary.core :as m]
    [taoensso.telemere :as tel])
@@ -58,7 +61,7 @@
 (defn- bump-stream! [user-id]
   (commands/bump-channels! user-id #{:assistant-stream}))
 
-(declare start-compact-run!)
+(declare start-compact-run! transcript-message-view)
 
 ;; ── Context resolution ─────────────────────────────────────────────────────
 
@@ -194,6 +197,36 @@
     "Sources are supplied again for each request. "
     "An earlier answer can discuss text that is not supplied now. "
     "Its evidence keys then named other text, so never copy a key from an earlier answer."))
+
+(def ^:private annotation-instructions
+  ;; A system message in the request's tail, never part of the first system
+  ;; message: that one is inside the cached prefix, and changing it for one
+  ;; turn would miss the cache. Measured 2026-10-02 on Gemini 3.8 Flash: with
+  ;; this text the reply had one section per segment in 9 of 9 runs over the
+  ;; three modes, and in 0 of 6 without it. In the tail, 8 of 9 requests still
+  ;; read the cache. plans/assistant-answer-selection-actions.md §3.
+  (str "# Annotated segments\n\n"
+    "The user's latest message quotes numbered segments of your earlier answers. "
+    "A segment can carry a question.\n"
+    "Reply with one section for each segment, in the order given.\n"
+    "Start each section with a line that holds only its number and the quote, "
+    "for example **[1] \"…\"**.\n"
+    "In that section, answer the segment's question. "
+    "When a segment has no question, explain that segment.\n"
+    "This structure replaces the reply structure of your mode for this reply only. "
+    "Keep your mode's teaching approach inside each section."))
+
+(defn- side-instructions
+  "The system message that turns a request into a side question about `passage`.
+   It sits in the request's tail, after the shared head, for the reason given
+   on `annotation-instructions`."
+  [passage]
+  (str "# Side question\n\n"
+    "This is a side conversation, separate from the main chat. "
+    "The user selected this passage of your previous answer:\n"
+    "\"" passage "\"\n"
+    "Answer only the side question about that passage. Keep the answer short. "
+    "Do not continue the main lesson."))
 
 (defn- source-revision
   "Stable revision text for one retained source snapshot."
@@ -595,20 +628,22 @@
                                   :cache_control {:type "ephemeral"}}])))
     messages))
 
-(defn- answer-request
-  "Render the exact provider request for one new answer.
+(defn- request-head
+  "The messages every request about `chat` starts with, and the sources they show.
+
    A provider caches the start of a request that repeats the previous one, so
    the stable parts come first: instructions, facts, checkpoint, and the current
-   topic's sources. The transcript after the checkpoint follows, then this
-   turn's @ references and the new user turn. While the learner stays on one
-   page, the previous request is a prefix of this one, minus its references and
-   its user turn.
+   topic's sources. The transcript after the checkpoint follows. A main answer
+   and a side question both start with this head, so a side question reads the
+   cache the main chat wrote.
    Gemini caches only up to an explicit breakpoint. When `cache-breakpoint?`,
-   the last current-topic source turn carries one. Every system message comes
-   before it, because Gemini fixes its system instruction with the cache.
-   See plans/assistant-request-prefix-cache.md."
-  [user-id chat page-topic-id user-text ref-topic-ids model-fields web-search-supported?
-   cache-breakpoint?]
+   the last current-topic source turn carries one. Every system message here
+   comes before it, because Gemini fixes its system instruction with the cache.
+   See plans/assistant-request-prefix-cache.md.
+
+   Post: {:messages head :reference-messages refs :evidence sources}. The
+         reference turns are separate: they belong to one turn, not the head."
+  [user-id chat page-topic-id ref-topic-ids cache-breakpoint?]
   (let [chat-id (:assistant_chats/id chat)
         root-topic-id (:assistant_chats/root_topic_id chat)
         mode (modes/resolve-mode (:assistant_chats/mode chat))
@@ -623,24 +658,59 @@
         checkpoint-message (when checkpoint
                              {:role "system"
                               :content (str "# Conversation checkpoint\n\n"
-                                         (:summary checkpoint))})
-        messages (-> [{:role "system" :content system-content}]
-                   (cond-> facts-message (conj facts-message)
-                           checkpoint-message (conj checkpoint-message))
-                   (into (cond-> (:current-messages sources)
-                           cache-breakpoint? with-cache-breakpoint))
-                   (into (transcript-messages-after-checkpoint chat-id checkpoint))
-                   (into (:reference-messages sources))
-                   (conj {:role "user" :content user-text}))]
-    {:provider-request (cond-> (assoc model-fields
-                                 :stream true
-                                 :session_id (:assistant_chats/provider_session_id chat)
-                                 :messages messages)
-                         (and (:assistant_chats/web_search chat)
-                           web-search-supported?)
-                         (merge (openrouter/web-search-fields)))
-     :source-snapshot (:evidence sources)
+                                         (:summary checkpoint))})]
+    {:messages (-> [{:role "system" :content system-content}]
+                 (cond-> facts-message (conj facts-message)
+                         checkpoint-message (conj checkpoint-message))
+                 (into (cond-> (:current-messages sources)
+                         cache-breakpoint? with-cache-breakpoint))
+                 (into (transcript-messages-after-checkpoint chat-id checkpoint)))
+     :reference-messages (:reference-messages sources)
      :evidence (:evidence sources)}))
+
+(defn- answer-request
+  "Render the exact provider request for one new answer: `request-head`, then
+   this turn's @ references, the annotation instructions when the turn carries
+   annotations, and the new user turn. While the learner stays on one page, the
+   previous request is a prefix of this one, minus its tail."
+  ([user-id chat page-topic-id user-text ref-topic-ids model-fields
+    web-search-supported? cache-breakpoint?]
+   (answer-request user-id chat page-topic-id user-text ref-topic-ids model-fields
+     web-search-supported? cache-breakpoint? false))
+  ([user-id chat page-topic-id user-text ref-topic-ids model-fields
+    web-search-supported? cache-breakpoint? annotated?]
+   (let [head (request-head user-id chat page-topic-id ref-topic-ids cache-breakpoint?)
+         messages (-> (:messages head)
+                    (into (:reference-messages head))
+                    (cond-> annotated?
+                      (conj {:role "system" :content annotation-instructions}))
+                    (conj {:role "user" :content user-text}))]
+     {:provider-request (cond-> (assoc model-fields
+                                  :stream true
+                                  :session_id (:assistant_chats/provider_session_id chat)
+                                  :messages messages)
+                          (and (:assistant_chats/web_search chat)
+                            web-search-supported?)
+                          (merge (openrouter/web-search-fields)))
+      :source-snapshot (:evidence head)
+      :evidence (:evidence head)})))
+
+(defn- side-request
+  "Render the provider request for one side-question turn: `request-head`, the
+   side instructions about `passage`, then the side thread `turns`, whose last
+   turn is the new question. Web search stays off: a side question is about a
+   passage already on screen.
+   Pre:  `turns` is a non-empty vector of {:role :content}, ending with a user turn."
+  [user-id chat page-topic-id passage turns model-fields cache-breakpoint?]
+  (let [head (request-head user-id chat page-topic-id nil cache-breakpoint?)]
+    {:provider-request (assoc model-fields
+                         :stream true
+                         :session_id (:assistant_chats/provider_session_id chat)
+                         :messages (-> (:messages head)
+                                     (conj {:role "system"
+                                            :content (side-instructions passage)})
+                                     (into turns)))
+     :evidence (:evidence head)}))
 
 (defn citation-target
   "Relative viewer target for one retained evidence record."
@@ -1020,14 +1090,22 @@
 (defn start-answer-run!
   "Create and start one streamed answer in an owned chat.
 
-   Pre: user-text is non-blank. Post: {:ok true :run-uuid} after durable creation
-   and worker submission, or {:error}. The call does not wait for the provider.
-   Invariant: the database rejects a second active operation in the chat."
+   Pre: user-text is non-blank. `annotated?` is true exactly when user-text is
+   an `annotations/user-message`. Post: {:ok true :run-uuid} after durable
+   creation and worker submission, or {:error}. The call does not wait for the
+   provider. Invariant: the database rejects a second active operation in the chat."
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id nil nil nil nil))
+     client-id false))
+  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id annotated?]
+   (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
+     client-id nil nil nil nil annotated?))
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
     retry-of-run-uuid exact-request exact-evidence exact-model-id]
+   (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
+     client-id retry-of-run-uuid exact-request exact-evidence exact-model-id false))
+  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
+    retry-of-run-uuid exact-request exact-evidence exact-model-id annotated?]
    (let [chat (db/get-assistant-chat user-id chat-id)
          api-key (settings/get-openrouter-api-key user-id)]
      (cond
@@ -1051,7 +1129,8 @@
                               ref-topic-ids model-fields
                               (card-models/web-search-supported?
                                 (:id entry))
-                              (card-models/cache-breakpoint? run-model-id)))
+                              (card-models/cache-breakpoint? run-model-id)
+                              annotated?))
                  run-uuid (str (random-uuid))
                  created (db/create-assistant-answer-run!
                            chat-id user-text client-id
@@ -1106,26 +1185,60 @@
 
 (defn ensure-and-start-answer-run!
   "Start an answer in `chat-id`, or in a new chat when `chat-id` is nil.
-   See start-answer-run-in-new-chat! for the new-chat contract."
-  [user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text ref-topic-ids client-id]
-  (if chat-id
-    (assoc (start-answer-run! user-id chat-id page-topic-id user-text
-             ref-topic-ids client-id)
-      :chat-id chat-id)
-    (start-answer-run-in-new-chat! user-id root-topic-id page-topic-id mode-id
-      web-search? user-text ref-topic-ids client-id)))
+   See start-answer-run-in-new-chat! for the new-chat contract. `annotated?`
+   applies to an existing chat only: annotations point at its answers, so
+   `submit-chat-input!` never sends them without a chat."
+  ([user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text
+    ref-topic-ids client-id]
+   (ensure-and-start-answer-run! user-id root-topic-id page-topic-id chat-id mode-id
+     web-search? user-text ref-topic-ids client-id false))
+  ([user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text
+    ref-topic-ids client-id annotated?]
+   (if chat-id
+     (assoc (start-answer-run! user-id chat-id page-topic-id user-text
+              ref-topic-ids client-id annotated?)
+       :chat-id chat-id)
+     (start-answer-run-in-new-chat! user-id root-topic-id page-topic-id mode-id
+       web-search? user-text ref-topic-ids client-id))))
 
 (defn submit-chat-input!
   "Dispatch composer input at the assistant boundary.
-   `/compact` is an application command and never becomes a user message."
-  [user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text ref-topic-ids client-id]
-  (if (= "/compact" (str/trim user-text))
-    (if chat-id
-      (assoc (start-compact-run! user-id chat-id) :chat-id chat-id :command :compact)
-      {:error "Start a chat before compacting context." :chat-id nil :command :compact})
-    (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
-             chat-id mode-id web-search? user-text ref-topic-ids client-id)
-      :command :answer)))
+   `/compact` is an application command and never becomes a user message.
+
+   `annotation-list` is the composer's annotations as `annotations/wire-annotations`
+   gives them, or empty. With annotations, the stored and sent user turn is
+   `annotations/user-message` over them and `draft`, and `draft` may be blank.
+   Pre:  an annotation needs an answer to point at, so a non-empty list comes
+         with a `chat-id`.
+   Post: {:error} without a run when the list fails `annotations/problem`."
+  ([user-id root-topic-id page-topic-id chat-id mode-id web-search? draft ref-topic-ids
+    client-id]
+   (submit-chat-input! user-id root-topic-id page-topic-id chat-id mode-id web-search?
+     draft ref-topic-ids client-id []))
+  ([user-id root-topic-id page-topic-id chat-id mode-id web-search? draft ref-topic-ids
+    client-id annotation-list]
+   (let [annotation-list (annotations/wire-annotations annotation-list)
+         annotated? (boolean (seq annotation-list))]
+     (cond
+       (and (not annotated?) (= "/compact" (str/trim draft)))
+       (if chat-id
+         (assoc (start-compact-run! user-id chat-id) :chat-id chat-id :command :compact)
+         {:error "Start a chat before compacting context." :chat-id nil :command :compact})
+
+       (and annotated? (nil? chat-id))
+       {:error "Annotations need an open chat." :chat-id nil :command :answer}
+
+       (and annotated? (annotations/problem annotation-list))
+       {:error (annotations/problem annotation-list) :chat-id chat-id :command :answer}
+
+       :else
+       (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
+                chat-id mode-id web-search?
+                (if annotated?
+                  (annotations/user-message annotation-list draft)
+                  draft)
+                ref-topic-ids client-id annotated?)
+         :command :answer)))))
 
 (defn start-compact-run!
   "Start `/compact` as a separate paid run without adding a user message.
@@ -1301,6 +1414,265 @@
       (toasts/push! user-id {:level :error
                              :message (or (:error result) "Card capture failed.")}))
     result))
+
+;; ── Cards from assistant text ──────────────────────────────────────────────
+
+(defn- answer-context-text
+  "An answer's text as card-generation context: its evidence tokens removed,
+   because they name sources the card model never sees."
+  [answer]
+  (str/trim (str/replace (or answer "") evidence-token-pattern "")))
+
+(defn- escape-html [s]
+  (str/escape (or s "") {\& "&amp;" \< "&lt;" \> "&gt;" \" "&quot;"}))
+
+(defn- enqueue-assistant-cards!
+  "Queue one card job for text taken from the assistant, through the toolbar's
+   Generate queue and with the toolbar's settings: card type, count, use-context
+   and KG fact routing all behave as they do for a toolbar selection.
+
+   Pre:  `page-topic-id` is the topic the panel is open on. `content-html` is
+         the subject. `context-text` is what a toolbar selection's surrounding
+         page would be.
+   Post: {:ok true} after the job is queued, or {:error}. The cards land on
+         `page-topic-id`, with the root the toolbar would use, and a toast
+         reports the count. Progress and Cancel are the topic's Activity row."
+  [user-id page-topic-id content-html context-text]
+  (let [page (db/get-topic-for-user user-id page-topic-id)
+        root-id (or (db/get-root-topic-id page-topic-id) page-topic-id)
+        root-kind (:topics/kind (if (= root-id page-topic-id) page (db/get-topic root-id)))
+        content (cleaner/clean-html-fragment content-html)]
+    (cond
+      (nil? page) {:error "Topic not found."}
+      (str/blank? (text/strip-html (or content ""))) {:error "There is no text to make cards from."}
+      :else
+      (do (card-gen/enqueue-card-gen!
+            {:id (str (random-uuid))
+             :content content
+             :context (when (settings/get-context-enabled user-id) context-text)
+             :card-type (settings/get-card-type user-id)
+             :card-count (settings/get-card-count user-id)
+             :user-id user-id
+             :enc-key nil
+             :topic-id page-topic-id
+             :root-topic-id (or (topic-kinds/pdf-root-id (:topics/kind page) page-topic-id
+                                  root-kind root-id)
+                              root-id)
+             :pre-prompt nil
+             :pre-prompt-mode nil
+             :success-toast? true})
+        {:ok true}))))
+
+(defn selection->cards!
+  "Queue cards from text selected in one settled answer. The whole answer is the
+   context, as a toolbar selection's page is.
+   Pre:  `message-id` is an assistant message in a chat `user-id` owns.
+   Post: as `enqueue-assistant-cards!`."
+  [user-id page-topic-id message-id selection-html]
+  (if-let [answer (db/get-assistant-message user-id message-id)]
+    (enqueue-assistant-cards! user-id page-topic-id selection-html
+      (answer-context-text (:content answer)))
+    {:error "Answer not found."}))
+
+;; ── Side questions ─────────────────────────────────────────────────────────
+;;
+;; A side question is a thread about one passage of an answer. It lives in one
+;; atom that its floating panel's server frame owns, and nowhere else: it writes
+;; no assistant_runs or assistant_messages row and bumps no assistant channel.
+;; A run row would meet the chat's one-active-run index, turn on the main
+;; panel's Stop, and every per-user bump would re-read the main transcript.
+;; plans/assistant-answer-selection-actions.md §5.3.
+
+(defonce ^:private side-run-executor
+  ;; Its own pool, so open side questions cannot hold the threads main answers
+  ;; stream on.
+  (Executors/newFixedThreadPool 4))
+
+(defn new-side-thread
+  "The empty state of a side question about `passage`, a quote from the answer
+   `message-id`."
+  [passage message-id]
+  {:passage passage :message-id message-id :closed? false :turns []})
+
+(defn close-side-thread!
+  "Mark the thread closed. A run in flight drains for its cost, then writes
+   nothing more. Post: nil."
+  [!thread]
+  (swap! !thread assoc :closed? true)
+  nil)
+
+(defn- side-turn-streaming? [thread]
+  (= "streaming" (:status (peek (:turns thread)))))
+
+(defn- update-side-answer!
+  "Apply `f` to the thread's newest turn, the answer `answer-id`, unless the
+   thread is closed or that turn is no longer the newest."
+  [!thread answer-id f]
+  (swap! !thread
+    (fn [thread]
+      (let [last-index (dec (count (:turns thread)))]
+        (if (and (not (:closed? thread))
+              (= answer-id (get-in thread [:turns last-index :id])))
+          (update-in thread [:turns last-index] f)
+          thread)))))
+
+(defn- creation->evidence-row
+  "Evidence as `request-head` gives it, in the column shape `transcript-message-view`
+   and the evidence dialog read."
+  [source]
+  {:citation_key (:citation-key source)
+   :document_topic_id (:document-topic-id source)
+   :page_topic_id (:page-topic-id source)
+   :page_number (:page-number source)
+   :anchor (:anchor source)
+   :quoted_text (:quoted-text source)
+   :quoted_html (:quoted-html source)
+   :document_title (:document-title source)
+   :display_label (:display-label source)})
+
+(defn- execute-side-run!
+  "Drain one side-question stream into the thread.
+   Post: the answer turn is completed or failed, unless the thread closed first.
+   The run is charged once under :assistant.side either way."
+  [!thread user-id answer-id api-key model-id provider-request]
+  (let [text* (volatile! "")
+        metadata* (volatile! {})
+        last-publish-ns* (volatile! 0)
+        charge! (fn [metadata]
+                  (charge-run! user-id :assistant.side model-id metadata))
+        publish! (fn [force?]
+                   (let [now (System/nanoTime)]
+                     (when (or force? (> (- now (long @last-publish-ns*)) 100000000))
+                       (vreset! last-publish-ns* now)
+                       (let [text @text*]
+                         (update-side-answer! !thread answer-id #(assoc % :content text))))))]
+    (try
+      (let [result (openrouter/chat-completion-stream!
+                     api-key provider-request {:feature :assistant-side :user-id user-id}
+                     (fn [delta]
+                       (vswap! text* str delta)
+                       (when-not (:closed? @!thread) (publish! false)))
+                     (fn [metadata] (vswap! metadata* merge metadata)))
+            reported @metadata*
+            metadata (merge reported
+                       (when (and (:generation-id reported) (nil? (:cost-usd reported)))
+                         (poll-generation-metadata api-key (:generation-id reported) user-id)))
+            response (str/trim (or (:text result) @text*))]
+        (charge! metadata)
+        (update-side-answer! !thread answer-id
+          #(if (str/blank? response)
+             (assoc % :status "failed" :error "The model returned an empty response.")
+             (assoc % :status "completed" :content response)))
+        (tel/log! {:level :info :id ::side-run-terminal
+                   :data {:user-id user-id :model-id model-id
+                          :closed? (:closed? @!thread)
+                          :cached-tokens (:cached-tokens metadata)
+                          :cost-usd (:cost-usd metadata)}}
+          "Assistant side question reached a terminal state"))
+      (catch Throwable error
+        (let [known @metadata*]
+          (charge! (merge known
+                     (when (:generation-id known)
+                       (poll-generation-metadata api-key (:generation-id known) user-id)))))
+        (tel/error! {:id ::side-run :data {:user-id user-id :model-id model-id}} error)
+        (update-side-answer! !thread answer-id
+          #(assoc % :status "failed"
+             :error (or (ex-message error) "The side question failed.")))))))
+
+(defn- side-history
+  "The provider turns of the thread so far. Turns come in question and answer
+   pairs, and a pair whose answer did not complete is left out, so the request
+   never carries two user turns in a row."
+  [turns]
+  (into []
+    (comp (partition-all 2)
+      (filter (fn [[_ answer]] (= "completed" (:status answer))))
+      cat
+      (map #(select-keys % [:role :content])))
+    turns))
+
+(defn ask-side-question!
+  "Add `question` to the side thread and start its answer.
+
+   Pre:  `!thread` holds a `new-side-thread` value. `chat-id` is the chat the
+         passage came from.
+   Post: {:ok true} with a user turn and a streaming answer turn appended, or
+         {:error} and the thread unchanged. The call does not wait for the
+         provider."
+  [!thread user-id chat-id page-topic-id question]
+  (let [thread @!thread
+        question (str/trim (or question ""))
+        chat (db/get-assistant-chat user-id chat-id)
+        api-key (settings/get-openrouter-api-key user-id)]
+    (cond
+      (:closed? thread) {:error "This side question is closed."}
+      (str/blank? question) {:error "Type a question."}
+      (side-turn-streaming? thread) {:error "Wait for the answer to finish."}
+      (nil? chat) {:error "Chat not found."}
+      (str/blank? api-key) {:error "OpenRouter API key not configured."}
+      :else
+      (let [gate (credits/check-cost-billed-balance! user-id)]
+        (if-not (:ok gate)
+          {:error (:error gate)}
+          (let [entry (model-entry user-id (:assistant_chats/root_topic_id chat))
+                model-fields (openrouter/chat-completion-fields entry
+                               {:reasoning_effort (settings/get-assistant-reasoning user-id)})
+                turns (conj (side-history (:turns thread))
+                        {:role "user" :content question})
+                rendered (side-request user-id chat page-topic-id (:passage thread) turns
+                           model-fields (card-models/cache-breakpoint? (:id entry)))
+                answer-id (str (random-uuid))
+                evidence (mapv creation->evidence-row (:evidence rendered))]
+            (swap! !thread update :turns into
+              [{:id (str (random-uuid)) :role "user" :content question}
+               {:id answer-id :role "assistant" :content "" :status "streaming"
+                :evidence evidence}])
+            ((m/via side-run-executor
+               (execute-side-run! !thread user-id answer-id api-key (:id entry)
+                 (:provider-request rendered)))
+             (fn [_] nil)
+             (fn [error]
+               (tel/error! {:id ::side-run-executor :data {:user-id user-id}} error)))
+            {:ok true}))))))
+
+(defn side-thread-rows
+  "The side thread as transcript rows, so the panel renders a side answer
+   through the same view, citations and math as a main answer.
+   Post: a vector in turn order."
+  [thread]
+  (mapv (fn [{:keys [id role content status error evidence]}]
+          (transcript-message-view
+            {:assistant_messages/id id
+             :assistant_messages/role role
+             :assistant_messages/content content
+             :assistant_run/status status
+             :assistant_run/error error
+             :assistant_run/evidence (or evidence [])}))
+    (:turns thread)))
+
+(defn side-thread->cards!
+  "Queue cards from the whole side thread: the passage, each question and each
+   answer. The answer the passage came from is the context.
+   Post: as `enqueue-assistant-cards!`, or {:error} when no answer has finished."
+  [user-id page-topic-id thread]
+  (tel/log! {:level :info :id ::side-thread-cards-debug
+             :data {:user-id user-id :page-topic-id page-topic-id
+                    :turns (count (:turns thread))}}
+    "side-thread->cards! entered")
+  (let [answered (filter #(and (= "assistant" (:role %)) (= "completed" (:status %)))
+                   (:turns thread))]
+    (if (empty? answered)
+      {:error "Ask a question and wait for its answer first."}
+      (enqueue-assistant-cards! user-id page-topic-id
+        (apply str
+          "<blockquote><p>" (escape-html (:passage thread)) "</p></blockquote>"
+          (for [{:keys [role content status]} (:turns thread)
+                :when (or (= "user" role) (= "completed" status))]
+            (if (= "user" role)
+              (str "<p><strong>Question:</strong> " (escape-html content) "</p>")
+              (markdown/markdown-with-math->html (answer-context-text content)))))
+        (some-> (db/get-assistant-message user-id (:message-id thread))
+          :content answer-context-text)))))
 
 (def ^:private max-referenceable-files
   "Most repo files the @ picker lists for one query. A repository can hold

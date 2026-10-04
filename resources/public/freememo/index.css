@@ -5324,6 +5324,145 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 .assistant-panel__ref-remove:hover { color: var(--color-danger-text, #b91c1c); }
 
+/* Annotations waiting for the next send (freememo.assistant-composer). */
+.assistant-panel__annotations {
+    font-size: 12px;
+    padding: 0 0 6px;
+    flex-shrink: 0;
+}
+.assistant-panel__annotations > summary {
+    display: inline-flex;
+    cursor: pointer;
+    padding: 2px 8px;
+    background: var(--color-bg-subtle, #f1f5f9);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+}
+.assistant-panel__annotation-list {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    max-height: 120px;
+    overflow-y: auto;
+}
+.assistant-panel__annotation {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 0;
+    color: var(--color-text-secondary);
+}
+
+/* Annotated ranges in assistant answers. A CSS highlight changes no node of
+   the answer leaf, which math/set-html! owns (freememo.answer-selection-menu). */
+::highlight(assistant-annotation) {
+    background-color: color-mix(in srgb, var(--color-highlight-gold) 40%, transparent);
+}
+
+/* The answer selection menu (freememo.answer-selection-menu). 1100 for the
+   same reason as .format-menu. */
+.answer-selection-menu {
+    position: fixed;
+    z-index: 1100;
+    display: none;
+    box-sizing: border-box;
+    max-width: min(360px, calc(100vw - 16px));
+    padding: 6px;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 12px;
+    box-shadow: 0 8px 28px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
+}
+.answer-selection-menu__actions { display: flex; gap: 4px; }
+.answer-selection-menu__note { display: none; gap: 4px; align-items: flex-end; }
+.answer-selection-menu__input {
+    width: 240px;
+    max-width: 60vw;
+    font-size: 13px;
+    resize: vertical;
+}
+
+/* The side-question panel (freememo.assistant-side-question): floating and
+   non-blocking. Below the evidence dialog (1600), so a citation opened from it
+   shows on top. Dragging by the title writes left/top inline. */
+.assistant-side-question-host { display: contents; }
+.assistant-side-question {
+    position: fixed;
+    z-index: 1050;
+    top: 96px;
+    right: calc(var(--side-panel-width, 360px) + 24px);
+    width: 380px;
+    max-width: calc(100vw - 32px);
+    height: min(520px, calc(100vh - 120px));
+    min-height: 240px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    overflow: hidden;
+    resize: both;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 8px 28px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    color: var(--color-text-primary);
+}
+.assistant-side-question__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+}
+.assistant-side-question__header h3 {
+    flex: 1;
+    margin: 0;
+    font-size: 14px;
+    cursor: move;
+    user-select: none;
+}
+.assistant-side-question__close {
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+}
+.assistant-side-question__passage {
+    margin: 8px 12px 0;
+    padding: 4px 8px;
+    max-height: 72px;
+    overflow-y: auto;
+    border-left: 3px solid var(--color-highlight-gold);
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    white-space: pre-wrap;
+}
+.assistant-side-question__thread {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 12px;
+}
+.assistant-side-question__composer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--color-border);
+}
+.assistant-side-question__input {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 13px;
+    resize: vertical;
+}
+.assistant-side-question__buttons { display: flex; justify-content: flex-end; gap: 6px; }
+
 .assistant-evidence-backdrop { z-index: 1600; }
 
 .assistant-evidence {

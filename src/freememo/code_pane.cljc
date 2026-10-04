@@ -104,23 +104,6 @@
        (not-empty (str (.toString sel))))
      :clj nil))
 
-(defn- katex->tex!
-  "Post: each typeset formula under `holder` is its TeX again, as `\\(…\\)`
-   text — the stored form (`freememo.math`), which is inline only. KaTeX keeps
-   the source in a MathML annotation. A formula cut by the selection edge has
-   none and is dropped rather than kept as KaTeX's duplicated render."
-  [holder]
-  #?(:cljs
-     (doseq [el (js/Array.from (.querySelectorAll holder ".katex-display, .katex"))]
-       (when (.contains holder el)
-         (let [tex (some-> (.querySelector el "annotation[encoding=\"application/x-tex\"]")
-                     .-textContent)]
-           (if tex
-             (.replaceWith el (.createTextNode js/document (math/wrap-tex tex)))
-             (.remove el)))))
-     :clj nil)
-  nil)
-
 (defn rendered-selection-html
   "The HTML the user selected in the rendered Markdown view, or nil.
    Post: nil unless both ends of the selection sit in the same
@@ -141,7 +124,7 @@
              (set! (.-textContent wrapper) (.-textContent holder))
              (set! (.-innerHTML holder) "")
              (.appendChild holder wrapper)))
-         (katex->tex! holder)
+         (math/katex->tex! holder)
          (not-empty (.-innerHTML holder))))
      :clj nil))
 
