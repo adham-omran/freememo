@@ -7,12 +7,14 @@
    #?(:clj [freememo.assistant :as assistant])))
 
 (e/defn SelectionCardsEffect
-  "Queue cards for each new value of `job` = {:id :message-id :html}, or nil.
+  "Queue cards for each new value of `!job` = {:id :message-id :html}, or nil.
+   The menu writes `!job`, and this component watches it.
    Post: the job is queued, or its error is in `!error`. Success reports
    itself with a toast when the cards are saved."
-  [job user-id page-topic-id !error]
+  [user-id page-topic-id !job !error]
   (e/client
-    (let [[token _] (e/Token job)]
+    (let [job (e/watch !job)
+          [token _] (e/Token job)]
       (when token
         (let [result (e/server
                        (e/Offload

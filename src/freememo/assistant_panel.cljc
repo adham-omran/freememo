@@ -1,9 +1,15 @@
 (ns freememo.assistant-panel
-  "AI assistant panel content: chat picker, New Chat, transcript, and composer.
+  "AI assistant panel content: chat bar, history view, transcript, and composer.
 
-   Chats are per-document. Sending with no active chat creates one first. Each
-   submitted turn creates a durable streamed run. Reading sources stay outside
-   the transcript and remain available in the answer details.
+   Chats are per-document. Sending with no active chat creates one with that
+   first message. Each submitted turn creates a durable streamed run. Reading
+   sources stay outside the transcript and remain available in the answer
+   details.
+
+   The active chat, the history view's open flag, the bar's rename flag and the
+   chat-action queue belong to RightSidePanel, which outlives this component
+   across a panel collapse and a poem tab switch. They arrive as positional
+   parameters.
 
    Chat controls subscribe to :assistant-mutations. The transcript also watches
    :assistant-stream for bounded durable partial text.
@@ -14,17 +20,14 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.assistant-answer-selection :as answer-selection]
+   [freememo.assistant-chat-history :as history]
    [freememo.assistant-composer :as composer]
-   [freememo.assistant-diagnostics :as diagnostics]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-data :as panel-data]
-   [freememo.assistant-panel-rows :as rows]
-   [freememo.assistant-evidence :as evidence]
+   [freememo.assistant-panel-overlays :as overlays]
    [freememo.assistant-selection-cards :as selection-cards]
-   [freememo.assistant-side-question :as side-question]
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
-   [freememo.assistant-run-details :as run-details]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn mention-query
@@ -37,17 +40,18 @@
   [draft]
   (panel-data/active-document-mention? draft))
 
-(e/defn AssistantPanel [page-topic-id root-topic-id user-id]
+(e/defn AssistantPanel
+  "Pre: `seeded?` is true once the last-chat seed has answered."
+  [page-topic-id root-topic-id user-id seeded?
+   !active !history-open? !renaming-active? !chat-action]
   (e/client
-    (let [!active (atom nil)
-          active (e/watch !active)
+    (let [active (e/watch !active)
           !draft (atom "")
           draft (e/watch !draft)
           !submit (atom nil)
           submit (e/watch !submit)
           [t _] (e/Token submit)
           !error (atom nil)
-          error (e/watch !error)
           !details-run (atom nil)
           details-run (e/watch !details-run)
           !evidence (atom nil)
@@ -82,9 +86,7 @@
           annotation-state (e/watch !annotations)
           annotations (answer-selection/visible-annotations annotation-state active)
           !selection-cards (atom nil)
-          selection-card-job (e/watch !selection-cards)
           !side (atom nil)
-          side (e/watch !side)
           data (panel-data/AssistantPanelData
                  user-id root-topic-id active details-run pending-mode
                  pending-web-search?)
@@ -110,7 +112,7 @@
          :root-topic-id root-topic-id :page-topic-id page-topic-id}
         t !draft !refs !echo !active !error !annotations)
 
-      (selection-cards/SelectionCardsEffect selection-card-job user-id page-topic-id !error)
+      (selection-cards/SelectionCardsEffect user-id page-topic-id !selection-cards !error)
 
       ;; Add one selected document as a chip. Its own e/defn, so this method
       ;; stays under the 64KB bytecode limit.
@@ -120,25 +122,19 @@
       (dom/div
         (dom/props {:class "assistant-panel"})
 
-        ;; Row 2: ＋ New + the chat picker.
-        (rows/ChatRow user-id root-topic-id chat-options pending-mode pending-web-search?
-          !active !draft !error)
+        (history/ChatBarWithHistory root-topic-id chat-options active
+          (:active-title data)
+          !active !history-open? !renaming-active? !chat-action !draft !error)
         (transcript/AssistantTranscript
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
            :page-topic-id page-topic-id :root-topic-id root-topic-id
-           :web-search? web-search? :annotations annotations}
+           :web-search? web-search? :seeded? seeded? :annotations annotations}
           !submit !active !refs !details-run !evidence !error !echo
           !annotations !selection-cards !side)
 
-        (run-details/RunDetailsModal !details-run details user-id)
-        (evidence/EvidenceModal !evidence root-topic-id)
-        (side-question/SideQuestionHost side user-id page-topic-id !side !evidence)
-
-        (when error
-          (dom/div
-            (dom/props {:class "assistant-panel__error"})
-            (dom/text error)))
+        (overlays/PanelOverlays details user-id root-topic-id page-topic-id
+          !details-run !evidence !side !error)
 
         (composer/AssistantComposer
           {:at-open? at-open?
@@ -158,27 +154,6 @@
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
           !pending-mode !pending-web-search? !error !annotations)
 
-        ;; Diagnostics LAST, and wrapping nothing. This used to be
-        ;; `(case (replace-state! …) (do … (dom/div …)))`, which put the whole
-        ;; panel inside a case branch keyed on a map that changes at exactly the
-        ;; two moments a run starts and settles. Re-selecting the branch remounts
-        ;; it, so both transitions tore down and rebuilt the panel: every
-        ;; (e/server …) read went cold at once — the transcript to zero rows and
-        ;; its empty-chat starters, the model select to zero options — while the
-        ;; atoms in this `let` survived and put the same chat back a round trip
-        ;; later. That was the blank on send and the blank on settle.
-        ;;
-        ;; A `case` is the right tool for SEQUENCING an effect before a token
-        ;; spend. It is the wrong tool for merely keeping one alive: this is a
-        ;; fire-and-forget write whose value nothing needs. As the last form of
-        ;; the body its value IS the body's value, so it cannot be skipped, and
-        ;; it gates no frame.
-        (e/on-unmount #(diagnostics/replace-state! {}))
-        (diagnostics/replace-state!
-          {:topic-id root-topic-id
-           :page-topic-id page-topic-id
-           :chat-id active
-           :run-uuid (:run_uuid active-run)
-           :run-kind (:kind active-run)
-           :run-status (:status active-run)
-           :render-phase (if sending? "streaming" "terminal")})))))
+        ;; Diagnostics LAST, and wrapping nothing: see PanelDiagnostics.
+        (overlays/PanelDiagnostics root-topic-id page-topic-id active active-run
+          sending?)))))

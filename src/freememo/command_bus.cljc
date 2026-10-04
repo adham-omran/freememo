@@ -310,6 +310,35 @@
     (when-let [toggle! (:toggle-assistant-pane! ctx)]
       (toggle!))))
 
+;; The assistant history commands. RightSidePanel publishes the four fns and
+;; :active-chat-id while a viewer document is open, and each fn opens the panel
+;; first where it shows UI. A nil :active-chat-id hides rename and delete.
+(register-handler! :show-assistant-history
+  (fn [ctx _payload]
+    (when-let [show! (:show-assistant-history! ctx)]
+      (show!))))
+
+(register-handler! :new-assistant-chat
+  (fn [ctx _payload]
+    (when-let [new-chat! (:new-assistant-chat! ctx)]
+      (new-chat!))))
+
+(register-preparer! :edit-assistant-chat-title
+  (fn [ctx] (when (some? (:active-chat-id ctx)) {})))
+
+(register-handler! :edit-assistant-chat-title
+  (fn [ctx _payload]
+    (when-let [rename! (:rename-active-assistant-chat! ctx)]
+      (rename!))))
+
+(register-preparer! :delete-active-assistant-chat
+  (fn [ctx] (when-some [chat-id (:active-chat-id ctx)] {:chat-id chat-id})))
+
+(register-handler! :delete-active-assistant-chat
+  (fn [ctx payload]
+    (when-let [delete! (:delete-assistant-chat! ctx)]
+      (delete! (:chat-id payload)))))
+
 (register-handler! :toggle-left-pane
   (fn [ctx _payload]
     (when-let [toggle! (:toggle-left-pane! ctx)]

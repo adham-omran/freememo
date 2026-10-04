@@ -4756,13 +4756,173 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 .assistant-panel__new { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
 
-/* Chat picker. The flex child is Typeahead's position:relative wrapper, not a
-   <select> — the widget sets width:100% on the input inside it, so the wrapper
-   is what has to flex. */
-.assistant-panel__chats { flex: 1; min-width: 0; }
+/* The history view covers the panel, so the panel is its containing block. */
+.assistant-panel { position: relative; }
 
-.assistant-panel__chats .input { font-size: 12px; padding: 4px 8px; }
-.assistant-panel__chats .tape-scroll td { font-size: 12px; }
+.assistant-panel__history,
+.assistant-history__back {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 6px;
+}
+
+/* The active chat's title. Selecting it starts a rename in place. */
+.assistant-panel__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 3px 6px;
+    cursor: text;
+}
+.assistant-panel__title:hover:not(:disabled) { border-color: var(--color-border); }
+.assistant-panel__title--new,
+.assistant-panel__title:disabled {
+    color: var(--color-text-secondary);
+    font-weight: 400;
+    cursor: default;
+}
+
+.assistant-chat-title-editor { flex: 1; min-width: 0; display: flex; }
+.assistant-chat-title-editor__input { width: 100%; min-width: 0; font-size: 12px; padding: 3px 6px; }
+
+/* Chat history (plans/assistant-chat-history.md §3). Always mounted; the
+   --open class shows it, so the transcript under it never remounts. */
+.assistant-history {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: none;
+    flex-direction: column;
+    background: var(--color-bg-card);
+    container-type: inline-size;
+}
+.assistant-history--open { display: flex; }
+
+.assistant-history__search { flex: 1; min-width: 0; font-size: 12px; padding: 4px 8px; }
+
+.assistant-history__list {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 8px 8px;
+}
+
+.assistant-history__section--empty { display: none; }
+
+.assistant-history__section-label {
+    padding: 10px 6px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+}
+
+.assistant-history__rows { display: flex; flex-direction: column; }
+
+.assistant-history__row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 6px 4px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.assistant-history__row:hover { background: var(--color-bg-hover); }
+.assistant-history__row:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+.assistant-history__row--active { background: var(--color-primary-light); }
+
+.assistant-history__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.assistant-history__pin { display: inline-flex; flex-shrink: 0; color: var(--color-text-secondary); }
+
+.assistant-history__time { flex-shrink: 0; font-size: 11px; color: var(--color-text-secondary); }
+
+@container (max-width: 240px) {
+    .assistant-history__time { display: none; }
+}
+
+.assistant-history__more {
+    flex-shrink: 0;
+    visibility: hidden;
+    padding: 0 6px;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--color-text-secondary);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.assistant-history__more:hover { background: var(--color-bg-subtle); }
+.assistant-history__row:hover .assistant-history__more,
+.assistant-history__row:focus-within .assistant-history__more { visibility: visible; }
+@media (hover: none) {
+    .assistant-history__more { visibility: visible; }
+}
+
+/* Empty states: an overlay that never displaces the sections. */
+.assistant-history__empty {
+    position: absolute;
+    top: 24px;
+    left: 0;
+    right: 0;
+    padding: 0 16px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    pointer-events: none;
+}
+.assistant-history__empty--hidden { display: none; }
+
+.assistant-history__menu {
+    position: absolute;
+    z-index: 10;
+    width: 168px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.assistant-history__menu-item {
+    padding: 6px 10px;
+    font-size: 13px;
+    text-align: left;
+    color: var(--color-text-primary);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.assistant-history__menu-item:hover,
+.assistant-history__menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
+.assistant-history__menu-item--danger { color: var(--color-danger); }
 
 .assistant-panel__transcript {
     flex: 1;
