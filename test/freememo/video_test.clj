@@ -170,6 +170,35 @@
     (is (not (contains? video/browser-safe-audio "truehd")))
     (is (not (contains? video/browser-safe-audio "vorbis")))))
 
+(deftest no-audio-track
+  (testing "only a successful probe proves that no audio track exists"
+    (is (true? (video/no-audio-track?
+                 {:ok true :container "matroska,webm" :video-codec "vp8" :audio-codec nil}))
+      "big.webm's shape: VP8 video and no audio stream")
+    (is (false? (video/no-audio-track?
+                  {:ok true :container "matroska,webm" :video-codec "vp8" :audio-codec "opus"})))
+    (is (false? (video/no-audio-track? {:ok false :error "Invalid data found"}))
+      "a failed probe has no :audio-codec either, but there it means unknown")
+    (is (false? (video/no-audio-track? nil))))
+
+  (testing "a video with no audio track is a success, never an error toast"
+    (let [r (video/no-audio-result false)]
+      (is (:success r))
+      (is (= 0 (:segments r)))
+      (is (false? (:transcribed r)))
+      (is (not (contains? r :notice))
+        "an upload with transcription off asked for nothing that is missing")
+      (is (not (contains? r :error)))))
+
+  (testing "a Transcribe request says why no transcript came"
+    (let [r (video/no-audio-result true)]
+      (is (:success r))
+      (is (false? (:transcribed r)))
+      (is (= video/no-audio-notice (:notice r)))))
+
+  (testing "the extraction failure message names no ffmpeg internals"
+    (is (not (re-find #"/tmp|@ 0x|ffmpeg|out#" video/extract-failed-message)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Transcript follows the playhead — the lookup that runs at the clock's rate
 ;; ---------------------------------------------------------------------------
