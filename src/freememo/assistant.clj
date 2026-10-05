@@ -24,6 +24,8 @@
    [freememo.content-toolbar-helpers :as card-gen]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
+   [freememo.question-map :as question-map]
+   [freememo.question-map-block :as map-block]
    [freememo.repo-markdown :as repo-md]
    [freememo.text :as text]
    [freememo.toasts :as toasts]
@@ -668,22 +670,39 @@
      :reference-messages (:reference-messages sources)
      :evidence (:evidence sources)}))
 
+(def turn-kinds
+  "What kind of turn a user message is. nil is an ordinary turn. `:annotated`
+   quotes numbered segments of earlier answers (`annotations/user-message`).
+   `:question-pins` is an Ask over a file's open pins
+   (`question-map/open-pins-message`, plans/anchored-questions.md §6.2.5)."
+  #{nil :annotated :question-pins})
+
 (defn- answer-request
   "Render the exact provider request for one new answer: `request-head`, then
    this turn's @ references, the annotation instructions when the turn carries
-   annotations, and the new user turn. While the learner stays on one page, the
-   previous request is a prefix of this one, minus its tail."
+   annotations, the question-map message when the page has a map or the turn
+   is an Ask, and the new user turn. While the learner stays on one page, the
+   previous request is a prefix of this one, minus its tail.
+   Post: also :question-map-run, {:map-id :diagnosis?} when the request carried
+         the question-map message, else nil. The run worker applies the
+         reply's map block to that map."
   ([user-id chat page-topic-id user-text ref-topic-ids model-fields
     web-search-supported? cache-breakpoint?]
    (answer-request user-id chat page-topic-id user-text ref-topic-ids model-fields
-     web-search-supported? cache-breakpoint? false))
+     web-search-supported? cache-breakpoint? nil))
   ([user-id chat page-topic-id user-text ref-topic-ids model-fields
-    web-search-supported? cache-breakpoint? annotated?]
+    web-search-supported? cache-breakpoint? turn]
+   {:pre [(contains? turn-kinds turn)]}
    (let [head (request-head user-id chat page-topic-id ref-topic-ids cache-breakpoint?)
+         diagnosis? (= :question-pins turn)
+         map-tail (question-map/request-tail user-id page-topic-id diagnosis?
+                    (mode-system-prompt "tutor"))
          messages (-> (:messages head)
                     (into (:reference-messages head))
-                    (cond-> annotated?
+                    (cond-> (= :annotated turn)
                       (conj {:role "system" :content annotation-instructions}))
+                    (cond-> map-tail
+                      (conj {:role "system" :content (:content map-tail)}))
                     (conj {:role "user" :content user-text}))]
      {:provider-request (cond-> (assoc model-fields
                                   :stream true
@@ -693,7 +712,10 @@
                             web-search-supported?)
                           (merge (openrouter/web-search-fields)))
       :source-snapshot (:evidence head)
-      :evidence (:evidence head)})))
+      :evidence (:evidence head)
+      :question-map-run (when map-tail
+                          {:map-id (:map-id map-tail) :diagnosis? diagnosis?
+                           :page-topic-id page-topic-id})})))
 
 (defn- side-request
   "Render the provider request for one side-question turn: `request-head`, the
@@ -958,6 +980,35 @@
     (credits/record-cost-charge! user-id endpoint model-id (double cost)
       [(select-keys metadata openrouter/token-keys)])))
 
+(def ^:private map-only-reply
+  "What the transcript stores when a reply was only a map block. A diagnosis
+   must ask a question after its block, so this is a model that did not."
+  "I updated the question map.")
+
+(defn- apply-question-map-reply!
+  "Write the map block `response` starts with into the run's question map, and
+   store the reply's prose without the block (plans/anchored-questions.md
+   §6.3.2). A block that cannot be applied writes nothing and tells the reader
+   in a toast. Never throws: the map is a side effect of the answer, and a
+   failure here must not fail the answer the reader already watched stream."
+  [user-id run-uuid question-map-run response]
+  (try
+    (let [{:keys [prose problem]} (question-map/apply-reply! user-id
+                                    (assoc question-map-run :run-uuid run-uuid)
+                                    response)]
+      (when (not= prose response)
+        (db/replace-assistant-run-text! run-uuid
+          (if (str/blank? prose) map-only-reply prose)))
+      (when problem
+        (tel/log! {:level :warn :id ::question-map-not-applied
+                   :data {:user-id user-id :run-uuid run-uuid :problem problem}})
+        (toasts/push! user-id {:level :warn
+                               :message (str "The question map was not updated. " problem)})))
+    (catch Throwable t
+      (tel/error! {:id ::question-map-apply :data {:user-id user-id :run-uuid run-uuid}} t)
+      (toasts/push! user-id {:level :warn
+                             :message "The question map was not updated. Try asking again."}))))
+
 (defn- execute-provider-run!
   "Drain one provider stream and settle its durable answer or checkpoint.
 
@@ -967,7 +1018,7 @@
    Invariant: on-delta writes through the database's active-state predicate.
    This worker never writes late response text after Stop."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request
-   compact-range]
+   compact-range question-map-run]
   (let [started-ns (System/nanoTime)
         metadata* (volatile! {})
         charged?* (volatile! false)
@@ -1016,6 +1067,8 @@
             (db/complete-assistant-compact-run! run-uuid (str/trim response)
               (:from compact-range) (:through compact-range))
             (do
+              (when question-map-run
+                (apply-question-map-reply! user-id run-uuid question-map-run response))
               (when sources-markdown
                 (db/append-assistant-run-text! run-uuid sources-markdown))
               (db/complete-assistant-answer-run! run-uuid))))
@@ -1068,14 +1121,15 @@
 (defn- start-provider-run!
   "Submit one accepted run to the bounded assistant executor.
    Post: returns immediately. The worker owns every terminal transition."
-  [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range]
+  [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range
+   question-map-run]
   (tel/log! {:level :info :id ::assistant-run-started
              :data {:user-id user-id :chat-id chat-id :run-uuid run-uuid
                     :kind run-kind :model-id model-id}}
     "Assistant run started")
   ((m/via assistant-run-executor
      (execute-provider-run! user-id chat-id run-uuid run-kind api-key model-id
-       provider-request compact-range))
+       provider-request compact-range question-map-run))
    (fn [_result] nil)
    (fn [error]
      (db/fail-assistant-run! run-uuid
@@ -1090,22 +1144,24 @@
 (defn start-answer-run!
   "Create and start one streamed answer in an owned chat.
 
-   Pre: user-text is non-blank. `annotated?` is true exactly when user-text is
-   an `annotations/user-message`. Post: {:ok true :run-uuid} after durable
-   creation and worker submission, or {:error}. The call does not wait for the
-   provider. Invariant: the database rejects a second active operation in the chat."
+   Pre: user-text is non-blank. `turn` is one of `turn-kinds`: `:annotated`
+   exactly when user-text is an `annotations/user-message`, `:question-pins`
+   exactly when it is `question-map/open-pins-message` text. Post: {:ok true
+   :run-uuid} after durable creation and worker submission, or {:error}. The
+   call does not wait for the provider. Invariant: the database rejects a
+   second active operation in the chat."
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id false))
-  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id annotated?]
+     client-id nil))
+  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id turn]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id nil nil nil nil annotated?))
+     client-id nil nil nil nil turn))
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
     retry-of-run-uuid exact-request exact-evidence exact-model-id]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id retry-of-run-uuid exact-request exact-evidence exact-model-id false))
+     client-id retry-of-run-uuid exact-request exact-evidence exact-model-id nil))
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
-    retry-of-run-uuid exact-request exact-evidence exact-model-id annotated?]
+    retry-of-run-uuid exact-request exact-evidence exact-model-id turn]
    (let [chat (db/get-assistant-chat user-id chat-id)
          api-key (settings/get-openrouter-api-key user-id)]
      (cond
@@ -1130,7 +1186,7 @@
                               (card-models/web-search-supported?
                                 (:id entry))
                               (card-models/cache-breakpoint? run-model-id)
-                              annotated?))
+                              turn))
                  run-uuid (str (random-uuid))
                  created (db/create-assistant-answer-run!
                            chat-id user-text client-id
@@ -1154,7 +1210,8 @@
                (do
                  (bump! user-id)
                  (start-provider-run! user-id chat-id run-uuid "answer" api-key
-                   run-model-id (:provider-request rendered) nil)
+                   run-model-id (:provider-request rendered) nil
+                   (:question-map-run rendered))
                  {:ok true :run-uuid run-uuid})))))))))
 
 (defn- start-answer-run-in-new-chat!
@@ -1166,14 +1223,14 @@
    first send leaves no empty chat behind.
    Owner: this function created the row, so it removes it. Callers do not."
   [user-id root-topic-id page-topic-id mode-id web-search? user-text ref-topic-ids
-   client-id]
+   client-id turn]
   (if (str/blank? user-text)
     {:error "Message is empty." :chat-id nil}
     (let [chat-id (start-chat! user-id root-topic-id mode-id web-search?
-                    (title-from user-text))
+                    (if (= :question-pins turn) "Pinned questions" (title-from user-text)))
           result (try
                    (start-answer-run! user-id chat-id page-topic-id user-text
-                     ref-topic-ids client-id)
+                     ref-topic-ids client-id turn)
                    (catch Throwable t
                      (db/delete-empty-assistant-chat! user-id chat-id)
                      (throw t)))]
@@ -1185,21 +1242,37 @@
 
 (defn ensure-and-start-answer-run!
   "Start an answer in `chat-id`, or in a new chat when `chat-id` is nil.
-   See start-answer-run-in-new-chat! for the new-chat contract. `annotated?`
-   applies to an existing chat only: annotations point at its answers, so
-   `submit-chat-input!` never sends them without a chat."
+   See start-answer-run-in-new-chat! for the new-chat contract. `turn` is one of
+   `turn-kinds`. `:annotated` comes with a chat only: annotations point at its
+   answers, so `submit-chat-input!` never sends them without one. An Ask over
+   pins can start a chat."
   ([user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text
     ref-topic-ids client-id]
    (ensure-and-start-answer-run! user-id root-topic-id page-topic-id chat-id mode-id
-     web-search? user-text ref-topic-ids client-id false))
+     web-search? user-text ref-topic-ids client-id nil))
   ([user-id root-topic-id page-topic-id chat-id mode-id web-search? user-text
-    ref-topic-ids client-id annotated?]
+    ref-topic-ids client-id turn]
    (if chat-id
      (assoc (start-answer-run! user-id chat-id page-topic-id user-text
-              ref-topic-ids client-id annotated?)
+              ref-topic-ids client-id turn)
        :chat-id chat-id)
      (start-answer-run-in-new-chat! user-id root-topic-id page-topic-id mode-id
-       web-search? user-text ref-topic-ids client-id))))
+       web-search? user-text ref-topic-ids client-id turn))))
+
+(defn submit-question-pins!
+  "Ask the tutor about every open pin of the file `page-topic-id`
+   (plans/anchored-questions.md §6.2.5). The pane button, the composer button
+   and the palette all reach this one function, and it builds the pin set, so
+   they send the same pins (§6.2.5.1).
+   Post: as `ensure-and-start-answer-run!`, plus :command :answer. With no open
+         pins, {:error} and no run."
+  [user-id root-topic-id page-topic-id chat-id mode-id web-search? client-id]
+  (let [{:keys [text error]} (question-map/open-pins-message user-id page-topic-id)]
+    (if error
+      {:error error :chat-id chat-id :command :answer}
+      (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
+               chat-id mode-id web-search? text [] client-id :question-pins)
+        :command :answer))))
 
 (defn submit-chat-input!
   "Dispatch composer input at the assistant boundary.
@@ -1237,7 +1310,7 @@
                 (if annotated?
                   (annotations/user-message annotation-list draft)
                   draft)
-                ref-topic-ids client-id annotated?)
+                ref-topic-ids client-id (when annotated? :annotated))
          :command :answer)))))
 
 (defn start-compact-run!
@@ -1299,7 +1372,7 @@
               (do
                 (bump! user-id)
                 (start-provider-run! user-id chat-id run-uuid "compact" api-key
-                  (:id entry) provider-request covered)
+                  (:id entry) provider-request covered nil)
                 {:ok true :run-uuid run-uuid}))))))))
 
 (defn stop-active-run!
@@ -1798,7 +1871,14 @@
    text as it arrives. Partial Markdown is re-parsed on each publication, so an
    unclosed fence formats itself once its closing fence lands."
   [message]
-  (let [wire-message (select-keys message transcript-wire-keys)
+  (let [;; A question-map block is data for the server, never text for the
+        ;; reader. Stripping it here covers the stream, a stopped run and a
+        ;; terminal one alike, and an open block shows as an empty answer
+        ;; until it closes (plans/anchored-questions.md §6.3.2.1).
+        message (cond-> message
+                  (= "assistant" (:assistant_messages/role message))
+                  (update :assistant_messages/content map-block/prose))
+        wire-message (select-keys message transcript-wire-keys)
         cited? (cited-keys (:assistant_messages/content message))
         wire-message (if (contains? wire-message :assistant_run/evidence)
                        (update wire-message :assistant_run/evidence

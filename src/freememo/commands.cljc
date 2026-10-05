@@ -53,7 +53,8 @@
     :card-mutations :sync-mutations :tree-mutations
     :queue-mutations :pin-mutations :assistant-mutations :assistant-stream
     :undo-mutations :kg-mutations
-    :schedule-mutations :curriculum-mutations :activity-mutations})
+    :schedule-mutations :curriculum-mutations :activity-mutations
+    :question-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -128,6 +129,45 @@
      ;; holds; the palette reaches them through the :…-assistant-chat… entries
      ;; below, which act on the panel's active chat. :delete-assistant-chat
      ;; bumps :undo-mutations too, because its stage writes an undo entry.
+     ;; Anchored questions on rendered Markdown (plans/anchored-questions.md).
+     ;; The rendered pane publishes :ask-about-selection's invoker and the open
+     ;; pin count that :ask-question-pins' preparer reads, so both are available
+     ;; only while that pane is mounted (§6.6.2). :ask-question-pins is consumed
+     ;; by the AssistantPanel, which owns the submit, and RightSidePanel opens
+     ;; the panel for it. The pin set is built on the server, in one place, so
+     ;; the pane button, the composer button and the palette send the same pins.
+     :ask-about-selection {:label "Ask about selection" :class :mutation :exec :ui-button
+                           :when #{:viewer}
+                           :data {:selection :dom}
+                           :table #{:question_maps :question_pins}
+                           :views #{:question-mutations}}
+     :ask-question-pins   {:label "Ask open pins" :class :mutation :exec :electric
+                           :when #{:viewer}
+                           :table #{:assistant_chats :assistant_messages :assistant_runs}
+                           :views #{:assistant-mutations}}
+     :save-question-pin   {:label "Save a question pin" :class :mutation :palette-hidden true
+                           :data {:pin-id :payload :question :payload :status :payload}
+                           :table #{:question_maps :question_pins}
+                           :views #{:question-mutations}}
+     :delete-question-pin {:label "Delete a question pin" :class :mutation :palette-hidden true
+                           :data {:pin-id :payload}
+                           :table #{:question_pins}
+                           :views #{:question-mutations}}
+     :teach-question-root {:label "Teach a question-map idea next" :class :mutation
+                           :palette-hidden true
+                           :data {:root-id :payload}
+                           :table #{:question_roots}
+                           :views #{:question-mutations}}
+     :mark-question-root-known {:label "Mark a question-map idea known" :class :mutation
+                                :palette-hidden true
+                                :data {:root-id :payload :known? :payload}
+                                :table #{:known_marks :kg_entities :question_roots}
+                                :views #{:question-mutations :kg-mutations}}
+     ;; Written by the run worker when a tutor reply carries a map block.
+     :apply-question-map  {:label "Apply a tutor's question map" :class :mutation
+                           :palette-hidden true
+                           :table #{:question_roots :question_pins :known_marks :kg_entities}
+                           :views #{:question-mutations :kg-mutations}}
      :rename-assistant-chat {:label "Rename an assistant chat" :class :mutation
                              :palette-hidden true
                              :data {:chat-id :payload :title :payload}
@@ -495,7 +535,8 @@
                                 :topic_pins :occlusion_groups :score_groups
                                 :card_schedules :card_versions :assistant_chats
                                 :kg_entities :kg_predicates :kg_facts :kg_questions
-                                :kg_reviews :settings :topic_files :topic_videos}
+                                :kg_reviews :settings :topic_files :topic_videos
+                                :question_maps :question_roots :question_pins :known_marks}
                        :views (conj document-views :card-mutations :settings-refresh)}
      :append-images   {:label "Append images" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files} :views document-views}

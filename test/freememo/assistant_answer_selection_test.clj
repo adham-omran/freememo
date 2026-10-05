@@ -83,6 +83,7 @@
                 db/get-kg-facts-context (fn [& _] [])
                 db/get-fact-mastery (fn [& _] {})
                 db/latest-assistant-checkpoint (fn [& _] nil)
+                db/question-doc-key (fn [& _] nil)
                 db/get-assistant-messages
                 (fn [_] [{:assistant_messages/id 1 :assistant_messages/role "user"
                           :assistant_messages/content "What is shape?"}
@@ -111,8 +112,8 @@
 (deftest annotation-instructions-sit-in-the-tail-only-when-annotated
   (with-reads
     (fn []
-      (let [plain (messages (answer-request 7 chat 77 "Q" nil {:model "m"} false true false))
-            annotated (messages (answer-request 7 chat 77 "Q" nil {:model "m"} false true true))
+      (let [plain (messages (answer-request 7 chat 77 "Q" nil {:model "m"} false true nil))
+            annotated (messages (answer-request 7 chat 77 "Q" nil {:model "m"} false true :annotated))
             instructions? #(and (= "system" (:role %))
                              (str/includes? (str (:content %)) "# Annotated segments"))]
         (is (not-any? instructions? plain))
@@ -130,7 +131,7 @@
         (is (= (annotations/user-message
                  [{:quote "steady ⊑ cont" :note "What is steady?"}] "")
               (nth @started 6)))
-        (is (true? (last @started))))
+        (is (= :annotated (last @started))))
       (testing "/compact with annotations is a message, not the command"
         (is (= :answer (:command (assistant/submit-chat-input!
                                    7 77 77 128 "general" false "/compact" [] "c2"

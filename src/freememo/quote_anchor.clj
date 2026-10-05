@@ -770,3 +770,68 @@
           (assoc out pos (.html root))))
       {}
       by-chapter)))
+
+;; ── Locating a quote in rendered Markdown ───────────────────────────
+;;
+;; A question pin and a citation both name a passage by its quote and the id of
+;; the heading above it. `locate` finds that passage in a rendered Markdown
+;; file and reports it in a form the browser can turn into a Range: a block
+;; index and a raw character offset inside that block
+;; (plans/anchored-questions.md §6.1.4). It is the one matcher for both.
+
+(defn- block-positions
+  "The normalized text of `root` and, per character, where it came from.
+
+   Pre : `root` is a parsed body.
+   Post: {:text s :positions [[block raw-offset] …] :heading-at {id index}},
+         one position per character of `s`. `block` is the index of the
+         character's top-level element among the body's element children, and
+         `raw-offset` counts every character of that block's text nodes before
+         it, whitespace included. That is the count a browser TreeWalker over
+         the same block reaches, because `innerHTML` keeps the text nodes Jsoup
+         parsed. `:heading-at` maps each top-level heading id to the normalized
+         index of the first character at or after it.
+   Note: text directly under the body has no block to name, so it is skipped.
+         Rendered Markdown puts only inter-block whitespace there."
+  [^Element root]
+  (let [sb (StringBuilder.)
+        positions (volatile! [])
+        heading-at (volatile! {})]
+    (doseq [[block ^Element el] (map-indexed vector (.children root))]
+      (when (and (re-matches #"h[1-6]" (.tagName el)) (seq (.id el)))
+        (vswap! heading-at assoc (.id el) (.length sb)))
+      (let [offset (volatile! 0)]
+        (doseq [^TextNode tn (text-nodes el)]
+          (let [^String whole (.getWholeText tn)
+                base @offset]
+            (dotimes [i (count whole)]
+              (when-let [c (fold-char (.charAt whole i))]
+                (.append sb c)
+                (vswap! positions conj [block (+ base i)])))
+            (vreset! offset (+ base (count whole)))))))
+    {:text (.toString sb) :positions @positions :heading-at @heading-at}))
+
+(defn locate
+  "Where `quote` sits in rendered Markdown `html`.
+
+   Pre : `html` is `repo-markdown/render` output. `quote` is the passage as a
+         reader selected it. `anchor` is the id of the heading above it, or nil.
+   Post: {:start [block offset] :end [block offset]} with `:end` exclusive, or
+         nil when the normalized quote does not occur. Only an exact match in
+         the normalized space counts: a quote whose text changed is unmatched,
+         and the reader sees it as stale (§6.1.3). No prefix pass, unlike
+         `place-highlights` — a partial match would outline a sentence the
+         reader never chose.
+   Inv : with an anchor, the first occurrence at or after that heading wins,
+         then the first in the document. So a quote that appears under two
+         headings resolves to the one the reader was under."
+  [html quote anchor]
+  (let [needle (normalize quote)]
+    (when (seq needle)
+      (let [{:keys [text positions heading-at]} (block-positions (parse-body html))
+            from (long (get heading-at anchor 0))
+            [s e] (or (find-from text needle from) (find-from text needle 0))]
+        (when s
+          (let [[sb so] (nth positions s)
+                [eb eo] (nth positions (dec (long e)))]
+            {:start [sb so] :end [eb (inc (long eo))]}))))))

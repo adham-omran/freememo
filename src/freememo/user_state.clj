@@ -42,6 +42,7 @@
           :schedule-mutations (atom 0)
           :curriculum-mutations (atom 0)
           :activity-mutations (atom 0)
+          :question-mutations (atom 0)
           :card-gen-status  (atom {})
           ;; Card generation cancels QUEUED work only. The processor is an m/ap
           ;; over a mailbox with `m/?> 3`, which hands out no per-item cancel fn,
