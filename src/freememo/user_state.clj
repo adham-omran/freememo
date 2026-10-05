@@ -65,6 +65,13 @@
           ;; success on the same url clears its entry, so only failures persist.
           :url-import-errors (atom {})
           :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
+          ;; video topic id -> error string for a `process-video!` run that
+          ;; failed. Written before membership drops from :processing-videos,
+          ;; so `activity-registry`'s :error-fn can read it when the reporter
+          ;; closes the row — otherwise a failed run is recorded as a success.
+          ;; Left behind after the work is gone, which is what makes the outcome
+          ;; readable; the next run on the same topic clears it at its start.
+          :video-process-errors (atom {})
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
           ;; Cancelling a page scan cannot abort its OCR request — clj-http's

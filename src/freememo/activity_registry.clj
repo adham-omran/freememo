@@ -228,7 +228,12 @@
    :video-process
    {:label "Processing video"
     :tier :server :subject :topic :work-key id->key
-    :state-key :processing-videos :phase "processing"}
+    :state-key :processing-videos :phase "processing"
+    ;; `start-processing!` records the error before it drops membership, so the
+    ;; entry is there when the reporter sees the run end. A skipped
+    ;; transcription is a success and records nothing.
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :video-process-errors) (key->id work-key)))}
 
    :distill-doc
    {:label "Distilling facts"
@@ -434,10 +439,11 @@
 (defn work-error
   "The owner's recorded error for one piece of work, or nil.
 
-   Only two owners publish an error where anything else can read it. The rest
-   report failure as a toast and nothing more, so a run of theirs that failed
-   terminates as 'success' in history — a known limitation, not an oversight.
-   Closing it for a type means giving that owner an `:error-fn` here."
+   Only the types with an `:error-fn` publish an error where anything else can
+   read it. The rest report failure as a toast and nothing more, so a run of
+   theirs that failed terminates as 'success' in history — a known limitation,
+   not an oversight. Closing it for a type means giving that owner an
+   `:error-fn` here."
   [type uid work-key]
   (when-some [{:keys [error-fn]} (activity-type type)]
     (when error-fn (error-fn uid work-key))))
