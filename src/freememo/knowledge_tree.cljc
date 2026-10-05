@@ -28,27 +28,6 @@
    #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
 
-;; Trap Tab within `container` so focus cycles the modal's focusable elements
-;; instead of escaping to the page behind it. Call from a keydown handler on
-;; the modal container; top-level platform-split defn keeps it frame-safe.
-#?(:cljs
-   (defn trap-tab! [container e]
-     (when (= (.-key e) "Tab")
-       (let [els (.querySelectorAll container
-                   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")
-             n (.-length els)]
-         (when (pos? n)
-           (let [first-el (.item els 0)
-                 last-el (.item els (dec n))
-                 active (.-activeElement js/document)]
-             (cond
-               (and (.-shiftKey e) (or (= active first-el) (= active container)))
-               (do (.preventDefault e) (.focus last-el))
-
-               (and (not (.-shiftKey e)) (= active last-el))
-               (do (.preventDefault e) (.focus first-el)))))))))
-#?(:clj (defn trap-tab! [_container _e] nil))
-
 ;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
@@ -458,7 +437,7 @@
                   (.click btn))
 
                 (= (.-key e) "Tab")
-                (trap-tab! (.-currentTarget e) e)))
+                (modal/trap-tab! (.-currentTarget e) e)))
             nil)
           (dom/div
             (dom/props {:class "modal-content modal-sm"})
