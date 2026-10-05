@@ -335,6 +335,47 @@
       (when row
         (lo/copy-to-file! tx (:lo_oid row) file)))))
 
+(defn no-audio-track?
+  "Whether `probe` proves that the file has no audio stream.
+
+   Only a SUCCESSFUL probe can prove it. A failed probe also has a nil
+   `:audio-codec`, but there it means 'unknown', and the pipeline must still try
+   the extraction — that is how it found audio in a file ffprobe could not read.
+
+   Pre:  `probe` is a `ffmpeg/probe-media` result, or nil.
+   Post: true only for {:ok true} with no `:audio-codec`."
+  [probe]
+  (boolean (and (:ok probe) (nil? (:audio-codec probe)))))
+
+(def no-audio-notice
+  "The toast for a Transcribe request on a video that has no audio track."
+  "This video has no audio track, so there is nothing to transcribe.")
+
+(def extract-failed-message
+  "The toast for an audio extraction that failed.
+
+   ffmpeg's stderr goes to the log, never to the toast. Its text names a temp
+   path and a muxer address, and it does not tell the user what was lost."
+  "Could not read this video's audio track. The video plays, but it has no waveform and no transcript.")
+
+(defn no-audio-result
+  "The pipeline result for a video with no audio track.
+
+   A silent screen recording is a valid video, so the result is a SUCCESS: the
+   video plays, and nothing remains for the pipeline to do. The run closes as a
+   success in the Activity monitor too, because that registry entry reads
+   `:processing-videos` membership only.
+
+   Only a Transcribe request gets `:notice`. The user asked for a transcript and
+   gets none, so the result says why. An upload with transcription off asked
+   for nothing that is missing, so it gets no toast.
+
+   Post: {:success true :segments 0 :transcribed false :audio? false}, plus
+         `:notice` when `transcribe?`."
+  [transcribe?]
+  (cond-> {:success true :segments 0 :transcribed false :audio? false}
+    transcribe? (assoc :notice no-audio-notice)))
+
 (defn process-video!
   "Run the pipeline for one uploaded video: normalize → probe → extract audio →
    chunk → transcribe. `transcribe?` false stops after the audio.
@@ -344,8 +385,8 @@
          `start-processing!` for why there is no defaulting arity.
    Post: {:success true :segments n :transcribed true} with duration, extracted
          audio and transcript persisted; {:success true :segments 0 :transcribed
-         false} when transcription was skipped; or {:success false :error S
-         :stage kw}.
+         false} when transcription was skipped; `no-audio-result` when the
+         probe found no audio track; or {:success false :error S :stage kw}.
    Partial success is intentional: the container is normalized and duration and
    audio are committed before transcription starts, so an API failure still
    leaves a playable, waveform-scrubbable video. Re-running replaces the
@@ -384,12 +425,21 @@
                 (when (and (not= :remuxed (:outcome normalized))
                         (:duration-ms probe))
                   (db/set-video-duration! topic-id (:duration-ms probe)))
-                (let [extracted (ffmpeg/extract-audio! media audio)]
+                ;; A video with no audio track has nothing to extract, and
+                ;; ffmpeg fails the extraction with "Output file does not
+                ;; contain any stream". So the probe decides first.
+                (let [extracted (if (no-audio-track? probe)
+                                  {:ok false :no-audio? true}
+                                  (ffmpeg/extract-audio! media audio))]
                   (cond
+                    (:no-audio? extracted)
+                    (do (log/log-info (str "Video has no audio track topic=" topic-id))
+                        (no-audio-result transcribe?))
+
                     (not (:ok extracted))
                     (do (log/log-warn (str "Video audio extraction failed topic=" topic-id
                                         " error=" (:error extracted)))
-                        {:success false :error (:error extracted) :stage :extract})
+                        {:success false :error extract-failed-message :stage :extract})
 
                     :else
                     (do
@@ -520,9 +570,13 @@
              (if (:success result)
                ;; §15.3 2.6 — `transcribed` distinguishes a skip from a run that
                ;; transcribed silence. Both report segments=0.
-               (log/log-info (str "Video processing complete topic=" topic-id
-                               " segments=" (:segments result)
-                               " transcribed=" (boolean (:transcribed result))))
+               (do (log/log-info (str "Video processing complete topic=" topic-id
+                                   " segments=" (:segments result)
+                                   " transcribed=" (boolean (:transcribed result))))
+                   ;; A success can still owe the user a reason, e.g. a
+                   ;; Transcribe request on a video with no audio track.
+                   (when-let [notice (:notice result)]
+                     (toasts/push! user-id {:level :info :message notice})))
                (do (log/log-warn (str "Video processing failed topic=" topic-id
                                    " stage=" (:stage result) " error=" (:error result)))
                    (toasts/push! user-id {:level :error :message (:error result)})))
