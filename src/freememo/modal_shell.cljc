@@ -27,22 +27,67 @@
 ;; Trap Tab within `container` so focus cycles the modal's focusable elements
 ;; instead of escaping to the page behind it. Call from a keydown handler on
 ;; the modal container; top-level platform-split defn keeps it frame-safe.
+;;
+;; The candidates are the elements native Tab can REACH, not the elements that
+;; can take focus. A `tabindex="-1"` element takes focus but native Tab never
+;; lands on it, so when one was the last candidate, `activeElement` never equalled
+;; it, the trap never wrapped, and focus left the modal. The command palette's
+;; `?` buttons are that shape. A selector cannot say this alone: in
+;; `a, b, [tabindex]:not([tabindex='-1'])` the `:not` binds to the last
+;; alternative only, so `tabbable?` tests each match instead.
 #?(:cljs
-   (defn trap-tab! [container e]
-     (when (= (.-key e) "Tab")
-       (let [els (.querySelectorAll container
-                   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")
-             n (.-length els)]
-         (when (pos? n)
-           (let [first-el (.item els 0)
-                 last-el (.item els (dec n))
-                 active (.-activeElement js/document)]
-             (cond
-               (and (.-shiftKey e) (or (= active first-el) (= active container)))
-               (do (.preventDefault e) (.focus last-el))
+   (def ^:private tabbable-candidates
+     (str "a[href], area[href], button, input, select, textarea, iframe, summary, "
+          "[contenteditable]:not([contenteditable='false']), [tabindex]")))
 
-               (and (not (.-shiftKey e)) (= active last-el))
-               (do (.preventDefault e) (.focus first-el)))))))))
+#?(:cljs
+   (defn- tabbable?
+     "True when native Tab can land on `el`: no negative tabindex, not
+      disabled (a disabled fieldset included), not a hidden input, not inside
+      an inert subtree, and rendered."
+     [^js el]
+     (let [tabindex (.getAttribute el "tabindex")]
+       (and (not (and tabindex (neg? (js/parseInt tabindex 10))))
+            (not (.matches el ":disabled"))
+            (not= "hidden" (.-type el))
+            (nil? (.closest el "[inert]"))
+            (if (.-checkVisibility el)
+              (.checkVisibility el #js {:visibilityProperty true
+                                        :checkVisibilityCSS true})
+              (pos? (.-length (.getClientRects el))))))))
+
+#?(:cljs
+   (defn- follows? [^js a ^js b]
+     (not (zero? (bit-and (.compareDocumentPosition a b)
+                          (.-DOCUMENT_POSITION_FOLLOWING js/Node))))))
+
+#?(:cljs
+   (defn trap-tab!
+     "Pre  : `e` is a keydown whose currentTarget is `container`, so focus is
+             inside `container`.
+      Post : when native Tab would move focus out of `container`, focus moves
+             to its first (Tab) or last (Shift+Tab) tabbable element instead.
+             Otherwise the browser moves focus.
+
+      The wrap is decided by document position, not by identity with the last
+      element. So focus on a non-tabbable element inside the modal — the
+      container itself, or a `tabindex=-1` button a click focused — wraps too.
+      With nothing tabbable inside, Tab does nothing and focus stays put. The
+      Upload modal is that shape: its one input is a hidden file input. A Tab
+      another handler already took (Quill's indent) is left alone."
+     [container e]
+     (when (and (= (.-key e) "Tab") (not (.-defaultPrevented e)))
+       (let [els (filterv tabbable? (array-seq (.querySelectorAll container tabbable-candidates)))]
+         (if (empty? els)
+           (.preventDefault e)
+           (let [active (.-activeElement js/document)]
+             (if (.-shiftKey e)
+               (when-not (some #(follows? % active) els)
+                 (.preventDefault e)
+                 (.focus (peek els)))
+               (when-not (some #(follows? active %) els)
+                 (.preventDefault e)
+                 (.focus (first els))))))))))
 #?(:clj (defn trap-tab! [_container _e] nil))
 
 ;; Focus restore (WCAG dialog pattern): remember the element that had focus
