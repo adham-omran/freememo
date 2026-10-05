@@ -17,6 +17,10 @@
        above the container top — that is the app command bar's floor. The
        container is clipped to the viewport first, so a container an ancestor
        scrolled off screen still cannot place the card off screen.
+     - on a touch device, also clear of the browser's own Cut/Copy/Paste bar,
+       which sits just above or below the selection. The page cannot read where
+       that bar is, so a band of `sel-place/touch-reserve` px is kept clear on
+       both sides of the selection.
      - horizontal: the card's near edge sits at the selection's focus point,
        mirrored for RTL, clamped to the viewport edges.
      - hidden while the selection is scrolled out of the container, and shown
@@ -613,6 +617,13 @@
         {:selection {:top (.-top box) :bottom (.-bottom box)}
          :focus-x (focus-x sel box)}))))
 
+(defn- touch?
+  "True on a touch-first device, where the browser draws its own selection bar
+   (Cut/Copy/Paste) beside the selection. Read per placement: a tablet can gain
+   or lose a mouse while the page is open."
+  []
+  (.-matches (.matchMedia js/window "(pointer: coarse)")))
+
 (defn- place!
   "Position `card` (fixed) where it covers no visible selected text, or hide it
    when no tier fits. freememo.selection-placement decides; this measures.
@@ -632,6 +643,7 @@
                     (sel-place/place
                       (assoc geom
                         :rtl? rtl?
+                        :reserve (if (touch?) sel-place/touch-reserve 0)
                         :container {:top (.-top con) :bottom (.-bottom con)}
                         :viewport {:width (.-innerWidth js/window)
                                    :height (.-innerHeight js/window)}

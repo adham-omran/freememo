@@ -228,3 +228,52 @@
     (is (nil? (place {:selection {:top -500 :bottom 1500}
                       :menu {:width 320 :height 200}}))
       "pane bottom 700 + 8 + 200 = 908 > viewport floor 792")))
+
+;; ---------------------------------------------------------------------------
+;; Touch: the browser's own selection bar
+;; ---------------------------------------------------------------------------
+
+(defn- clears-band?
+  "True when the placement's band stays `clearance` px away from the visible
+   selection band on both sides."
+  [result selection container view menu-height clearance]
+  (or (nil? result)
+      (nil? (visible-band selection container view))
+      (let [[b-top b-bottom] (visible-band selection container view)
+            top (:top result)
+            bottom (+ top menu-height)]
+        (or (>= top (+ b-bottom clearance))
+            (<= bottom (- b-top clearance))))))
+
+(deftest touch-reserve-clears-the-native-selection-bar
+  (testing "the iPhone report: selection near the pane top, card goes below the bar"
+    ;; 414x896 viewport, pane under a ~140px command bar, card ~210px tall.
+    (let [phone {:width 414 :height 896}
+          phone-pane {:top 140 :bottom 650}
+          sel {:top 150 :bottom 285}
+          r (place {:selection sel :container phone-pane :viewport phone
+                    :menu {:width 270 :height 210}
+                    :reserve placement/touch-reserve})]
+      (is (= :below (:side r)))
+      (is (= (+ 285 placement/gap placement/touch-reserve) (:top r)))))
+  (testing "above placement keeps the same clearance"
+    ;; Below needs 560+68+300 = 928 > 700; above gives 480-68-300 = 112 >= 100.
+    (let [sel {:top 480 :bottom 560}
+          r (place {:selection sel :reserve placement/touch-reserve})]
+      (is (= :above (:side r)))
+      (is (= (- 480 placement/gap placement/touch-reserve 300) (:top r)))))
+  (testing "no placement comes within the reserve, across every shape"
+    (let [clearance (+ placement/gap placement/touch-reserve)
+          failures (for [con container-shapes
+                         view viewport-shapes
+                         menu-height [80 300 520]
+                         sel-top (range -400 1000 37)
+                         sel-height [18 40 120 300 600 1200]
+                         :let [sel {:top sel-top :bottom (+ sel-top sel-height)}
+                               r (place {:selection sel :container con :viewport view
+                                         :menu {:width 320 :height menu-height}
+                                         :reserve placement/touch-reserve})]
+                         :when (not (clears-band? r sel con view menu-height clearance))]
+                     {:selection sel :container con :viewport view :result r})]
+      (is (empty? failures)
+        (str "placements inside the reserve: " (pr-str (take 5 failures)))))))

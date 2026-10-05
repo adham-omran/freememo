@@ -21,6 +21,16 @@
   "Pixels kept clear of the viewport edges."
   8)
 
+(def touch-reserve
+  "Pixels kept clear above AND below the selection on a touch device, on top of
+   `gap`. iOS Safari and Android Chrome draw their own Cut/Copy/Paste bar beside
+   a selection — above it when there is room, else below — and a page cannot
+   move it, read its rect, or suppress it for a contenteditable. Measured on an
+   iPhone: the bar ends about 60px below the selection's last row, handle
+   included. Reserving the band on both sides clears it whichever side the
+   browser picks."
+  60)
+
 (defn- clamp [lo hi v]
   (max lo (min v hi)))
 
@@ -34,6 +44,9 @@
      :container {:top :bottom}   the editor element the selection lives in
      :viewport  {:width :height} window inner size
      :menu      {:width :height} measured popover size
+     :reserve                    extra clearance on each side of the selection,
+                                 for the browser's own selection bar (default 0;
+                                 the caller passes `touch-reserve` on touch)
 
    Four tiers, first fit wins:
      1. below the selection, inside the container
@@ -58,8 +71,9 @@
           :top >= margin.
    Inv  : the returned [top, top+height] band never overlaps the visible
           selection band [max(sel-top, top-limit), min(sel-bottom, bottom-limit)]."
-  [{:keys [selection focus-x rtl? container viewport menu]}]
-  (let [{sel-top :top sel-bottom :bottom} selection
+  [{:keys [selection focus-x rtl? container viewport menu reserve]}]
+  (let [clearance (+ gap (or reserve 0))
+        {sel-top :top sel-bottom :bottom} selection
         {con-top :top con-bottom :bottom} container
         {view-w :width view-h :height} viewport
         {menu-w :width menu-h :height} menu
@@ -70,9 +84,9 @@
     ;; so there is nothing to anchor to and nothing the user can read.
     (when (and (> sel-bottom top-limit) (< sel-top bottom-limit))
       (let [visible-bottom (min sel-bottom bottom-limit)
-            below-in-container (+ sel-bottom gap)
-            above-in-container (- sel-top gap menu-h)
-            below-in-viewport (+ visible-bottom gap)
+            below-in-container (+ sel-bottom clearance)
+            above-in-container (- sel-top clearance menu-h)
+            below-in-viewport (+ visible-bottom clearance)
             [top side] (cond
                          (<= (+ below-in-container menu-h) bottom-limit)
                          [below-in-container :below]
