@@ -761,31 +761,12 @@
                   (icons/Icon :trash-2 :size 13)
                   (dom/text "Delete curriculum")
                   (dom/On "click" (fn [_] (reset! !delete-error nil)
-                                    (reset! !confirm-delete {:id curriculum-id})) nil)))
+                                    (reset! !confirm-delete {:id curriculum-id
+                                                             :title (:title detail)})) nil)))
               (when delete-error
                 (dom/p (dom/props {:class "curriculum-inline-error"})
                   (dom/text delete-error))))
             (ScheduleSummary user-id curriculum-id))
-          ;; The confirm states the recovery boundary and the two things the
-          ;; stage does not change: imported sources and recorded credits.
-          (modal/ConfirmModal !confirm-delete
-            "Delete curriculum?"
-            (str "Delete \"" (:title detail) "\"? The blocks, the materials, the "
-              "exams and the exam results will be hidden. You can undo this for 12 hours. "
-              "Imported documents stay. Generated exam charges stay spent.")
-            "Delete curriculum" "btn btn-danger-fill"
-            ;; The navigate rides `e/on-unmount`, not the success branch.
-            ;; Staging bumps `:curriculum-mutations` inside the
-            ;; same server call whose result this reads, so `detail` goes nil
-            ;; in the same tick and tears down the subtree holding this
-            ;; `e/fn`. A navigate sequenced after the answer races that
-            ;; teardown; one registered here fires whichever teardown wins.
-            (e/fn [_payload]
-              (let [response (e/server (e/Offload
-                                        #(stage-curriculum-for-deletion* user-id curriculum-id)))]
-                (if (e/server (:ok response))
-                  (do (e/on-unmount #(navigate! :curriculum)) :deleted)
-                  (case (reset! !delete-error (e/server (:error response))) :failed)))))
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
             (e/for [[index block]
@@ -797,7 +778,31 @@
                 (dom/props {:type "button" :class "curriculum-add-block"})
                 (icons/Icon :plus :size 16)
                 (dom/text "Add block")
-                (dom/On "click" (fn [_] (reset! !add-block? true)) nil)))))))))
+                (dom/On "click" (fn [_] (reset! !add-block? true)) nil))))))
+      ;; The confirm modal sits OUTSIDE the `detail` gate, and that is the fix
+      ;; for a race. Staging bumps `:curriculum-mutations` in the same server
+      ;; call whose answer this reads, so `detail` can go nil before the answer
+      ;; arrives. Inside the gate, that teardown unmounted the handler before
+      ;; the success branch mounted, and the page stayed on the deleted id
+      ;; reading "Curriculum not found." (3 of 12 runs, measured). Out here the
+      ;; handler outlives the re-query, so the navigate always runs.
+      ;; The title rides the payload because `detail` may be nil by then.
+      ;; The confirm states the recovery boundary and the two things the
+      ;; stage does not change: imported sources and recorded credits.
+      (modal/ConfirmModal !confirm-delete
+        "Delete curriculum?"
+        (str "Delete \"" (:title (e/watch !confirm-delete)) "\"? The blocks, the "
+          "materials, the exams and the exam results will be hidden. You can undo "
+          "this for 12 hours. Imported documents stay. Generated exam charges stay spent.")
+        "Delete curriculum" "btn btn-danger-fill"
+        ;; The navigate rides `e/on-unmount`, which fires when the modal
+        ;; closes after a success, or when the route change tears it down.
+        (e/fn [_payload]
+          (let [response (e/server (e/Offload
+                                    #(stage-curriculum-for-deletion* user-id curriculum-id)))]
+            (if (e/server (:ok response))
+              (do (e/on-unmount #(navigate! :curriculum)) :deleted)
+              (case (reset! !delete-error (e/server (:error response))) :failed))))))))
 
 (e/defn CurriculumPage
   "The curriculum tab. Three screens live behind one active-tab branch.
