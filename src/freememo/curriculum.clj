@@ -16,7 +16,8 @@
    [taoensso.telemere :as tel])
   (:import
    [java.security MessageDigest]
-   [java.time LocalDate ZoneId]))
+   [java.sql Timestamp]
+   [java.time Instant LocalDate ZoneId]))
 
 (def ^:private opts {:builder-fn rs/as-unqualified-maps})
 (def default-threshold 70)
@@ -580,7 +581,11 @@
   "True when the curriculum was staged after operation-started-at.
 
    This reads deletion history, not the current staged marker. An Undo can make
-   a curriculum live again, but it must not authorize an older model result."
+   a curriculum live again, but it must not authorize an older model result.
+
+   Pre: operation-started-at is a java.time.Instant. It is bound as a
+   java.sql.Timestamp, because pgjdbc cannot infer a SQL type for an Instant
+   and no namespace loads next.jdbc.date-time."
   [connectable user-id curriculum-id operation-started-at]
   (boolean (:deleted
              (jdbc/execute-one! connectable
@@ -590,7 +595,8 @@
                        AND action_type = 'delete-curriculum'
                        AND entity_refs @> ?::jsonb
                        AND occurred_at >= ?) AS deleted"
-                user-id (json/generate-string [curriculum-id]) operation-started-at]
+                user-id (json/generate-string [curriculum-id])
+                (Timestamp/from ^Instant operation-started-at)]
                opts))))
 
 (defn- lock-subject-curriculum!
@@ -1237,7 +1243,9 @@
         score-by-material (into {} (map (juxt :material_id :raw_score)) material-scores)
         passed (completed-subjects user-id)
         passed-materials (into #{} (keep :material_id) passed)
-        summaries (exam-summaries db/ds user-id curriculum-id)]
+        ;; A staged curriculum keeps its blocks, and `own-block` hides them,
+        ;; so the evidence walk inside the summaries throws for one.
+        summaries (when curriculum (exam-summaries db/ds user-id curriculum-id))]
     (when curriculum
       (assoc curriculum
         :complete? (and (seq blocks) (every? :completed_at blocks))
