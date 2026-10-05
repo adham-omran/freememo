@@ -500,16 +500,26 @@
          handler, which reads the user's preference, and the Transcribe button,
          which always passes true."
   [user-id topic-id transcribe?]
-  (let [!in-flight (us/get-atom user-id :processing-videos)]
+  (let [!in-flight (us/get-atom user-id :processing-videos)
+        !errors (us/get-atom user-id :video-process-errors)]
     (if (contains? @!in-flight topic-id)
       (do (log/log-info (str "Video processing already running topic=" topic-id)) nil)
       (do
+        ;; Cleared BEFORE membership is published: the reporter must never see
+        ;; this run live beside the previous run's error.
+        (swap! !errors dissoc topic-id)
         (swap! !in-flight conj topic-id)
         (us/work-started! user-id)
         (commands/bump! user-id :process-video)
         (log/log-info (str "Video processing started topic=" topic-id
                         " transcribe=" (boolean transcribe?)))
-        (letfn [(finish! []
+        ;; Every failure records its error BEFORE `finish!` drops membership.
+        ;; The reporter reads `:video-process-errors` when it sees the topic
+        ;; leave `:processing-videos`; an error written after that point is
+        ;; never read, and the run closes as a success.
+        (letfn [(fail! [message]
+                  (swap! !errors assoc topic-id (or message "Video processing failed")))
+                (finish! []
                   (swap! !in-flight disj topic-id)
                   (commands/bump! user-id :process-video))]
           ((m/timeout
@@ -525,11 +535,13 @@
                                " transcribed=" (boolean (:transcribed result))))
                (do (log/log-warn (str "Video processing failed topic=" topic-id
                                    " stage=" (:stage result) " error=" (:error result)))
+                   (fail! (:error result))
                    (toasts/push! user-id {:level :error :message (:error result)})))
              (finish!))
            (fn [e]
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::process-video :data {:user-id user-id :topic-id topic-id}} e)
+               (fail! (.getMessage e))
                (toasts/push! user-id {:level :error :message (.getMessage e)}))
              (finish!))))
         nil))))
