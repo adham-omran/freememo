@@ -328,6 +328,15 @@
             {:label "Check source evidence"
              :detail "Select an evidence link to read its retained excerpt. Evidence from another document includes Open document in new tab."
              :commands #{}}
+            {:label "Pin questions on a Markdown file"
+             :detail "On a Markdown file from a repository, in the rendered view, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
+             :commands #{:ask-about-selection :save-question-pin :delete-question-pin}}
+            {:label "Ask your pins together"
+             :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea marked Start here. Point at a citation to light up its passage in the file."
+             :commands #{:ask-question-pins :apply-question-map}}
+            {:label "Work the map"
+             :detail "Each idea in the map offers I know it and Teach me. I know it is remembered for every document you read, and Undo removes it. When your answers show you understand an idea, the tutor marks it learned and closes its pins."
+             :commands #{:teach-question-root :mark-question-root-known}}
             {:label "Pick its model"
              :detail "Use the Model dropdown below the composer to set the model for this document. Leave it on your default otherwise."
              :commands #{}}

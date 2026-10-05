@@ -256,63 +256,69 @@
   (or (= "new" decision)
     (and (integer? decision) (contains? valid-ids decision))))
 
-(defn- link-entities!
+(defn link-entities!
   "Pass 2. Distinct labels → {lower-label entity-id}, creating rows for new.
    Labels without trigram candidates skip the LLM. A failed/invalid LLM
    decision degrades to new (a duplicate entity is reviewable later; a wrong
    merge is not). Post: every input label has an id; :cost is the LLM spend and
-   :tokens its usage-tokens maps, one per completion."
-  [api-key model-fields user-id labels]
-  (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
-        by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
-        ;; One batched trigram query for every label instead of a round trip
-        ;; per label; the LLM merge decision itself was already one call.
-        candidates-by-label (db/find-entity-link-candidates-batch user-id (vals by-lower) 6)
-        candidates (into {}
-                     (keep (fn [[_ label]]
-                             (when-let [cs (seq (get candidates-by-label label))]
-                               [label (mapv #(select-keys % [:id :label :aliases]) cs)])))
-                     by-lower)
-        {:keys [decisions cost tokens]}
-        (if (empty? candidates)
-          {:decisions {} :cost 0.0 :tokens []}
-          (try
-            (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields
-                                                 (cards/load-prompt-template "kg-link.md")
-                                                 (llm-json/write-prompt-input
-                                                   {:candidates candidates})
-                                                 :decisions :map
-                                                 {:feature :kg-link})]
-              {:decisions (into {}
-                            (map (fn [[label decision]]
-                                   [(if (keyword? label)
-                                      (subs (str label) 1)
-                                      (str label))
-                                    decision]))
-                            parsed)
-               :cost cost
-               :tokens tokens})
-            (catch Exception e
-              (tel/log! {:level :warn :id ::link-degraded
-                         :data {:labels (count candidates) :error (ex-message e)}}
-                "Entity-link call failed; treating all as new entities")
-              {:decisions {} :cost 0.0 :tokens []})))
-        valid-ids (into #{} (comp (mapcat val) (map :id)) candidates)
-        id-of (fn [label]
-                (let [d (get decisions label)]
-                  (when (and (link-decision-valid? valid-ids d)
-                          (integer? d))
-                    d)))
-        ;; Labels with no merge decision are new — batch-insert them all in
-        ;; one round trip instead of one insert-kg-entity! per label.
-        new-labels (into [] (comp (map val) (remove id-of)) by-lower)
-        new-ids (zipmap new-labels (db/insert-kg-entities! user-id new-labels))]
-    {:by-label (into {}
-                 (map (fn [[lower label]]
-                        [lower (or (id-of label) (get new-ids label))]))
-                 by-lower)
-     :cost cost
-     :tokens tokens}))
+   :tokens its usage-tokens maps, one per completion. The caller bills both.
+
+   Public because a question-map diagnosis links its root labels through this
+   same shortlist and pick (plans/anchored-questions.md §6.4.2.1). `opts`
+   `{:from-diagnosis? true}` marks the rows it creates."
+  ([api-key model-fields user-id labels]
+   (link-entities! api-key model-fields user-id labels {}))
+  ([api-key model-fields user-id labels opts]
+   (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
+         by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
+         ;; One batched trigram query for every label instead of a round trip
+         ;; per label; the LLM merge decision itself was already one call.
+         candidates-by-label (db/find-entity-link-candidates-batch user-id (vals by-lower) 6)
+         candidates (into {}
+                      (keep (fn [[_ label]]
+                              (when-let [cs (seq (get candidates-by-label label))]
+                                [label (mapv #(select-keys % [:id :label :aliases]) cs)])))
+                      by-lower)
+         {:keys [decisions cost tokens]}
+         (if (empty? candidates)
+           {:decisions {} :cost 0.0 :tokens []}
+           (try
+             (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                                                  (cards/load-prompt-template "kg-link.md")
+                                                  (llm-json/write-prompt-input
+                                                    {:candidates candidates})
+                                                  :decisions :map
+                                                  {:feature :kg-link})]
+               {:decisions (into {}
+                             (map (fn [[label decision]]
+                                    [(if (keyword? label)
+                                       (subs (str label) 1)
+                                       (str label))
+                                     decision]))
+                             parsed)
+                :cost cost
+                :tokens tokens})
+             (catch Exception e
+               (tel/log! {:level :warn :id ::link-degraded
+                          :data {:labels (count candidates) :error (ex-message e)}}
+                 "Entity-link call failed; treating all as new entities")
+               {:decisions {} :cost 0.0 :tokens []})))
+         valid-ids (into #{} (comp (mapcat val) (map :id)) candidates)
+         id-of (fn [label]
+                 (let [d (get decisions label)]
+                   (when (and (link-decision-valid? valid-ids d)
+                           (integer? d))
+                     d)))
+         ;; Labels with no merge decision are new — batch-insert them all in
+         ;; one round trip instead of one insert-kg-entity! per label.
+         new-labels (into [] (comp (map val) (remove id-of)) by-lower)
+         new-ids (zipmap new-labels (db/insert-kg-entities! user-id new-labels opts))]
+     {:by-label (into {}
+                  (map (fn [[lower label]]
+                         [lower (or (id-of label) (get new-ids label))]))
+                  by-lower)
+      :cost cost
+      :tokens tokens})))
 
 ;; ---------------------------------------------------------------------------
 ;; Orchestrator

@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-41-in-a-fixed-order
-  (is (= 41 (count fmt/entity-tables)))
-  (is (= 41 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-45-in-a-fixed-order
+  (is (= 45 (count fmt/entity-tables)))
+  (is (= 45 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -117,7 +117,14 @@
              ;; kg_reviews' CHECK requires exactly one of question_id /
              ;; flashcard_id (db.clj:1006), so it needs both tables present.
              [:kg_reviews :kg_questions]
-             [:kg_reviews :flashcards]]]
+             [:kg_reviews :flashcards]
+             [:question_maps :topics]
+             [:question_roots :question_maps]
+             [:question_roots :kg_entities]
+             [:question_pins :question_maps]
+             [:question_pins :question_roots]
+             [:question_pins :topics]
+             [:known_marks :kg_entities]]]
       (is (before? referenced referrer)
         (str (name referrer) " references " (name referenced) " and must follow it"))))
   (testing "settings is last — its keys embed topic ids (§5.4.8)"

@@ -155,6 +155,13 @@
         (history/AssistantChatEffects user-id root-topic-id show-right-pane!
           !active !history-open? !renaming-active? !chat-action !seeded?)
 
+        ;; An Ask over pins is consumed by the AssistantPanel, which is not
+        ;; mounted while this panel is closed or on another tab. Opening the
+        ;; assistant tab mounts it, and it takes the waiting invocation
+        ;; (plans/anchored-questions.md §6.2.5).
+        (e/for [_request (bus/Requests :ask-question-pins)]
+          (show-right-pane! "assistant"))
+
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]
             (case r

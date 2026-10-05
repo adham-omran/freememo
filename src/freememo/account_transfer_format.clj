@@ -81,7 +81,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 41 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 45 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -129,6 +129,10 @@
    :kg_questions
    :kg_question_facts
    :kg_reviews
+   :question_maps
+   :question_roots
+   :question_pins
+   :known_marks
    :settings])
 
 (def excluded-tables
@@ -407,6 +411,27 @@
                         :params 2 :order "t.id"}
 
    :kg_entities {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   ;; Question maps (plans/anchored-questions.md §6.1.6). A map is scoped
+   ;; through its repository node as well as its user, so a map whose
+   ;; repository is staged for deletion stays behind with it. Roots and pins
+   ;; follow their map. `question_roots.citations` holds quotes and heading
+   ;; anchors only, never an id or HTML, so it needs no remap.
+   :question_maps {:where (str "t.user_id = ? AND t.repo_topic_id IN (" owned-topics ")")
+                   :params 2 :order "t.id"}
+
+   :question_roots {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
+                             " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                    :params 2 :order "t.id"}
+
+   :question_pins {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
+                            " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                   :params 2 :order "t.id"}
+
+   ;; Keyed on (entity_id, source) with no id column. The owner is the
+   ;; entity's owner.
+   :known_marks {:where "t.entity_id IN (SELECT e.id FROM kg_entities e WHERE e.user_id = ?)"
+                 :params 1 :order "t.entity_id, t.source"}
 
    :kg_predicates {:where "t.user_id = ?" :params 1 :order "t.id"}
 

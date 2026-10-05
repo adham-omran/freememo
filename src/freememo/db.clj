@@ -2170,6 +2170,76 @@
       PRIMARY KEY (topic_id, surface)
     )"]))
 
+(defn- setup-schema-question-pins!
+  "Anchored questions on rendered Markdown (plans/anchored-questions.md §6).
+   Must run after setup-schema-kg! and setup-schema-code!.
+
+   A question map is one per document key: a repository node plus a
+   `repo_path`. Each GitLab update writes a new snapshot topic for every file
+   under the same repository node, so keying by the snapshot would strand pins
+   on the old file. The map row also owns the label counter, so a label is
+   never reused after a delete (§6.2.3).
+
+   A pin stores its lifecycle only. Whether its quote matches is computed per
+   snapshot when one renders (§6.1.3), so no column says `stale`.
+
+   A root links to a `kg_entities` row with ON DELETE SET NULL and keeps its
+   own label, so deleting an entity leaves every pin with a root (§6.4.2.4).
+   The partial unique index holds the one-`next`-per-map invariant (§6.3.8).
+
+   A known mark has no `user_id`: the entity's owner is the mark's owner, and
+   a second copy of that fact could disagree with it (§6.4.5)."
+  []
+  (jdbc/execute! ds ["ALTER TABLE kg_entities
+                      ADD COLUMN IF NOT EXISTS from_diagnosis BOOLEAN NOT NULL DEFAULT false"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS question_maps (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      repo_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      repo_path TEXT NOT NULL,
+      next_label INTEGER NOT NULL DEFAULT 1 CHECK (next_label >= 1),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (repo_topic_id, repo_path)
+    )"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS question_roots (
+      id SERIAL PRIMARY KEY,
+      map_id INTEGER NOT NULL REFERENCES question_maps(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      entity_id INTEGER REFERENCES kg_entities(id) ON DELETE SET NULL,
+      in_document BOOLEAN NOT NULL,
+      citations JSONB NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'next', 'learned')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (map_id, label)
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_question_roots_one_next
+                      ON question_roots(map_id) WHERE status = 'next'"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS question_pins (
+      id SERIAL PRIMARY KEY,
+      map_id INTEGER NOT NULL REFERENCES question_maps(id) ON DELETE CASCADE,
+      label INTEGER NOT NULL CHECK (label >= 1),
+      snapshot_topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+      quote TEXT NOT NULL CHECK (quote <> ''),
+      heading_anchor TEXT,
+      question TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+      root_id INTEGER REFERENCES question_roots(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (map_id, label)
+    )"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS known_marks (
+      entity_id INTEGER NOT NULL REFERENCES kg_entities(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK (source IN ('self', 'tutor')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (entity_id, source)
+    )"]))
+
 (defn- setup-schema-document-summaries!
   "Install the maintained root-document progress read model.
 
@@ -2842,6 +2912,7 @@
   (setup-schema-activity-monitor!)
   (setup-schema-document-summaries!)
   (setup-schema-reading-positions!)
+  (setup-schema-question-pins!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
 
@@ -3448,6 +3519,20 @@
              delta run-uuid]
             {:builder-fn rs/as-unqualified-maps})
     :response_text))
+
+(defn replace-assistant-run-text!
+  "Replace an active run's stored text before it completes. Used once, after
+   the stream ends, to drop a question-map block the reply started with
+   (plans/anchored-questions.md §6.3.2), so the transcript stores the prose.
+   Pre: `text` is the prose of the run's own stored text.
+   Post: true when the run was still active; a stopped or failed run keeps its
+         text, under the same invariant as `append-assistant-run-text!`."
+  [run-uuid text]
+  (some? (jdbc/execute-one! ds
+           ["UPDATE assistant_runs SET response_text = ?
+              WHERE run_uuid = ? AND status IN ('queued','streaming')
+             RETURNING run_uuid"
+            text run-uuid])))
 
 (defn update-assistant-run-metadata!
   "Merge provider metadata without changing status or response text.
@@ -10460,6 +10545,9 @@
    or a caller that (like kg-extract's LLM-linker) inserts without an
    existence check, can produce a duplicate label — acceptable, matching the
    prior single-row insert-kg-entity!'s semantics.
+   `from-diagnosis?` marks rows a question-map diagnosis created, so the
+   Knowledge view can tell them from extracted ones (plans/anchored-questions.md
+   §6.4.2.2).
    Pre:  labels non-empty; distinct within any one chunk (both callers dedupe
          before calling — a duplicate label in the same chunk would share one
          id in the result, since re-association below is by label).
@@ -10467,18 +10555,22 @@
    back `label` and re-associates each id to its input label by that value —
    NOT by trusting Postgres' VALUES/RETURNING row order, which SQL does not
    guarantee (reliable in practice for a single INSERT, but not a contract)."
-  [user-id labels]
-  (when (seq labels)
-    (into []
-      (mapcat (fn [chunk]
-                (let [returned (jdbc/execute! ds
+  ([user-id labels] (insert-kg-entities! user-id labels {}))
+  ([user-id labels {:keys [from-diagnosis?]}]
+   (when (seq labels)
+     (into []
+       (mapcat (fn [chunk]
+                 (let [returned (jdbc/execute! ds
                                   (sql/format {:insert-into :kg_entities
-                                               :values (mapv #(hash-map :user_id user-id :label (sanitize-utf8 %)) chunk)
+                                               :values (mapv #(hash-map :user_id user-id
+                                                                :label (sanitize-utf8 %)
+                                                                :from_diagnosis (boolean from-diagnosis?))
+                                                         chunk)
                                                :returning [:id :label]})
                                   {:builder-fn rs/as-unqualified-maps})
-                      id-by-label (into {} (map (juxt :label :id)) returned)]
-                  (mapv (comp id-by-label sanitize-utf8) chunk))))
-      (partition-all entity-batch-chunk-size labels))))
+                       id-by-label (into {} (map (juxt :label :id)) returned)]
+                   (mapv (comp id-by-label sanitize-utf8) chunk))))
+       (partition-all entity-batch-chunk-size labels)))))
 
 (defn get-or-create-kg-entities!
   "Batched exact get-or-create of entities by (user-id, label) — the
@@ -11211,7 +11303,12 @@
    Both fact reads filter status='approved', matching every other fact read in the
    app. They did not until 'duplicate' existed, and the omission was invisible
    while rejects were rare: an entity whose facts were all withdrawn still counted
-   them, so the Entities view reported usage for a concept no longer in the graph."
+   them, so the Entities view reported usage for a concept no longer in the graph.
+
+   An entity a question-map diagnosis created is left out until a fact uses it:
+   it names a concept a reader asked about, not one extraction found
+   (plans/anchored-questions.md §6.4.2.3). Once extraction links a fact to it,
+   it is an ordinary entity and is listed."
   ([user-id query limit] (list-kg-entities user-id query limit nil))
   ([user-id query limit source-id]
    (let [blank? (or (nil? query) (str/blank? query))
@@ -11227,7 +11324,11 @@
                  (SELECT COUNT(*) FROM kg_facts f
                   WHERE (f.subject_entity_id = e.id OR f.object_entity_id = e.id)
                     AND f.status = 'approved') AS fact_count
-               FROM kg_entities e WHERE e.user_id = ?"
+               FROM kg_entities e WHERE e.user_id = ?
+                AND (NOT e.from_diagnosis OR EXISTS (
+                      SELECT 1 FROM kg_facts fd
+                       WHERE (fd.subject_entity_id = e.id OR fd.object_entity_id = e.id)
+                         AND fd.status = 'approved'))"
          rows (if blank?
                 (jdbc/execute! ds
                   (into [(str base src-sql
@@ -13505,3 +13606,271 @@
       (sql/format {:select [[[:max :updated_at] :cached_at]]
                    :from [:anki_card_states]
                    :where [:= :user_id user-id]}))))
+
+;; ---------------------------------------------------------------------------
+;; Question maps — plans/anchored-questions.md §6
+;;
+;; Every write here carries its ownership as a clause of the statement: a map
+;; row holds `user_id`, and pins and roots are reached only through a map the
+;; caller owns. A forged id therefore writes nothing.
+;; ---------------------------------------------------------------------------
+
+(defn question-doc-key
+  "The document key of `user-id`'s repository file `topic-id`.
+   Post: {:repo_topic_id :repo_path} when the topic is the user's, has a
+         non-blank `repo_path`, and its root is a `repo` node; else nil."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["WITH RECURSIVE up AS (
+        SELECT id, parent_id, kind, repo_path, id AS file_id
+          FROM topics WHERE id = ? AND user_id = ? AND kind = 'code'
+                        AND repo_path IS NOT NULL AND repo_path <> ''
+        UNION ALL
+        SELECT t.id, t.parent_id, t.kind, up.repo_path, up.file_id
+          FROM topics t JOIN up ON t.id = up.parent_id)
+      SELECT id AS repo_topic_id, repo_path FROM up
+       WHERE parent_id IS NULL AND kind = 'repo'"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn question-map-id
+  "The id of the question map for a document key, or nil when none exists."
+  [user-id repo-topic-id repo-path]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM question_maps
+            WHERE user_id = ? AND repo_topic_id = ? AND repo_path = ?"
+          user-id repo-topic-id repo-path]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn ensure-question-map!
+  "The id of the question map for a document key, created when absent.
+   Pre:  `repo-topic-id` is a `repo` node `user-id` owns, else nil.
+   Post: one row per document key, whatever the concurrency."
+  [user-id repo-topic-id repo-path]
+  (jdbc/execute-one! ds
+    ["INSERT INTO question_maps (user_id, repo_topic_id, repo_path)
+      SELECT ?, t.id, ? FROM topics t
+       WHERE t.id = ? AND t.user_id = ? AND t.kind = 'repo'
+      ON CONFLICT (repo_topic_id, repo_path) DO NOTHING"
+     user-id repo-path repo-topic-id user-id])
+  (question-map-id user-id repo-topic-id repo-path))
+
+(defn create-question-pin!
+  "Create one open pin in map `map-id` and give it the map's next label.
+   Pre:  `quote` is non-blank. `snapshot-topic-id` is the file topic it was
+         made on; a topic the user does not own is stored as NULL.
+   Post: the new row as an unqualified map, or nil when the map is not the
+         user's. The label is taken and the counter moved in one transaction,
+         so two concurrent creates never share a label, and a deleted pin's
+         label is never given out again (§6.2.3)."
+  [user-id map-id {:keys [snapshot-topic-id quote heading-anchor question]}]
+  (jdbc/with-transaction [tx ds]
+    (when-let [label (:label (jdbc/execute-one! tx
+                               ["UPDATE question_maps SET next_label = next_label + 1
+                                  WHERE id = ? AND user_id = ?
+                                 RETURNING next_label - 1 AS label"
+                                map-id user-id]
+                               {:builder-fn rs/as-unqualified-maps}))]
+      (jdbc/execute-one! tx
+        ["INSERT INTO question_pins
+            (map_id, label, snapshot_topic_id, quote, heading_anchor, question)
+          VALUES (?, ?, (SELECT id FROM topics WHERE id = ? AND user_id = ?), ?, ?, ?)
+          RETURNING id, label, quote, heading_anchor, question, status, root_id"
+         map-id label snapshot-topic-id user-id (sanitize-utf8 quote)
+         heading-anchor (sanitize-utf8 (or question ""))]
+        {:builder-fn rs/as-unqualified-maps}))))
+
+(def ^:private owned-pin-clause
+  "map_id IN (SELECT id FROM question_maps WHERE user_id = ?)")
+
+(defn update-question-pin-question!
+  "Replace the question text of `user-id`'s pin. Post: the update count."
+  [user-id pin-id question]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      [(str "UPDATE question_pins SET question = ?, updated_at = now()
+              WHERE id = ? AND " owned-pin-clause)
+       (sanitize-utf8 (or question "")) pin-id user-id])))
+
+(defn set-question-pin-status!
+  "Set `user-id`'s pin to `status`, `open` or `closed`. Post: the update count."
+  [user-id pin-id status]
+  {:pre [(#{"open" "closed"} status)]}
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      [(str "UPDATE question_pins SET status = ?, updated_at = now()
+              WHERE id = ? AND " owned-pin-clause)
+       status pin-id user-id])))
+
+(defn delete-question-pin!
+  "Delete `user-id`'s pin. Its label is not given out again. Post: the count."
+  [user-id pin-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      [(str "DELETE FROM question_pins WHERE id = ? AND " owned-pin-clause)
+       pin-id user-id])))
+
+(defn question-pins
+  "Every pin of `user-id`'s map `map-id`, in label order."
+  [user-id map-id]
+  (jdbc/execute! ds
+    [(str "SELECT id, label, quote, heading_anchor, question, status, root_id
+             FROM question_pins WHERE map_id = ? AND " owned-pin-clause
+          " ORDER BY label")
+     map-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn question-roots
+  "Every root of `user-id`'s map `map-id`, oldest first.
+   Post: each row carries `:known_sources`, the sources of the known marks on
+         its entity (`self`, `tutor`), empty when it has none or no entity, and
+         `:citations` as Clojure data."
+  [user-id map-id]
+  (mapv #(-> %
+           (update :citations pgobject->clj)
+           (update :known_sources (fn [a] (if a (vec (.getArray ^java.sql.Array a)) []))))
+    (jdbc/execute! ds
+      [(str "SELECT r.id, r.label, r.entity_id, r.in_document, r.citations, r.status,
+                    (SELECT array_agg(k.source ORDER BY k.source) FROM known_marks k
+                      WHERE k.entity_id = r.entity_id) AS known_sources
+               FROM question_roots r
+              WHERE r.map_id = ? AND r." owned-pin-clause
+            " ORDER BY r.id")
+       map-id user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn- set-next-root!
+  "Inside `tx`: make root `root-id` of map `map-id` the one `next` root.
+   The old `next` root becomes `open` first, because the partial unique index
+   allows one `next` per map at every statement boundary (§6.3.8)."
+  [tx map-id root-id]
+  (jdbc/execute! tx ["UPDATE question_roots SET status = 'open', updated_at = now()
+                       WHERE map_id = ? AND status = 'next' AND id <> ?"
+                     map-id root-id])
+  (jdbc/execute! tx ["UPDATE question_roots SET status = 'next', updated_at = now()
+                       WHERE map_id = ? AND id = ?"
+                     map-id root-id]))
+
+(defn apply-question-map-plan!
+  "Write one validated reply plan into `user-id`'s map `map-id`, atomically.
+
+   `plan` is `question-map-block/plan`'s output with entity ids added:
+     :new-roots   [{:label :in-document? :citations [..] :entity-id}]
+     :relinks     {root-label entity-id}, for roots whose entity was deleted
+     :pin-roots   {pin-label root-label}
+     :learned     #{root-label}
+     :next        root-label or nil
+
+   Pre:  every label the plan names is a root after :new-roots is applied —
+         the planner guarantees it.
+   Post: nil when the map is not the user's. Otherwise, in one transaction:
+         new roots exist; each named pin links its root; each learned root is
+         `learned`, its open pins are `closed`, and its entity has a `tutor`
+         known mark (§6.4.5); the `next` root, when named and not learned, is
+         the map's one `next` root. Returns {:closed-pins n}."
+  [user-id map-id {:keys [new-roots relinks pin-roots learned next]}]
+  (jdbc/with-transaction [tx ds]
+    (when (jdbc/execute-one! tx ["SELECT 1 FROM question_maps WHERE id = ? AND user_id = ?"
+                                 map-id user-id])
+      (doseq [{:keys [label in-document? citations entity-id]} new-roots]
+        (jdbc/execute! tx
+          ["INSERT INTO question_roots (map_id, label, entity_id, in_document, citations)
+            VALUES (?, ?, (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?), ?, ?)
+            ON CONFLICT (map_id, label) DO NOTHING"
+           map-id (sanitize-utf8 label) entity-id user-id (boolean in-document?)
+           (->jsonb (vec citations))]))
+      (doseq [[label entity-id] relinks]
+        (jdbc/execute! tx
+          ["UPDATE question_roots
+               SET entity_id = (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?),
+                   updated_at = now()
+             WHERE map_id = ? AND label = ? AND entity_id IS NULL"
+           entity-id user-id map-id label]))
+      (let [root-id (into {} (map (juxt :label :id))
+                      (jdbc/execute! tx ["SELECT id, label FROM question_roots WHERE map_id = ?"
+                                         map-id]
+                        {:builder-fn rs/as-unqualified-maps}))]
+        (doseq [[pin-label root-label] pin-roots
+                :let [rid (root-id root-label)]
+                :when rid]
+          (jdbc/execute! tx ["UPDATE question_pins SET root_id = ?, updated_at = now()
+                               WHERE map_id = ? AND label = ?"
+                             rid map-id pin-label]))
+        (let [learned-ids (vec (keep root-id learned))
+              closed (if (seq learned-ids)
+                       (let [ids (into-array Integer (map int learned-ids))]
+                         (jdbc/execute! tx ["UPDATE question_roots SET status = 'learned', updated_at = now()
+                                              WHERE map_id = ? AND id = ANY(?)"
+                                            map-id ids])
+                         (jdbc/execute! tx ["INSERT INTO known_marks (entity_id, source)
+                                             SELECT entity_id, 'tutor' FROM question_roots
+                                              WHERE map_id = ? AND id = ANY(?) AND entity_id IS NOT NULL
+                                             ON CONFLICT DO NOTHING"
+                                            map-id ids])
+                         (::jdbc/update-count
+                           (jdbc/execute-one! tx ["UPDATE question_pins SET status = 'closed', updated_at = now()
+                                                    WHERE map_id = ? AND status = 'open' AND root_id = ANY(?)"
+                                                  map-id ids])))
+                       0)]
+          (when-let [rid (and next (not (contains? (set learned) next)) (root-id next))]
+            (when (jdbc/execute-one! tx ["SELECT 1 FROM question_roots
+                                           WHERE id = ? AND status <> 'learned'" rid])
+              (set-next-root! tx map-id rid)))
+          {:closed-pins closed})))))
+
+(defn set-question-root-next!
+  "\"Teach me\": make `user-id`'s root `root-id` its map's one `next` root,
+   whatever its status was (§6.3.7). Post: true when the root is the user's."
+  [user-id root-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [map-id (:map_id (jdbc/execute-one! tx
+                                 [(str "SELECT map_id FROM question_roots
+                                         WHERE id = ? AND " owned-pin-clause)
+                                  root-id user-id]
+                                 {:builder-fn rs/as-unqualified-maps}))]
+      (set-next-root! tx map-id root-id)
+      true)))
+
+(defn ensure-question-root-entity!
+  "The entity id of `user-id`'s root `root-id`, creating one from the root's
+   label when the root has none — its entity was deleted (§6.4.2.4), or it was
+   never linked. A created row is marked `from_diagnosis`.
+   Post: the entity id, or nil when the root is not the user's."
+  [user-id root-id]
+  (when-let [root (jdbc/execute-one! ds
+                    [(str "SELECT id, label, entity_id FROM question_roots
+                            WHERE id = ? AND " owned-pin-clause)
+                     root-id user-id]
+                    {:builder-fn rs/as-unqualified-maps})]
+    (or (:entity_id root)
+      (let [entity-id (first (insert-kg-entities! user-id [(:label root)]
+                               {:from-diagnosis? true}))]
+        (jdbc/execute! ds ["UPDATE question_roots SET entity_id = ?, updated_at = now()
+                             WHERE id = ? AND entity_id IS NULL"
+                           entity-id root-id])
+        (:entity_id (jdbc/execute-one! ds ["SELECT entity_id FROM question_roots WHERE id = ?"
+                                           root-id]
+                      {:builder-fn rs/as-unqualified-maps}))))))
+
+(defn set-known-mark!
+  "Write a known mark with `source` on `user-id`'s entity. Idempotent.
+   Post: true when the entity is the user's."
+  [user-id entity-id source]
+  {:pre [(#{"self" "tutor"} source)]}
+  (some? (jdbc/execute-one! ds
+           ["INSERT INTO known_marks (entity_id, source)
+             SELECT id, ? FROM kg_entities WHERE id = ? AND user_id = ?
+             ON CONFLICT (entity_id, source) DO UPDATE SET source = excluded.source
+             RETURNING entity_id"
+            source entity-id user-id])))
+
+(defn delete-known-marks!
+  "Remove every known mark on `user-id`'s entity, of both sources (§6.4.4).
+   Post: the number of marks removed."
+  [user-id entity-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      ["DELETE FROM known_marks
+         WHERE entity_id IN (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?)"
+       entity-id user-id])))
+

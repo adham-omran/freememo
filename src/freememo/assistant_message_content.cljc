@@ -5,7 +5,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.assistant-evidence :as evidence]
-   [freememo.math :as math]))
+   [freememo.command-bus :as bus]
+   [freememo.math :as math]
+   [freememo.question-pin-state :as pin-state]))
 
 (defn pin-transcript!
   "Scroll the transcript holding `node` to its bottom. CLJ no-op.
@@ -31,6 +33,44 @@
   #?(:cljs (.dispatchEvent node (js/CustomEvent. "assistant-answer-rendered"
                                   #js {:bubbles true}))
      :clj nil))
+
+(defn- evidence-text
+  "The text of retained evidence `source`. A row that kept its HTML crosses
+   without its text (`assistant/evidence-wire-row`), so the text is read back
+   from the HTML. The matcher removes all whitespace, so the two agree."
+  [source]
+  (or (:quoted_text source)
+    #?(:cljs (when-let [html (:quoted_html source)]
+               (let [t (.createElement js/document "template")]
+                 (set! (.-innerHTML t) html)
+                 (.. t -content -textContent)))
+       :clj nil)))
+
+(defn- pointed-passage
+  "The passage the citation under `event` cites, as `pin-state/!finger` takes
+   it, or nil when the pointer is not on a citation."
+  [event sources]
+  (when-let [source (some->> (evidence/clicked-citation event)
+                      (evidence/source-for-citation sources))]
+    (when-let [quote (not-empty (evidence-text source))]
+      {:quote quote :anchor (:anchor source)
+       :source-topic-id (:page_topic_id source)})))
+
+(defn- point-at-citation!
+  "Light up the passage of the citation under the pointer in the open file,
+   or stop when the pointer is on none (plans/anchored-questions.md §6.5.1)."
+  [event sources]
+  (pin-state/point! (pointed-passage event sources)))
+
+(defn- scroll-to-citation!
+  "A citation of the file the rendered pane shows scrolls there instead of
+   opening the evidence dialog (§6.5.4). Post: true when it did."
+  [event sources]
+  (let [passage (pointed-passage event sources)
+        pane-topic-id (:question-pane-topic-id @bus/!ctx)]
+    (if (and passage pane-topic-id (= pane-topic-id (:source-topic-id passage)))
+      (do (pin-state/point! (assoc passage :scroll? true)) true)
+      false)))
 
 (e/defn AssistantRichTextLeaf [safe-html]
   (e/client
@@ -59,8 +99,13 @@
               (when-let [source (evidence/source-for-citation
                                   (:assistant_run/evidence message) citation)]
                 (.preventDefault event)
-                (reset! !evidence source))))
+                (when-not (scroll-to-citation! event (:assistant_run/evidence message))
+                  (reset! !evidence source)))))
           nil)
+        (dom/On "mouseover"
+          (fn [event] (point-at-citation! event (:assistant_run/evidence message)))
+          nil)
+        (dom/On "mouseleave" (fn [_] (pin-state/point! nil)) nil)
         (if (str/blank? content)
           (when-not (or (= "failed" status) (= "stopped" status))
             (dom/span

@@ -29,6 +29,7 @@
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.math :as math]
+   [freememo.question-pin-pane :as pin-pane]
    [freememo.reading-position-view :refer [ReadingPosition]]
    [freememo.rich-text-editor :as editor]
    [freememo.video-format :refer [format-bytes]]
@@ -278,16 +279,21 @@
       (dom/On "click" (fn [_] (set-view! (if (= "rendered" view) "source" "rendered"))) nil))))
 
 (e/defn RenderedMarkdown
-  "The rendered view of a Markdown file (§2).
+  "The rendered view of a Markdown file (§2), and its question pins
+   (plans/anchored-questions.md §6.2).
    Pre : `rendered` is {:topic-id :html}, `:html` being `rendered-markdown*`'s
-         result. A server value."
-  [rendered]
+         result. A server value.
+   Inv : the pane's div holds only the rendered blocks. A pin location names a
+         block by its index among them, so `PinLayer` mounts beside the div."
+  [rendered user-id pin-list-open? !pin-list-open?]
   (e/client
-    (dom/div
-      (dom/props {:class "code-pane-rendered" :tabindex "0"})
-      (let [node dom/node]
-        (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
-        (show-rendered! node rendered)))))
+    (let [[node _] (dom/div
+                     (dom/props {:class "code-pane-rendered" :tabindex "0"})
+                     (let [node dom/node]
+                       (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
+                       [node (show-rendered! node rendered)]))]
+      (pin-pane/PinLayer user-id (:topic-id rendered) node pin-list-open?
+        !pin-list-open?))))
 
 (e/defn CodePane
   "Pre : dctx/page-topic-id names a code topic (dctx/is-code?).
@@ -328,7 +334,9 @@
                                (e/Offload #(when-let [h (rendered-markdown* user-id topic-id)]
                                              {:topic-id topic-id :html h}))))
           !notice (atom nil)
-          notice (e/watch !notice)]
+          notice (e/watch !notice)
+          !pin-list-open? (atom false)
+          pin-list-open? (e/watch !pin-list-open?)]
       (e/drain
         (when t-view
           (let [save-topic (:topic-id view-save)
@@ -349,6 +357,8 @@
                                                              (some-> (:byte-size code) format-bytes)])))))
           (when (and markdown? source? view)
             (ViewToggle view set-view!))
+          (when rendered?
+            (pin-pane/PinHeaderControls user-id topic-id !pin-list-open?))
           ;; Copy to notes copies source lines, which the rendered view has
           ;; none of (§2.8). A hidden editor pane would take the lines out of
           ;; sight (plans/editor-pane-toggle.md §4.3).
@@ -378,7 +388,7 @@
             (dom/text (str "No source is stored for this file. Its extension was not "
                         "selected at import, or the file is binary or larger than 1 MB.")))
 
-          rendered? (RenderedMarkdown rendered)
+          rendered? (RenderedMarkdown rendered user-id pin-list-open? !pin-list-open?)
 
           show-source?
           (dom/pre

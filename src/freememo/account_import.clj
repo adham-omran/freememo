@@ -60,7 +60,8 @@
    An archive's own user id is provenance only and is never trusted."
   #{:sources :media :topics :poem_packages :topic_repetitions :study_schedules
     :curricula :curriculum_exam_forms :curriculum_exam_sittings :assistant_chats
-    :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings})
+    :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings
+    :question_maps})
 
 (def ^:private fk-columns
   "column → id space, per table. The id space is the table whose ledger map
@@ -116,7 +117,12 @@
               :object_entity_id :kg_entities :graph_topic_id :topics}
    :kg_page_extractions {:graph_topic_id :topics :page_topic_id :topics}
    :kg_question_facts {:question_id :kg_questions :fact_id :kg_facts}
-   :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}})
+   :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}
+   :question_maps {:repo_topic_id :topics}
+   :question_roots {:map_id :question_maps :entity_id :kg_entities}
+   :question_pins {:map_id :question_maps :snapshot_topic_id :topics
+                   :root_id :question_roots}
+   :known_marks {:entity_id :kg_entities}})
 
 (def ^:private required-fk-columns
   "Foreign keys whose row is worthless without them. A row whose value here does
@@ -156,7 +162,16 @@
    ;; the UNIQUE on page_topic_id makes that a hard failure rather than a wrong
    ;; skip — dropping the row instead re-extracts one page.
    :kg_page_extractions #{:graph_topic_id :page_topic_id}
-   :kg_question_facts #{:question_id :fact_id}})
+   :kg_question_facts #{:question_id :fact_id}
+   ;; A map is its document key, and roots and pins are nothing without their
+   ;; map. `entity_id`, `snapshot_topic_id` and `root_id` are nullable with ON
+   ;; DELETE SET NULL, so an untranslatable value arrives as null, the same
+   ;; outcome the source schema produces.
+   :question_maps #{:repo_topic_id}
+   :question_roots #{:map_id}
+   :question_pins #{:map_id}
+   ;; Half of the primary key.
+   :known_marks #{:entity_id}})
 
 (def ^:private dropped-columns
   "Columns removed before insert. `id` everywhere — the target's sequence issues

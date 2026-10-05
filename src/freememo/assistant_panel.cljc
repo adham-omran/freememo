@@ -28,6 +28,7 @@
    [freememo.assistant-selection-cards :as selection-cards]
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
+   [freememo.question-map-panel :as question-map]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn mention-query
@@ -114,6 +115,10 @@
 
       (selection-cards/SelectionCardsEffect user-id page-topic-id !selection-cards !error)
 
+      ;; An Ask over a file's open pins arrives as a command and leaves as a
+      ;; submit (plans/anchored-questions.md §6.2.5.1).
+      (question-map/AskPinsEffect !submit !active (:id mode-entry) web-search?)
+
       ;; Add one selected document as a chip. Its own e/defn, so this method
       ;; stays under the 64KB bytecode limit.
       (composer/ReferencePickEffect picked reference-documents reference-document-count
@@ -125,6 +130,7 @@
         (history/ChatBarWithHistory root-topic-id chat-options active
           (:active-title data)
           !active !history-open? !renaming-active? !chat-action !draft !error)
+        (question-map/QuestionMapCard user-id page-topic-id)
         (transcript/AssistantTranscript
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id
@@ -135,6 +141,8 @@
 
         (overlays/PanelOverlays details user-id root-topic-id page-topic-id
           !details-run !evidence !side !error)
+
+        (question-map/AskPinsRow sending?)
 
         (composer/AssistantComposer
           {:at-open? at-open?
