@@ -1,10 +1,10 @@
 (ns freememo.walkthrough-entry
   "\"Walk through commits…\" on a repository node
-   (plans/commit-range-walkthrough.md §6.6.1): the button, the picker that
-   takes commits A and B from the clone's history, and the list of this
-   repository's walkthroughs.
+   (plans/commit-range-walkthrough.md §6.6.1): the button, and the picker
+   that takes the first and the last commit from the clone's history. The
+   repository home lists the walkthroughs (`walkthrough-table`).
 
-   Its own namespace for the 64KB method cap: `repo-update-bar` mounts it."
+   Its own namespace for the 64KB method cap: `repo-home` mounts it."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -14,7 +14,6 @@
    [freememo.modal-shell :as modal]
    [freememo.typeahead :as typeahead]
    [freememo.navigation :as nav]
-   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.walkthrough :as wt])))
 
 (defn history* [user-id repo-id]
@@ -22,9 +21,6 @@
 
 (defn start!* [user-id repo-id from-sha to-sha]
   #?(:clj (wt/start! user-id repo-id from-sha to-sha) :cljs nil))
-
-(defn walkthroughs* [_rev user-id repo-id]
-  #?(:clj (wt/list-for-repo user-id repo-id) :cljs nil))
 
 (defn- short-sha [sha] (subs (str sha) 0 (min 7 (count (str sha)))))
 
@@ -141,34 +137,19 @@
           (dom/text "Close")
           (dom/On "click" (fn [_] (reset! !open? false)) nil))))))
 
-(e/defn WalkthroughEntry
-  "The repository node's walkthrough control and its walkthroughs."
+(e/defn WalkthroughStart
+  "The \"Walk through commits…\" button and its picker. Publishes the
+   palette's :start-walkthrough invoker while mounted."
   [user-id repo-id navigate!]
   (e/client
     (let [!open? (atom false)
-          open? (e/watch !open?)
-          rev (e/server (e/watch (us/get-atom user-id :walkthrough-mutations)))
-          rows (e/server (e/Offload #(walkthroughs* rev user-id repo-id)))]
+          open? (e/watch !open?)]
       (bus/publish-invoker! :start-walkthrough #(reset! !open? true))
       (e/on-unmount #(bus/retract-invoker! :start-walkthrough))
-      (dom/div
-        (dom/props {:class "wt-entry"})
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-entry__start"})
-          (dom/text "Walk through commits…")
-          (dom/On "click" (fn [_] (reset! !open? true)) nil))
-        (dom/ul
-          (dom/props {:class "wt-entry__list"})
-          (e/for [w (e/server (e/diff-by :id rows))]
-            (dom/li
-              (dom/button
-                (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-entry__open"})
-                (dom/text (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) " · "
-                            (:commit_count w) " commits · "
-                            (case (:status w) "ready" (str "step " (:step w) " of " (:concepts w))
-                                             "preparing" "preparing"
-                                             (str "failed"))))
-                (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-walkthrough repo-id (:id w)))) nil))))))
+      (dom/button
+        (dom/props {:type "button" :class "btn btn-sm btn-primary wt-entry__start"})
+        (dom/text "Walk through commits…")
+        (dom/On "click" (fn [_] (reset! !open? true)) nil))
       (dom/div
         (dom/props {:class "wt-picker-host"})
         (when open? (Picker user-id repo-id !open? navigate!))))))

@@ -37,6 +37,7 @@
             [freememo.unified-diff :as diff]
             [freememo.user-state :as us]
             [freememo.walkthrough-grouping :as grouping]
+            [freememo.walkthrough-name :as wname]
             [freememo.walkthrough-range :as wr]
             [taoensso.telemere :as tel]))
 
@@ -185,6 +186,34 @@
         {:ok true})
     {:error "Only a walkthrough that failed can be prepared again."}))
 
+(defn rename!
+  "Give `user-id`'s walkthrough `wid` the name `typed`, or clear it when
+   `typed` is blank (plans/repository-home.md §4.3.3). The one writer for the
+   home row and the screen title.
+   Post: {:ok true}, or {:error S} for a name that is too long or a
+         walkthrough that is not the user's."
+  [user-id wid typed]
+  (let [{:keys [name error]} (wname/normalize-name typed)]
+    (cond
+      error {:error error}
+      (db/rename-walkthrough! user-id wid name)
+      (do (commands/bump! user-id :rename-walkthrough) {:ok true})
+      :else {:error "That walkthrough could not be renamed."})))
+
+(defn delete!
+  "Delete `user-id`'s walkthrough `wid` (plans/repository-home.md §4.2.2.7).
+   A preparation still running would write into the deleted walkthrough, so
+   it must be cancelled first.
+   Post: {:ok true}, or {:error S}."
+  [user-id wid]
+  (let [w (db/get-walkthrough user-id wid)]
+    (cond
+      (nil? w) {:error "That walkthrough could not be deleted."}
+      (= "preparing" (:status w)) {:error "Cancel the preparation before deleting the walkthrough."}
+      (pos? (db/delete-walkthrough! user-id wid))
+      (do (commands/bump! user-id :delete-walkthrough) {:ok true})
+      :else {:error "That walkthrough could not be deleted."})))
+
 (defn cancel!
   "Abandon the preparation of `wid` (§6.5.5). Post: `activity/cancel-work!`'s
    result."
@@ -201,25 +230,55 @@
 
 (defn overview
   "The step bar's data for `user-id`'s walkthrough (§6.6.2).
-   Post: nil, or {:id :repo-id :repo-title :sha-a :sha-b :sha-from :status
-         :error :step :commit-count :concepts [{:id :position :label :summary :noise
-         :understood? :hunk-count}]}."
+   Post: nil, or {:id :name :display-name :repo-id :repo-title :sha-a :sha-b
+         :sha-from :status :error :step :commit-count :concepts [{:id :position
+         :label :summary :noise :understood? :hunk-count}]}. `:name` is the
+         reader's own, or nil."
   [user-id wid]
   (when-let [w (db/get-walkthrough user-id wid)]
-    {:id wid :repo-id (:repo_topic_id w) :repo-title (:repo_title w)
-     :sha-a (:sha_a w) :sha-b (:sha_b w) :sha-from (:sha (first (:commits w)))
-     :status (:status w) :error (:error w)
-     :step (:step w) :commit-count (count (:commits w))
-     :concepts (mapv (fn [c] {:id (:id c) :position (:position c) :label (:label c)
-                              :summary (:summary c) :noise (:noise c)
-                              :understood? (some? (:understood_at c))
-                              :hunk-count (:hunk_count c)})
-                 (db/walkthrough-concepts user-id wid))}))
+    (let [concepts (mapv (fn [c] {:id (:id c) :position (:position c) :label (:label c)
+                                  :summary (:summary c) :noise (:noise c)
+                                  :understood? (some? (:understood_at c))
+                                  :hunk-count (:hunk_count c)})
+                     (db/walkthrough-concepts user-id wid))
+          sha-from (:sha (first (:commits w)))]
+      {:id wid :name (:name w)
+       :display-name (wname/display-name (:name w)
+                       (map (fn [c] {:label (:label c) :noise? (:noise c)}) concepts)
+                       sha-from (:sha_b w))
+       :repo-id (:repo_topic_id w) :repo-title (:repo_title w)
+       :sha-a (:sha_a w) :sha-b (:sha_b w) :sha-from sha-from
+       :status (:status w) :error (:error w)
+       :step (:step w) :commit-count (count (:commits w))
+       :concepts concepts})))
+
+(defn- progress-text [{:keys [status steps]}]
+  (case status
+    "preparing" "Preparing…"
+    "failed" "Failed"
+    (str (count (filter :understood? steps)) " / " (count steps))))
+
+(defn- progressed-text
+  "`Oct 6, 14:23`, in the server's zone, as `util/format-timestamp` reads time."
+  [ts]
+  (when ts
+    (.format (java.time.LocalDateTime/ofInstant (.toInstant ts) (java.time.ZoneId/systemDefault))
+      (java.time.format.DateTimeFormatter/ofPattern "MMM d, HH:mm" java.util.Locale/ENGLISH))))
 
 (defn list-for-repo
-  "`user-id`'s walkthroughs of repository node `repo-id`, newest first."
+  "`user-id`'s walkthroughs of repository node `repo-id`, as the repository
+   home's table shows them, the most recently progressed first
+   (plans/repository-home.md §4.2.2.2).
+   Post: [{:id :name :display-name :range :progress :progressed :status}].
+         `:name` is the reader's own, or nil."
   [user-id repo-id]
-  (mapv #(select-keys % [:id :sha_a :sha_from :sha_b :status :error :step :concepts :commit_count])
+  (mapv (fn [w]
+          {:id (:id w) :name (:name w) :status (:status w)
+           :display-name (wname/display-name (:name w) (:steps w) (:sha_from w) (:sha_b w))
+           :range (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) " · "
+                    (:commit_count w) (if (= 1 (:commit_count w)) " commit" " commits"))
+           :progress (progress-text w)
+           :progressed (progressed-text (:updated_at w))})
     (db/list-walkthroughs user-id repo-id)))
 
 (defn- hunk-key-of [{:keys [commit_sha old_path new_path hunk_index]}]

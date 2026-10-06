@@ -224,9 +224,15 @@
             {:label "Read without the notes editor"
              :detail "To give the code pane the full width, run Toggle Editor pane from the command palette. Run it again to show the editor. The choice applies to the whole repository and stays after a reload. Generate, Extract and Add new card still take the text you select in the code pane. The command also works on a PDF and on a video."
              :commands #{:toggle-editor-pane}}
-            {:label "Update"
-             :detail "On the repository topic, Update adds the newest commit as a new commit topic, with the same selection."
+            {:label "The repository's home"
+             :detail "The repository topic opens on its home, not on a notes editor. The home shows where the repository comes from, its walkthroughs, and its imported commits. Repository, commit and directory topics have no notes, no toolbar and no card table. A directory topic shows nothing: open its files in the hierarchy."
              :commands #{}}
+            {:label "Update"
+             :detail "On the repository's home, Update adds the newest commit as a new commit topic, with the same selection. Imported commits lists it, newest first, with its message and its number of files."
+             :commands #{}}
+            {:label "Read a commit"
+             :detail "A commit topic shows the commit's message, author, date, full id with Copy, branch or tag, and number of changed files. FreeMemo reads them from its copy of the repository each time. Walk through this commit starts a walkthrough of that commit alone."
+             :commands #{:walk-through-commit}}
             {:label "From a .zip"
              :detail "In the Code dialog, click Upload a .zip file instead, or drop the .zip on the Import page. Only Clojure files (.clj, .cljc, .cljs) are kept, one topic for each file. `git archive --format=zip -o repo.zip HEAD` makes a clean .zip."
              :commands #{}}
@@ -309,7 +315,7 @@
              :detail "A repository imported from a forge, with Import → More sources → Code. A repository uploaded as a .zip has no history, so it has no walkthrough. Preparing a walkthrough calls the AI model, and the tutor calls it for each answer. Settings → Usage → AI costs lists the preparation as Walkthrough concepts and Walkthrough grouping, and the recording of known ideas as Walkthrough linking."
              :commands #{}}
             {:label "Open the picker"
-             :detail "Open the repository topic and choose Walk through commits…, or run Walk through commits… from the command palette. FreeMemo first fetches the repository, so the lists show its newest commits. While it reads, the picker says Reading the repository's history…. The lists hold the newest 500 commits of the branch you imported."
+             :detail "On the repository's home, choose Walk through commits…, or run Walk through commits… from the command palette. To learn one commit, open its commit topic and choose Walk through this commit. FreeMemo first fetches the repository, so the lists show its newest commits. While it reads, the picker says Reading the repository's history…. The lists hold the newest 500 commits of the branch you imported."
              :commands #{:start-walkthrough}}
             {:label "Choose the commits"
              :detail "In First commit to learn and Last commit to learn, type part of a short commit id or of a commit message, and pick a commit. Both commits are taught. Choose the same commit in both fields to learn that commit alone. After you pick one field, the other offers only the commits that make a valid range. A line under the fields says how many commits the walkthrough teaches. Then choose Start walkthrough."
@@ -324,10 +330,16 @@
              :detail "The walkthrough says why it could not be prepared. Try again prepares the same range again. A failed preparation stores no grouping, so nothing is lost. A cancelled walkthrough also shows as failed, with the reason Cancelled, and Try again starts it again."
              :commands #{:restart-walkthrough}}
             {:label "Open a walkthrough again"
-             :detail "The repository topic lists its walkthroughs beside Walk through commits…, newest first. Each shows its first and last commit, its number of commits, and its step, or preparing or failed. Select one to open it at the step where you stopped."
+             :detail "The repository's home lists its walkthroughs, the most recently progressed first. Each row shows the walkthrough's name, its first and last commit, its number of commits, how many steps you understood out of all of them, and when you last progressed. Select a row to open it at the step where you stopped."
              :commands #{}}
+            {:label "Name a walkthrough"
+             :detail "A walkthrough is named after its first step until you name it. Choose Rename on its row, or Rename beside its name on the walkthrough screen. Leave the name empty to go back to the step name. A name holds at most 120 characters. The browser tab shows the name too."
+             :commands #{:rename-walkthrough}}
+            {:label "Delete a walkthrough"
+             :detail "Choose Delete on its row, then Delete to confirm. Its steps, your progress and your step fixes are deleted. Pins and known ideas stay. A walkthrough that is still preparing has no Delete: cancel it first."
+             :commands #{:delete-walkthrough}}
             {:label "Find your way on the screen"
-             :detail "The walkthrough replaces the repository's document column, and the Assistant panel stays on the right. ← Repository goes back to the repository. The header names the repository, the first and the last commit, and the number of commits. The step bar under it holds Start and one chip for each step, in teaching order. Select a chip to open its step. A step you finished shows ✓."
+             :detail "The walkthrough replaces the repository's document column, and the Assistant panel stays on the right. ← Repository goes back to the repository. The header shows the walkthrough's name, the repository, the first and the last commit, and the number of commits. The step bar under it holds Start and one chip for each step, in teaching order. Select a chip to open its step. A step you finished shows ✓."
              :commands #{}}
             {:label "Other changes and Noise"
              :detail "When they exist, two steps come last. Other changes holds the changes that fit no concept. Noise holds the changes nobody reads line by line. These are files that the repository's .gitattributes marks as vendored or generated, and changes of more than 1500 lines. Noise shows in italics, and you can skip it."

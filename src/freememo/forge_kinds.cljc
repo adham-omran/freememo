@@ -30,3 +30,16 @@
   "Post: the public host for `forge-id`, or nil when unknown."
   [forge-id]
   (some #(when (= forge-id (:id %)) (:default-host %)) forges))
+
+(def structure-kinds
+  "The topic kinds a forge import makes for structure: the repository, each
+   commit snapshot and each directory (plans/repository-home.md §4.1.1). They
+   hold no notes and no cards, so the viewer shows them no editor, no document
+   toolbar and no card table. NOT `db/structural-kinds`, which also holds the
+   PDF `page`, a kind with content and cards."
+  #{"repo" "commit" "dir"})
+
+(defn structure-kind?
+  "True when a topic of `kind` is forge structure."
+  [kind]
+  (contains? structure-kinds kind))

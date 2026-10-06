@@ -2290,6 +2290,9 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_walkthroughs_repo
                       ON walkthroughs(repo_topic_id, id)"])
+  ;; The reader's own name; NULL shows a name derived from the steps
+  ;; (plans/repository-home.md §4.3.1).
+  (jdbc/execute! ds ["ALTER TABLE walkthroughs ADD COLUMN IF NOT EXISTS name TEXT"])
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS walkthrough_concepts (
       id SERIAL PRIMARY KEY,
@@ -10078,6 +10081,45 @@
      repo-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn repo-snapshots
+  "The commit snapshots of `user-id`'s live repository node `repo-id`, newest
+   first (plans/repository-home.md §4.2.3).
+   Post: [{:id :title :commit_sha :created_at :files}]; `:files` counts the
+         live file topics under each snapshot."
+  [user-id repo-id]
+  (jdbc/execute! ds
+    ["WITH RECURSIVE tree AS (
+        SELECT c.id AS snapshot_id, c.id
+          FROM topics c
+          JOIN topics r ON r.id = c.parent_id
+         WHERE r.id = ? AND r.user_id = ? AND r.kind = 'repo' AND r.staged_delete_id IS NULL
+           AND c.kind = 'commit' AND c.staged_delete_id IS NULL
+        UNION ALL
+        SELECT tree.snapshot_id, t.id
+          FROM topics t JOIN tree ON t.parent_id = tree.id
+         WHERE t.staged_delete_id IS NULL)
+      SELECT c.id, c.title, c.commit_sha, c.created_at,
+             (SELECT count(*) FROM tree JOIN topics f ON f.id = tree.id
+               WHERE tree.snapshot_id = c.id AND f.kind = 'code') AS files
+        FROM topics c
+       WHERE c.id IN (SELECT snapshot_id FROM tree)
+       ORDER BY c.created_at DESC, c.id DESC"
+     repo-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn commit-node
+  "`user-id`'s live commit snapshot `topic-id`, with its repository.
+   Post: {:repo-id :sha :ref}, or nil when `topic-id` is not such a node."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT r.id AS \"repo-id\", c.commit_sha AS sha, rs.ref
+        FROM topics c
+        JOIN topics r ON r.id = c.parent_id AND r.kind = 'repo' AND r.staged_delete_id IS NULL
+        JOIN repo_selections rs ON rs.topic_id = r.id
+       WHERE c.id = ? AND c.user_id = ? AND c.kind = 'commit' AND c.staged_delete_id IS NULL"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
 (defn insert-repo-selection!
   "Pre : `tx` is open and `repo-id` is a `repo` topic inserted in it.
    Post: the repository's forge, ref and selection are stored."
@@ -14144,20 +14186,47 @@
       {:builder-fn rs/as-unqualified-maps})))
 
 (defn list-walkthroughs
-  "`user-id`'s walkthroughs of repository node `repo-id`, newest first.
-   Post: [{:id :sha_a :sha_from :sha_b :status :step :concepts :created_at}],
-         without the range. `:sha_from` is the first commit taught."
+  "`user-id`'s walkthroughs of repository node `repo-id`, the most recently
+   progressed first.
+   Post: [{:id :name :sha_a :sha_from :sha_b :status :error :step :created_at
+          :updated_at :commit_count :steps [{:label :noise? :understood?}]}],
+         without the range. `:sha_from` is the first commit taught, and
+         `:steps` are in order."
   [user-id repo-id]
-  (jdbc/execute! ds
-    ["SELECT w.id, w.sha_a, w.commits->0->>'sha' AS sha_from, w.sha_b, w.status, w.error,
-             w.step, w.created_at,
-             (SELECT count(*) FROM walkthrough_concepts c WHERE c.walkthrough_id = w.id) AS concepts,
-             jsonb_array_length(w.commits) AS commit_count
-        FROM walkthroughs w
-       WHERE w.user_id = ? AND w.repo_topic_id = ?
-       ORDER BY w.id DESC"
-     user-id repo-id]
-    {:builder-fn rs/as-unqualified-maps}))
+  (let [rows (jdbc/execute! ds
+               ["SELECT w.id, w.name, w.sha_a, w.commits->0->>'sha' AS sha_from, w.sha_b,
+                        w.status, w.error, w.step, w.created_at, w.updated_at,
+                        jsonb_array_length(w.commits) AS commit_count
+                   FROM walkthroughs w
+                  WHERE w.user_id = ? AND w.repo_topic_id = ?
+                  ORDER BY w.updated_at DESC, w.id DESC"
+                user-id repo-id]
+               {:builder-fn rs/as-unqualified-maps})
+        steps (group-by :walkthrough_id
+                (jdbc/execute! ds
+                  ["SELECT c.walkthrough_id, c.label, c.noise, c.understood_at
+                      FROM walkthrough_concepts c
+                      JOIN walkthroughs w ON w.id = c.walkthrough_id
+                     WHERE w.user_id = ? AND w.repo_topic_id = ?
+                     ORDER BY c.walkthrough_id, c.position"
+                   user-id repo-id]
+                  {:builder-fn rs/as-unqualified-maps}))]
+    (mapv (fn [w]
+            (assoc w :steps (mapv (fn [c] {:label (:label c) :noise? (boolean (:noise c))
+                                           :understood? (some? (:understood_at c))})
+                              (get steps (:id w)))))
+      rows)))
+
+(defn rename-walkthrough!
+  "Set `user-id`'s walkthrough name to `name`; nil clears it.
+   Pre : `name` is nil or a name `walkthrough-name/normalize-name` returned.
+   Post: true when the walkthrough is the user's. The progress time is
+         unchanged: a rename is not progress."
+  [user-id walkthrough-id name]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE walkthroughs SET name = ? WHERE id = ? AND user_id = ?"
+             (some-> name sanitize-utf8) walkthrough-id user-id]))))
 
 (defn set-walkthrough-failed!
   "Mark `user-id`'s walkthrough failed with `error`, if it is still
@@ -14364,7 +14433,8 @@
           true)))))
 
 (defn delete-walkthrough!
-  "Delete `user-id`'s walkthrough. Post: the update count."
+  "Delete `user-id`'s walkthrough, with its steps and changes (cascade).
+   Post: the update count."
   [user-id walkthrough-id]
   (::jdbc/update-count
     (jdbc/execute-one! ds ["DELETE FROM walkthroughs WHERE id = ? AND user_id = ?"
