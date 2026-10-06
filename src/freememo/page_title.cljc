@@ -38,11 +38,12 @@
      :cljs nil))
 
 (defn walkthrough-title*
-  "Post: the name of a walkthrough the user owns, after its repository
-   (plans/commit-range-walkthrough.md §6.6.7.3), or nil."
+  "Post: the name of a walkthrough the user owns, then its repository
+   (plans/repository-home.md §4.3.5), or nil."
   [_rev user-id walkthrough-id]
   #?(:clj (when (int? walkthrough-id)
-            (fmt/walkthrough-name (:repo-title (walkthrough/overview user-id walkthrough-id))))
+            (let [ov (walkthrough/overview user-id walkthrough-id)]
+              (fmt/walkthrough-name (:display-name ov) (:repo-title ov))))
      :cljs nil))
 
 (defn write-title!
@@ -78,8 +79,10 @@
           :curriculum (e/server
                         (let [rev (e/watch (us/get-atom user-id :curriculum-mutations))]
                           (e/Offload #(curriculum-title* rev user-id id))))
+          ;; A repository rename and a walkthrough rename both change it.
           :walkthrough (e/server
-                         (let [rev (e/watch (us/get-atom user-id :tree-mutations))]
+                         (let [rev (+ (e/watch (us/get-atom user-id :tree-mutations))
+                                     (e/watch (us/get-atom user-id :walkthrough-mutations)))]
                            (e/Offload #(walkthrough-title* rev user-id id))))
           :label (get fmt/tab-labels id)
           nil)))))

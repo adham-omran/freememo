@@ -25,6 +25,7 @@
    [freememo.question-pin-state :as pin-state]
    [freememo.walkthrough-canvas :as canvas]
    [freememo.walkthrough-state :as wstate]
+   [freememo.walkthrough-table :refer [RenameDialog]]
    [freememo.walkthrough-text :as wtext]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.walkthrough :as wt])))
@@ -370,8 +371,12 @@
           ov (e/server (e/Offload #(overview* rev user-id wid)))
           status (e/server (:status ov))
           error (e/server (:error ov))
-          title (e/server (str (:repo-title ov) " · " (short-sha (:sha-from ov)) " → "
-                            (short-sha (:sha-b ov)) " · " (:commit-count ov) " commits"))
+          display-name (e/server (:display-name ov))
+          own-name (e/server (:name ov))
+          about (e/server (str (:repo-title ov) " · " (short-sha (:sha-from ov)) " → "
+                            (short-sha (:sha-b ov)) " · " (:commit-count ov)
+                            (if (= 1 (:commit-count ov)) " commit" " commits")))
+          !renaming (atom nil)
           phase (e/server (phase* (e/watch (us/get-atom user-id :preparing-walkthroughs)) wid))]
       (dom/div
         (dom/props {:class "wt-screen" :data-testid "walkthrough-screen" :data-status (or status "")})
@@ -382,7 +387,14 @@
             (dom/text "← Repository")
             (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-topic repo-id nil))) nil))
           (dom/h2 (dom/props {:class "wt-screen__title" :dir "auto"})
-            (dom/text (str "Walkthrough · " title))))
+            (dom/text (or display-name "")))
+          (dom/span (dom/props {:class "wt-screen__about" :dir "auto"})
+            (dom/text about))
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-screen__rename"})
+            (dom/text "Rename")
+            (dom/On "click" (fn [_] (reset! !renaming {:id wid :name own-name})) nil)))
+        (RenameDialog user-id !renaming)
         (dom/div
           (dom/props {:class "wt-screen__body"})
           (when (= "preparing" status) (PreparingPanel user-id wid phase))

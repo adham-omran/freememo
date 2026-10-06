@@ -211,6 +211,24 @@
                                   :data {:from-id :payload :into-id :payload}
                                   :table #{:walkthrough_concepts :walkthrough_hunks :walkthroughs}
                                   :views #{:walkthrough-mutations}}
+     ;; The repository home (plans/repository-home.md §4.6.1). Renaming and
+     ;; deleting need a walkthrough only a row or the screen holds, so they
+     ;; are hidden. The commit card publishes its walk button.
+     :rename-walkthrough {:label "Rename a walkthrough" :class :mutation
+                          :palette-hidden true
+                          :data {:walkthrough-id :payload :name :payload}
+                          :table #{:walkthroughs}
+                          :views #{:walkthrough-mutations}}
+     :delete-walkthrough {:label "Delete a walkthrough" :class :mutation
+                          :palette-hidden true
+                          :data {:walkthrough-id :payload}
+                          :table #{:walkthroughs :walkthrough_concepts :walkthrough_hunks}
+                          :views #{:walkthrough-mutations}}
+     :walk-through-commit {:label "Walk through this commit" :class :mutation :exec :ui-button
+                           :when #{:viewer}
+                           :data {:topic-id :ctx}
+                           :table #{:walkthroughs}
+                           :views #{:walkthrough-mutations}}
      ;; Written by the preparation thread when its grouping lands or fails.
      :prepare-walkthrough {:label "Prepare a walkthrough" :class :mutation
                            :palette-hidden true

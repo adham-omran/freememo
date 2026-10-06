@@ -508,6 +508,18 @@
                    :body (str/trim (str body))}))))
       (str/split out (re-pattern record-sep)))))
 
+(defn changed-paths
+  "The paths commit `sha` changes against its first parent, or against the
+   empty tree when it has none. Trees only, so no blob is fetched.
+   Pre : `parents` are `sha`'s parents, as `log` gives them.
+   Post: a vector of paths."
+  [^File dir sha parents]
+  (let [args (if-let [p (first parents)]
+               ["diff-tree" "-r" "--name-only" "--no-renames" p sha]
+               ["diff-tree" "-r" "--root" "--name-only" "--no-renames" "--no-commit-id" sha])]
+    (into [] (remove str/blank?)
+      (str/split-lines (out-str (git-ok! args {:dir dir} "the commit's files"))))))
+
 (defn diff
   "The patch from commit `from` to commit `to`, with renames found (§6.4.3).
    Missing blobs are fetched in one batch by git's own diff prefetch.

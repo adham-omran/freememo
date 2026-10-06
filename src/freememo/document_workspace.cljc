@@ -8,6 +8,7 @@
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.bottom-panel :refer [BottomPanel]]
    [freememo.command-bus :as bus]
+   [freememo.forge-kinds :as forge-kinds]
    [freememo.util :as util]))
 
 (e/defn DocumentSplitDivider []
@@ -36,8 +37,11 @@
 
 (e/defn DocumentMainColumn [assistant-inside?]
   (e/client
-    (let [card-table-open? dctx/card-table-open?
-          toggle-card-table! dctx/toggle-card-table!
+    (let [;; Forge structure has no cards, so no card table and no toggle
+          ;; for one (plans/repository-home.md §4.1.2).
+          structure? (forge-kinds/structure-kind? dctx/kind)
+          card-table-open? (and dctx/card-table-open? (not structure?))
+          toggle-card-table! (when-not structure? dctx/toggle-card-table!)
           ;; Published only on a document with a source pane, so the palette
           ;; lists :toggle-editor-pane nowhere else (its preparer reads it).
           toggle-editor-pane! (when dctx/has-source-pane? dctx/toggle-editor-hidden!)

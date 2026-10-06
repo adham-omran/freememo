@@ -4,6 +4,9 @@
    HTTP call (`walkthrough-model-stub`), so the real JSON parsing runs. Every
    test skips when the database is down."
   (:require [clojure.java.io :as io]
+            [freememo.account-export :as account-export]
+            [freememo.account-import :as account-import]
+            [freememo.archive :as archive]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
@@ -15,6 +18,7 @@
             [freememo.kg-llm :as llm]
             [freememo.openrouter :as openrouter]
             [freememo.walkthrough-model-stub :as stub]
+            [freememo.repo-commits :as repo-commits]
             [freememo.repo-import :as repo-import]
             [freememo.user-state :as us]
             [freememo.walkthrough :as wt]
@@ -215,3 +219,74 @@
       (is (= ["ready" nil 0] ((juxt :status :error :step) o)))
       (is (= ["split hold" "rename cycle to loop"] (map :label (:concepts o)))
         "the old grouping is gone and the new one is whole"))))
+
+(deftest a-walkthrough-is-named-listed-and-deleted
+  (with-walkthrough [user repo-id wid shas]
+    (let [row (fn [] (first (wt/list-for-repo user repo-id)))]
+      (testing "plans/repository-home.md §4.2.2.2: the home row"
+        (is (= {:id wid :name nil :status "ready" :display-name "split hold and 1 more"
+                :progress "0 / 2"}
+              (select-keys (row) [:id :name :status :display-name :progress])))
+        (is (= (str (subs (second shas) 0 7) " → " (subs (last shas) 0 7) " · 2 commits")
+              (:range (row))))
+        (is (string? (:progressed (row)))))
+      (testing "§4.3.3: a name is trimmed, shows everywhere, and clears when blank"
+        (is (= {:ok true} (wt/rename! user wid "  Hold and loop ")))
+        (is (= "Hold and loop" (:display-name (row))))
+        (is (= ["Hold and loop" "Hold and loop"] ((juxt :name :display-name) (wt/overview user wid))))
+        (is (:error (wt/rename! user wid (apply str (repeat 121 "x")))))
+        (is (= "Hold and loop" (:name (row))) "a refused name changes nothing")
+        (is (:error (wt/rename! (inc user) wid "Theirs")) "another user's walkthrough")
+        (is (= {:ok true} (wt/rename! user wid "")))
+        (is (= "split hold and 1 more" (:display-name (row)))))
+      (testing "§4.2.2.7: delete takes the steps with it"
+        (is (:error (wt/delete! (inc user) wid)))
+        (is (= {:ok true} (wt/delete! user wid)))
+        (is (empty? (wt/list-for-repo user repo-id)))
+        (is (empty? (db/walkthrough-concepts user wid)))))))
+
+(deftest the-home-and-the-commit-card-read-the-clone
+  (with-walkthrough [user repo-id wid shas]
+    (let [commit-id (:id (jdbc/execute-one! db/ds ["SELECT id FROM topics WHERE parent_id = ? AND kind = 'commit'"
+                                                   repo-id] opts))]
+      (testing "§4.2.3: the imported snapshot, its files and its subject"
+        (is (= [[(last shas) 2]] (map (juxt :commit_sha :files) (db/repo-snapshots user repo-id))))
+        (is (= {:ok {(last shas) "refactor: rename cycle to loop"}}
+              (repo-commits/snapshot-subjects user repo-id))))
+      (testing "§4.4.1: the commit card"
+        (let [card (repo-commits/commit-card user commit-id)]
+          (is (= {:repo-id repo-id :sha (last shas) :subject "refactor: rename cycle to loop"
+                  :changed-files 2 :refusal nil}
+                (select-keys card [:repo-id :sha :subject :changed-files :refusal])))
+          (is (seq (:author card)))))
+      (testing "§4.4.2: a lost clone is made again"
+        (git/delete-clone! repo-id)
+        (is (= (last shas) (:sha (repo-commits/commit-card user commit-id)))))
+      (testing "§4.4.4: the repository's first commit cannot be walked through alone"
+        (jdbc/execute! db/ds ["UPDATE topics SET commit_sha = ? WHERE id = ?" (first shas) commit-id])
+        (is (re-find #"first commit" (str (:refusal (repo-commits/commit-card user commit-id))))))
+      (testing "not a commit snapshot"
+        (is (nil? (repo-commits/commit-card user repo-id)))))))
+
+(deftest a-walkthrough-name-survives-an-account-transfer
+  (with-walkthrough [user repo-id wid shas]
+    (is (= {:ok true} (wt/rename! user wid "Hold and loop")))
+    (let [zip (java.io.File/createTempFile "walkthrough-transfer" ".zip")
+          other (:id (jdbc/execute-one! db/ds
+                       ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                        (str "walkthrough-transfer-" (random-uuid)) (str (random-uuid) "@example.test")]
+                       opts))]
+      (try
+        (with-open [out (io/output-stream zip)]
+          (account-export/write-archive! db/ds user out "http://test.example"))
+        (let [dir (archive/extract-to-temp-dir! zip {})]
+          (try
+            (is (:ok (account-import/import-archive! db/ds other dir nil {})))
+            (testing "plans/repository-home.md §4.3.4: the name crosses with the walkthrough"
+              (is (= ["Hold and loop"]
+                    (map :name (jdbc/execute! db/ds ["SELECT name FROM walkthroughs WHERE user_id = ?" other]
+                                 opts)))))
+            (finally (git/delete-dir! dir))))
+        (finally
+          (.delete zip)
+          (jdbc/execute! db/ds ["DELETE FROM users WHERE id = ?" other]))))))

@@ -16,7 +16,9 @@
    [freememo.video-pane :refer [VideoPane]]
    [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.code-pane :refer [CodePane]]
-   [freememo.repo-update-bar :refer [RepoUpdateBar]]
+   [freememo.commit-card :refer [CommitCard]]
+   [freememo.forge-kinds :as forge-kinds]
+   [freememo.repo-home :refer [RepoHome]]
    [freememo.walkthrough-screen :refer [WalkthroughScreen]]
    [freememo.walkthrough-state :as walkthrough-state]
    [freememo.editor-pane :refer [EditorPane]]
@@ -180,9 +182,10 @@
           is-pdf? dctx/is-pdf? top-bottom? dctx/top-bottom?
           editor-hidden? dctx/editor-hidden?
           effective-content dctx/effective-content navigate! dctx/navigate!
-          ;; A walkthrough the route opens on this repository node replaces
-          ;; the panes; the editor stays mounted, hidden, so its Quill and
-          ;; auto-save survive (plans/commit-range-walkthrough.md §6.6.7.2).
+          ;; Forge structure holds no notes: a repository shows its home or
+          ;; an open walkthrough, a commit its card, a directory nothing
+          ;; (plans/repository-home.md §4.1.2).
+          structure? (forge-kinds/structure-kind? kind)
           walkthrough-id (when (= kind "repo")
                            (walkthrough-state/open-on (e/watch walkthrough-state/!route)
                              page-topic-id))]
@@ -193,58 +196,59 @@
         ;; the audio segment picked here pairs with notation rects for cards.
         (when dctx/is-score?
           (ScoreWaveformStrip))
-        ;; Repository nodes: the Update control across the top, the one place it
-        ;; exists (plans/git-forge-integration.md §4.6 6.1).
         (when (and (= kind "repo") (not walkthrough-id))
-          (RepoUpdateBar))
+          (RepoHome))
         (when walkthrough-id
           (WalkthroughScreen walkthrough-id))
-        (dom/div
-          ;; The focus-reader class is the ONLY scope for the centered-column
-          ;; CSS. `.ql-editor` also styles card fields and every other Quill
-          ;; surface, so an unscoped padding rule would reach a card modal.
-          ;;
-          ;; `editor-hidden` hides the editor and the source|editor handle in
-          ;; CSS, and the binding below widens the source pane. Nothing
-          ;; remounts: Quill, its auto-save and the source pane all survive a
-          ;; toggle (plans/editor-pane-toggle.md §3).
-          (dom/props {:class (cond
-                               (and dctx/focus-available? dctx/focus?) "focus-reader-column"
-                               editor-hidden? "editor-hidden"
-                               :else "")
-                      :style {:flex "1" :display (if walkthrough-id "none" "flex")
-                              :flex-direction (if (and is-pdf? top-bottom?)
-                                                "column"
-                                                "row")
-                              :min-height "0" :overflow "hidden"}})
-          ;; The three split panes size their source column by these two. The
-          ;; atoms keep the reader's split, so showing the editor restores it.
-          (binding [dctx/left-pct (if editor-hidden? 100 dctx/left-pct)
-                    dctx/top-split-pct (if editor-hidden? 100 dctx/top-split-pct)]
-            (PdfSplitPane)
-            ;; Video topics: the video column (player, waveform, transcript) sits
-            ;; INSIDE this row, so the editor is beside it rather than below it.
-            ;; All four surfaces of §4.8 8.1 remain visible and independently
-            ;; usable; only their arrangement changed.
-            (binding [dctx/video-topic-id page-topic-id]
-              (VideoSplitPane))
-            ;; Files from a git forge: read-only source beside the notes editor.
-            (CodeSplitPane))
-          (binding [dctx/topic-id page-topic-id
-                    dctx/audio-topic-id (when (= kind "audio") page-topic-id)
-                    dctx/is-pdf-page? is-pdf?
-                    dctx/static-content effective-content
-                    dctx/on-imported-navigate!
-                    (fn [tid]
-                      (when navigate!
-                        (navigate! :viewer (nav/nav-topic tid nil))))]
-            ;; A poem gets the read-only reader INSTEAD of the editor, not
-            ;; beside it (spec row 3.2.1). EditorPane owns the Quill instance
-            ;; and the auto-save that writes topics.content on every
-            ;; text-change, so mounting it for a poem would make the poem
-            ;; editable and let one keystroke overwrite the rendered fallback
-            ;; the importer stored. A poem page has no .ql-editor.
-            (if dctx/is-poem? (PoemPane) (EditorPane))))))))
+        (when (= kind "commit")
+          (CommitCard))
+        (when-not structure?
+          (dom/div
+            ;; The focus-reader class is the ONLY scope for the centered-column
+            ;; CSS. `.ql-editor` also styles card fields and every other Quill
+            ;; surface, so an unscoped padding rule would reach a card modal.
+            ;;
+            ;; `editor-hidden` hides the editor and the source|editor handle in
+            ;; CSS, and the binding below widens the source pane. Nothing
+            ;; remounts: Quill, its auto-save and the source pane all survive a
+            ;; toggle (plans/editor-pane-toggle.md §3).
+            (dom/props {:class (cond
+                                 (and dctx/focus-available? dctx/focus?) "focus-reader-column"
+                                 editor-hidden? "editor-hidden"
+                                 :else "")
+                        :style {:flex "1" :display "flex"
+                                :flex-direction (if (and is-pdf? top-bottom?)
+                                                  "column"
+                                                  "row")
+                                :min-height "0" :overflow "hidden"}})
+            ;; The three split panes size their source column by these two. The
+            ;; atoms keep the reader's split, so showing the editor restores it.
+            (binding [dctx/left-pct (if editor-hidden? 100 dctx/left-pct)
+                      dctx/top-split-pct (if editor-hidden? 100 dctx/top-split-pct)]
+              (PdfSplitPane)
+              ;; Video topics: the video column (player, waveform, transcript) sits
+              ;; INSIDE this row, so the editor is beside it rather than below it.
+              ;; All four surfaces of §4.8 8.1 remain visible and independently
+              ;; usable; only their arrangement changed.
+              (binding [dctx/video-topic-id page-topic-id]
+                (VideoSplitPane))
+              ;; Files from a git forge: read-only source beside the notes editor.
+              (CodeSplitPane))
+            (binding [dctx/topic-id page-topic-id
+                      dctx/audio-topic-id (when (= kind "audio") page-topic-id)
+                      dctx/is-pdf-page? is-pdf?
+                      dctx/static-content effective-content
+                      dctx/on-imported-navigate!
+                      (fn [tid]
+                        (when navigate!
+                          (navigate! :viewer (nav/nav-topic tid nil))))]
+              ;; A poem gets the read-only reader INSTEAD of the editor, not
+              ;; beside it (spec row 3.2.1). EditorPane owns the Quill instance
+              ;; and the auto-save that writes topics.content on every
+              ;; text-change, so mounting it for a poem would make the poem
+              ;; editable and let one keystroke overwrite the rendered fallback
+              ;; the importer stored. A poem page has no .ql-editor.
+              (if dctx/is-poem? (PoemPane) (EditorPane)))))))))
 
 (e/defn DocumentColumns
   "Resizable top region of a document view: left panel, content, and optional
@@ -329,19 +333,22 @@
         ;; (user-id, enc-key, llm-enabled?, navigate!, citation, page-info,
         ;; pdf-root?, pdf-status, reading-mode?, !show-bib) are
         ;; already bound at the root.
-        (binding [dctx/topic-id page-topic-id
-                  dctx/audio? (= kind "audio")
-                  dctx/root-topic-id toolbar-root-id
-                  dctx/page-number (when is-pdf? current-page)
-                  dctx/static-content effective-content
-                  dctx/context-mode context-mode
-                  dctx/context-tooltip (if is-pdf?
-                                         "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                         "Include context for better cards. With a selection: extract text. Without: original page text.")
-                  dctx/extract-status toolbar-extract-status
-                  dctx/origin (:origin queue-ctx)
-                  dctx/on-done! (:on-done! queue-ctx)]
-          (ToolbarBar))
+        ;; Forge structure holds no notes and no cards, so it has no toolbar
+        ;; (plans/repository-home.md §4.1.2).
+        (when-not (forge-kinds/structure-kind? kind)
+          (binding [dctx/topic-id page-topic-id
+                    dctx/audio? (= kind "audio")
+                    dctx/root-topic-id toolbar-root-id
+                    dctx/page-number (when is-pdf? current-page)
+                    dctx/static-content effective-content
+                    dctx/context-mode context-mode
+                    dctx/context-tooltip (if is-pdf?
+                                           "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
+                                           "Include context for better cards. With a selection: extract text. Without: original page text.")
+                    dctx/extract-status toolbar-extract-status
+                    dctx/origin (:origin queue-ctx)
+                    dctx/on-done! (:on-done! queue-ctx)]
+            (ToolbarBar)))
 
         ;; SECOND BAR (full width, PDF only): all PDF-scoped controls —
         ;; page-nav, zoom, layout-toggle, done-checkbox, and the AI/extract
