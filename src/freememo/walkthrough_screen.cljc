@@ -24,6 +24,7 @@
    [freememo.question-pin-state :as pin-state]
    [freememo.walkthrough-canvas :as canvas]
    [freememo.walkthrough-state :as wstate]
+   [freememo.walkthrough-text :as wtext]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.walkthrough :as wt])))
 
@@ -109,6 +110,21 @@
     (e/on-unmount #(wstate/route! nil nil))
     (wstate/route! repo-id walkthrough-id)))
 
+;; ── Text ───────────────────────────────────────────────────────────
+
+(e/defn InlineCode
+  "Model-written `text` with its inline code set as code
+   (`walkthrough-text/code-spans`). The spans sit in an element of their
+   own, so the loop shares its parent with nothing."
+  [text]
+  (e/client
+    (dom/span
+      (dom/props {:class "wt-rich"})
+      (e/for [[_ [kind s]] (e/diff-by first (map-indexed vector (wtext/code-spans text)))]
+        (if (= :code kind)
+          (dom/code (dom/props {:class "wt-inline-code"}) (dom/text s))
+          (dom/text s))))))
+
 ;; ── Panels ─────────────────────────────────────────────────────────
 
 (e/defn PreparingPanel
@@ -164,8 +180,9 @@
         (dom/props {:class "wt-opener__concepts"})
         (e/for [c concepts]
           (dom/li
-            (dom/strong (dom/text (:label c)))
-            (dom/text (str " — " (:summary c)))))))))
+            (dom/strong (InlineCode (:label c)))
+            (dom/text " — ")
+            (InlineCode (:summary c))))))))
 
 (e/defn StepBar
   "The steps in order, the current one marked, and the coloring toggle
@@ -188,7 +205,7 @@
                                         (when (= step (:position c)) " wt-step--current")
                                         (when (:understood? c) " wt-step--done")
                                         (when (:noise c) " wt-step--noise"))
-                               :label (str (:position c) ". " (:label c))))))]
+                               :label (str (:position c) ". " (wtext/plain (:label c)))))))]
           (e/for [[t [_ n]] (e/diff-by first (e/as-vec commands))]
             (let [r (e/server (e/Offload #(go-to-step!* user-id wid n)))]
               (case r (t))))))
@@ -268,9 +285,10 @@
         (dom/div
           (dom/props {:class "wt-step-view__head"})
           (dom/h3 (dom/props {:class "wt-step-view__title" :dir "auto"})
-            (dom/text (str (:position concept) ". " (:label concept))))
+            (dom/text (str (:position concept) ". "))
+            (InlineCode (:label concept)))
           (dom/p (dom/props {:class "wt-step-view__summary" :dir "auto"})
-            (dom/text (:summary concept)))
+            (InlineCode (:summary concept)))
           (dom/div
             (dom/props {:class "wt-step-view__tools"})
             (pin-pane/PinHeaderControls user-id {:repo-id repo-id :path path :sha sha} !list-open?)
@@ -297,7 +315,7 @@
           concepts (e/server (mapv #(select-keys % [:id :position :label :summary :understood?
                                                     :noise :hunk-count])
                                (:concepts ov)))
-          concept-options (e/server (mapv (fn [c] [(str (:id c)) (str (:position c) ". " (:label c))])
+          concept-options (e/server (mapv (fn [c] [(str (:id c)) (str (:position c) ". " (wtext/plain (:label c)))])
                                       (:concepts ov)))
           concept (e/server (some #(when (= step (:position %)) %) concepts))
           !mode (atom :previous)

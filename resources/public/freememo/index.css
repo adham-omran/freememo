@@ -8933,7 +8933,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    reuses the code pane's rendered-Markdown styles. A changed block or line
    carries a class from `walkthrough/line-class`: wt-c is this step's change,
    wt-e an earlier step's (Since A only), wt-o another step's, outlined.
-   Everything else is unchanged since A and reads gray. */
+   Everything else is unchanged since A and reads dimmed. Code sits on the
+   code pane's dark `pre` (#23241f), so its colors are for a dark ground. */
 .wt-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .wt-screen__header {
     display: flex; align-items: center; gap: 12px; padding: 8px 16px;
@@ -8947,14 +8948,21 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-panel__hint { font-size: 13px; color: var(--color-text-secondary); margin: 0 0 12px; }
 .wt-panel--error { color: var(--color-danger-text); }
 .wt-steps {
-    display: flex; align-items: center; gap: 12px; padding: 8px 16px;
-    border-bottom: 1px solid var(--color-border); overflow-x: auto;
+    display: flex; align-items: flex-start; gap: 12px; padding: 8px 16px;
+    border-bottom: 1px solid var(--color-border);
 }
-.wt-steps__list { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+/* The chips wrap, so no chip runs under the coloring toggle beside them. */
+.wt-steps__list { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0;
+    flex: 1; min-width: 0; }
+.wt-steps__list > li { flex: none; max-width: 100%; }
 .wt-step {
     border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-bg-card);
     color: var(--color-text-primary); padding: 3px 10px; font-size: 12px; white-space: nowrap;
-    cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+    cursor: pointer; max-width: min(240px, 100%); overflow: hidden; text-overflow: ellipsis;
+}
+.wt-inline-code {
+    padding: 0.1em 0.35em; border-radius: var(--radius-sm); background: var(--color-bg-subtle);
+    font-size: 0.88em; font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
 }
 .wt-step--current { border-color: var(--color-primary); background: var(--color-primary-tint);
     color: var(--color-primary-tint-text); font-weight: 600; }
@@ -8990,19 +8998,26 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     box-shadow: -4px 0 0 var(--color-primary-light);
 }
 .wt-canvas [data-wt="wt-o"] { outline: 1px dashed var(--color-border-strong); outline-offset: 2px; }
+/* A fenced block keeps its dark ground; only the bar marks it. */
+.wt-canvas pre[data-wt] { background: #23241f; }
+.wt-canvas[data-kind="markdown"] > pre:not([data-wt]) { color: #f8f8f2; opacity: 0.55; }
 
-/* Code: one span per line; the newline sits outside it. */
-.wt-code { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre; overflow-x: auto;
-    color: var(--color-text-secondary); }
-.wt-line { display: inline-block; min-width: 100%; box-sizing: border-box; }
-.wt-line.wt-c { background: var(--color-primary-tint); color: var(--color-text-primary);
+/* Code: one span per line; the newline sits outside it. A long line wraps
+   inside its span, so every line band is the width of the canvas and no
+   line runs past its right edge. `.wt-canvas .wt-code` outranks the code
+   pane's `.code-pane-rendered pre` color. */
+.wt-canvas .wt-code { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap;
+    overflow-wrap: anywhere; overflow-x: hidden; color: #8a8b84; }
+.wt-line { display: inline-block; min-width: 100%; max-width: 100%; box-sizing: border-box;
+    padding-left: 8px; }
+.wt-line.wt-c { background: color-mix(in srgb, var(--color-primary) 30%, transparent); color: #f8f8f2;
     box-shadow: inset 3px 0 0 var(--color-primary); }
-.wt-line.wt-e { background: color-mix(in srgb, var(--color-primary-tint) 45%, transparent);
-    color: var(--color-text-primary); }
-.wt-line.wt-o { color: var(--color-text-primary); box-shadow: inset 3px 0 0 var(--color-border-strong); }
+.wt-line.wt-e { background: color-mix(in srgb, var(--color-primary) 14%, transparent); color: #e6e6df;
+    box-shadow: inset 3px 0 0 var(--color-primary-light); }
+.wt-line.wt-o { color: #cfcfc6; box-shadow: inset 3px 0 0 #75715e; }
 .wt-fold::before {
     content: attr(data-label); display: block; cursor: pointer; font-style: italic;
-    color: var(--color-text-hint); background: var(--color-bg-subtle); padding: 0 8px;
+    color: #9a9b93; background: #2e2f29; padding: 0 8px; margin: 2px 0;
 }
 .wt-fold__body { display: none; }
 .wt-fold--open .wt-fold__body { display: inline; }

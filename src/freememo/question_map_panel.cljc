@@ -144,17 +144,21 @@
   "Turn each :ask-walkthrough-tutor invocation into a submit of the panel
    with the invocation's text (plans/commit-range-walkthrough.md §6.7.1). The
    server reads the walkthrough's step from the screen's focus, so the text
-   is an ordinary turn."
+   is an ordinary turn.
+   Post: the turn starts a NEW chat, which the panel then shows. The opener
+   tests the reader from nothing, so an earlier conversation must not be in
+   its context."
   [!submit !active mode-id web-search?]
   (e/client
     (e/for [{:keys [invocation-id payload]} (bus/Requests :ask-walkthrough-tutor)]
       (let [[t _] (e/Token invocation-id)]
         (when t
-          (case (reset! !submit {:id (str (random-uuid)) :text (str (:text payload))
-                                 :chat @!active :refs [] :mode mode-id
-                                 :web-search? web-search?})
-            (case (bus/consume! invocation-id)
-              (t))))))))
+          (case (reset! !active nil)
+            (case (reset! !submit {:id (str (random-uuid)) :text (str (:text payload))
+                                   :chat nil :refs [] :mode mode-id
+                                   :web-search? web-search?})
+              (case (bus/consume! invocation-id)
+                (t)))))))))
 
 (e/defn AskEffects
   "Both command-to-submit effects of the assistant panel, in one call."
