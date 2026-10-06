@@ -9,6 +9,306 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20261002-b0e8697
+
+### For users
+
+- **AI settings now use levels, and every account starts on Best.** Settings →
+  AI Features gives each of five tasks a level: Flashcards, Page scanning,
+  Reading assistant, Quiz grading and Knowledge graph. The levels are Economy
+  ($), Balanced ($$), Best ($$$) and Custom.
+  - **Three views show the same settings.** Simple sets one level for every
+    task. By task sets a level per task. Advanced shows every setting, grouped
+    by task, as two-column rows. An edit in Advanced makes that task Custom.
+  - **Best runs GPT-6 Sol for cards, the assistant, quiz grading and most
+    knowledge-graph steps.** It scans with Gemini 3.8 Flash at 300 DPI. On card
+    generation, Best costs about 20 times as much as Economy.
+  - **This update moves every existing account to Best once.** A model,
+    reasoning or DPI you chose before stays stored, but a named level does not
+    read it. Pick Custom or edit in Advanced to use your own values again.
+  - **A document no longer picks its own model.** Document options loses its
+    card and OCR model pickers, and the assistant panel loses its model picker.
+    The level decides the model in every document.
+  - **Duplicate detection moved into Advanced**, under Knowledge graph.
+- **You can import a code repository from GitHub, GitLab or Forgejo.** The Code
+  card on the Import page, or `Import code…` in the palette, opens the form. You
+  pick a repository and a ref, then the directories and file extensions to keep.
+  - **Each file becomes a topic in the Learn queue.** It opens in a read-only
+    code pane beside your notes. `Copy to notes` inserts the selected code, and
+    Generate reads the selection in the pane first.
+  - **A Markdown file shows formatted, with a `Source` / `Rendered` toggle.**
+    Links to other files in the same import work. A selection in the rendered
+    view can become an extract.
+  - **The import shows its phase, and you can cancel it.** `Close` lets the
+    import continue on the server and shows a toast when it ends. The Activity
+    monitor can cancel it too.
+  - **`Update` on the repository adds the newest commit beside the old ones.**
+  - **Settings → Git Forges stores your access tokens**, encrypted.
+  - **Search reads code, and has a Code filter.** The picker can search
+    directories and extensions.
+- **`Toggle Editor pane` hides the notes editor beside a PDF, a video or a code
+  file.** FreeMemo remembers the choice for each document. Add card and Extract
+  still work. They read the selection from the pane.
+- **A sidebar on the left replaces the top tab bar.** It shows icons when it is
+  closed and opens when you point at it. `Keep open` (`⌘.` or `Ctrl+.`) docks
+  it. On a phone, a menu button in a slim top bar opens it.
+  - **`Continue` opens the last document you read.** The palette command `Go to
+    Viewer` is now `Continue reading`, and `Go to Knowledge` is now `Go to
+    Facts`.
+  - **Learn shows the number of due items.** The closed sidebar shows `99+` for
+    more than 99.
+- **Home has a `Get started` checklist of six steps.** It reads your existing
+  data, so it shows the progress you already made. `Show me` points at the
+  control for each step. `Dismiss` hides the checklist, and `Show getting
+  started` in the palette brings it back.
+  - **Settings → Anki Sync shows how to connect AnkiConnect.** `Connect` asks
+    Anki to allow this site. If Anki never asks, a section shows the line to add
+    to AnkiConnect's config, with a copy button.
+- **Help is searchable and opens beside the page.** `Help for this page` in the
+  sidebar opens the section for the page you are on, in a modal. In a document,
+  it picks the section for that kind of document.
+  - **The palette lists matching Help sections after the commands.**
+    `Shift+Enter` or the `?` on a row opens the Help for that command.
+  - **Each import source has its own Help section, 14 in total.** Three wrong
+    steps in the old import section are corrected.
+- **The assistant reads more of what you mention.**
+  - **An `@` mention of a PDF or an EPUB now sends its text.** A PDF sends the
+    pages around the one you last read. An EPUB sends the chapters around the
+    first chapter you have not marked done. Before, both sent nothing.
+  - **The assistant reads the source of a repository file.** In the `@` menu, a
+    file shows as `<repository>/<path>`.
+  - **The model reads plain text, not HTML.** Code in an answer no longer shows
+    `&lt;` for `<`, and a long code block keeps its lines.
+  - **Answers on Gemini 3.8 Flash and Gemini 3.5 Flash-Lite cost less.** The
+    request now lets the provider cache your sources between turns. In two
+    measured turns, the first one cost $0.0021 instead of about $0.0096.
+  - **Answer details lists thousands of sources without slowing the page.** A
+    `Show` button opens the excerpt below the list.
+- **You can put an MP3 clip inside your text.** Drag it in, paste it, or use
+  `Insert audio` in the format menu or the palette. It plays in the document, in
+  extracts and on cards. Right-click a clip to turn Loop on or off. Drag the
+  grip on a clip to move it to another line. In Anki, the clip plays with the
+  Replay button.
+- **The editors understand Markdown as you type or paste.** `#` makes a heading,
+  `- ` a bullet, `1. ` a numbered list, `> ` a quote, and ```` ``` ```` a code
+  block. `**bold**`, `*italic*`, `~~strike~~`, `` `code` `` and `[label](url)`
+  work inline.
+- **Tab indents in the document editor.** `Shift+Tab` outdents. Press `Esc`,
+  then `Tab`, to leave the editor. In a card field, Tab still moves to the next
+  field. The new `Increase indent` and `Decrease indent` buttons in the format
+  menu indent there.
+  - **Lists are easier to read.** Items have space between them, and the bullet
+    is larger. Cards and Anki notes use the same list style.
+  - **`⌘Y` (`Ctrl+Y`) redoes.** `⌘⇧Z` still works.
+  - **Closing a modal puts the caret back where it was.** It used to jump to the
+    start of the document.
+- **Card changes.**
+  - **`⌘⇧Enter` (`Ctrl+Shift+Enter`) clicks `Add & Keep`.** Both Add buttons show
+    their shortcut in a tooltip. Freeze gains `Freeze Both`.
+  - **Copy card can change the card type.**
+  - **The × on a card row hides the row at once.** A failed delete puts it back.
+  - **A PDF page's card table lists the cards of its extracts too.** Before, a
+    page showed `No cards yet` while its extract held cards.
+  - **You can choose whether card generation uses approved facts.** Settings has
+    a default, and Document options can override it for one document.
+- **Duplicate cards are removed once, and FreeMemo blocks new ones again.** Card
+  dedupe had not worked since 2026-08-03. For each set of duplicates, FreeMemo
+  keeps the card linked to Anki or with the most reviews. That card gets the
+  schedules, reviews and history of the others. If a removed card had other
+  text, History keeps it as a version.
+- **Focus reader works on Topic, EPUB, Web, Wikipedia and Markdown items.** It
+  worked on PDFs only before.
+- **A text topic opens where you stopped reading.** Before, every text topic
+  except a PDF opened at the top. FreeMemo now keeps your place in the notes
+  editor, the poem reader, and both views of a code file.
+  - **Your place survives a topic switch, a reload and another device.** It is
+    saved one second after you stop scrolling, and when you leave the topic.
+  - **An edit above your place does not move it to the wrong paragraph.**
+  - **A link to a heading still opens at that heading.**
+- **A PDF reopens at the fit you last chose**, `Fit page` or `Fit width`.
+- **Document options saves each field as you change it.** The modal has only a
+  `Done` button now, and it uses the same groups and rows as Settings. Its
+  buttons show their labels at every width.
+  - **`Done` waits for a save in progress.** A failed save keeps the modal open
+    and shows the error.
+  - **Two labels changed.** `Push to children` is now `Copy to extracts`, and
+    `Facts for card generation` is now `Use approved facts`.
+  - **Text typed during a save is no longer lost.** Before, an older save could
+    finish last and replace the newer text.
+- **Deleting a curriculum can be undone for 12 hours.** The toast has an Undo
+  button, and `⌘Z` works too. Exam credits already spent stay spent.
+- **You can import a poem package and read it.** The first package is معلقة
+  امرئ القيس. Tap a word to read its gloss and its إعراب, with the source of
+  each. Buttons in the panel make cards and extracts from a verse.
+- **Settings is easier to scan.** Each tab has one card, with groups inside it.
+  A new `Usage` tab holds Credits, Storage and AI costs.
+  - **AI costs shows token counts for new charges.** It fits its card, and its
+    empty message shows when there are no rows.
+  - **A prompt you edited shows a chip.** The chip says when the default prompt
+    changed after your edit. `View default` shows the new default.
+  - **Settings → Appearance has `Code Block Font Size`.**
+- **Page scans store math as `\(TeX\)`.** A scan used to store subscripts as
+  HTML, which the editor could not show as a formula.
+- **A done item is easy to see.** Its toggle is solid green, and the toolbar row
+  gets a green tint. A score now has a Done button, and `⌘D` marks it done.
+- **The browser tab names what you have open**, as `<name> | FreeMemo`.
+- **Anki cards center code blocks and tables.** A code block is as wide as its
+  longest line. A line wider than the card scrolls instead of wrapping.
+- **The toolbar's Anki Sync is one button, not a menu with one item.**
+- **The palette finds `Import document…` and `Import code…`.**
+- **Lists, results and table rows work with the keyboard.** Enter or Space opens
+  them, and sortable headers say their sort order.
+- **Library shows better on a phone.** Side panels cover the document instead of
+  squeezing it, and the card table columns line up.
+- **Input borders are darker**, at 3:1 contrast or more in both themes. Buttons
+  and the assistant's Mode select now use the app font.
+- **The Library type filter lists every document kind.**
+- **Model changes.**
+  - **New: GPT-6 Sol, GPT-6 Luna and Ling 3.0 Flash.** Ling 3.0 Flash is the
+    cheapest card model.
+  - **Retired from the card picker:** GPT-5.1, GPT-5.6 Luna, Terra and Sol,
+    Gemini 3 Flash, Gemini 3.6 Flash and Claude Haiku 4.5. The same GPT and
+    Gemini models leave the scanning picker. A saved choice moves to GPT-6 Sol,
+    GPT-6 Luna, Gemini 3.8 Flash or Claude Sonnet 5.
+  - **GLM 5.3 Flash goes to its fastest provider, not its cheapest.** The
+    cheapest one was often slow.
+- **Removed: CSV export.** Its button, its palette command and its menu item are
+  gone.
+- Bug fix: **the page Wayl opens after a payment crashed for a pending order.**
+  It now shows the order, and a pending order shows `Payment confirmed` when it
+  completes.
+- Bug fix: **moving through Learn items could freeze the tab.** No crash
+  happened in 150 test advances after the fix.
+- Bug fix: **a server crash froze the tab with no message.** The connection-lost
+  banner now shows within a few milliseconds.
+- Bug fix: **a very long review interval or Postpone ended the session.** An
+  interval now stops at 100 years.
+- Bug fix: **the assistant transcript could go blank after a send** and stay
+  blank until a reload.
+- Bug fix: **a citation that named several sources showed as raw text.** Each
+  source now gets its own link, in old answers too.
+- Bug fix: **a link import did not show in the Activity monitor.**
+- Bug fix: **in dark mode, pointing at a node in Graph hid its label.**
+- Bug fix: **importing a document again after you deleted it could open the
+  deleted copy.** The new import gets a numbered title, such as `Title (2)`.
+- Bug fix: **a self-hosted server could not start on an empty database.**
+
+### Known issues
+
+- **Best costs more than the level many accounts used before.** This update set
+  every account to Best. Choose Balanced or Economy in Settings → AI Features to
+  spend less.
+- **A model you chose for one document is no longer used.** The level decides.
+- **Gemini 3.8 Flash has not been tested on Arabic scans.** The earlier Arabic
+  test chose Gemini 3 Flash, which this update retires.
+- **The GLM 5.3 Flash routing change has not run against the live service.** It
+  also gives up a temporary discount on the cheapest provider.
+- **The duplicate repair can delete Anki notes.** When FreeMemo removes a
+  duplicate, your next Anki sync deletes its note if no other card holds it. A
+  note you edited in Anki shows as a conflict instead.
+- **Editing a card so that it equals another card shows a database error.**
+- **Audio clips must be MP3.** Loop does not reach Anki. You cannot seek inside
+  a clip, and a removed clip still uses storage.
+- **A repository import cannot change its selection afterward.** An import makes
+  at most 20,000 topics. A file over 1 MiB, or a binary file, becomes an empty
+  topic.
+- **An `@` mention of a score sends nothing now.** The `@` menu no longer offers
+  scores.
+- **Pages you scanned before this update keep their HTML math.** If you saved
+  your own OCR prompt, it does not get the new math rule.
+- **AI cost rows from before this update still show 0 tokens.**
+- **`Extract a passage` in Get started can read not done** if all your extracts
+  came before this update.
+- **To leave the document editor with the keyboard, press `Esc` and then
+  `Tab`.** Tab alone indents.
+- **A poem imported before the package rebuild keeps its old text.** Delete it
+  and import it again.
+- **Video, audio and score topics do not remember a reading position.** A PDF
+  remembers its page, as before.
+- **After you go from one video to another, the old transcript shows for a
+  moment.** It stays until the new transcript loads.
+
+### Technical
+
+- Five new tables. `poem_packages` holds one poem's JSONB package.
+  `topic_code` holds a repository file's source, and `repo_selections` holds an
+  import's forge, ref and selection. `app_migrations` holds the keys of
+  one-time data migrations, for `db/run-once!`. `reading_positions` holds one
+  row per topic and surface.
+- A reading position is an anchor `{i, fp, frac}`: a block index, a text
+  fingerprint, and the fraction of the block above the top edge. The browser
+  sends it with `sendBeacon` to `POST /api/reading-position`, only after the
+  reader's own input. A restore runs once per content write, against its own
+  topic only, and re-applies for up to 3 s while images settle.
+  `freememo.reading-anchor` holds the pure part.
+- New columns: `topics.repo_path`, `commit_sha`, `repo_url` and `is_extract`,
+  `curricula.staged_delete_id` (FK to `undo_log`), and
+  `upload_sessions.forge_source`. `undo_log`'s CHECK constraints accept
+  `delete-curriculum`. Staged deletes no longer count against the 100-entry cap.
+- Account export covers 41 tables, up from 37: `poem_packages`, `topic_code`,
+  `repo_selections` and `reading_positions`. `app_migrations` is excluded. A
+  staged curriculum is left out. New settings prefixes that embed a topic id:
+  `focus_reader_`, `pdf_fit_`, `code_view_`, `editor_hidden_` and
+  `right_panel_tab_`.
+- `db/move-everyone-to-best-level!` runs once, under the `app_migrations`
+  marker. The second deploy color waits on the first one's key and skips.
+- `setup-schema-flashcard-uniqueness!` is now the last schema step. In one
+  transaction it removes duplicates, moves their schedules, reviews, history and
+  Anki tombstones to the survivor, and builds the two `md5` indexes.
+  `plans/flashcard-dedupe-audit.sql` is a read-only count to run before deploy.
+- `idx_topics_source_content_digest` moved to `setup-schema-sources!`, after the
+  column it indexes. On an empty database the boot threw before.
+- `db/structural-kinds` (`page`, `repo`, `commit`, `dir`) keeps structure-only
+  topics out of every review query. Topic kinds go from 12 to 17, and
+  `freememo.topic-kinds/all` is the first single list of them.
+- New env vars: `FORGE_ALLOW_PRIVATE_HOSTS` (production sets it in
+  `docker-compose.truenas.yml`) and `SLOW_READ_LOG_MS` (default 250). The forge
+  token key comes from `ENC_KEY_SECRET` and the user id.
+- New dependency `flexmark-ext-footnotes` 0.64.8. Vendored Amiri 5.3.0 and
+  Floating UI 1.8.0. Run `clj -X:build vendor/fetch!` once.
+- Every AI debit row records prompt, cached, completion and reasoning tokens. A
+  0 means the provider reported zero, and NULL means it reported nothing.
+- The assistant request puts the current topic's sources before the transcript.
+  The last source turn carries `cache_control` on the two Gemini models, and
+  `/compact` starts a new cache. Claude Sonnet 5 is excluded, because Anthropic
+  bills a cache write at 1.25 times the input price.
+- The transcript sends only the evidence rows an answer cites. On a 238 KB repo
+  file, the largest message in a send went from 702 KB to 2.9 KB, and opening
+  the chat went from 3.5 MB to 17 KB. `run-details*` no longer sends
+  `:source_snapshot`, which was 1.1 MB on the measured run.
+- `freememo.electric-process-failure` logs `::process-failed` with the stack,
+  the user id and the path. `client-boot/boot!` raises the banner on close code
+  1011 or 1012. `DocumentRoot` drains the ids the server reads back.
+  `bugs/20260926-electric-input-diff-corruption/` holds a one-file reproduction
+  of the `:diff-corruption` for upstream.
+- `get-flashcards-for-subtree` is one recursive CTE, not one parameter per
+  topic.
+- Document options saves each field through one service. The server numbers
+  each value as it arrives and writes it under a per-field lock, and it skips a
+  write older than the newest one stored. A cancelled `e/Offload` cannot stop a
+  JDBC write that has started, so the lock is what keeps the newest text. The
+  Escape probe lost text in 1 of 10 runs before, and kept it in 20 of 20 after.
+  `forms-ext/Select!` is a tracked `<select>` with the `Input!` contract.
+  `document-options-targets` holds the one rule for which topics the modal, the
+  toolbar and History act on.
+- The subset review queue, the undo history, the video transcript and both
+  history-modal reads now run in `e/Offload`, and each one logs its time. The
+  subset queue reads eight columns instead of the whole row.
+- Production logs are in Loki on the TrueNAS box. `scripts/prod_logs.py` reads
+  them. `broadcast-changelog.sh` now runs `freememo.changelog` in a container on
+  `BROADCAST_HOST` and needs no Clojure CLI.
+- `spec/` holds a portable FreeMemo specification, version 0.1. Publish-clean
+  excludes it. `extensions/benchmark-card-generation/` is a card generation
+  benchmark that spends the operator's own OpenRouter credits.
+- `CLAUDE.md` gains patterns for an `e/input` flow with no value at mount, an
+  `e/for` that shares a branch slot, an overlay that adds no height, and a PDF
+  viewer that never swaps in place. It also gains the tab-title and nav-rail
+  obligations and a Production logs section.
+- These were not driven in a browser before release: the signed-in sidebar
+  check, the rendered Markdown pane, the repository import progress and picker
+  search, the done-state checks, Markdown shortcuts, and the live check of audio
+  clips.
+
 ## v20260910-9781008
 
 ### For users
