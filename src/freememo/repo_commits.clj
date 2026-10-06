@@ -18,17 +18,6 @@
     (do (tel/error! {:id ::commit-read-failed} t)
         "FreeMemo could not read this commit. The server log has the details.")))
 
-(defn- clone-holding
-  "The clone of `user-id`'s repository `repo-id` that holds every sha of
-   `shas`, fetching once when one is missing.
-   Post: the clone's {:dir …}, or nil when the node is not an imported
-         repository. Throws a forge failure when a fetch fails."
-  [user-id repo-id shas]
-  (when-let [ctx (repo-import/clone-context user-id repo-id)]
-    (if (every? #(git/commit-exists? (:dir ctx) %) shas)
-      ctx
-      (repo-import/clone-context user-id repo-id true))))
-
 (defn snapshot-subjects
   "The subject line of each snapshot commit of `user-id`'s repository node
    `repo-id`. Post: {:ok {sha subject}}, or {:error S}. A sha the clone
@@ -38,7 +27,7 @@
     (let [shas (keep :commit_sha (db/repo-snapshots user-id repo-id))]
       (if (empty? shas)
         {:ok {}}
-        (let [{:keys [dir]} (clone-holding user-id repo-id shas)
+        (let [{:keys [dir]} (repo-import/clone-holding user-id repo-id shas)
               present (filterv #(git/commit-exists? dir %) shas)]
           {:ok (if (seq present)
                  (into {} (map (juxt :sha :subject)) (git/log dir (into ["--no-walk"] present)))
@@ -55,7 +44,7 @@
   [user-id topic-id]
   (when-let [{:keys [repo-id sha ref]} (db/commit-node user-id topic-id)]
     (try
-      (let [{:keys [dir]} (clone-holding user-id repo-id [sha])
+      (let [{:keys [dir]} (repo-import/clone-holding user-id repo-id [sha])
             c (first (git/log dir ["-1" sha]))
             refusal (try (wr/taught-range dir sha sha) nil
                       (catch clojure.lang.ExceptionInfo e

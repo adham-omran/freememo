@@ -10147,6 +10147,114 @@
     ["INSERT INTO repo_selections (topic_id, forge, ref, selection) VALUES (?, ?, ?, ?)"
      repo-id forge ref (selection->jsonb selection)]))
 
+;; ── Widening a selection (plans/repo-selection-widening.md) ───────────
+
+(defn replace-repo-selection!
+  "Store `new` as repository `repo-id`'s selection, when `old` is still stored.
+   Pre : `tx` is open.
+   Post: true when the row held `old` and now holds `new`; false, with nothing
+         written, when another write changed it first (§4.2). JSONB equality
+         ignores key order, and `selection->jsonb` sorts the extensions."
+  [tx repo-id old new]
+  (= 1 (::jdbc/update-count
+         (jdbc/execute-one! tx
+           ["UPDATE repo_selections SET selection = ? WHERE topic_id = ? AND selection = ?"
+            (selection->jsonb new) repo-id (selection->jsonb old)]))))
+
+(defn commit-subtree-rows
+  "The `dir` and `code` rows under `user-id`'s commit node `commit-id`, staged
+   ones included and marked: a staged row still holds its (parent_id,
+   page_number) pair in `idx_topics_page`.
+   Post: {repo-path {:id :parent :title :ordinal :staged?}}, where `:parent` is
+         the parent row's `repo_path`, or nil when the commit node is the
+         parent — the shape `repo-tree/widening-plan` reads as `live`."
+  [user-id commit-id]
+  (into {}
+    (map (fn [r] [(:repo_path r) {:id (:id r)
+                                  :parent (not-empty (:parent_path r))
+                                  :title (:title r)
+                                  :ordinal (:page_number r)
+                                  :staged? (:staged r)}]))
+    (jdbc/execute! ds
+      ["WITH RECURSIVE sub AS (
+          SELECT id FROM topics WHERE id = ? AND user_id = ? AND kind = 'commit'
+          UNION ALL
+          SELECT t.id FROM topics t JOIN sub ON t.parent_id = sub.id)
+        SELECT t.id, t.repo_path, t.title, t.page_number, p.repo_path AS parent_path,
+               t.staged_delete_id IS NOT NULL AS staged
+          FROM topics t JOIN sub ON sub.id = t.id JOIN topics p ON p.id = t.parent_id
+         WHERE t.kind IN ('dir', 'code') AND t.repo_path IS NOT NULL"
+       commit-id user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn commit-source-bytes
+  "Post: the bytes of source stored under commit node `commit-id`'s live
+         subtree (§4.4), for the per-commit source budget."
+  [connectable commit-id]
+  (:n (jdbc/execute-one! connectable
+        ["WITH RECURSIVE sub AS (
+            SELECT id FROM topics WHERE id = ?
+            UNION ALL
+            SELECT t.id FROM topics t JOIN sub ON t.parent_id = sub.id
+             WHERE t.staged_delete_id IS NULL)
+          SELECT COALESCE(sum(tc.byte_size), 0) AS n
+            FROM sub JOIN topic_code tc ON tc.topic_id = sub.id"
+         commit-id]
+        {:builder-fn rs/as-unqualified-maps})))
+
+(def ^:private commit-subtree-cte
+  "Binds `sub` to commit `?` of user `?` and every row under it."
+  "WITH RECURSIVE sub AS (
+     SELECT id FROM topics WHERE id = ? AND user_id = ?
+     UNION ALL
+     SELECT t.id FROM topics t JOIN sub ON t.parent_id = sub.id)")
+
+(defn release-repo-row-ordinals!
+  "Clear `page_number` on the rows of `user-id`'s commit subtree that are about
+   to move, so no sibling inserted or moved meanwhile collides with an ordinal
+   they are leaving: `idx_topics_page` is unique on (parent_id, page_number)
+   and checked row by row, never deferred.
+   Pre : `tx` is open, and `move-repo-rows!` for the same ids follows in it.
+   Post: the number of rows written."
+  [tx user-id commit-id ids]
+  (if (empty? ids)
+    0
+    (::jdbc/update-count
+      (jdbc/execute-one! tx
+        [(str commit-subtree-cte "
+          UPDATE topics t SET page_number = NULL
+           WHERE t.id = ANY(?) AND t.user_id = ? AND t.id IN (SELECT id FROM sub)")
+         commit-id user-id (into-array Integer (map int ids)) user-id]))))
+
+(defn move-repo-rows!
+  "Re-place rows of `user-id`'s commit subtree after its selection widened
+   (§4.3). `reparent-topic!` refuses structural kinds, so a `dir` moves here.
+   Pre : `tx` is open; `release-repo-row-ordinals!` ran for these ids; each
+         move is {:id :parent-id :title :ordinal}, `:parent-id` is the commit
+         or a row of its subtree, and no two moves under one parent share an
+         ordinal with each other or with a row that stays.
+   Post: the number of rows written. A row outside the commit's subtree, or
+         another user's, is not written.
+   Invariant: one statement with four array parameters, whatever the number of
+         moves, so the 65 535-parameter ceiling cannot bind."
+  [tx user-id commit-id moves]
+  (if (empty? moves)
+    0
+    (::jdbc/update-count
+      (jdbc/execute-one! tx
+        [(str commit-subtree-cte "
+          UPDATE topics t
+             SET parent_id = m.parent_id, title = m.title, page_number = m.ordinal
+            FROM unnest(?::int[], ?::int[], ?::text[], ?::int[]) AS m(id, parent_id, title, ordinal)
+           WHERE t.id = m.id AND t.user_id = ? AND t.id IN (SELECT id FROM sub)
+             AND m.parent_id IN (SELECT id FROM sub)")
+         commit-id user-id
+         (into-array Integer (map (comp int :id) moves))
+         (into-array Integer (map (comp int :parent-id) moves))
+         (into-array String (map :title moves))
+         (into-array Integer (map (comp int :ordinal) moves))
+         user-id]))))
+
 (defn insert-topic-code-rows!
   "Batch-insert `topic_code` rows.
    Pre : `tx` is open; each row carries :topic_id :source :byte_size :lang, and
