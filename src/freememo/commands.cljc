@@ -185,6 +185,11 @@
                           :data {:walkthrough-id :ctx}
                           :table #{:walkthroughs}
                           :views #{:walkthrough-mutations :activity-mutations}}
+     :restart-walkthrough {:label "Prepare the walkthrough again" :class :mutation :exec :ui-button
+                           :when #{:viewer}
+                           :data {:walkthrough-id :ctx}
+                           :table #{:walkthroughs :walkthrough_concepts}
+                           :views #{:walkthrough-mutations}}
      :ask-walkthrough-tutor {:label "Test what I know about the starting commit"
                              :class :mutation :exec :electric
                              :when #{:viewer}

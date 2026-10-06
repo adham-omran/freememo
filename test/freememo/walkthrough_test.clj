@@ -202,3 +202,16 @@
       (testing "a commit that was never imported reads from the clone"
         (is (= "const Op = enum { cycle, hold };\n"
               (:source (docref/content user {:repo-id repo-id :path "src/ir.zig" :sha (second shas)}))))))))
+
+(deftest a-failed-walkthrough-can-be-prepared-again
+  (with-walkthrough [user repo-id wid shas]
+    (is (:error (wt/restart! user wid)) "a ready walkthrough is not restarted")
+    (jdbc/execute! db/ds ["UPDATE walkthroughs SET status = 'failed', error = 'boom' WHERE id = ?" wid])
+    (is (= {:ok true} (wt/restart! user wid)))
+    (deref (future (loop [n 0]
+                     (when (and (< n 200) (not= "ready" (:status (db/get-walkthrough user wid))))
+                       (Thread/sleep 50) (recur (inc n))))))
+    (let [o (wt/overview user wid)]
+      (is (= ["ready" nil 0] ((juxt :status :error :step) o)))
+      (is (= ["split hold" "rename cycle to loop"] (map :label (:concepts o)))
+        "the old grouping is gone and the new one is whole"))))

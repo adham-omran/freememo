@@ -306,8 +306,9 @@
     :title "Walking through commits"
     :intro "Learn what changed between two commits of an imported repository, one concept at a time, with the tutor."
     :steps [{:label "Start one"
-             :detail "Open the repository and choose Walk through commits…. Search for the first commit to learn and the last one, on one branch, and choose Start walkthrough. Both are taught, and the two can be the same commit. A walkthrough takes at most 50 commits. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it."
-             :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough}}
+             :detail "Open the repository and choose Walk through commits…. Search for the first commit to learn and the last one, on one branch, and choose Start walkthrough. Both are taught, and the two can be the same commit. A walkthrough takes at most 50 commits. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it. When a preparation fails, Try again prepares the same range again."
+             :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough
+                         :restart-walkthrough}}
             {:label "Test what you know first"
              :detail "Before step 1, choose Test what I know about the starting commit. The tutor asks about the code just before your first commit, and an idea you show you know is remembered with that state."
              :commands #{:ask-walkthrough-tutor :apply-walkthrough-known}}

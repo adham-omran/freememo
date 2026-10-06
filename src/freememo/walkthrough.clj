@@ -173,6 +173,18 @@
         (swap! cancellers dissoc wid)
         (swap! marks disj wid)))))
 
+(defn restart!
+  "Prepare a failed walkthrough again, from the same range. A failure costs
+   the reader nothing to retry: no grouping was stored.
+   Post: {:ok true} once the preparation runs, or {:error S} when the
+         walkthrough is not the user's or is not failed."
+  [user-id wid]
+  (if-let [repo-id (db/restart-walkthrough! user-id wid)]
+    (do (future (prepare! user-id wid repo-id))
+        (commands/bump! user-id :restart-walkthrough)
+        {:ok true})
+    {:error "Only a walkthrough that failed can be prepared again."}))
+
 (defn cancel!
   "Abandon the preparation of `wid` (§6.5.5). Post: `activity/cancel-work!`'s
    result."
