@@ -14159,13 +14159,33 @@
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn set-walkthrough-failed!
-  "Mark `user-id`'s walkthrough failed with `error`. Post: the update count."
+  "Mark `user-id`'s walkthrough failed with `error`, if it is still
+   preparing. A ready walkthrough stays ready: a cancel that lands after the
+   grouping saved has nothing left to stop. Post: the update count."
   [user-id walkthrough-id error]
   (::jdbc/update-count
     (jdbc/execute-one! ds
       ["UPDATE walkthroughs SET status = 'failed', error = ?, updated_at = now()
-         WHERE id = ? AND user_id = ?"
+         WHERE id = ? AND user_id = ? AND status = 'preparing'"
        (sanitize-utf8 (str error)) walkthrough-id user-id])))
+
+(defn restart-walkthrough!
+  "Put `user-id`'s failed walkthrough back to `preparing`, with no grouping
+   and at the opener, so it can be prepared again.
+   Post: its repository node id, or nil when it is not the user's or not
+         failed."
+  [user-id walkthrough-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [{:keys [repo_topic_id]}
+               (jdbc/execute-one! tx
+                 ["UPDATE walkthroughs SET status = 'preparing', error = NULL, step = 0,
+                          updated_at = now()
+                    WHERE id = ? AND user_id = ? AND status = 'failed'
+                   RETURNING repo_topic_id"
+                  walkthrough-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+      (jdbc/execute! tx ["DELETE FROM walkthrough_concepts WHERE walkthrough_id = ?" walkthrough-id])
+      repo_topic_id)))
 
 (defn save-walkthrough-grouping!
   "Store the grouping of `user-id`'s walkthrough and make it `ready`, in one

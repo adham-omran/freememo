@@ -51,6 +51,9 @@
 (defn merge!* [user-id from-id into-id]
   #?(:clj (wt/merge-concepts! user-id from-id into-id) :cljs nil))
 
+(defn restart!* [user-id wid]
+  #?(:clj (wt/restart! user-id wid) :cljs nil))
+
 (defn cancel!* [user-id wid]
   #?(:clj (do (wt/cancel! user-id wid) {:ok true}) :cljs nil))
 
@@ -125,6 +128,21 @@
                       :label "Cancel")]
         (let [r (e/server (e/Offload #(cancel!* user-id wid)))]
           (case r (t)))))))
+
+(e/defn FailedPanel
+  "A walkthrough whose preparation failed: why, and Try again."
+  [user-id wid error]
+  (e/client
+    (dom/div
+      (dom/props {:class "wt-panel"})
+      (dom/p (dom/props {:class "wt-panel--error" :role "alert"})
+        (dom/text (str "This walkthrough could not be prepared. " error)))
+      (bus/publish-invoker! :restart-walkthrough #(click-control! ".wt-restart"))
+      (e/on-unmount #(bus/retract-invoker! :restart-walkthrough))
+      (e/for [[t _] (forms/Button! [::restart] :class "btn btn-sm btn-primary wt-restart"
+                      :label "Try again")]
+        (let [r (e/server (e/Offload #(restart!* user-id wid)))]
+          (case r (if (:ok r) (t) (t (:error r)))))))))
 
 (e/defn OpenerPanel
   "Step 0 (§6.7.1): the concepts ahead, and the tutor's test of what the
@@ -324,8 +342,5 @@
         (dom/div
           (dom/props {:class "wt-screen__body"})
           (when (= "preparing" status) (PreparingPanel user-id wid phase))
-          (when (= "failed" status)
-            (dom/div
-              (dom/props {:class "wt-panel wt-panel--error" :role "alert"})
-              (dom/text (str "This walkthrough could not be prepared. " error))))
+          (when (= "failed" status) (FailedPanel user-id wid error))
           (when (= "ready" status) (ReadyView user-id wid repo-id)))))))
