@@ -8977,6 +8977,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
 .wt-step-view .wt-actions { padding: 0; }
 .wt-actions__rename { width: 200px; font-size: 13px; }
+.wt-actions__merge-host { display: inline-flex; }
 .wt-actions__merge { font-size: 13px; }
 .wt-step-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .wt-step-view__head { padding: 10px 16px 8px; border-bottom: 1px solid var(--color-border-light); }

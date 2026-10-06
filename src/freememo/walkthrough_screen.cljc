@@ -19,6 +19,7 @@
    [freememo.command-bus :as bus]
    [freememo.doc-context :as dctx]
    [freememo.forms-ext :as forms-ext]
+   [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    [freememo.question-pin-pane :as pin-pane]
    [freememo.question-pin-state :as pin-state]
@@ -222,6 +223,18 @@
           (dom/text "Since A")
           (dom/On "click" (fn [_] (reset! !mode :start)) nil))))))
 
+(def merge-hint
+  "What merging a step does, for the control's tooltip."
+  "Use this when the model split one idea into two steps. This step's changes move into the step you pick, and this step is deleted.")
+
+(defn merge-message
+  "The confirmation text for merging step `from-label`, with `n` changes,
+   into step `into-label`."
+  [from-label into-label n]
+  (str "Merge \"" from-label "\" into \"" into-label "\"? "
+    "This step's " n " change" (when (not= 1 n) "s") " move into that step, this step is deleted, "
+    "and the later steps are numbered again. A merge cannot be undone."))
+
 (e/defn StepActions
   "\"I understand\", rename and merge for the step at `position`
    (§6.6.5, §6.5.7.2, §6.5.7.3)."
@@ -254,11 +267,24 @@
                   r (e/server (e/Offload #(rename!* user-id (:id concept) label)))]
               (case r (if (:ok r) (t) (t (:error r))))))))
       (when concept
-        (e/for [[t {:keys [into]}] (forms-ext/Select! :into "" merge-options
-                                     :class "input wt-actions__merge"
-                                     :aria-label "Merge this step into another")]
-          (let [r (e/server (e/Offload #(merge!* user-id (:id concept) (parse-long into))))]
-            (case r (if (:ok r) (t) (t (:error r))))))))))
+        ;; A pick only asks: the merge runs from the confirmation. The pending
+        ;; merge names both steps, so the work reads nothing the merge changes.
+        (let [!pending (atom nil)
+              pending (e/watch !pending)]
+          (dom/span
+            (dom/props {:class "wt-actions__merge-host" :data-tooltip merge-hint})
+            (e/for [[t {:keys [into]}] (forms-ext/Select! :into "" merge-options
+                                         :class "input wt-actions__merge"
+                                         :aria-label "Merge this step into another step")]
+              (case (reset! !pending
+                      {:from (:id concept) :into (parse-long into)
+                       :message (merge-message (str (:position concept) ". " (wtext/plain (:label concept)))
+                                  (some (fn [[id label]] (when (= id into) label)) merge-options)
+                                  (or (:hunk-count concept) 0))})
+                (t))))
+          (modal/ConfirmModal !pending "Merge steps?" (:message pending) "Merge" "btn btn-primary"
+            (e/fn [{:keys [from into]}]
+              (e/server (e/Offload #(merge!* user-id from into))))))))))
 
 (e/defn StepView
   "One concept step: its summary, the canvas, the rail, and the pins
@@ -277,7 +303,7 @@
           list-open? (e/watch !list-open?)
           request (e/watch pin-state/!canvas-request)
           concept-id (:id concept)
-          merge-options (into [["" "Merge into…"]]
+          merge-options (into [["" "Merge this step into…"]]
                           (keep (fn [[id label]] (when (not= id (str concept-id)) [id label])))
                           concept-options)]
       (dom/div
