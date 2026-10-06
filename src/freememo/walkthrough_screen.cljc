@@ -308,7 +308,7 @@
           ov (e/server (e/Offload #(overview* rev user-id wid)))
           status (e/server (:status ov))
           error (e/server (:error ov))
-          title (e/server (str (:repo-title ov) " · " (short-sha (:sha-a ov)) " → "
+          title (e/server (str (:repo-title ov) " · " (short-sha (:sha-from ov)) " → "
                             (short-sha (:sha-b ov)) " · " (:commit-count ov) " commits"))
           phase (e/server (phase* (e/watch (us/get-atom user-id :preparing-walkthroughs)) wid))]
       (dom/div

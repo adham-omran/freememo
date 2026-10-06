@@ -52,6 +52,12 @@
           (is (thrown-with-msg? Exception #"before the second" (wr/range-commits dir d a)))
           (with-redefs [wr/max-commits 2]
             (is (thrown-with-msg? Exception #"at most 2" (wr/range-commits dir a d)))))
+        (testing "§6.4.2: a taught range includes its first commit"
+          (is (= {:sha-a a :commits [b c d]} (update (wr/taught-range dir b d) :commits #(mapv :sha %))))
+          (is (= {:sha-a c :commits [d]} (update (wr/taught-range dir d d) :commits #(mapv :sha %)))
+            "the newest commit alone")
+          (is (thrown-with-msg? Exception #"first commit has nothing before it" (wr/taught-range dir a d)))
+          (is (thrown-with-msg? Exception #"must not come after" (wr/taught-range dir d b))))
         (testing "§6.4.3: hunks carry their commit and paths"
           (let [hunks (wr/range-hunks dir commits {})]
             (is (= #{b c d} (set (map :commit-sha hunks))))

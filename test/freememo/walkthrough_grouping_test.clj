@@ -1,9 +1,14 @@
 (ns freememo.walkthrough-grouping-test
   "The grouping checks and assembly (plans/commit-range-walkthrough.md §6.5).
-   No model: `group!` runs against a stub `chat`."
+   No model. `group!` runs through the real `kg-llm/chat!`, with the HTTP call
+   under it stubbed, so its contract — the value under the root key — is the
+   one production enforces."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [freememo.kg-llm :as llm]
+            [freememo.openrouter :as openrouter]
             [freememo.walkthrough-grouping :as g]
+            [freememo.walkthrough-model-stub :as stub]
             [freememo.walkthrough-range :as wr]))
 
 (def ^:private a (apply str "aaaaaaa" (repeat 33 "0")))
@@ -54,30 +59,27 @@
                  {:sha b :subject "refactor: rename cycle to loop" :body "" :parents [a]}]
         hunks [(hunk a "plans/x.md" 0) (hunk a "ir.zig" 0) (hunk b "ir.zig" 0)]
         !calls (atom [])
-        chat (fn [system user root-key _]
-               (swap! !calls conj [root-key user])
-               (case root-key
-                 :concepts {:parsed {:concepts [{:label "rename cycle to loop" :commits ["bbbbbbb"]
-                                                 :depends_on ["split hold"]}
-                                                {:label "split hold" :commits ["aaaaaaa"]}]}
-                            :cost 0.01 :tokens [{:prompt 1}]}
-                 :assignments {:parsed {:assignments {:H1 "split hold" :H2 "split hold"
-                                                      :H3 "rename cycle to loop"}}
-                               :cost 0.02 :tokens [{:prompt 2}]}))
         !bills (atom [])
-        r (g/group! {:chat chat :commits commits :hunks hunks :noise #{}
-                     :check-cancelled! (fn []) :set-phase! (fn [_])
-                     :on-pass (fn [pass cost _] (swap! !bills conj [pass cost]))})]
+        r (with-redefs [openrouter/chat-completion!
+                        (fn [k body & more]
+                          (swap! !calls conj (:content (second (:messages body))))
+                          (apply stub/chat-completion! k body more))]
+            (g/group! {:chat (fn [system user root-key root-type]
+                               (llm/chat! "key" {} system user root-key root-type))
+                       :commits commits :hunks hunks :noise #{}
+                       :check-cancelled! (fn []) :set-phase! (fn [_])
+                       :on-pass (fn [pass cost _] (swap! !bills conj [pass cost]))}))]
     (is (= ["split hold" "rename cycle to loop"] (map :label (:concepts r))) "§6.5.3")
-    (is (= [[:concepts 0.01] [:classify 0.02]] @!bills) "§6.5.6: one charge per pass")
-    (is (str/includes? (second (first @!calls)) "Work packages: WP2.2"))
-    (is (str/includes? (second (first @!calls)) "Plan diff:"))
+    (is (= [:concepts :classify] (map first @!bills)) "§6.5.6: one charge per pass")
+    (is (str/includes? (first @!calls) "Work packages: WP2.2"))
+    (is (str/includes? (first @!calls) "Plan diff:"))
     (is (= {"split hold" 2 "rename cycle to loop" 1} (frequencies (map :concept (:hunks r)))))))
 
 (deftest a-cancel-stops-before-the-next-call
   (let [!calls (atom 0)]
     (is (thrown-with-msg? Exception #"cancelled"
-          (g/group! {:chat (fn [& _] (swap! !calls inc) {:parsed {:concepts [{:label "x" :commits ["aaaaaaa"]}]}})
+          (g/group! {:chat (fn [& _] (swap! !calls inc)
+                             {:parsed [{:label "x" :commits ["aaaaaaa"]}] :cost 0.0 :tokens []})
                      :commits [{:sha a :subject "s" :body ""}] :hunks [(hunk a "x" 0)] :noise #{}
                      :check-cancelled! (fn [] (when (pos? @!calls) (throw (ex-info "cancelled" {}))))
                      :set-phase! (fn [_]) :on-pass (fn [& _])})))
