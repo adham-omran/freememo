@@ -58,7 +58,7 @@
                   db/get-kg-facts-context (fn [& _] facts)
                   db/get-fact-mastery (fn [& _] {})
                   db/latest-assistant-checkpoint (fn [& _] checkpoint)
-                  db/question-doc-key (fn [& _] nil)
+                  db/question-doc-ref (fn [& _] nil)
                   db/get-assistant-messages (fn [_] @!messages)]
       (f request! say!))))
 
@@ -203,7 +203,7 @@
                             db/get-kg-facts-context (fn [& _] [])
                             db/get-fact-mastery (fn [& _] {})
                             db/latest-assistant-checkpoint (fn [& _] nil)
-                            db/question-doc-key (fn [& _] nil)
+                            db/question-doc-ref (fn [& _] nil)
                             db/get-assistant-messages (fn [_] [])]
                 (answer-request 7 chat 42 "Q?" nil {:model "m"} false true))]
         (is (not-any? breakpoint? (get-in r [:provider-request :messages])))))))

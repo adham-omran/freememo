@@ -24,6 +24,7 @@
    [freememo.content-toolbar-helpers :as card-gen]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
+   [freememo.document-ref :as docref]
    [freememo.question-map :as question-map]
    [freememo.question-map-block :as map-block]
    [freememo.repo-markdown :as repo-md]
@@ -31,6 +32,7 @@
    [freememo.toasts :as toasts]
    [freememo.topic-kinds :as topic-kinds]
    [freememo.db :as db]
+   [freememo.walkthrough :as walkthrough]
    [missionary.core :as m]
    [taoensso.telemere :as tel])
   (:import
@@ -677,15 +679,27 @@
    (`question-map/open-pins-message`, plans/anchored-questions.md §6.2.5)."
   #{nil :annotated :question-pins})
 
+(defn document-ref-for
+  "The repository file a run about `page-topic-id` is about: the file a
+   walkthrough screen shows on that repository node, else the page itself
+   when it is a repository file (plans/commit-range-walkthrough.md §6.3).
+   Post: a document ref, or nil."
+  [user-id page-topic-id]
+  (or (walkthrough/focused-ref user-id page-topic-id)
+    (docref/for-topic user-id page-topic-id)))
+
 (defn- answer-request
   "Render the exact provider request for one new answer: `request-head`, then
    this turn's @ references, the annotation instructions when the turn carries
-   annotations, the question-map message when the page has a map or the turn
-   is an Ask, and the new user turn. While the learner stays on one page, the
-   previous request is a prefix of this one, minus its tail.
-   Post: also :question-map-run, {:map-id :diagnosis?} when the request carried
-         the question-map message, else nil. The run worker applies the
-         reply's map block to that map."
+   annotations, the walkthrough message while a walkthrough screen is open on
+   the page, the question-map message when the page's file has a map or the
+   turn is an Ask, and the new user turn. While the learner stays on one page,
+   the previous request is a prefix of this one, minus its tail.
+   Post: also :reply-blocks, {:question-map {:map-id :diagnosis? :ref}
+         :walkthrough {:walkthrough-id :repo-id :as-of-sha}} with each key
+         present when the request carried that message, or nil for neither.
+         The run worker applies the reply's leading block to each.
+         The walkthrough's evidence follows the head's, numbered after it."
   ([user-id chat page-topic-id user-text ref-topic-ids model-fields
     web-search-supported? cache-breakpoint?]
    (answer-request user-id chat page-topic-id user-text ref-topic-ids model-fields
@@ -695,12 +709,18 @@
    {:pre [(contains? turn-kinds turn)]}
    (let [head (request-head user-id chat page-topic-id ref-topic-ids cache-breakpoint?)
          diagnosis? (= :question-pins turn)
-         map-tail (question-map/request-tail user-id page-topic-id diagnosis?
+         ref (document-ref-for user-id page-topic-id)
+         walk-tail (walkthrough/request-tail user-id page-topic-id
+                     (inc (count (:evidence head))))
+         map-tail (question-map/request-tail user-id ref diagnosis?
                     (mode-system-prompt "tutor"))
+         evidence (into (vec (:evidence head)) (:evidence walk-tail))
          messages (-> (:messages head)
                     (into (:reference-messages head))
                     (cond-> (= :annotated turn)
                       (conj {:role "system" :content annotation-instructions}))
+                    (cond-> walk-tail
+                      (conj {:role "system" :content (:content walk-tail)}))
                     (cond-> map-tail
                       (conj {:role "system" :content (:content map-tail)}))
                     (conj {:role "user" :content user-text}))]
@@ -711,11 +731,13 @@
                           (and (:assistant_chats/web_search chat)
                             web-search-supported?)
                           (merge (openrouter/web-search-fields)))
-      :source-snapshot (:evidence head)
-      :evidence (:evidence head)
-      :question-map-run (when map-tail
-                          {:map-id (:map-id map-tail) :diagnosis? diagnosis?
-                           :page-topic-id page-topic-id})})))
+      :source-snapshot evidence
+      :evidence evidence
+      :reply-blocks (when (or map-tail walk-tail)
+                      (cond-> {}
+                        map-tail (assoc :question-map {:map-id (:map-id map-tail)
+                                                       :diagnosis? diagnosis? :ref ref})
+                        walk-tail (assoc :walkthrough (:run walk-tail))))})))
 
 (defn- side-request
   "Render the provider request for one side-question turn: `request-head`, the
@@ -1009,6 +1031,31 @@
       (toasts/push! user-id {:level :warn
                              :message "The question map was not updated. Try asking again."}))))
 
+(defn- apply-walkthrough-reply!
+  "Record the ideas the block `response` starts with lists as known, with the
+   walkthrough's version (plans/commit-range-walkthrough.md §6.7.1). When no
+   question map also reads the block, store the prose without it. Never
+   throws, for the reason `apply-question-map-reply!` gives."
+  [user-id run-uuid walkthrough-run response replace-text?]
+  (try
+    (let [{:keys [prose problem]} (walkthrough/apply-reply! user-id walkthrough-run response)]
+      (when (and replace-text? (not= prose response))
+        (db/replace-assistant-run-text! run-uuid
+          (if (str/blank? prose) "I noted what you know." prose)))
+      (when problem
+        (tel/log! {:level :warn :id ::walkthrough-known-not-applied
+                   :data {:user-id user-id :run-uuid run-uuid :problem problem}})))
+    (catch Throwable t
+      (tel/error! {:id ::walkthrough-known-apply :data {:user-id user-id :run-uuid run-uuid}} t))))
+
+(defn- apply-reply-blocks!
+  "Apply the leading block of `response` to each reader of `reply-blocks`."
+  [user-id run-uuid {:keys [question-map walkthrough]} response]
+  (when walkthrough
+    (apply-walkthrough-reply! user-id run-uuid walkthrough response (nil? question-map)))
+  (when question-map
+    (apply-question-map-reply! user-id run-uuid question-map response)))
+
 (defn- execute-provider-run!
   "Drain one provider stream and settle its durable answer or checkpoint.
 
@@ -1018,7 +1065,7 @@
    Invariant: on-delta writes through the database's active-state predicate.
    This worker never writes late response text after Stop."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request
-   compact-range question-map-run]
+   compact-range reply-blocks]
   (let [started-ns (System/nanoTime)
         metadata* (volatile! {})
         charged?* (volatile! false)
@@ -1067,8 +1114,8 @@
             (db/complete-assistant-compact-run! run-uuid (str/trim response)
               (:from compact-range) (:through compact-range))
             (do
-              (when question-map-run
-                (apply-question-map-reply! user-id run-uuid question-map-run response))
+              (when reply-blocks
+                (apply-reply-blocks! user-id run-uuid reply-blocks response))
               (when sources-markdown
                 (db/append-assistant-run-text! run-uuid sources-markdown))
               (db/complete-assistant-answer-run! run-uuid))))
@@ -1122,14 +1169,14 @@
   "Submit one accepted run to the bounded assistant executor.
    Post: returns immediately. The worker owns every terminal transition."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range
-   question-map-run]
+   reply-blocks]
   (tel/log! {:level :info :id ::assistant-run-started
              :data {:user-id user-id :chat-id chat-id :run-uuid run-uuid
                     :kind run-kind :model-id model-id}}
     "Assistant run started")
   ((m/via assistant-run-executor
      (execute-provider-run! user-id chat-id run-uuid run-kind api-key model-id
-       provider-request compact-range question-map-run))
+       provider-request compact-range reply-blocks))
    (fn [_result] nil)
    (fn [error]
      (db/fail-assistant-run! run-uuid
@@ -1211,7 +1258,7 @@
                  (bump! user-id)
                  (start-provider-run! user-id chat-id run-uuid "answer" api-key
                    run-model-id (:provider-request rendered) nil
-                   (:question-map-run rendered))
+                   (:reply-blocks rendered))
                  {:ok true :run-uuid run-uuid})))))))))
 
 (defn- start-answer-run-in-new-chat!
@@ -1267,7 +1314,8 @@
    Post: as `ensure-and-start-answer-run!`, plus :command :answer. With no open
          pins, {:error} and no run."
   [user-id root-topic-id page-topic-id chat-id mode-id web-search? client-id]
-  (let [{:keys [text error]} (question-map/open-pins-message user-id page-topic-id)]
+  (let [{:keys [text error]} (question-map/open-pins-message user-id
+                                (document-ref-for user-id page-topic-id))]
     (if error
       {:error error :chat-id chat-id :command :answer}
       (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
@@ -1393,7 +1441,8 @@
    :quoted-text (:quoted_text source)
    :document-title (:document_title source)
    :display-label (:display_label source)
-   :source-revision (:source_revision source)})
+   :source-revision (:source_revision source)
+   :walkthrough-id (:walkthrough_id source)})
 
 (defn retry-answer-run!
   "Retry one failed answer with its exact provider request and evidence snapshot.
@@ -1601,7 +1650,8 @@
    :quoted_text (:quoted-text source)
    :quoted_html (:quoted-html source)
    :document_title (:document-title source)
-   :display_label (:display-label source)})
+   :display_label (:display-label source)
+   :walkthrough_id (:walkthrough-id source)})
 
 (defn- execute-side-run!
   "Drain one side-question stream into the thread.
@@ -1811,7 +1861,7 @@
 
 (def ^:private evidence-wire-keys
   [:citation_key :document_topic_id :page_topic_id :page_number :anchor
-   :quoted_text :quoted_html :document_title :display_label])
+   :quoted_text :quoted_html :document_title :display_label :walkthrough_id])
 
 (def ^:private retained-html-pattern
   #"(?is)<(?:blockquote|code|div|figure|h[1-6]|li|ol|p|pre|table|td|th|tr|ul)\b")

@@ -40,7 +40,8 @@
    "account-export"       {:member "account"}
    "account-import"       {:member "account"}
    "url-import"           {:member "https://example.org/"}
-   "repo-import"          {:member "github.com/owner/name" :entry "downloading"}})
+   "repo-import"          {:member "github.com/owner/name" :entry "downloading"}
+   "walkthrough-prepare"  {:member 42 :entry "reading diffs"}})
 
 (defn- publish! [a {:keys [member entry]}]
   (if (map? @a)

@@ -38,3 +38,7 @@
     (is (seq tabs) "no (when (= active-tab :kw) …) branch found in main.cljc")
     (is (empty? (remove fmt/tab-labels tabs))
       (str "tabs with no label: " (vec (remove fmt/tab-labels tabs))))))
+
+(deftest a-walkthrough-is-named-after-its-repository
+  (is (= "Walkthrough · owner/grid | FreeMemo" (fmt/page-title (fmt/walkthrough-name "owner/grid"))))
+  (is (= "Not found | FreeMemo" (fmt/page-title (fmt/walkthrough-name nil)))))

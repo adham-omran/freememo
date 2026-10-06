@@ -15,6 +15,7 @@
             [freememo.page-title-format :as fmt]
             #?(:clj [freememo.curriculum :as curriculum])
             #?(:clj [freememo.db :as db])
+            #?(:clj [freememo.walkthrough :as walkthrough])
             #?(:clj [freememo.user-state :as us])))
 
 ;; Server reads. Each keeps its var on both peers, because its name appears
@@ -36,6 +37,14 @@
   #?(:clj (when (int? curriculum-id) (curriculum/curriculum-title user-id curriculum-id))
      :cljs nil))
 
+(defn walkthrough-title*
+  "Post: the name of a walkthrough the user owns, after its repository
+   (plans/commit-range-walkthrough.md §6.6.7.3), or nil."
+  [_rev user-id walkthrough-id]
+  #?(:clj (when (int? walkthrough-id)
+            (fmt/walkthrough-name (:repo-title (walkthrough/overview user-id walkthrough-id))))
+     :cljs nil))
+
 (defn write-title!
   "Pre: item-name is a page's name, or nil when its item does not exist.
    Post: on the client, `document.title` reads `(fmt/page-title item-name)`."
@@ -47,11 +56,14 @@
 (e/defn PageTitle
   "Title the browser tab after one subject.
 
-   Pre: subject is `[:topic id]`, `[:curriculum id]`, `[:label tab-keyword]` or
-   `:not-found`, and the caller is the one owner of the title on its route.
+   Pre: subject is `[:topic id]`, `[:curriculum id]`, `[:walkthrough id]`,
+   `[:label tab-keyword]` or `:not-found`, and the caller is the one owner of
+   the title on its route.
    Post: once the name is known, `document.title` reads `Name | FreeMemo`. A
    missing or unowned item reads Not found. A topic rename arrives through
    `:tree-mutations`, and a curriculum rename through `:curriculum-mutations`.
+   A walkthrough is named after its repository, so it watches
+   `:tree-mutations` too.
    Invariant: the call is the LAST form of the caller's body, never inside a
    `case`, so its effect is the body's value and gates no DOM."
   [user-id subject]
@@ -66,5 +78,8 @@
           :curriculum (e/server
                         (let [rev (e/watch (us/get-atom user-id :curriculum-mutations))]
                           (e/Offload #(curriculum-title* rev user-id id))))
+          :walkthrough (e/server
+                         (let [rev (e/watch (us/get-atom user-id :tree-mutations))]
+                           (e/Offload #(walkthrough-title* rev user-id id))))
           :label (get fmt/tab-labels id)
           nil)))))

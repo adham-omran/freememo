@@ -15,6 +15,7 @@
    [freememo.doc-context :as dctx]
    [freememo.forge-kinds :as kinds]
    [freememo.navigation :as nav]
+   [freememo.walkthrough-entry :refer [WalkthroughEntry]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.repo-import :as repo-import])
    #?(:clj [freememo.user-state :as us])))
@@ -96,4 +97,7 @@
             (dom/text "Open commit")
             (dom/On "click"
               (fn [_] (navigate! :viewer (nav/nav-topic (:topic-id result) nil)))
-              nil)))))))
+              nil)))
+        ;; Commit-range walkthroughs start here (plans/commit-range-walkthrough.md
+        ;; §6.6.1).
+        (WalkthroughEntry user-id repo-id navigate!)))))

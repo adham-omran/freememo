@@ -54,7 +54,7 @@
     :queue-mutations :pin-mutations :assistant-mutations :assistant-stream
     :undo-mutations :kg-mutations
     :schedule-mutations :curriculum-mutations :activity-mutations
-    :question-mutations})
+    :question-mutations :walkthrough-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -163,6 +163,60 @@
                                 :data {:root-id :payload :known? :payload}
                                 :table #{:known_marks :kg_entities :question_roots}
                                 :views #{:question-mutations :kg-mutations}}
+     ;; Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.9.1).
+     ;; Start and step are buttons the repository node and the walkthrough
+     ;; screen publish, so the palette lists them only there. Cancel is
+     ;; published while a preparation runs. The opener's "Test me" is consumed
+     ;; by the AssistantPanel, which owns the submit, as an Ask over pins is.
+     ;; Moving a change, renaming and merging steps need a subject only the
+     ;; screen holds, so they are hidden.
+     :start-walkthrough  {:label "Walk through commits…" :class :mutation :exec :ui-button
+                          :when #{:viewer}
+                          :data {:repo-id :ctx :sha-a :payload :sha-b :payload}
+                          :table #{:walkthroughs}
+                          :views #{:walkthrough-mutations}}
+     :walkthrough-step   {:label "I understand this step" :class :mutation :exec :ui-button
+                          :when #{:viewer}
+                          :data {:walkthrough-id :ctx :step :payload}
+                          :table #{:walkthroughs :walkthrough_concepts}
+                          :views #{:walkthrough-mutations}}
+     :cancel-walkthrough {:label "Cancel walkthrough preparation" :class :mutation :exec :ui-button
+                          :when #{:viewer}
+                          :data {:walkthrough-id :ctx}
+                          :table #{:walkthroughs}
+                          :views #{:walkthrough-mutations :activity-mutations}}
+     :ask-walkthrough-tutor {:label "Test what I know about the starting commit"
+                             :class :mutation :exec :electric
+                             :when #{:viewer}
+                             :data {:text :payload}
+                             :table #{:assistant_chats :assistant_messages :assistant_runs}
+                             :views #{:assistant-mutations}}
+     :move-walkthrough-hunk {:label "Move a change to another step" :class :mutation
+                             :palette-hidden true
+                             :data {:hunk-id :payload :concept-id :payload}
+                             :table #{:walkthrough_hunks}
+                             :views #{:walkthrough-mutations}}
+     :rename-walkthrough-concept {:label "Rename a walkthrough step" :class :mutation
+                                  :palette-hidden true
+                                  :data {:concept-id :payload :label :payload}
+                                  :table #{:walkthrough_concepts}
+                                  :views #{:walkthrough-mutations}}
+     :merge-walkthrough-concepts {:label "Merge two walkthrough steps" :class :mutation
+                                  :palette-hidden true
+                                  :data {:from-id :payload :into-id :payload}
+                                  :table #{:walkthrough_concepts :walkthrough_hunks :walkthroughs}
+                                  :views #{:walkthrough-mutations}}
+     ;; Written by the preparation thread when its grouping lands or fails.
+     :prepare-walkthrough {:label "Prepare a walkthrough" :class :mutation
+                           :palette-hidden true
+                           :table #{:walkthroughs :walkthrough_concepts :walkthrough_hunks}
+                           :views #{:walkthrough-mutations}}
+     ;; Written by the run worker when a walkthrough tutor reply lists ideas
+     ;; the reader showed they know (§6.7.1).
+     :apply-walkthrough-known {:label "Record ideas a walkthrough showed known" :class :mutation
+                               :palette-hidden true
+                               :table #{:known_marks :kg_entities}
+                               :views #{:kg-mutations :question-mutations}}
      ;; Written by the run worker when a tutor reply carries a map block.
      :apply-question-map  {:label "Apply a tutor's question map" :class :mutation
                            :palette-hidden true

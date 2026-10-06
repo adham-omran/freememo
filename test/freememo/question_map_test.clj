@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
             [freememo.db :as db]
+            [freememo.document-ref :as docref]
             [freememo.question-map :as qm]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
@@ -31,13 +32,20 @@
           user-id kind (str kind " test") parent-id repo-path]
          opts)))
 
-(defn- markdown-file! [user-id repo path source]
+(defn- random-sha []
+  (apply str (repeatedly 40 #(rand-nth "0123456789abcdef"))))
+
+(defn- markdown-file!
+  "A commit with its own sha under `repo`, and `path` in it as a Markdown file.
+   Post: the file's document ref."
+  [user-id repo path source]
   (let [commit (topic! user-id "commit" repo "")
         file (topic! user-id "code" commit path)]
+    (jdbc/execute! db/ds ["UPDATE topics SET commit_sha = ? WHERE id = ?" (random-sha) commit])
     (jdbc/execute! db/ds ["INSERT INTO topic_code (topic_id, source, byte_size, lang)
                            VALUES (?, ?, ?, 'markdown')"
                           file source (count source)])
-    file))
+    (docref/for-topic user-id file)))
 
 (def v1 (str "# Ports\n\nA port declares shape, degree, Type and timing.\n\n"
           "## Callables\n\nCallable slots also carry a closure signature.\n"))
@@ -48,6 +56,7 @@
   `(if-not (db-up?)
      (is true "PostgreSQL is unavailable; integration assertion skipped")
      (do (#'db/setup-schema-question-pins!)
+         (#'db/setup-schema-walkthroughs!)
          (let [~sym (create-user!)]
            (try ~@body
              (finally (jdbc/execute! db/ds ["DELETE FROM users WHERE id = ?" ~sym])))))))
@@ -85,10 +94,10 @@
         (is (str/includes? content "PERSONA") "§6.3.1.2: the Ask teaches as the Tutor")
         (is (str/includes? content "[pin 1] \"closure signature\"\nRelates to what?"))
         (is (str/includes? content "This reply is a diagnosis")))
-      (is (= {:map-id (qm/map-id-for-topic u file)
+      (is (= {:map-id (qm/map-id-for-ref u file)
               :text (qm/diagnosis-user-message
                       (filterv #(= "open" (:status %))
-                        (db/question-pins u (qm/map-id-for-topic u file))))}
+                        (db/question-pins u (qm/map-id-for-ref u file))))}
             (qm/open-pins-message u file))))))
 
 (defn- reply [block prose] (str "```freememo-map\n" block "\n```\n\n" prose))
@@ -99,9 +108,9 @@
           file (markdown-file! u repo "a.md" v1)
           _ (qm/create-pin! u file {:quote "shape, degree"})
           _ (qm/create-pin! u file {:quote "closure signature"})
-          map-id (qm/map-id-for-topic u file)
+          map-id (qm/map-id-for-ref u file)
           run {:map-id map-id :diagnosis? true :run-uuid (str (random-uuid))
-               :page-topic-id file}]
+               :ref file}]
       (testing "an invalid block writes nothing and says why"
         (let [r (qm/apply-reply! u run (reply "{\"next\": \"Nowhere\"}" "Q?"))]
           (is (= "Q?" (:prose r)))
@@ -135,3 +144,42 @@
         (is (not (str/includes? (str (:assistant_messages/safe-html v)
                                   (:assistant_messages/content v))
                    "freememo-map")))))))
+
+(deftest a-pin-on-code-anchors-by-its-exact-quote
+  (testing "§6.3.7: a repeated quote resolves to the occurrence nearest the hint"
+    (let [src "a = 1;\nb = 2;\na = 1;\n"]
+      (is (= {:offsets [0 6]} (qm/locate-in-source src "a = 1;" nil)))
+      (is (= {:offsets [14 20]} (qm/locate-in-source src "a = 1;" 13)))
+      (is (nil? (qm/locate-in-source src "a  = 1;" 0)) "whitespace is not folded"))))
+
+(deftest a-pin-made-at-a-commit-shows-on-the-snapshot-topic
+  (with-user u
+    (let [repo (topic! u "repo" nil nil)
+          topic-ref (markdown-file! u repo "docs/spec.md" v1)
+          ;; The same file at the same commit, named the way a walkthrough
+          ;; canvas names it: no topic id.
+          bare (dissoc topic-ref :topic-id)
+          {:keys [ok]} (qm/create-pin! u bare {:quote "shape, degree" :anchor "ports"})]
+      (is ok)
+      (testing "§6.3.4: the pin stores its sha and no topic id"
+        (is (= [nil (:sha topic-ref)]
+              ((juxt :snapshot_topic_id :snapshot_sha)
+               (jdbc/execute-one! db/ds ["SELECT snapshot_topic_id, snapshot_sha FROM question_pins
+                                           WHERE id = ?" (:id ok)] opts)))))
+      (testing "§6.3.6: the snapshot topic shows it"
+        (is (some? (:range (first (:pins (qm/snapshot-view u topic-ref))))))))))
+
+(deftest i-know-it-records-the-snapshot-it-was-said-on
+  (with-user u
+    (let [repo (topic! u "repo" nil nil)
+          ref (markdown-file! u repo "docs/ir-spec.md" v1)
+          _ (qm/create-pin! u ref {:quote "shape, degree"})
+          map-id (qm/map-id-for-ref u ref)
+          run {:map-id map-id :diagnosis? true :run-uuid (str (random-uuid)) :ref ref}
+          _ (qm/apply-reply! u run (reply "{\"roots\": [{\"label\": \"Axes\", \"in_document\": true}]}" "Q?"))
+          root (first (db/question-roots u map-id))]
+      (is (:ok (qm/set-root-known! u (:id root) true ref)))
+      (testing "§6.8.2 of plans/commit-range-walkthrough.md: the mark carries the file's commit"
+        (is (= [repo (:sha ref)]
+              ((juxt :as_of_repo_topic_id :as_of_sha)
+               (first (db/known-marks-for-entities u [(:entity_id (first (db/question-roots u map-id)))])))))))))

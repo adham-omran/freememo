@@ -89,6 +89,11 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
       STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
+      # The git clone of each imported repository. A cache: without the
+      # volume, a recreated container clones each repository again on use.
+      FORGE_CLONE_ROOT: /var/lib/freememo/clones
+    volumes:
+      - forge-clones:/var/lib/freememo/clones
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
       interval: 30s
@@ -98,3 +103,4 @@ services:
 
 volumes:
   pgdata:
+  forge-clones:

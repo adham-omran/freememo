@@ -115,9 +115,11 @@
 
       (selection-cards/SelectionCardsEffect user-id page-topic-id !selection-cards !error)
 
-      ;; An Ask over a file's open pins arrives as a command and leaves as a
-      ;; submit (plans/anchored-questions.md §6.2.5.1).
-      (question-map/AskPinsEffect !submit !active (:id mode-entry) web-search?)
+      ;; An Ask over a file's open pins, and a walkthrough's opener, arrive as
+      ;; commands and leave as submits (plans/anchored-questions.md §6.2.5.1,
+      ;; plans/commit-range-walkthrough.md §6.7.1). One call, for the 64KB
+      ;; method cap of this component.
+      (question-map/AskEffects !submit !active (:id mode-entry) web-search?)
 
       ;; Add one selected document as a chip. Its own e/defn, so this method
       ;; stays under the 64KB bytecode limit.

@@ -70,8 +70,12 @@ WORKDIR /app
 # extract a 32 kbps mono MP3, and split it into Whisper-sized chunks
 # (freememo.ffmpeg / plans/incremental-video.md §4.4). Without it a video still
 # uploads and plays; it just gets no duration, waveform, or transcript.
+# git carries every byte of an imported repository: a blob-less bare clone per
+# repository, fetched on Update (freememo.git-clone,
+# plans/commit-range-walkthrough.md §6.1.1). `check-attr --source` needs git
+# 2.40 or later.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 ffmpeg \
+ && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 ffmpeg git \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/app.jar app.jar
 

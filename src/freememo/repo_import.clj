@@ -2,12 +2,17 @@
   "Import one commit of a git forge repository as a topic tree, and update a
    repository to a newer commit (plans/git-forge-integration.md §4.3, §4.6).
 
+   Bytes arrive through a blob-less bare clone (`freememo.git-clone`,
+   plans/commit-range-walkthrough.md §6.2). The forge's REST API serves the
+   picker's repository list only.
+
    Two phases, because the picker needs the whole tree before any row exists:
 
-     stage-repository!  resolve the ref, download the archive, extract it, and
-                        record the directory as an upload session
-     import-staged!     apply the user's selection, create the rows, release
-                        the session
+     stage-repository!  clone the history, resolve the ref, and record the
+                        staging clone as an upload session
+     import-staged!     apply the user's selection, fetch those files, create
+                        the rows, keep the clone as the repository's, and
+                        release the session
 
    `update-repository!` runs both at once with the selection stored on the
    repository node, so an update shows no picker (§4.6 6.2).
@@ -22,18 +27,19 @@
    work runs, and `:repo-import-errors` keeps the failure the reporter reads
    when it closes the row.
 
-   Cancel (plans/repo-import-progress.md): cooperative. `:repo-import-cancelled`
-   marks a work key; the archive read checks it per buffer, and the insert
-   transaction per batch. Neither can be stopped from outside."
-  (:require [clojure.string :as str]
+   Cancel (plans/repo-import-progress.md): `:repo-import-cancelled` marks a
+   work key. A git process reads it and stops; the insert transaction checks it
+   per batch."
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [next.jdbc :as jdbc]
             [freememo.activity :as activity]
-            [freememo.archive :as archive]
             [freememo.commands :as commands]
             [freememo.db :as db]
             [freememo.forge :as forge]
             [freememo.forge-kinds :as kinds]
             [freememo.forge-tokens :as tokens]
+            [freememo.git-clone :as git]
             [freememo.input-check :as input]
             [freememo.priority :as priority]
             [freememo.repo-tree :as tree]
@@ -43,20 +49,9 @@
   (:import [java.io File]
            [java.nio ByteBuffer]
            [java.nio.charset CharacterCodingException CodingErrorAction StandardCharsets]
-           [java.nio.file Files]))
+           [java.nio.file Files StandardCopyOption]))
 
 ;; ── Limits ─────────────────────────────────────────────────────────
-
-(def extract-limits
-  "The bounds of `epub/default-limits` (§4.2 2.4). An entry that escapes the
-   extraction directory fails the whole archive instead of being skipped: no
-   forge produces one, so an archive that holds one is hostile."
-  {:prefix "forge-import"
-   :max-entries 50000
-   :max-entry-bytes (* 64 1024 1024)
-   :max-inflation-ratio 10
-   :max-total-bytes (* 8 1024 1024 1024)
-   :escaping-entry :refuse})
 
 (def max-source-bytes
   "Largest file whose source is stored. A larger file becomes an empty leaf:
@@ -140,50 +135,46 @@
 (defn- failure-message
   "Post: a message for the user. An unexpected throw is logged here, once."
   [^Throwable t]
-  (let [type (:type (ex-data t))]
+  (do
     (cond
       (forge/failure? t) (.getMessage t)
-      (= :freememo.archive/archive-too-large type)
-      "The repository archive is too large to extract."
-      (= :freememo.archive/unsafe-entry type)
-      "The archive holds a path outside the repository, so FreeMemo refused it."
       :else
       (do (tel/error! {:id ::repo-import-failed} t)
           "The import failed. The server log has the details."))))
 
-;; ── The extracted tree ─────────────────────────────────────────────
+;; ── The clone ────────────────────────────────────────────────────
 
-(defn- archive-root
-  "The directory the repository's paths are relative to. All three forges wrap a
-   commit in one top-level directory named after the repository and the sha,
-   and that wrapper is not part of the repository."
-  ^File [^File dir]
-  (let [children (vec (.listFiles dir))]
-    (if (and (= 1 (count children)) (.isDirectory ^File (first children)))
-      (first children)
-      dir)))
+(defn- git-context
+  "What a git call on `forge`'s repository `path` needs: the clone URL, the
+   auth header of the user's token, and the cancel mark of `key`.
+   Post: {:url :auth :cancelled? :what}. Throws ::forge-failure for an origin
+   the transport refuses (HTTPS only, the address gate)."
+  [user-id key forge origin path]
+  {:url (git/remote-url origin path)
+   :auth (git/auth-header forge (tokens/token user-id forge (:host origin)))
+   :cancelled? #(cancelled? user-id key)
+   :what path})
 
-(defn- file-paths
-  "Post: every regular file under `root`, as repository-relative `/` paths."
-  [^File root]
-  (let [base (.toPath root)]
-    (->> (file-seq root)
-      (filter #(.isFile ^File %))
-      (mapv #(str/replace (str (.relativize base (.toPath ^File %))) File/separator "/")))))
+(defn- stage-dir
+  "A fresh staging clone path beside the clones, so the import can rename it
+   into place on the same filesystem."
+  ^File []
+  (io/file (git/clone-root) (str ".stage-" (random-uuid) ".git")))
 
-(defn- fetch-tree!
-  "Download and extract the archive of `sha`.
-   Post: the extracted directory. The caller owns it and MUST delete it. The
-         archive file is gone on every path (§4.3 3.7)."
-  ^File [user-id key forge origin token path sha]
-  (set-phase! user-id key "downloading")
-  (let [zip (forge/download-archive! forge origin token path sha
-              #(cancelled? user-id key))]
-    (try
-      (set-phase! user-id key "extracting")
-      (archive/extract-to-temp-dir! zip extract-limits)
-      (finally
-        (.delete ^File zip)))))
+(defn- adopt-stage!
+  "Make staging clone `dir` repository node `repo-id`'s clone. A clone already
+   there wins and `dir` is left for the session release to delete. A failed
+   rename costs nothing: a clone is a cache (§6.1.4)."
+  [^File dir repo-id]
+  (let [target (git/clone-dir repo-id)]
+    (git/with-lock target
+      (when-not (git/clone? target)
+        (try
+          (Files/move (.toPath dir) (.toPath target)
+            (into-array java.nio.file.CopyOption [StandardCopyOption/ATOMIC_MOVE]))
+          (catch Exception e
+            (tel/log! {:level :warn :id ::adopt-stage-failed
+                       :data {:repo-id repo-id :error (ex-message e)}})))))))
 
 (defn- utf8-text
   "Post: the text of `bytes` when it is valid UTF-8 and holds no NUL, else nil.
@@ -239,18 +230,24 @@
 (defn- create-commit-subtree!
   "Write one commit subtree, and the repository node when it does not exist.
 
-   Pre : `root` holds the extracted commit. `source` is
-         {:forge :repo-url :path :ref :sha}. `selection` is normalized.
-         `repo-id` is the existing repository node, or nil for a first import.
+   Pre : `git-ctx` is `git-context`'s value plus :dir, a clone holding commit
+         `sha`. `source` is {:forge :repo-url :path :ref :sha}. `selection` is
+         normalized. `repo-id` is the existing repository node, or nil for a
+         first import.
    Post: {:ok true :topic-id commit-id :repo-id N :report {…}}, or
          {:ok false :error S} with nothing written — when a node cap refuses
          (§4.3 3.9, 3.9.1) or the sha is already a child of the repository.
    Invariant: every row commits in one transaction.
    Invariant: `check-cancelled!` runs before the transaction and before each
-         source batch; when it throws, the transaction writes nothing."
-  [user-id ^File root source selection repo-id check-cancelled!]
+         source batch; when it throws, the transaction writes nothing.
+   Invariant: only the selected files' blobs are fetched, in one request, and
+         one blob at a time is in heap."
+  [user-id git-ctx source selection repo-id check-cancelled!]
   (let [{:keys [forge repo-url path ref sha]} source
-        commit-tree (tree/tree (file-paths root))
+        dir (:dir git-ctx)
+        entries (git/ls-tree dir sha)
+        oid-of (into {} (map (juxt :path :oid)) entries)
+        commit-tree (tree/tree (map :path entries))
         plan (tree/import-plan commit-tree (:dirs selection))
         nodes (tree/subtree-nodes plan (:dirs selection))
         new-count (+ (count nodes) 1 (if repo-id 0 1))
@@ -267,7 +264,12 @@
                 existing-count ". One repository may hold " tree/max-repository-nodes ".")}
 
       :else
-      (let [;; The repository id first, so ids ascend from root to leaf.
+      (let [extensions (:extensions selection)
+            wanted (filterv #(contains? extensions (tree/extension %)) (:files plan))
+            _ (set-phase! user-id (:key git-ctx) "downloading")
+            _ (git/prefetch-blobs! dir sha (map oid-of wanted) git-ctx)
+            size-of (git/blob-sizes dir (map oid-of wanted))
+            ;; The repository id first, so ids ascend from root to leaf.
             repo-id* (or repo-id (first (db/reserve-topic-ids! 1)))
             [commit-id & node-ids] (db/reserve-topic-ids! (inc (count nodes)))
             id-by-path (zipmap (map :path nodes) node-ids)
@@ -286,16 +288,15 @@
                                         :title (clamp-title title) :repo_path path
                                         :page_number ordinal)))
                            nodes))
-            extensions (:extensions selection)
             !report (atom {:directories (count (:dirs plan)) :files (count (:files plan))
                            :sources-stored 0 :binary-files 0 :oversize-files 0
                            :over-budget-files 0})
             !budget (atom 0)
             ;; Lazy, and realized once inside the transaction, so at most one
             ;; statement's worth of source is in heap at a time.
-            code-rows (keep (fn [p]
-                              (let [f (File. root ^String p)
-                                    len (.length f)]
+            code-rows (fn [read-blob]
+                        (keep (fn [p]
+                              (let [len (long (get size-of (oid-of p) 0))]
                                 (cond
                                   (> len max-source-bytes)
                                   (do (swap! !report update :oversize-files inc) nil)
@@ -304,26 +305,51 @@
                                   (do (swap! !report update :over-budget-files inc) nil)
 
                                   :else
-                                  (if-let [text (utf8-text (Files/readAllBytes (.toPath f)))]
+                                  (if-let [text (some-> (read-blob (oid-of p)) utf8-text)]
                                     (do (swap! !budget + len)
                                         (swap! !report update :sources-stored inc)
                                         {:topic_id (id-by-path p) :source text
                                          :byte_size len :lang (tree/language-for p)})
                                     (do (swap! !report update :binary-files inc) nil)))))
-                        (filter #(contains? extensions (tree/extension %)) (:files plan)))]
+                          wanted))]
         (check-cancelled!)
-        (jdbc/with-transaction [tx db/ds]
-          (if (and repo-id (db/find-commit-node tx repo-id sha))
-            {:ok false :error (str "Commit " (subs sha 0 7) " is already imported.")}
-            (do
-              (db/insert-topic-rows! tx topic-rows)
-              (doseq [batch (partition-by-bytes statement-source-bytes code-rows)]
-                (check-cancelled!)
-                (db/insert-topic-code-rows! tx batch))
-              (when (nil? repo-id)
-                (db/insert-repo-selection! tx repo-id* forge ref selection))
-              {:ok true :topic-id commit-id :repo-id repo-id*
-               :report (assoc @!report :topics-created new-count)})))))))
+        (set-phase! user-id (:key git-ctx) "creating topics")
+        (git/with-blob-reader* dir
+          (fn [read-blob]
+            (jdbc/with-transaction [tx db/ds]
+              (if (and repo-id (db/find-commit-node tx repo-id sha))
+                {:ok false :error (str "Commit " (subs sha 0 7) " is already imported.")}
+                (do
+                  (db/insert-topic-rows! tx topic-rows)
+                  (doseq [batch (partition-by-bytes statement-source-bytes (code-rows read-blob))]
+                    (check-cancelled!)
+                    (db/insert-topic-code-rows! tx batch))
+                  (when (nil? repo-id)
+                    (db/insert-repo-selection! tx repo-id* forge ref selection))
+                  {:ok true :topic-id commit-id :repo-id repo-id*
+                   :report (assoc @!report :topics-created new-count)})))))))))
+
+(defn clone-context
+  "What a reader of repository node `repo-id`'s clone needs: its git dir,
+   remote URL and auth header (plans/commit-range-walkthrough.md §6.1.4).
+   A missing clone is made again here; an existing one is NOT fetched, so a
+   read costs no network unless `fresh?`.
+   Pre : `repo-id` is a `repo` topic `user-id` owns.
+   Post: {:dir :url :auth :what}, or nil when the node is not an imported
+         repository. Throws ::forge-failure when a clone or fetch fails."
+  ([user-id repo-id] (clone-context user-id repo-id false))
+  ([user-id repo-id fresh?]
+   (when-let [{:keys [repo-url forge]} (db/get-repo-import user-id repo-id)]
+     (let [{:keys [origin path]} (forge/parse-repository-input repo-url)
+           dir (git/clone-dir repo-id)
+           ctx {:dir dir :what path
+                :url (git/remote-url origin path)
+                :auth (git/auth-header forge (tokens/token user-id forge (:host origin)))}]
+       (git/with-lock dir
+         (cond
+           fresh? (git/ensure-fresh! dir (:url ctx) ctx)
+           (not (git/clone? dir)) (do (git/delete-dir! dir) (git/clone! dir (:url ctx) ctx))))
+       ctx))))
 
 ;; ── Services ───────────────────────────────────────────────────────
 
@@ -388,16 +414,18 @@
           {:ok false :topic-id existing
            :error (str path " is already imported. Open it and press Update to add a newer commit.")}
           (try
-            (run-as-activity user-id key "resolving"
+            (run-as-activity user-id key "cloning"
               (fn []
-                (let [token (tokens/token user-id forge (:host origin))
-                      {:keys [sha ref]} (forge/resolve-commit forge origin token path ref)
-                      dir (fetch-tree! user-id key forge origin token path sha)]
+                (let [ctx (git-context user-id key forge origin path)
+                      dir (stage-dir)]
                   (try
-                    (throw-if-cancelled! user-id key)
-                    (let [source {:forge forge :origin-url (forge/origin-url origin)
+                    (git/with-lock dir (git/clone! dir (:url ctx) ctx))
+                    (set-phase! user-id key "resolving")
+                    (let [{:keys [sha ref]} (git/resolve-ref dir ref path)
+                          _ (throw-if-cancelled! user-id key)
+                          source {:forge forge :origin-url (forge/origin-url origin)
                                   :repo-url repo-url :path path :ref ref :sha sha}
-                          file-count (count (file-paths (archive-root dir)))
+                          file-count (count (git/ls-tree dir sha))
                           stage-id (db/open-forge-stage! user-id path dir source)]
                       ;; A cancel that lands after the stage opened: no picker
                       ;; will mount to release it.
@@ -406,7 +434,7 @@
                         (throw-if-cancelled! user-id key))
                       {:ok true :file-count file-count :source source :stage-id stage-id})
                     (catch Throwable t
-                      (archive/delete-dir! dir)
+                      (git/delete-dir! dir)
                       (throw t))))))
             (catch Throwable t
               {:ok false :error (failure-message t)})))))))
@@ -417,7 +445,7 @@
   [user-id stage-id]
   (when-let [{:keys [dir forge-source]} (db/get-forge-stage user-id stage-id)]
     {:source forge-source
-     :tree (tree/tree (file-paths (archive-root dir)))}))
+     :tree (tree/tree (map :path (git/ls-tree dir (:sha forge-source))))}))
 
 (defonce ^:private !importing-stages
   ;; Stage ids `import-staged!` holds. `cancel-stage!` leaves these alone, so a
@@ -446,10 +474,15 @@
             (fn []
               (if (db/find-repo-node user-id repo-url)
                 {:ok false :error (str path " was imported while this picker was open.")}
-                (let [r (create-commit-subtree! user-id (archive-root dir) forge-source
-                          (normalize-selection selection) nil
-                          #(throw-if-cancelled! user-id key))]
+                (let [origin (forge/parse-origin (:origin-url forge-source))
+                      ctx (assoc (git-context user-id key (:forge forge-source) origin path)
+                            :dir dir :key key)
+                      r (git/with-lock dir
+                          (create-commit-subtree! user-id ctx forge-source
+                            (normalize-selection selection) nil
+                            #(throw-if-cancelled! user-id key)))]
                   (when (:ok r)
+                    (adopt-stage! dir (:repo-id r))
                     (commands/bump! user-id :import-document))
                   (assoc r :path path)))))
           (catch Throwable t
@@ -570,29 +603,30 @@
    Post: {:ok true :topic-id commit-id :sha S :report {…}} for a new commit;
          {:ok true :unchanged? true :topic-id commit-id :sha S} when that sha is
          already a child (§4.6 6.3); {:ok false :cancelled? true}; or
-         {:ok false :error S}. Nothing is written on failure or cancel, and the extracted tree is gone on every path."
+         {:ok false :error S}. Nothing is written on failure or cancel. The
+         clone is fetched, or made again when it is missing (§6.1.4), and an
+         unchanged ref transfers no objects (§6.2.2)."
   [user-id repo-id]
   (if-let [{:keys [repo-url forge ref selection]} (db/get-repo-import user-id repo-id)]
     (let [{:keys [origin path]} (forge/parse-repository-input repo-url)
           key (work-key origin path)]
       (try
-        (run-as-activity user-id key "resolving"
+        (run-as-activity user-id key "fetching"
           (fn []
-            (let [token (tokens/token user-id forge (:host origin))
-                  {:keys [sha]} (forge/resolve-commit forge origin token path ref)]
-              (if-let [existing (db/find-commit-node repo-id sha)]
-                {:ok true :unchanged? true :topic-id existing :sha sha}
-                (let [dir (fetch-tree! user-id key forge origin token path sha)]
-                  (try
-                    (set-phase! user-id key "creating topics")
-                    (let [r (create-commit-subtree! user-id (archive-root dir)
+            (let [dir (git/clone-dir repo-id)
+                  ctx (assoc (git-context user-id key forge origin path) :dir dir :key key)]
+              (git/with-lock dir
+                (git/ensure-fresh! dir (:url ctx) ctx)
+                (set-phase! user-id key "resolving")
+                (let [{:keys [sha]} (git/resolve-ref dir ref path)]
+                  (if-let [existing (db/find-commit-node repo-id sha)]
+                    {:ok true :unchanged? true :topic-id existing :sha sha}
+                    (let [r (create-commit-subtree! user-id ctx
                               {:forge forge :repo-url repo-url :path path :ref ref :sha sha}
                               selection repo-id #(throw-if-cancelled! user-id key))]
                       (when (:ok r)
                         (commands/bump! user-id :import-document))
-                      (assoc r :sha sha))
-                    (finally
-                      (archive/delete-dir! dir))))))))
+                      (assoc r :sha sha))))))))
         (catch Throwable t
           {:ok false :error (failure-message t)})))
     {:ok false :error "This topic is not an imported repository."}))

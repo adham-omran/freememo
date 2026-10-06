@@ -110,9 +110,10 @@
 
 (def ^:private phase-labels
   "The phases `repo-import` publishes, as the modal words them."
-  {"resolving" "Finding the commit…"
-   "downloading" "Downloading the archive…"
-   "extracting" "Unpacking the archive…"
+  {"cloning" "Cloning the history…"
+   "fetching" "Fetching new commits…"
+   "resolving" "Finding the commit…"
+   "downloading" "Downloading the files…"
    "creating topics" "Creating topics…"})
 
 (e/defn RunStatus

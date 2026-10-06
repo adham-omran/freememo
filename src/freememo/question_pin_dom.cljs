@@ -1,6 +1,7 @@
 (ns freememo.question-pin-dom
-  "The plain-DOM half of question pins on rendered Markdown
-   (plans/anchored-questions.md §6.2, §6.5).
+  "The plain-DOM half of question pins on rendered Markdown and on code
+   (plans/anchored-questions.md §6.2, §6.5; plans/commit-range-walkthrough.md
+   §6.3.7).
 
    Electric owns the rendered pane's `div` but none of its children: the code
    pane writes them with `innerHTML`, and a block's index among them is half of
@@ -9,9 +10,15 @@
    label badges, the virtual finger and the Ask button live in one layer
    appended to `document.body`, positioned from range rects.
 
-   A location is {:start [block offset] :end [block offset]}. `offset` counts
-   the characters of the block's text nodes, as the server's Jsoup parse of the
-   same HTML did. KaTeX rewrites a formula after the HTML lands, so a typeset
+   Two text models, one per surface:
+     :blocks  rendered Markdown. A location is {:start [block offset]
+              :end [block offset]}. `offset` counts the characters of the
+              block's text nodes, as the server's Jsoup parse of the same HTML
+              did.
+     :source  code. Every text node under the container, in order, is the
+              file's source exactly, so a location is {:offsets [start end]},
+              character offsets into the whole source. A folded run keeps its
+              text nodes, hidden, so folding moves no offset. KaTeX rewrites a formula after the HTML lands, so a typeset
    `.katex` or `.katex-display` counts as its TeX plus its two delimiters — the
    text the server saw — and a range never starts or ends inside one.
 
@@ -66,9 +73,47 @@
               true)
           (recur more end))))))
 
+(declare block-range)
+
+(defn- text-nodes
+  "Every text node under `container`, in document order."
+  [^js container]
+  (let [walker (.createTreeWalker js/document container 4)
+        out (array)]
+    (loop []
+      (when-let [n (.nextNode walker)]
+        (.push out n)
+        (recur)))
+    (vec out)))
+
+(defn- source-point
+  "[node offset-in-node] for character `offset` of `container`'s source. An
+   end exactly at a node boundary stays in the earlier node."
+  [^js container offset end?]
+  (loop [[n & more] (text-nodes container) acc 0]
+    (when n
+      (let [len (.-length n)]
+        (if (or (< offset (+ acc len)) (and end? (= offset (+ acc len))))
+          [n (- offset acc)]
+          (recur more (+ acc len)))))))
+
+(defn- source-range [^js container [s e]]
+  (let [a (source-point container s false)
+        b (source-point container e true)]
+    (when (and a b)
+      (doto (.createRange js/document)
+        (.setStart (first a) (second a))
+        (.setEnd (first b) (second b))))))
+
 (defn range-for
-  "A DOM Range over `location` in `container`, or nil when the blocks it
-   names are not there (the pane re-rendered with other content)."
+  "A DOM Range over `location` in `container`, or nil when the content it
+   names is not there (the pane re-rendered with other content)."
+  [^js container location]
+  (if-let [offsets (:offsets location)]
+    (source-range container offsets)
+    (block-range container location)))
+
+(defn- block-range
   [^js container {[sb so] :start [eb eo] :end}]
   (let [blocks (.-children container)
         b1 (aget blocks sb)
@@ -121,13 +166,53 @@
                 (.contains container (.-endContainer rng)))
           rng)))))
 
+(defn- source-offsets [^js container ^js rng]
+  (let [nodes (text-nodes container)
+        index-of (fn [^js node offset]
+                   (if (= 3 (.-nodeType node))
+                     (loop [[n & more] nodes acc 0]
+                       (cond (nil? n) nil
+                             (identical? n node) (+ acc offset)
+                             :else (recur more (+ acc (.-length n)))))
+                     ;; An element point: count the text before its offset-th child.
+                     (let [child (aget (.-childNodes node) offset)
+                           before (.createRange js/document)]
+                       (.setStart before container 0)
+                       (if child (.setEndBefore before child) (.setEndAfter before node))
+                       (count (.toString before)))))]
+    [(index-of (.-startContainer rng) (.-startOffset rng))
+     (index-of (.-endContainer rng) (.-endOffset rng))]))
+
+(defn- capture-source
+  "The passage selected in code `container`: its exact source text and its
+   start offset, the hint that picks among repeated quotes (§6.3.7)."
+  [^js container ^js rng]
+  (let [[s e] (source-offsets container rng)
+        text (apply str (map #(.-data %) (text-nodes container)))
+        box (.getBoundingClientRect rng)]
+    (when (and s e (< s e))
+      {:quote (subs text s e) :offset s
+       :rect {:top (.-top box) :bottom (.-bottom box) :left (.-left box)
+              :right (.-right box)}})))
+
+(declare capture-blocks)
+
 (defn capture
   "The passage the reader selected in `container`, or nil.
-   Post: {:quote :anchor :rect}. `:quote` is the selected text with formulas as
-         TeX and whitespace squeezed. `:anchor` is the id of the heading above
-         the selection's start. `:rect` is the selection's bounding box."
-  [^js container]
+   Post, :blocks: {:quote :anchor :rect}. `:quote` is the selected text with
+         formulas as TeX and whitespace squeezed. `:anchor` is the id of the
+         heading above the selection's start.
+   Post, :source: {:quote :offset :rect}. `:quote` is the exact source text.
+   `:rect` is the selection's bounding box."
+  [^js container model]
   (when-let [rng (live-range container)]
+    (if (= :source model)
+      (capture-source container rng)
+      (capture-blocks container rng))))
+
+(defn- capture-blocks
+  [^js container ^js rng]
+  (do
     (let [holder (.createElement js/document "div")]
       (.appendChild holder (.cloneContents rng))
       (formulas->tex! holder)
@@ -243,15 +328,16 @@
   "Open the popover for the live selection, as the Ask button does. Post: true
    when there was a selection to ask about."
   [{:keys [container ask !state]}]
-  (if-let [c (capture container)]
+  (if-let [c (capture container (:model @!state))]
     (do (set! (.. ask -style -display) "none")
         (when-let [f (:on-ask @!state)] (f c))
         true)
     false))
 
 (defn install!
-  "Attach pins, the finger and the Ask button to rendered-Markdown `container`.
-   `callbacks`: {:on-ask (fn [capture]) :on-open-pin (fn [pin rect])}.
+  "Attach pins, the finger and the Ask button to `container`.
+   `callbacks`: {:on-ask (fn [capture]) :on-open-pin (fn [pin rect])
+   :model :blocks|:source}, `:model` being the container's text model.
    Post: a handle for `set-pins!`, `set-finger!`, `ask-current!` and
          `teardown!`. The layer repaints itself on scroll, resize, and any
          change to the pane's DOM — a new document, or KaTeX typesetting."

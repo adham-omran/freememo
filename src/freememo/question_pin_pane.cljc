@@ -1,7 +1,9 @@
 (ns freememo.question-pin-pane
-  "Question pins in the rendered Markdown view (plans/anchored-questions.md
-   §6.2, §6.5): the pin layer, the pin popover, the pin list, and the code
-   pane's header controls.
+  "Question pins on a repository file (plans/anchored-questions.md §6.2,
+   §6.5): the pin layer, the pin popover, the pin list, and a pane's header
+   controls. The file is named by a REF SPEC, {:topic-id} for a snapshot topic
+   or {:repo-id :path :sha} for a file at a commit a walkthrough shows
+   (plans/commit-range-walkthrough.md §6.3). The server resolves and checks it.
 
    The rendered pane's `div` takes its children from `innerHTML`, and a
    block's index among them is half of every location the server reports. So
@@ -20,6 +22,7 @@
    [freememo.command-bus :as bus]
    [freememo.question-pin-state :as pin-state]
    #?(:cljs [freememo.question-pin-dom :as pin-dom])
+   #?(:clj [freememo.document-ref :as docref])
    #?(:clj [freememo.question-map :as qm])
    #?(:clj [freememo.user-state :as us])))
 
@@ -27,12 +30,14 @@
 ;; Called from Electric bodies, so each var exists on both peers.
 
 (defn- install-layer!
-  "Attach the pin layer to `node`. Post: the layer handle."
-  [node !popover]
+  "Attach the pin layer to `node`, whose text model is `model` (:blocks or
+   :source). Post: the layer handle."
+  [node model !popover]
   #?(:cljs (pin-dom/install! node
-             {:on-ask (fn [{:keys [quote anchor rect]}]
-                        (reset! !popover {:id (random-uuid) :mode :new
-                                          :quote quote :anchor anchor :rect rect}))
+             {:model model
+              :on-ask (fn [{:keys [quote anchor offset rect]}]
+                        (reset! !popover {:id (random-uuid) :mode :new :quote quote
+                                          :anchor anchor :offset offset :rect rect}))
               :on-open-pin (fn [pin rect]
                              (reset! !popover {:id (random-uuid) :mode :edit
                                                :pin pin :rect rect}))})
@@ -98,20 +103,25 @@
 
 ;; ── Server wrappers ────────────────────────────────────────────────
 
-(defn snapshot-view* [_rev user-id topic-id]
-  #?(:clj (qm/snapshot-view user-id topic-id) :cljs nil))
+(defn snapshot-view* [_rev user-id spec]
+  #?(:clj (qm/snapshot-view user-id (docref/resolve-spec user-id spec)) :cljs nil))
 
-(defn pin-counts* [_rev user-id topic-id]
-  #?(:clj (qm/pin-counts user-id topic-id) :cljs nil))
+(defn pin-counts* [_rev user-id spec]
+  #?(:clj (qm/pin-counts user-id (docref/resolve-spec user-id spec)) :cljs nil))
 
-(defn locate-for-finger* [user-id topic-id finger]
+(defn doc-key*
+  "The document key [repo-id path] of `spec`, or nil."
+  [user-id spec]
+  #?(:clj (some-> (docref/resolve-spec user-id spec) docref/doc-key) :cljs nil))
+
+(defn locate-for-finger* [user-id spec finger]
   #?(:clj (when finger
-            (qm/locate-for-finger user-id topic-id (:source-topic-id finger)
-              (:quote finger) (:anchor finger)))
+            (qm/locate-for-finger user-id (docref/resolve-spec user-id spec)
+              (:source-doc finger) (:quote finger) (:anchor finger)))
      :cljs nil))
 
-(defn create-pin!* [user-id topic-id passage]
-  #?(:clj (qm/create-pin! user-id topic-id passage) :cljs nil))
+(defn create-pin!* [user-id spec passage]
+  #?(:clj (qm/create-pin! user-id (docref/resolve-spec user-id spec) passage) :cljs nil))
 
 (defn edit-pin!* [user-id pin-id edit]
   #?(:clj (qm/edit-pin! user-id pin-id edit) :cljs nil))
@@ -140,7 +150,7 @@
    pin of {:mode :edit :pin :rect} (§6.2.2). `!popover` closes it when nil.
    A Forms5 field and buttons; Enter saves, Escape cancels, and an outside
    click follows `install-outside-click!`."
-  [user-id topic-id popover !popover]
+  [user-id spec popover !popover]
   (e/client
     (let [{:keys [mode pin rect]} popover
           edit? (= :edit mode)]
@@ -193,9 +203,9 @@
                                  #(if edit?
                                     (edit-pin!* user-id (:id pin)
                                       {:op :question :text question})
-                                    (create-pin!* user-id topic-id
+                                    (create-pin!* user-id spec
                                       {:quote (:quote popover) :anchor (:anchor popover)
-                                       :question question}))))]
+                                       :offset (:offset popover) :question question}))))]
                   (case result
                     (if (:error result)
                       (case (reset! !error (:error result)) (t))
@@ -215,12 +225,12 @@
   "The popover for `popover`, or nothing. Keyed by (:id popover), so a new
    Ask or a click on another badge replaces the open popover. The host element
    is always mounted and holds only the popover."
-  [user-id topic-id popover !popover]
+  [user-id spec popover !popover]
   (e/client
     (dom/div
       (dom/props {:class "question-pin-popover-host"})
       (e/for-by identity [_k (if popover [(:id popover)] [])]
-        (PinPopover user-id topic-id popover !popover)))))
+        (PinPopover user-id spec popover !popover)))))
 
 (e/defn PinRow
   "One row of the pin list. Post: its button commands."
@@ -300,55 +310,62 @@
 
 (e/defn PublishPinCommands
   "Make the pin commands available while this pane is mounted (§6.6.2), and
-   tell the assistant panel which file the pane shows, so a citation of that
-   file scrolls to its passage (§6.5.4)."
-  [handle topic-id open-count]
+   tell the assistant panel which file the pane shows: its document key, so a
+   citation of that document scrolls to its passage (§6.5.4), and its ref
+   spec, so the map card reads the same file."
+  [handle spec doc-key open-count]
   (e/client
     (bus/publish-invoker! :ask-about-selection (fn [] (ask-current! handle)))
     (e/on-unmount (fn []
                     (bus/retract-invoker! :ask-about-selection)
-                    (bus/retract-ctx! [:question-open-pins :question-pane-topic-id])))
-    (bus/publish-ctx! {:question-open-pins open-count :question-pane-topic-id topic-id})))
+                    (bus/retract-ctx! [:question-open-pins :question-pane-doc :question-pane-ref])))
+    (bus/publish-ctx! {:question-open-pins open-count :question-pane-doc doc-key
+                       :question-pane-ref spec})))
 
 (e/defn Finger
   "Outline the passage the assistant panel points at (§6.5.1)."
-  [user-id topic-id handle]
+  [user-id spec handle]
   (e/client
     (let [finger (e/watch pin-state/!finger)
           location (e/server (when finger
-                               (e/Offload #(locate-for-finger* user-id topic-id finger))))]
+                               (e/Offload #(locate-for-finger* user-id spec finger))))]
       (show-finger! handle location (boolean (:scroll? finger))))))
 
 (e/defn PinLayer
-  "Pins, the popover, the pin list and the finger for rendered pane `node`
-   showing file `topic-id`. Mounted BESIDE the pane's div, never inside it."
-  [user-id topic-id node list-open? !list-open?]
+  "Pins, the popover, the pin list and the finger for pane `node` showing the
+   file `spec` names. `model` is the pane's text model, :blocks for rendered
+   Markdown and :source for code. Mounted BESIDE the pane's element, never
+   inside it: the layer adds no node to the pane."
+  [user-id spec node model list-open? !list-open?]
   (e/client
-    ;; Keyed by pane AND file: the code pane stays mounted when the route moves
-    ;; to another file, and the layer, its popover and its pins belong to one.
-    (e/for-by identity [_k [[node topic-id]]]
+    ;; Keyed by pane AND file at a commit (§6.3.6 of
+    ;; plans/commit-range-walkthrough.md): a pane stays mounted when the route
+    ;; or the step moves to another file, and the layer, its popover and its
+    ;; pins belong to one.
+    (e/for-by identity [_k [[node spec model]]]
       (let [!popover (atom nil)
             popover (e/watch !popover)
-            handle (install-layer! node !popover)
+            handle (install-layer! node model !popover)
             rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
             ;; SERVER-FORM binding: the view stays on the server, and only the
-            ;; pins cross, with their locations in this snapshot.
-            view (e/server (e/Offload #(snapshot-view* rev user-id topic-id)))
+            ;; pins cross, with their locations in this file.
+            view (e/server (e/Offload #(snapshot-view* rev user-id spec)))
             pins (e/server (vec (:pins view)))
-            open-count (e/server (or (:open-count view) 0))]
+            open-count (e/server (or (:open-count view) 0))
+            doc-key (e/server (e/Offload #(doc-key* user-id spec)))]
         (e/on-unmount #(teardown-layer! handle))
-        (PublishPinCommands handle topic-id open-count)
-        (Finger user-id topic-id handle)
-        (PinPopoverHost user-id topic-id popover !popover)
+        (PublishPinCommands handle spec doc-key open-count)
+        (Finger user-id spec handle)
+        (PinPopoverHost user-id spec popover !popover)
         (PinList user-id pins list-open? !list-open? handle)
         (show-pins! handle pins)))))
 
 (e/defn PinHeaderControls
-  "The code pane header's Pins toggle and Ask button (§6.2.5, §6.2.6)."
-  [user-id topic-id !list-open?]
+  "A pane header's Pins toggle and Ask button (§6.2.5, §6.2.6)."
+  [user-id spec !list-open?]
   (e/client
     (let [rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
-          counts (e/server (e/Offload #(pin-counts* rev user-id topic-id)))
+          counts (e/server (e/Offload #(pin-counts* rev user-id spec)))
           open (e/server (:open counts 0))
           total (e/server (:total counts 0))]
       (dom/span

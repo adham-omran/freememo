@@ -302,6 +302,27 @@
             {:label "Sync again any time"
              :detail "Every sync rebuilds from the export. A highlight you deleted on the device loses its mark, and your own edits inside a USER NOTES list do not survive."
              :commands #{}}]}
+   {:slug "commit-walkthrough"
+    :title "Walking through commits"
+    :intro "Learn what changed between two commits of an imported repository, one concept at a time, with the tutor."
+    :steps [{:label "Start one"
+             :detail "Open the repository and choose Walk through commits…. Pick the first commit (A) and the last (B) on one branch, at most 50 commits apart, and choose Start walkthrough. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it."
+             :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough}}
+            {:label "Test what you know first"
+             :detail "Before step 1, choose Test what I know about the starting commit. The tutor asks about the code at A, and an idea you show you know is remembered with that commit."
+             :commands #{:ask-walkthrough-tutor :apply-walkthrough-known}}
+            {:label "Read a step"
+             :detail "Each step shows its main file whole. The step's changes are colored, other steps' changes are outlined, and unchanged text is gray. Since A also colors the changes of earlier steps. The rail lists the step's other files; select one to show it. Long unchanged runs of code fold; select a fold to open it."
+             :commands #{}}
+            {:label "Move on"
+             :detail "Choose I understand when the step is clear. The walkthrough remembers the step, so closing it and coming back opens where you left."
+             :commands #{:walkthrough-step}}
+            {:label "Fix the grouping"
+             :detail "Open a file's Changes in the rail and pick another step to move a change there. Rename a step, or merge it into another, from the step's header."
+             :commands #{:move-walkthrough-hunk :rename-walkthrough-concept :merge-walkthrough-concepts}}
+            {:label "Ask about a step"
+             :detail "Ask the tutor in the Assistant panel. It reads the step's changes, the file you are reading, and why the commits changed it, and cites them. Pin questions on the file and ask them together as on any repository file."
+             :commands #{}}]}
    {:slug "ai-assistant"
     :title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
@@ -328,8 +349,8 @@
             {:label "Check source evidence"
              :detail "Select an evidence link to read its retained excerpt. Evidence from another document includes Open document in new tab."
              :commands #{}}
-            {:label "Pin questions on a Markdown file"
-             :detail "On a Markdown file from a repository, in the rendered view, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
+            {:label "Pin questions on a repository file"
+             :detail "On a file from a repository, in the rendered view of a Markdown file or in the source of any file, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
              :commands #{:ask-about-selection :save-question-pin :delete-question-pin}}
             {:label "Ask your pins together"
              :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea marked Start here. Point at a citation to light up its passage in the file."
