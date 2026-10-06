@@ -13,6 +13,7 @@
    [freememo.math :as math]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
+   #?(:cljs [freememo.card-filter-highlight :as filter-highlight])
    [freememo.optimistic :as opt]))
 
 (defn replace-img-with-chip
@@ -62,6 +63,22 @@
    frame-mismatch rule); this wrapper needs none."
   [node html]
   (math/set-html! node html))
+
+(defn set-cell-html!
+  "Write a card-table cell's html, then mark `query`'s matches in it once any
+   math is typeset. CLJ no-op.
+   Pre:  `query` is nil or a card-filter/query string.
+   Post: as math/set-html!, and the cell's `card-filter` ranges are its matches
+         of `query` (freememo.card-filter-highlight/paint!)."
+  [node html query]
+  #?(:cljs (math/set-html! node html #(filter-highlight/paint! node query))
+     :clj nil))
+
+(defn clear-cell-highlight!
+  "Remove a card-table cell's `card-filter` ranges. CLJ no-op."
+  [node]
+  #?(:cljs (filter-highlight/paint! node nil)
+     :clj nil))
 
 ;; RTL detection — checks if text starts with Arabic/Hebrew characters
 (defn rtl-text? [text]
@@ -245,7 +262,7 @@
   (let [states (into #{} (map sync-state) (:members c))]
     (if (= 1 (count states)) (first states) :mixed)))
 
-(e/defn CardRow [card !editing-card user-id order anki-overlay review-target?]
+(e/defn CardRow [card !editing-card user-id order anki-overlay review-target? filter-query]
   (e/client
     (let [id (e/server (:flashcards/id card))
           member-ids (e/server (:member-ids card))
@@ -336,7 +353,8 @@
             (e/for-by identity [_k [(str "f-" id)]]
               (dom/div
                 (dom/props {:class "card-row-html"})
-                (set-inner-html! dom/node front-html))))
+                (e/on-unmount (let [node dom/node] #(clear-cell-highlight! node)))
+                (set-cell-html! dom/node front-html filter-query))))
           ;; Back column — hidden when the front cell spans both
           (let [back-text (if span2? "" (or answer ""))
                 back-html (card-row-html back-text)]
@@ -349,7 +367,8 @@
               (e/for-by identity [_k [(str "b-" id)]]
                 (dom/div
                   (dom/props {:class "card-row-html"})
-                  (set-inner-html! dom/node back-html)))))
+                  (e/on-unmount (let [node dom/node] #(clear-cell-highlight! node)))
+                  (set-cell-html! dom/node back-html filter-query)))))
           ;; Delete column
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"

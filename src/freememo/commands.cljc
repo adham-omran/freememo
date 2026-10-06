@@ -664,6 +664,11 @@
                                 :exec :electric :when #{:viewer}}
      :find-next-remarked-card  {:label "Find next remarked card" :class :query
                                 :exec :electric :when #{:viewer}}
+     ;; The card table's filter input publishes this invoker, so the palette
+     ;; lists it only while the table is mounted. :electric would queue an
+     ;; invocation with the table closed and focus the input when it opened.
+     :filter-cards {:label "Filter cards" :class :query :exec :ui-button
+                    :when #{:viewer} :views #{}}
 
      ;; — App shell —
      :toggle-palette    {:label "Command palette" :class :nav :bind "meta+k"}

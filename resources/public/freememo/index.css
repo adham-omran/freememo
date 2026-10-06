@@ -5360,6 +5360,12 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     background-color: color-mix(in srgb, var(--color-highlight-gold) 40%, transparent);
 }
 
+/* Card-table filter matches (freememo.card-filter-highlight). A highlight, not
+   a <mark>, for the same reason: math/set-html! owns each cell's nodes. */
+::highlight(card-filter) {
+    background-color: color-mix(in srgb, var(--color-highlight-gold) 45%, transparent);
+}
+
 /* The answer selection menu (freememo.answer-selection-menu). 1100 for the
    same reason as .format-menu. */
 .answer-selection-menu {
@@ -5616,6 +5622,34 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+}
+
+/* Card-table header: the count, then the filter bar (plans/card-table-filter.md).
+   Outside the scroll box, so it stays in view. */
+.card-table-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--color-text-hint);
+}
+
+.card-table-header[hidden] {
+    display: none;
+}
+
+.card-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-inline-start: auto;
+}
+
+.card-filter-input {
+    width: 200px;
+    max-width: 40vw;
 }
 
 /* Phone: an empty card table shrinks to its message and the document takes
