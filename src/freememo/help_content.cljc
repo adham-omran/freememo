@@ -306,10 +306,10 @@
     :title "Walking through commits"
     :intro "Learn what changed between two commits of an imported repository, one concept at a time, with the tutor."
     :steps [{:label "Start one"
-             :detail "Open the repository and choose Walk through commits…. Pick the first commit (A) and the last (B) on one branch, at most 50 commits apart, and choose Start walkthrough. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it."
+             :detail "Open the repository and choose Walk through commits…. Search for the first commit to learn and the last one, on one branch, and choose Start walkthrough. Both are taught, and the two can be the same commit. A walkthrough takes at most 50 commits. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it."
              :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough}}
             {:label "Test what you know first"
-             :detail "Before step 1, choose Test what I know about the starting commit. The tutor asks about the code at A, and an idea you show you know is remembered with that commit."
+             :detail "Before step 1, choose Test what I know about the starting commit. The tutor asks about the code just before your first commit, and an idea you show you know is remembered with that state."
              :commands #{:ask-walkthrough-tutor :apply-walkthrough-known}}
             {:label "Read a step"
              :detail "Each step shows its main file whole. The step's changes are colored, other steps' changes are outlined, and unchanged text is gray. Since A also colors the changes of earlier steps. The rail lists the step's other files; select one to show it. Long unchanged runs of code fold; select a fold to open it."

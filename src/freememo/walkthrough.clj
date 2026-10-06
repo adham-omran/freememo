@@ -50,7 +50,10 @@
 
 ;; ── History and start ──────────────────────────────────────────────
 
-(def ^:private picker-commits 100)
+(def ^:private picker-commits
+  "Commits the picker lists. Its picklists search and scroll, so a long
+   history costs one read."
+  500)
 
 (defn history
   "The newest commits of `user-id`'s repository node `repo-id`, for picking
@@ -71,16 +74,17 @@
 (declare prepare!)
 
 (defn start!
-  "Start a walkthrough of `user-id`'s repository node from `sha-a` to `sha-b`
-   and prepare it on a server thread (§6.4.2, §6.5).
+  "Start a walkthrough of `user-id`'s repository node that teaches the commits
+   from `from-sha` to `to-sha`, both included, and prepare it on a server
+   thread (§6.4.2, §6.5). The walkthrough's A is `from-sha`'s first parent.
    Post: {:ok true :walkthrough-id N} once the row exists, or {:error S} when
-         the range is refused — not an ancestor, equal, or past
-         `walkthrough-range/max-commits` — and then nothing is written."
-  [user-id repo-id sha-a sha-b]
+         `walkthrough-range/taught-range` refuses the range, and then nothing
+         is written."
+  [user-id repo-id from-sha to-sha]
   (try
     (if-let [{:keys [dir]} (repo-import/clone-context user-id repo-id)]
-      (let [commits (wr/range-commits dir sha-a sha-b)]
-        (if-let [wid (db/create-walkthrough! user-id repo-id sha-a sha-b commits)]
+      (let [{:keys [sha-a commits]} (wr/taught-range dir from-sha to-sha)]
+        (if-let [wid (db/create-walkthrough! user-id repo-id sha-a to-sha commits)]
           (do (future (prepare! user-id wid repo-id))
               (commands/bump! user-id :start-walkthrough)
               {:ok true :walkthrough-id wid})
@@ -185,13 +189,14 @@
 
 (defn overview
   "The step bar's data for `user-id`'s walkthrough (§6.6.2).
-   Post: nil, or {:id :repo-id :repo-title :sha-a :sha-b :status :error :step
-         :commit-count :concepts [{:id :position :label :summary :noise
+   Post: nil, or {:id :repo-id :repo-title :sha-a :sha-b :sha-from :status
+         :error :step :commit-count :concepts [{:id :position :label :summary :noise
          :understood? :hunk-count}]}."
   [user-id wid]
   (when-let [w (db/get-walkthrough user-id wid)]
     {:id wid :repo-id (:repo_topic_id w) :repo-title (:repo_title w)
-     :sha-a (:sha_a w) :sha-b (:sha_b w) :status (:status w) :error (:error w)
+     :sha-a (:sha_a w) :sha-b (:sha_b w) :sha-from (:sha (first (:commits w)))
+     :status (:status w) :error (:error w)
      :step (:step w) :commit-count (count (:commits w))
      :concepts (mapv (fn [c] {:id (:id c) :position (:position c) :label (:label c)
                               :summary (:summary c) :noise (:noise c)

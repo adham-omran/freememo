@@ -9,8 +9,10 @@
    never reaches the model and goes to \"Noise\".
 
    The prompts, the checks and the final assembly are pure. `group!` runs the
-   two passes through a `chat` fn with `kg-llm/chat!`'s contract, so a test
-   or a probe can stand in for the model."
+   two passes through a `chat` fn with `kg-llm/chat!`'s contract: it returns
+   the VALUE under the root key, a vector for `:concepts` and `:summaries` and
+   a map for `:assignments`. Tests stub the HTTP call under `kg-llm/chat!`,
+   never `chat!` itself, so the parser that enforces that contract runs."
   (:require [clojure.string :as str]
             [freememo.unified-diff :as diff]
             [freememo.walkthrough-range :as wr]))
@@ -227,17 +229,27 @@
 
 ;; ── Running the passes ─────────────────────────────────────────────
 
+(def ^:private root-types
+  "The JSON type under each root key, as `kg-llm/chat!` checks it."
+  {:concepts :vector :summaries :vector :assignments :map})
+
+(defn- chat-object
+  "Call `chat` for `root-key`. Post: its result, with `:parsed` the reply
+   object {root-key value}, the shape every check here reads."
+  [chat system user root-key]
+  (update (chat system user root-key (root-types root-key)) :parsed (fn [v] {root-key v})))
+
 (defn- chat-checked
   "Call `chat` and check its reply with `problem`; on a problem, call once
    more with the problem stated. Post: {:parsed :problem :cost :tokens}."
   [chat system user root-key problem]
-  (let [first-r (chat system user root-key :map)
+  (let [first-r (chat-object chat system user root-key)
         p1 (problem (:parsed first-r))]
     (if (nil? p1)
       (assoc first-r :problem nil)
-      (let [second-r (chat system (str user "\n\nYour previous reply could not be used: " p1
-                                    " Reply again.")
-                       root-key :map)]
+      (let [second-r (chat-object chat system
+                       (str user "\n\nYour previous reply could not be used: " p1 " Reply again.")
+                       root-key)]
         {:parsed (:parsed second-r) :problem (problem (:parsed second-r))
          :cost (+ (or (:cost first-r) 0.0) (or (:cost second-r) 0.0))
          :tokens (into (vec (:tokens first-r)) (:tokens second-r))}))))
@@ -246,7 +258,7 @@
   "Run both passes over a range.
 
    `chat` is (fn [system user root-key root-type] → {:parsed :cost :tokens}),
-   `kg-llm/chat!` with its key and model bound. `check-cancelled!` throws when
+   `kg-llm/chat!` with its key and model bound; `:parsed` is the root value. `check-cancelled!` throws when
    the reader abandoned the preparation; it runs before every call, so a
    cancel stops the spending at the next call. `on-pass` receives (pass cost
    tokens) once per finished pass, which is where the caller bills (§6.5.6).
@@ -267,7 +279,8 @@
                       (str/join "\n\n"
                         (mapcat (fn [batch]
                                   (check-cancelled!)
-                                  (let [r (chat summary-system (str/join "\n" batch) :summaries :map)]
+                                  (let [r (chat-object chat summary-system (str/join "\n" batch)
+                                            :summaries)]
                                     (add-cost! r)
                                     (map (fn [{:keys [commit summary]}]
                                            (str "## Commit " commit "\n" summary))

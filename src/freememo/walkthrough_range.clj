@@ -55,6 +55,27 @@
 
         :else commits))))
 
+(defn taught-range
+  "The range a reader asked for: the commits from `from` to `to`, both
+   included, on `to`'s first-parent line (§6.4.2). A, the state the range
+   starts from, is `from`'s first parent, so picking the newest commit for
+   both teaches that one commit.
+   Post: {:sha-a A :commits [...]}, as `range-commits` gives them. Throws
+         ::forge-failure when `from` has no parent, comes after `to`, is not on
+         `to`'s first-parent line, or the range is past `max-commits`."
+  [^File dir from to]
+  (when-not (and (git/commit-exists? dir from) (git/commit-exists? dir to))
+    (throw (failure "One of the two commits is not in this repository's history.")))
+  (let [base (first (:parents (first (git/log dir ["-1" from]))))]
+    (when-not base
+      (throw (failure "The repository's first commit has nothing before it to compare with. Choose the commit after it.")))
+    (when-not (git/ancestor? dir from to)
+      (throw (failure "The first commit must not come after the last one.")))
+    (let [commits (range-commits dir base to)]
+      (when-not (= from (:sha (first commits)))
+        (throw (failure "The first commit is not on the branch line that leads to the last one. Choose both from one branch.")))
+      {:sha-a base :commits commits})))
+
 (defn recent-commits
   "The newest `n` commits of `ref` in the clone, newest first, for the
    picker (§6.6.1). Post: as `git-clone/log`."

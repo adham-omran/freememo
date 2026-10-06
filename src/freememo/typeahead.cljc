@@ -217,8 +217,11 @@
                     (reset! !search nil)
                     (reset! !open? false)
                     (reset! !active-idx -1))
+                  ;; An open dropdown owns Escape: it closes the dropdown and
+                  ;; goes no further, so a modal around the field stays open.
                   (= key "Escape")
-                  (do (reset! !search nil)
+                  (do (when @!open? (.stopPropagation e))
+                    (reset! !search nil)
                     (reset! !open? false)
                     (reset! !active-idx -1)))))
             nil))

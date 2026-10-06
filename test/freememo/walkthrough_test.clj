@@ -1,8 +1,8 @@
 (ns freememo.walkthrough-test
   "The walkthrough service against PostgreSQL and a fixture repository
-   (plans/commit-range-walkthrough.md §6.4–§6.8). The model is a stub: pass 1
-   names two concepts and pass 2 places hunks by file. Every test skips when
-   the database is down."
+   (plans/commit-range-walkthrough.md §6.4–§6.8). The model is stubbed at its
+   HTTP call (`walkthrough-model-stub`), so the real JSON parsing runs. Every
+   test skips when the database is down."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -13,6 +13,8 @@
             [freememo.git-clone :as git]
             [freememo.git-clone-test :as fixture]
             [freememo.kg-llm :as llm]
+            [freememo.openrouter :as openrouter]
+            [freememo.walkthrough-model-stub :as stub]
             [freememo.repo-import :as repo-import]
             [freememo.user-state :as us]
             [freememo.walkthrough :as wt]
@@ -32,24 +34,6 @@
    {"docs/ir-spec.md" "# IR\n\nA loop op repeats.\n\nA hold op splits.\n\nEnd.\n"
     "src/ir.zig" "const Op = enum { loop, hold };\n" :message "refactor: rename cycle to loop"}])
 
-(defn stub-chat
-  "Pass 1: two concepts. Pass 2: a hunk goes to the concept its commit
-   carries."
-  [_api-key _fields _system user root-key _type & _]
-  (case root-key
-    :concepts {:parsed {:concepts [{:label "rename cycle to loop" :summary "Cycle is now loop."
-                                    :commits [(second (re-find #"## Commit (\w+)\nrefactor" user))]
-                                    :depends_on ["split hold"]}
-                                   {:label "split hold" :summary "A hold op splits."
-                                    :commits [(second (re-find #"## Commit (\w+)\nfeat" user))]}]}
-               :cost 0.0 :tokens []}
-    :assignments {:parsed {:assignments
-                           (into {} (map (fn [[_ id subject]]
-                                           [(keyword id) (if (str/starts-with? subject "feat")
-                                                           "split hold" "rename cycle to loop")]))
-                             (re-seq #"### (H\d+) · commit \w+ \"([^\"]*)\"" user))}
-                   :cost 0.0 :tokens []}))
-
 (defmacro with-walkthrough
   "Bind `user`, `repo-id` and `wid` to a prepared walkthrough over `commits`."
   [[user repo-id wid shas] & body]
@@ -67,7 +51,7 @@
                        git/remote-url (fn [_# _#] (str "file://" repo#))
                        llm/resolve-model+gate! (fn [& _#] {:api-key "k" :entry {:id "stub"}
                                                            :model-fields {}})
-                       llm/chat! stub-chat]
+                       openrouter/chat-completion! stub/chat-completion!]
            (let [staged# (repo-import/stage-repository! ~user {:forge "gitlab" :host "gitlab.example.com"
                                                                :repository "owner/name"})
                  r# (repo-import/import-staged! ~user (:stage-id staged#)
@@ -75,7 +59,7 @@
                  ~repo-id (:id (jdbc/execute-one! db/ds ["SELECT parent_id AS id FROM topics WHERE id = ?"
                                                          (:topic-id r#)] opts))
                  ~wid (do (#'db/setup-schema-walkthroughs!)
-                          (:walkthrough-id (wt/start! ~user ~repo-id (first ~shas) (last ~shas))))]
+                          (:walkthrough-id (wt/start! ~user ~repo-id (second ~shas) (last ~shas))))]
              (deref (future (loop [n# 0]
                               (when (and (< n# 200)
                                       (= "preparing" (:status (db/get-walkthrough ~user ~wid))))
