@@ -8299,10 +8299,17 @@
    quota/check-and-bump! THROWS on cap violation, which would abort the
    relocation. Sole such caller: normalize-inline-card-images!.
 
+   Concurrent calls with the same bytes are the ordinary case, not an edge: a
+   paste uploads the image while a save carrying the same data: URI rehosts it
+   (`image-rehost/rehost-data-uris!`). The lookup alone cannot settle that, so
+   the insert is `ON CONFLICT DO NOTHING` and the loser reads the winner's row.
+   The quota charge follows the insert in the same transaction, so a loser is
+   never charged and a cap violation rolls the insert back.
+
    Pre : `bytes` is non-nil; `user-id` owns the write.
    Post: {:media/id N :media/inserted? bool}. `:media/inserted?` is true only
          when this call created the row, i.e. only then is the row this
-         caller's to delete."
+         caller's to delete. Never raises on a duplicate (user_id, sha256)."
   [{:keys [user-id kind ^bytes bytes mime-type source-url meter-quota?]
     :or {meter-quota? true}}]
   (let [sha256 (bytes-sha256 bytes)
@@ -8310,20 +8317,32 @@
     (if-let [existing (find-media-by-sha user-id sha256)]
       {:media/id (:media/id existing) :media/inserted? false}
       (jdbc/with-transaction [tx ds]
-        (when meter-quota?
-          (quota/check-and-bump! tx user-id byte-size))
-        {:media/id (-> (jdbc/execute-one! tx
-                         (sql/format {:insert-into :media
-                                      :values [{:user_id user-id
-                                                :kind (or kind "image")
-                                                :bytes bytes
-                                                :mime_type mime-type
-                                                :sha256 sha256
-                                                :byte_size byte-size
-                                                :source_url source-url}]
-                                      :returning [:id]}))
-                     :media/id)
-         :media/inserted? true}))))
+        ;; A concurrent insert of the same key makes this one wait for it, then
+        ;; return no row. The SELECT after is a new statement, so under READ
+        ;; COMMITTED it sees the row the winner committed.
+        (if-let [id (:media/id (jdbc/execute-one! tx
+                                 (sql/format {:insert-into :media
+                                              :values [{:user_id user-id
+                                                        :kind (or kind "image")
+                                                        :bytes bytes
+                                                        :mime_type mime-type
+                                                        :sha256 sha256
+                                                        :byte_size byte-size
+                                                        :source_url source-url}]
+                                              :on-conflict [:user_id :sha256]
+                                              :do-nothing true
+                                              :returning [:id]})))]
+          (do (when meter-quota?
+                (quota/check-and-bump! tx user-id byte-size))
+              {:media/id id :media/inserted? true})
+          {:media/id (or (:media/id (jdbc/execute-one! tx
+                                      (sql/format {:select [:id]
+                                                   :from [:media]
+                                                   :where [:and [:= :user_id user-id]
+                                                           [:= :sha256 sha256]]})))
+                         (throw (ex-info "Media row vanished after a conflicting insert"
+                                  {:user-id user-id :sha256 sha256})))
+           :media/inserted? false})))))
 
 (defn upsert-media!
   "Insert media or return existing id if same bytes already stored for this user.
