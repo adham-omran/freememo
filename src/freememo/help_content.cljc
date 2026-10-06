@@ -495,7 +495,10 @@
              :commands #{:compare-card-gen}}
             {:label "Curate"
              :detail "Add a card from a text selection ({add-new}) — the passage is marked in the editor — edit any card's question/answer or cloze, or delete the weak ones."
-             :commands #{:add-new :add-card :edit-card :delete-card}}]}
+             :commands #{:add-new :add-card :edit-card :delete-card}}
+            {:label "Filter the card table"
+             :detail "Type in Filter cards above the card table to show only the cards whose question or answer holds the text. The matches are marked. Pick a kind, or press Unsynced, to narrow the rows further. Esc clears the text. The filters clear when you open another page or document."
+             :commands #{:filter-cards}}]}
    {:slug "image-occlusion-cards"
     :title "Image-occlusion cards"
     :intro "Hide parts of an image and quiz yourself on what's under the mask."
