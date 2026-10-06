@@ -9,7 +9,8 @@
 
    The user starts every update. No schedule exists.
 
-   It is the header of the repository home (`repo-home`)."
+   It is the header of the repository home (`repo-home`), and holds Add files
+   (`repo-add-files`) beside Update."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -17,6 +18,7 @@
    [freememo.doc-context :as dctx]
    [freememo.forge-kinds :as kinds]
    [freememo.navigation :as nav]
+   [freememo.repo-add-files :refer [AddFilesButton]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.repo-import :as repo-import])
    #?(:clj [freememo.user-state :as us])))
@@ -52,7 +54,7 @@
 
 (e/defn RepoUpdateBar
   "Pre : dctx/page-topic-id names a `repo` topic.
-   Post: the repository's source and an Update button. After an update, one line
+   Post: the repository's source, an Update button and Add files. After an update, one line
          says what happened, and a control opens the commit it names."
   []
   (e/client
@@ -81,6 +83,7 @@
           (let [r (e/server (e/Offload #(update-repository!* user-id repo-id)))]
             (case (reset! !result r)
               (if (:ok r) (t) (t (:error r))))))
+        (AddFilesButton user-id repo-id navigate!)
         (when phase
           (dom/span
             (dom/props {:class "repo-update-bar__phase" :role "status"})

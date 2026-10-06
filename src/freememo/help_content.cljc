@@ -230,6 +230,9 @@
             {:label "Update"
              :detail "On the repository's home, Update adds the newest commit as a new commit topic, with the same selection. Imported commits lists it, newest first, with its message and its number of files."
              :commands #{}}
+            {:label "Add files"
+             :detail "On the repository's home, Add files… opens the directory and extension picker on the newest imported commit. What was selected stays selected: you can only add. Click Add, and the new files go into that commit. A directory you add above an imported one becomes its parent, and the imported one keeps its notes. A file or directory you deleted is not added back. Later updates use the larger selection."
+             :commands #{:add-repository-files}}
             {:label "Read a commit"
              :detail "A commit topic shows the commit's message, author, date, full id with Copy, branch or tag, and number of changed files. FreeMemo reads them from its copy of the repository each time. Walk through this commit starts a walkthrough of that commit alone."
              :commands #{:walk-through-commit}}

@@ -65,8 +65,9 @@
 
 (defn exit-running-step!*
   "Pre : `running` is the value of `!running` when the user asked to leave.
-   Post: a running download is abandoned; a running import is abandoned for
-         `exit` :cancel and backgrounded for :close. Returns :done."
+   Post: a running download is abandoned; a running import or Add files run
+         (`repo-add-files`) is abandoned for `exit` :cancel and backgrounded for
+         :close. Returns :done."
   [user-id running exit]
   #?(:clj (do (case (:step running)
                 :download (repo-import/cancel-import! user-id
@@ -75,6 +76,10 @@
                           (repo-import/cancel-import! user-id
                             (repo-import/source-work-key (:source running)))
                           (repo-import/background-import! user-id (:stage-id running)))
+                :add-files (if (= :cancel exit)
+                             (repo-import/cancel-import! user-id
+                               (repo-import/repo-url-work-key (:repo-url running)))
+                             (repo-import/background-import! user-id (:run-key running)))
                 nil)
               :done)
      :cljs nil))
@@ -271,8 +276,9 @@
 
 (e/defn DirectoryRow
   "One directory of the picker. Its checkbox reads the client's decisions, so a
-   click answers with no round trip."
-  [i row decisions !decisions]
+   click answers with no round trip. A directory `old-dirs` selects stays
+   checked (`repo-tree/dir-locked?`)."
+  [i row decisions !decisions old-dirs]
   (e/client
     (let [{:keys [path name depth file-count match?]} row]
       (dom/tr
@@ -282,7 +288,8 @@
             (dom/props {:class (if match? "forge-picker__dir" "forge-picker__dir forge-picker__dir--context")
                         :style {:padding-left (str (+ 8 (* 16 depth)) "px")}})
             (dom/input
-              (dom/props {:type "checkbox" :checked (tree/dir-selected? decisions path)})
+              (dom/props {:type "checkbox" :checked (tree/dir-selected? decisions path)
+                          :disabled (tree/dir-locked? old-dirs decisions path)})
               (dom/On "change" (fn [_] (swap! !decisions tree/toggle-dir path)) nil))
             (dom/span
               (dom/props {:class "forge-picker__name" :dir "ltr"})
@@ -290,6 +297,135 @@
             (dom/span
               (dom/props {:class "forge-picker__count"})
               (dom/text (str file-count (if (= 1 file-count) " file" " files"))))))))))
+
+(e/defn DirectoryChoices
+  "The Directories section of a picker: All, None, a search, and one checkbox
+   per directory of `commit-tree`.
+
+   Pre : `commit-tree` is a server-form binding; it never crosses whole.
+         `old-dirs` is {} for a first import, else the stored decisions,
+         already on the client.
+   Post: `!decisions` holds the user's choices. With `none?` false, None is
+         absent (plans/repo-selection-widening.md §6.2.3)."
+  [commit-tree !decisions old-dirs none?]
+  (e/client
+    (let [decisions (e/watch !decisions)
+          rows (e/server (tree/picker-rows commit-tree))
+          ;; Searches are debounced client atoms and run on the server, so a
+          ;; keystroke sends one string and the rows never cross whole.
+          !dir-query (atom "")
+          dir-query (e/watch !dir-query)
+          !dir-query-timer (atom nil)
+          shown-rows (e/server (tree/filter-picker-rows rows dir-query))
+          row-count (e/server (count shown-rows))]
+      (dom/div
+        (dom/props {:class "forge-picker__heading"})
+        (dom/span (dom/text "Directories"))
+        ;; With no search this is [""], so All and None write the root as
+        ;; they always did; with one, they write the matches and their subtrees.
+        (let [outermost (e/server (tree/outermost-matches shown-rows))]
+          (dom/button
+            (dom/props {:type "button" :class "forge-import__link"})
+            (dom/text "All")
+            (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost true)) nil))
+          (when none?
+            (dom/button
+              (dom/props {:type "button" :class "forge-import__link"})
+              (dom/text "None")
+              (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost false)) nil)))))
+      (dom/input
+        (dom/props {:type "text" :class "input forge-picker__search"
+                    :placeholder "Search directories…" :aria-label "Search directories"})
+        (dom/On "input" (fn [e] (util/debounce! !dir-query-timer !dir-query (-> e .-target .-value) 300)) nil))
+      (dom/div
+        (dom/props {:class "tape-scroll forge-picker__dirs"})
+        (let [[offset limit] (Scroll-window row-height row-count dom/node
+                               {:overquery-factor 2 :reset-key dir-query})]
+          (dom/props {:style {:--count row-count :--grid-cols "1fr"
+                              :--row-height (str row-height "px")}})
+          (dom/table
+            (e/for [i (Tape offset limit)]
+              (let [row (e/server (nth shown-rows i nil))]
+                (when row
+                  (DirectoryRow i row decisions !decisions old-dirs)))))
+          ;; A sibling overlay, never a branch that unmounts the table
+          ;; (CLAUDE.md, "Never unmount a virtual-scroll table").
+          (when (zero? row-count)
+            (dom/div (dom/props {:class "tape-table-empty"})
+              (dom/text "No directories match."))))))))
+
+(e/defn ExtensionChoices
+  "The File extensions section of a picker: All, None, a search, and one
+   checkbox per extension of `commit-tree`.
+
+   Pre : as `DirectoryChoices`; `old-extensions` is #{} for a first import.
+   Post: `!extensions` holds the user's choices. An extension in
+         `old-extensions` stays checked. With `none?` false, None is absent."
+  [commit-tree !extensions old-extensions none?]
+  (e/client
+    (let [extensions (e/watch !extensions)
+          extension-counts (e/server (tree/extension-counts commit-tree))
+          !ext-query (atom "")
+          ext-query (e/watch !ext-query)
+          !ext-query-timer (atom nil)
+          shown-extensions (e/server (tree/filter-extension-counts extension-counts ext-query))]
+      (dom/div
+        (dom/props {:class "forge-picker__heading"})
+        (dom/span (dom/text "File extensions"))
+        ;; All and None act on the extensions shown, which with no search
+        ;; is every extension.
+        (let [shown (e/server (mapv first shown-extensions))]
+          (dom/button
+            (dom/props {:type "button" :class "forge-import__link"})
+            (dom/text "All")
+            (dom/On "click" (fn [_] (swap! !extensions into shown)) nil))
+          (when none?
+            (dom/button
+              (dom/props {:type "button" :class "forge-import__link"})
+              (dom/text "None")
+              (dom/On "click" (fn [_] (swap! !extensions #(reduce disj % shown))) nil)))))
+      (dom/p
+        (dom/props {:class "hint"})
+        (dom/text "A file with an unselected extension is still a topic, with no source. You can mark it done later."))
+      (dom/input
+        (dom/props {:type "text" :class "input forge-picker__search"
+                    :placeholder "Search extensions…" :aria-label "Search extensions"})
+        (dom/On "input" (fn [e] (util/debounce! !ext-query-timer !ext-query (-> e .-target .-value) 300)) nil))
+      (dom/div
+        (dom/props {:class "forge-picker__extensions"})
+        (when (e/server (empty? shown-extensions))
+          (dom/span (dom/props {:class "hint"}) (dom/text "No extensions match.")))
+        (e/for [[ext n] (e/diff-by first shown-extensions)]
+          (dom/label
+            (dom/props {:class "forge-picker__extension"})
+            (dom/input
+              (dom/props {:type "checkbox" :checked (contains? extensions ext)
+                          :disabled (contains? old-extensions ext)})
+              (dom/On "change"
+                (fn [e] (swap! !extensions (if (-> e .-target .-checked) conj disj) ext))
+                nil))
+            (dom/span (dom/props {:dir "ltr"}) (dom/text (tree/extension-label ext)))
+            (dom/span (dom/props {:class "forge-picker__count"}) (dom/text (str n)))))))))
+
+(e/defn PickerSummary
+  "The status line under a picker's choices."
+  [text over?]
+  (dom/p
+    (dom/props {:class (if over?
+                         "forge-picker__summary forge-picker__summary--over"
+                         "forge-picker__summary")
+                :role "status"})
+    (dom/text text)))
+
+(defn- import-summary
+  "Post: [text over?] for an import of `node-count` topics."
+  [node-count]
+  (cond
+    (<= node-count 1) ["Select at least one directory." false]
+    (> node-count tree/max-selection-nodes)
+    [(str node-count " topics. One import may create "
+       tree/max-selection-nodes ". Select fewer directories.") true]
+    :else [(str node-count " topics will be created.") false]))
 
 (e/defn StagePicker
   "The second stage: the whole tree, directory checkboxes and extension
@@ -309,24 +445,12 @@
           ;; window rows, the extension counts and one number cross.
           picked (e/server (e/Offload #(staged-tree* user-id stage-id)))
           commit-tree (e/server (:tree picked))
-          rows (e/server (tree/picker-rows commit-tree))
-          ;; Searches are debounced client atoms and run on the server, so a
-          ;; keystroke sends one string and the rows never cross whole.
-          !dir-query (atom "")
-          dir-query (e/watch !dir-query)
-          !dir-query-timer (atom nil)
-          shown-rows (e/server (tree/filter-picker-rows rows dir-query))
-          row-count (e/server (count shown-rows))
-          extension-counts (e/server (tree/extension-counts commit-tree))
-          !ext-query (atom "")
-          ext-query (e/watch !ext-query)
-          !ext-query-timer (atom nil)
-          shown-extensions (e/server (tree/filter-extension-counts extension-counts ext-query))
           !decisions (atom {})
           decisions (e/watch !decisions)
           !extensions (atom #{})
           extensions (e/watch !extensions)
           node-count (e/server (tree/node-count (tree/import-plan commit-tree decisions)))
+          [summary over?] (import-summary node-count)
           !failure (atom nil)
           failure (e/watch !failure)]
       (dom/div
@@ -335,89 +459,9 @@
           (dom/props {:class "forge-picker__source" :dir "ltr"})
           (dom/text (str path " · " (subs sha 0 7) (when ref (str " (" ref ")"))
                       " · " (:file-count staged) " files")))
-
-        (dom/div
-          (dom/props {:class "forge-picker__heading"})
-          (dom/span (dom/text "Directories"))
-          ;; With no search this is [""], so All and None write the root as
-          ;; they always did; with one, they write the matches and their subtrees.
-          (let [outermost (e/server (tree/outermost-matches shown-rows))]
-            (dom/button
-              (dom/props {:type "button" :class "forge-import__link"})
-              (dom/text "All")
-              (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost true)) nil))
-            (dom/button
-              (dom/props {:type "button" :class "forge-import__link"})
-              (dom/text "None")
-              (dom/On "click" (fn [_] (swap! !decisions tree/set-dirs outermost false)) nil))))
-        (dom/input
-          (dom/props {:type "text" :class "input forge-picker__search"
-                      :placeholder "Search directories…" :aria-label "Search directories"})
-          (dom/On "input" (fn [e] (util/debounce! !dir-query-timer !dir-query (-> e .-target .-value) 300)) nil))
-        (dom/div
-          (dom/props {:class "tape-scroll forge-picker__dirs"})
-          (let [[offset limit] (Scroll-window row-height row-count dom/node
-                                 {:overquery-factor 2 :reset-key dir-query})]
-            (dom/props {:style {:--count row-count :--grid-cols "1fr"
-                                :--row-height (str row-height "px")}})
-            (dom/table
-              (e/for [i (Tape offset limit)]
-                (let [row (e/server (nth shown-rows i nil))]
-                  (when row
-                    (DirectoryRow i row decisions !decisions)))))
-            ;; A sibling overlay, never a branch that unmounts the table
-            ;; (CLAUDE.md, "Never unmount a virtual-scroll table").
-            (when (zero? row-count)
-              (dom/div (dom/props {:class "tape-table-empty"})
-                (dom/text "No directories match.")))))
-
-        (dom/div
-          (dom/props {:class "forge-picker__heading"})
-          (dom/span (dom/text "File extensions"))
-          ;; All and None act on the extensions shown, which with no search
-          ;; is every extension.
-          (let [shown (e/server (mapv first shown-extensions))]
-            (dom/button
-              (dom/props {:type "button" :class "forge-import__link"})
-              (dom/text "All")
-              (dom/On "click" (fn [_] (swap! !extensions into shown)) nil))
-            (dom/button
-              (dom/props {:type "button" :class "forge-import__link"})
-              (dom/text "None")
-              (dom/On "click" (fn [_] (swap! !extensions #(reduce disj % shown))) nil))))
-        (dom/p
-          (dom/props {:class "hint"})
-          (dom/text "A file with an unselected extension is still a topic, with no source. You can mark it done later."))
-        (dom/input
-          (dom/props {:type "text" :class "input forge-picker__search"
-                      :placeholder "Search extensions…" :aria-label "Search extensions"})
-          (dom/On "input" (fn [e] (util/debounce! !ext-query-timer !ext-query (-> e .-target .-value) 300)) nil))
-        (dom/div
-          (dom/props {:class "forge-picker__extensions"})
-          (when (e/server (empty? shown-extensions))
-            (dom/span (dom/props {:class "hint"}) (dom/text "No extensions match.")))
-          (e/for [[ext n] (e/diff-by first shown-extensions)]
-            (dom/label
-              (dom/props {:class "forge-picker__extension"})
-              (dom/input
-                (dom/props {:type "checkbox" :checked (contains? extensions ext)})
-                (dom/On "change"
-                  (fn [e] (swap! !extensions (if (-> e .-target .-checked) conj disj) ext))
-                  nil))
-              (dom/span (dom/props {:dir "ltr"}) (dom/text (tree/extension-label ext)))
-              (dom/span (dom/props {:class "forge-picker__count"}) (dom/text (str n))))))
-
-        (dom/p
-          (dom/props {:class (if (> node-count tree/max-selection-nodes)
-                               "forge-picker__summary forge-picker__summary--over"
-                               "forge-picker__summary")
-                      :role "status"})
-          (dom/text (cond
-                      (<= node-count 1) "Select at least one directory."
-                      (> node-count tree/max-selection-nodes)
-                      (str node-count " topics. One import may create "
-                        tree/max-selection-nodes ". Select fewer directories.")
-                      :else (str node-count " topics will be created."))))
+        (DirectoryChoices commit-tree !decisions {} true)
+        (ExtensionChoices commit-tree !extensions #{} true)
+        (PickerSummary summary over?)
         (when failure
           (dom/div
             (dom/props {:class "forge-import__error" :role "alert"})

@@ -16,6 +16,8 @@
 
    `update-repository!` runs both at once with the selection stored on the
    repository node, so an update shows no picker (§4.6 6.2).
+   `add-repository-files!` widens that selection and adds what it adds to the
+   newest commit (plans/repo-selection-widening.md).
 
    The rows: one `repo` node per repository URL, one `commit` node per sha under
    it, one `dir` node per selected directory, one `code` node per file inside a
@@ -73,13 +75,18 @@
 (defn- work-key [origin path]
   (str (:host origin) "/" path))
 
+(defn repo-url-work-key
+  "Post: the work key of the runs on repository `repo-url`, or nil when it does
+   not parse. The key encoding stays in this namespace; a reader passes the URL."
+  [repo-url]
+  (when-let [{:keys [origin path]} (some-> repo-url forge/parse-repository-input)]
+    (work-key origin path)))
+
 (defn phase-in
   "Post: the phase of the running import or update of `repo-url` in `phases` —
-   the value of `:importing-repos` — or nil when none runs. The work key
-   encoding stays in this namespace; a reader passes the URL."
+   the value of `:importing-repos` — or nil when none runs."
   [phases repo-url]
-  (when-let [{:keys [origin path]} (some-> repo-url forge/parse-repository-input)]
-    (get phases (work-key origin path))))
+  (some->> (repo-url-work-key repo-url) (get phases)))
 
 (defn- set-phase! [user-id key phase]
   (swap! (us/get-atom user-id :importing-repos) assoc key phase))
@@ -227,6 +234,34 @@
    :extensions (into #{} (filter #(and (string? %) (or (= "" %) (str/starts-with? % "."))))
                  extensions)})
 
+(defn- source-rows
+  "The `topic_code` rows of the files `paths`, realized lazily, so at most one
+   statement's worth of source is in heap at a time.
+
+   Pre : the blobs of `paths` are on disk; `id-by-path` names each path's topic.
+   Post: a lazy seq of {:topic_id :source :byte_size :lang}. A file over
+         `max-source-bytes`, a file past `budget` bytes in total, and a binary
+         file give no row; `!report` counts each, and `:sources-stored`."
+  [paths id-by-path oid-of size-of budget !report read-blob]
+  (let [!spent (atom 0)]
+    (keep (fn [p]
+            (let [len (long (get size-of (oid-of p) 0))]
+              (cond
+                (> len max-source-bytes)
+                (do (swap! !report update :oversize-files inc) nil)
+
+                (> (+ @!spent len) budget)
+                (do (swap! !report update :over-budget-files inc) nil)
+
+                :else
+                (if-let [text (some-> (read-blob (oid-of p)) utf8-text)]
+                  (do (swap! !spent + len)
+                      (swap! !report update :sources-stored inc)
+                      {:topic_id (id-by-path p) :source text
+                       :byte_size len :lang (tree/language-for p)})
+                  (do (swap! !report update :binary-files inc) nil)))))
+      paths)))
+
 (defn- create-commit-subtree!
   "Write one commit subtree, and the repository node when it does not exist.
 
@@ -291,27 +326,9 @@
             !report (atom {:directories (count (:dirs plan)) :files (count (:files plan))
                            :sources-stored 0 :binary-files 0 :oversize-files 0
                            :over-budget-files 0})
-            !budget (atom 0)
-            ;; Lazy, and realized once inside the transaction, so at most one
-            ;; statement's worth of source is in heap at a time.
             code-rows (fn [read-blob]
-                        (keep (fn [p]
-                              (let [len (long (get size-of (oid-of p) 0))]
-                                (cond
-                                  (> len max-source-bytes)
-                                  (do (swap! !report update :oversize-files inc) nil)
-
-                                  (> (+ @!budget len) max-import-source-bytes)
-                                  (do (swap! !report update :over-budget-files inc) nil)
-
-                                  :else
-                                  (if-let [text (some-> (read-blob (oid-of p)) utf8-text)]
-                                    (do (swap! !budget + len)
-                                        (swap! !report update :sources-stored inc)
-                                        {:topic_id (id-by-path p) :source text
-                                         :byte_size len :lang (tree/language-for p)})
-                                    (do (swap! !report update :binary-files inc) nil)))))
-                          wanted))]
+                        (source-rows wanted id-by-path oid-of size-of
+                          max-import-source-bytes !report read-blob))]
         (check-cancelled!)
         (set-phase! user-id (:key git-ctx) "creating topics")
         (git/with-blob-reader* dir
@@ -350,6 +367,17 @@
            fresh? (git/ensure-fresh! dir (:url ctx) ctx)
            (not (git/clone? dir)) (do (git/delete-dir! dir) (git/clone! dir (:url ctx) ctx))))
        ctx))))
+
+(defn clone-holding
+  "The clone of `user-id`'s repository `repo-id` that holds every sha of
+   `shas`, fetching once when one is missing.
+   Post: `clone-context`'s value, or nil when the node is not an imported
+         repository. Throws a forge failure when a fetch fails."
+  [user-id repo-id shas]
+  (when-let [ctx (clone-context user-id repo-id)]
+    (if (every? #(git/commit-exists? (:dir ctx) %) shas)
+      ctx
+      (clone-context user-id repo-id true))))
 
 ;; ── Services ───────────────────────────────────────────────────────
 
@@ -401,8 +429,8 @@
          tree, nothing is charged to quota, and no topic exists yet. On failure
          nothing remains on disk or in upload_sessions. A cancelled download
          returns {:ok false :cancelled? true} and leaves nothing either.
-   A repository that is already imported is refused before any download: its
-   selection cannot change (frame), and Update on its node is the path."
+   A repository that is already imported is refused before any download:
+   Update and Add files on its node are the paths."
   [user-id form]
   (let [req (read-import-form form)]
     (if-not (:ok req)
@@ -412,7 +440,7 @@
             key (work-key origin path)]
         (if-let [existing (db/find-repo-node user-id repo-url)]
           {:ok false :topic-id existing
-           :error (str path " is already imported. Open it and press Update to add a newer commit.")}
+           :error (str path " is already imported. Open it and press Update to add a newer commit, or Add files to select more.")}
           (try
             (run-as-activity user-id key "cloning"
               (fn []
@@ -501,37 +529,72 @@
   (* 60 60 1000))
 
 (defonce ^:private !import-runs
-  ;; stage id -> {:user-id :delivery promise :backgrounded? :result :settled-at}.
+  ;; run key -> {:user-id :delivery promise :success-message :backgrounded?
+  ;; :result :settled-at}. A run key is a stage id, or [:add-files id] for an
+  ;; Add files run.
   ;; The result and the Close mark are each written with `swap-vals!`, so
   ;; whichever lands second sees the other and pushes the one toast.
   (atom {}))
 
+(defn- import-success-message [{:keys [path report]}]
+  (str "Imported " path ": " (:topics-created report) " topics."))
+
 (defn- push-result-toast!
-  "Post: one toast for `r`, or none for a cancelled run — the user chose it."
-  [user-id {:keys [ok cancelled? topic-id path report error]}]
+  "Post: one toast for `r`, or none for a cancelled run — the user chose it.
+   `success-message` words a successful `r`."
+  [user-id success-message {:keys [ok cancelled? topic-id error] :as r}]
   (cond
     cancelled? nil
     ok (toasts/push! user-id
          {:level :info
-          :message (str "Imported " path ": " (:topics-created report) " topics.")
+          :message (success-message r)
           :actions [{:label "Open" :nav [:viewer {:type :topic :topic-id topic-id}]}]})
     :else (toasts/push! user-id {:level :error :message error})))
 
 (defn- settle-run!
-  "Record `r` for `stage-id`, hand it to the waiting picker, and toast it when
+  "Record `r` for `run-key`, hand it to the waiting picker, and toast it when
    the picker already closed."
-  [stage-id r]
-  (let [[old _] (swap-vals! !import-runs update stage-id assoc
+  [run-key r]
+  (let [[old _] (swap-vals! !import-runs update run-key assoc
                   :result r :settled-at (System/currentTimeMillis))
-        run (get old stage-id)]
+        run (get old run-key)]
     (deliver (:delivery run) r)
     (when (:backgrounded? run)
-      (push-result-toast! (:user-id run) r))))
+      (push-result-toast! (:user-id run) (:success-message run import-success-message) r))))
 
 (defn- without-expired-runs [runs now]
   (into {} (remove (fn [[_ {:keys [settled-at]}]]
                      (and settled-at (> (- now settled-at) settled-run-ttl-ms))))
     runs))
+
+(defn- start-run!
+  "Run `run!` on a server thread, once per `run-key`.
+
+   Post: a promise of `run!`'s result, or nil when another user's run holds
+         `run-key`. A second call for the same key — an e/Offload restart —
+         returns the same promise and starts nothing. `hold!` runs before this
+         returns, and only for the call that starts the run.
+   Invariant: a throw from `run!` settles as {:ok false :error S}, so the
+         promise is always delivered."
+  [user-id run-key success-message hold! run!]
+  (let [fresh {:user-id user-id :delivery (promise) :success-message success-message}
+        run (get (swap! !import-runs
+                   (fn [runs]
+                     (let [runs (without-expired-runs runs (System/currentTimeMillis))]
+                       (if (contains? runs run-key) runs (assoc runs run-key fresh)))))
+              run-key)]
+    (cond
+      (not= user-id (:user-id run)) nil
+
+      (identical? run fresh)
+      (do (hold!)
+          (future
+            (settle-run! run-key
+              (try (run!)
+                (catch Throwable t {:ok false :error (failure-message t)}))))
+          (:delivery run))
+
+      :else (:delivery run))))
 
 (defn start-import!
   "Run `import-staged!` for `stage-id` on a server thread, once.
@@ -543,40 +606,26 @@
    Invariant: the stage is held before this returns, so a picker that unmounts
          at once cannot release the tree the run reads."
   [user-id stage-id selection]
-  (let [fresh {:user-id user-id :delivery (promise)}
-        run (get (swap! !import-runs
-                   (fn [runs]
-                     (let [runs (without-expired-runs runs (System/currentTimeMillis))]
-                       (if (contains? runs stage-id) runs (assoc runs stage-id fresh)))))
-              stage-id)]
-    (cond
-      (not= user-id (:user-id run))
-      (doto (promise) (deliver {:ok false :error "This download expired. Start the import again."}))
-
-      (identical? run fresh)
-      (do (swap! !importing-stages conj stage-id)
-          (future
-            (settle-run! stage-id
-              (try (import-staged! user-id stage-id selection)
-                (catch Throwable t {:ok false :error (failure-message t)}))))
-          (:delivery run))
-
-      :else (:delivery run))))
+  (or (start-run! user-id stage-id import-success-message
+        #(swap! !importing-stages conj stage-id)
+        #(import-staged! user-id stage-id selection))
+    (doto (promise) (deliver {:ok false :error "This download expired. Start the import again."}))))
 
 (defn background-import!
-  "The picker waiting on `stage-id`'s run closed.
+  "The picker waiting on the run of `run-key` — a stage id, or an Add files
+   run key — closed.
    Post: the run's result reaches the user as a toast exactly once — now if it
          already settled, else when it settles. Nothing for a run `user-id`
          does not own. Returns nil."
-  [user-id stage-id]
+  [user-id run-key]
   (let [[old _] (swap-vals! !import-runs
                   (fn [runs]
-                    (if (= user-id (get-in runs [stage-id :user-id]))
-                      (assoc-in runs [stage-id :backgrounded?] true)
+                    (if (= user-id (get-in runs [run-key :user-id]))
+                      (assoc-in runs [run-key :backgrounded?] true)
                       runs)))
-        run (get old stage-id)]
+        run (get old run-key)]
     (when (and (= user-id (:user-id run)) (not (:backgrounded? run)) (contains? run :result))
-      (push-result-toast! user-id (:result run)))
+      (push-result-toast! user-id (:success-message run import-success-message) (:result run)))
     nil))
 
 (defn cancel-import!
@@ -630,3 +679,169 @@
         (catch Throwable t
           {:ok false :error (failure-message t)})))
     {:ok false :error "This topic is not an imported repository."}))
+
+;; ── Adding to the selection ────────────────────────────────────────
+;; plans/repo-selection-widening.md. The selection only grows, and what it
+;; adds goes into the newest imported commit.
+
+(defn add-files-target
+  "The commit an Add files run writes into, and what its picker reads (§5.1).
+
+   Pre : `repo-id` is a `repo` topic `user-id` owns.
+   Post: {:ok true :commit-id :sha :ref :repo-url :path :tree :selection
+         :live}, or {:ok false :error S}. The commit is the newest in the
+         Imported commits order (§4.1). The clone is read as it is, and fetched
+         once only when it lacks the commit (D8). `:live` is
+         `db/commit-subtree-rows`."
+  [user-id repo-id]
+  (try
+    (if-let [{:keys [repo-url ref selection]} (db/get-repo-import user-id repo-id)]
+      (if-let [{commit-id :id sha :commit_sha} (first (db/repo-snapshots user-id repo-id))]
+        (let [{:keys [dir]} (clone-holding user-id repo-id [sha])]
+          {:ok true :commit-id commit-id :sha sha :ref ref :repo-url repo-url
+           :path (:path (forge/parse-repository-input repo-url))
+           :tree (tree/tree (map :path (git/ls-tree dir sha)))
+           :selection selection
+           :live (db/commit-subtree-rows user-id commit-id)})
+        {:ok false :error "This repository has no imported commit. Press Update to import one."})
+      {:ok false :error "This topic is not an imported repository."})
+    (catch Throwable t
+      {:ok false :error (failure-message t)})))
+
+(defn- add-to-commit!
+  "Write what widening `target`'s selection to `new` adds, and store `new`.
+
+   Pre : the clone's lock is held, so no Update runs meanwhile. `target` is an
+         `add-files-target` success and `git-ctx` names its clone. `new` is
+         normalized.
+   Post: as `add-repository-files!`.
+   Invariant: every row and the selection commit in one transaction, and only
+         while the commit is live and the stored selection is the one the plan
+         was computed from (§4.2)."
+  [user-id repo-id git-ctx target new check-cancelled!]
+  (let [{:keys [commit-id sha tree selection live]} target
+        dir (:dir git-ctx)
+        {:keys [insert move fill skipped]} (tree/widening-plan tree selection new live)
+        commit-count (db/count-subtree-topics commit-id)
+        repo-count (db/count-subtree-topics repo-id)]
+    (cond
+      (not (tree/widens? selection new))
+      {:ok false :error "Add files cannot remove a directory or an extension that is already selected."}
+
+      (and (empty? insert) (empty? fill))
+      {:ok false :error "This selection adds no files to the commit."}
+
+      (> (+ commit-count (count insert)) tree/max-selection-nodes)
+      {:ok false
+       :error (str "This selection adds " (count insert) " topics to a commit that holds "
+                commit-count ". One commit may hold " tree/max-selection-nodes ".")}
+
+      (> (+ repo-count (count insert)) tree/max-repository-nodes)
+      {:ok false
+       :error (str "This selection adds " (count insert) " topics to a repository that holds "
+                repo-count ". One repository may hold " tree/max-repository-nodes ".")}
+
+      :else
+      (let [oid-of (into {} (map (juxt :path :oid)) (git/ls-tree dir sha))
+            ;; New files with a selected extension, then old empty files
+            ;; whose extension is new (D3).
+            wanted (into (into [] (comp (filter #(= "code" (:kind %)))
+                                    (map :path)
+                                    (filter #(contains? (:extensions new) (tree/extension %))))
+                           insert)
+                     fill)
+            _ (set-phase! user-id (:key git-ctx) "downloading")
+            _ (git/prefetch-blobs! dir sha (map oid-of wanted) git-ctx)
+            size-of (git/blob-sizes dir (map oid-of wanted))
+            new-ids (db/reserve-topic-ids! (count insert))
+            id-by-path (merge (update-vals live :id) (zipmap (map :path insert) new-ids))
+            parent-id #(if % (id-by-path %) commit-id)
+            base {:user_id user-id :status "active" :priority priority/priority-default}
+            topic-rows (mapv (fn [{:keys [kind path parent title ordinal]}]
+                               (assoc base :id (id-by-path path) :kind kind
+                                 :parent_id (parent-id parent)
+                                 :title (clamp-title title) :repo_path path
+                                 :page_number ordinal))
+                         insert)
+            moves (mapv (fn [{:keys [id parent title ordinal]}]
+                          {:id id :parent-id (parent-id parent)
+                           :title (clamp-title title) :ordinal ordinal})
+                    move)
+            !report (atom {:topics-created (count insert) :moved (count move)
+                           :skipped (count skipped) :sources-stored 0 :binary-files 0
+                           :oversize-files 0 :over-budget-files 0})]
+        (check-cancelled!)
+        (set-phase! user-id (:key git-ctx) "creating topics")
+        (git/with-blob-reader* dir
+          (fn [read-blob]
+            (jdbc/with-transaction [tx db/ds]
+              (cond
+                (not= commit-id (db/find-commit-node tx repo-id sha))
+                {:ok false :error "This commit was deleted while the picker was open."}
+
+                (not (db/replace-repo-selection! tx repo-id selection new))
+                {:ok false :error "The selection changed while this picker was open. Open Add files again."}
+
+                :else
+                (let [budget (- max-import-source-bytes (db/commit-source-bytes tx commit-id))]
+                  ;; Release, insert, move: the order `idx_topics_page` needs.
+                  (db/release-repo-row-ordinals! tx user-id commit-id (map :id moves))
+                  (db/insert-topic-rows! tx topic-rows)
+                  (db/move-repo-rows! tx user-id commit-id moves)
+                  (doseq [batch (partition-by-bytes statement-source-bytes
+                                  (source-rows wanted id-by-path oid-of size-of budget
+                                    !report read-blob))]
+                    (check-cancelled!)
+                    (db/insert-topic-code-rows! tx batch))
+                  {:ok true :topic-id commit-id :report @!report})))))))))
+
+(defn add-repository-files!
+  "Widen repository `repo-id`'s selection to `selection` and add what it adds
+   to the newest commit (§5.2).
+
+   Pre : `repo-id` is a `repo` topic `user-id` owns; `commit-id` is the commit
+         the picker showed; `selection` came from the client.
+   Post: {:ok true :topic-id commit-id :path S :report {…}};
+         {:ok false :cancelled? true}; or {:ok false :error S}. Nothing is
+         written on failure or cancel.
+   Invariant: the whole run holds the clone's lock, which an Update holds for
+         its whole run too, so the two never overlap (§5.3.1)."
+  [user-id repo-id commit-id selection]
+  (if-let [key (repo-url-work-key (:repo-url (db/get-repo-import user-id repo-id)))]
+    (try
+      (run-as-activity user-id key "resolving"
+        (fn []
+          (git/with-lock (git/clone-dir repo-id)
+            (let [target (add-files-target user-id repo-id)]
+              (cond
+                (not (:ok target)) target
+
+                (not= commit-id (:commit-id target))
+                {:ok false :error "A newer commit was imported while this picker was open. Open Add files again."}
+
+                :else
+                (let [{:keys [forge]} (db/get-repo-import user-id repo-id)
+                      {:keys [origin path]} (forge/parse-repository-input (:repo-url target))
+                      ctx (assoc (git-context user-id key forge origin path)
+                            :dir (git/clone-dir repo-id) :key key)
+                      r (add-to-commit! user-id repo-id ctx target
+                          (normalize-selection selection) #(throw-if-cancelled! user-id key))]
+                  (when (:ok r)
+                    (commands/bump! user-id :add-repository-files))
+                  (assoc r :path path)))))))
+      (catch Throwable t
+        {:ok false :error (failure-message t)}))
+    {:ok false :error "This topic is not an imported repository."}))
+
+(defn- added-files-message [{:keys [path report]}]
+  (str "Added " (:topics-created report) " topics to " path "."))
+
+(defn start-add-files!
+  "Run `add-repository-files!` on a server thread, once per `run-id`.
+   Pre : `run-id` is fresh for each Add press.
+   Post: a promise of its result; a refusal for a `run-id` another user holds.
+         Closing the picker leaves the run going (§5.3.4)."
+  [user-id run-id repo-id commit-id selection]
+  (or (start-run! user-id [:add-files run-id] added-files-message (fn [])
+        #(add-repository-files! user-id repo-id commit-id selection))
+    (doto (promise) (deliver {:ok false :error "This run belongs to another user."}))))

@@ -598,6 +598,14 @@
                        :views #{:refresh :card-mutations}}
      :import-document {:label "Import document" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files :sources} :views document-views}
+     ;; Adding to an imported repository's selection
+     ;; (plans/repo-selection-widening.md §7.1). The button on the repository
+     ;; home publishes it, so the palette lists it only there.
+     :add-repository-files {:label "Add files to repository…" :class :mutation :exec :ui-button
+                            :when #{:viewer}
+                            :data {:repo-id :ctx :selection :payload}
+                            :table #{:topics :topic_code :repo_selections}
+                            :views document-views}
      ;; A SuperMemo collection lands a whole tree at once — topics, their
      ;; cards, their bibliography and an archived repetition log — so it
      ;; declares more tables than :import-document and adds :card-mutations.
