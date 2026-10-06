@@ -109,7 +109,7 @@
                   (dom/text
                     (str (or (:document_title source) "Untitled document")
                       (when-let [page (:page_number source)]
-                        (str " · Page " page))))))
+                        (str ", Page " page))))))
               (dom/button
                 (dom/props {:class "btn btn-secondary" :type "button"
                             :aria-label "Close source evidence"})

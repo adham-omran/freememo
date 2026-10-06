@@ -435,10 +435,10 @@
           ;; local `(if (pos? days-left) …  "today")`, which read `today` for
           ;; every non-positive value — a schedule three weeks past its target
           ;; looked due today on the one surface a user scans to triage.
-          (dom/text (str (:target-date s) " · "
+          (dom/text (str (:target-date s) ", "
                       (fc/deadline-token (:days-to-target s))
                       (when (:first-page s)
-                        (str " · pages " (:first-page s) "–"
+                        (str ", pages " (:first-page s) "–"
                           (or (:last-page s) "end"))))))))))
 
 (e/defn ArchivedSchedules [user-id navigate! selected-id]
@@ -541,7 +541,7 @@
             (dom/On "click" (open-document! navigate! (:root-topic-id document)) nil)))
         (dom/span
           (dom/props {:class "sched-doc-heading-note"})
-          (dom/text (if archived? "Forecast · archived" "Forecast"))))
+          (dom/text (if archived? "Forecast (archived)" "Forecast"))))
       ;; Edit sits beside Archive because both act on the schedule as a whole.
       ;; Hidden while archived: a retired schedule has no plan to revise, and
       ;; Restore is the one action that makes sense there.
@@ -684,13 +684,13 @@
           ;;
           ;; The `today:` label is load-bearing here and absent in the tab, where
           ;; the tile's own cap supplies it. Without it this segment reads
-          ;; `4 pages ahead · 44 / 60 covered · 2 ahead` — two different `ahead`
+          ;; `4 pages ahead, 44 / 60 covered, 2 ahead` — two different `ahead`
           ;; numbers in one line, one measured against the pace line and one
           ;; against today's allocation. A bare `done` reads as the whole
           ;; schedule being finished.
           (dom/text (str (:pace-phrase s)
-                      " · " (:covered s) " / " (:total s) " covered"
-                      " · today: " (fc/quota-phrase (:pages-today s)))))
+                      ", " (:covered s) " / " (:total s) " covered"
+                      ", today: " (fc/quota-phrase (:pages-today s)))))
         ;; :ok needs no line — a working forecast is the ordinary case, and
         ;; labelling it would make the exceptions harder to spot.
         (when (not= :ok (:status s))
@@ -727,7 +727,7 @@
                   (dom/span
                     (dom/text (if (:feasible? plan) "Feasible" "Needs adjustment"))))
                 (dom/p
-                  (dom/text (str (:total-minutes plan) " minutes remaining · "
+                  (dom/text (str (:total-minutes plan) " minutes remaining, "
                               (:daily-minutes plan) " minutes per study day")))
                 (when (:earliest-date plan)
                   (dom/time (dom/text (str "Estimated finish " (:earliest-date plan)))))))))

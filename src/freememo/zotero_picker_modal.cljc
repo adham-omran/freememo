@@ -50,7 +50,7 @@
            (:year item)
            (or (:item-type item) (:item_type item))]
        (remove (fn [s] (or (nil? s) (= "" s))))
-       (str/join " · "))))
+       (str/join "; "))))
 
 #?(:cljs
    (defn- matches?

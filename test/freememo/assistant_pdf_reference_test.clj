@@ -44,7 +44,7 @@
     (is (= ["E4" "E5" "E6" "E7" "E8"] (map :citation-key evidence))
       "keys run on from the current topic")
     (is (= 9 next-index))
-    (is (str/includes? (:content (first messages)) "Paper, page 10 — Page 10 · excerpt 1"))))
+    (is (str/includes? (:content (first messages)) "Paper, page 10 — Page 10, excerpt 1"))))
 
 (deftest a-pdf-never-opened-starts-at-page-one
   (let [[_ asked] (packet [(page 1 "<p>Abstract.</p>")] 1 20)]

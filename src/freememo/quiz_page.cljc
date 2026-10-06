@@ -379,7 +379,7 @@
         (dom/p (dom/props {:style {:font-size "14px"}})
           (dom/text (str "Answered " graded " of " total " — "
                       correct " correct, " partial " partial, " incorrect " incorrect"
-                      (when score (str " · " (int (+ 0.5 score)) "%")))))
+                      (when score (str ", score " (int (+ 0.5 score)) "%")))))
         (dom/button
           (dom/props {:class "btn btn-primary"})
           (dom/text "New quiz")
@@ -705,7 +705,7 @@
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
                                   :margin "10px 0"}})
-              (dom/text (str remaining " due · " reviewed " reviewed")))
+              (dom/text (str remaining " due, " reviewed " reviewed")))
             ;; Frame isolation, keyed on the item AND the tally. Every turn-local
             ;; atom (a card's revealed?/draft) must start fresh on the next item, and
             ;; the item ref alone is not enough: requeueing the only card in the queue

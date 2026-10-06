@@ -168,7 +168,7 @@
                                  (when (:today? c) " quiz-heatmap-today")
                                  (when (pos? (:reviews c)) " quiz-heatmap-open"))})
             (tooltip/Tooltip! (str (:reviews c)
-                                (if (= 1 (:reviews c)) " review · " " reviews · ")
+                                (if (= 1 (:reviews c)) " review on " " reviews on ")
                                 (:date c)))
             (when (pos? (:reviews c))
               (let [open! (fn [_] (open-day! (:date c)))]

@@ -6000,7 +6000,7 @@
 
 (def ^:private occlusion-mask-count-expr
   "Rects in the whole group — the masks the card tables render as
-   \"Occlusion · N masks → M cards\", where M is the group's row count and this
+   \"Occlusion: N masks → M cards\", where M is the group's row count and this
    is N. Group-wide rather than per-ordinal because the tables collapse a group
    to ONE row (freememo.card-rows), so no row stands for a single ordinal any
    more. 0 for non-occlusion rows: og.geometry is NULL there, so the coalesce
@@ -13084,7 +13084,7 @@
                  {:builder-fn rs/as-unqualified-maps})]
     (item-stats-shape
       {:item-kind :card
-       :item-label (str "Card " card-id (when (pos? (long ord)) (str " · c" ord)))
+       :item-label (str "Card " card-id (when (pos? (long ord)) (str " (c" ord ")")))
        ;; nil when the deletion has been edited away since it was last reviewed —
        ;; the history stays, the prompt is gone.
        :prompt (:prompt (get-card-item user-id card-id ord))

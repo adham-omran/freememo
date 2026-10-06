@@ -38,7 +38,7 @@
    titled `repo-title` (plans/repository-home.md §4.3.5), or nil when there
    is no such walkthrough."
   [display-name repo-title]
-  (when (and display-name repo-title) (str display-name " · " repo-title)))
+  (when (and display-name repo-title) (str display-name " (" repo-title ")")))
 
 (defn page-title
   "Pre: item-name is a page's name as a string, or nil when the page's item

@@ -37,7 +37,7 @@
     (is (not (str/includes? text "```")) "the model reads rendered text, not fences")
     (is (= (inc (count evidence)) next-index))
     (let [block (some #(when (str/includes? (:quoted-text %) "Every slot") %) evidence)]
-      (is (str/starts-with? (:display-label block) "6.1 Axes · excerpt "))
+      (is (str/starts-with? (:display-label block) "6.1 Axes, excerpt "))
       (is (some? (:anchor block)) "a citation can land on the heading")
       (is (= "grid/docs/ir-spec.md" (:document-title block)))
       (is (nil? (:page-number block)) "a tree ordinal is not a page")

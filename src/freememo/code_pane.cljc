@@ -370,7 +370,7 @@
             (dom/text (e/server (or (:path code) ""))))
           (dom/span
             (dom/props {:class "code-pane__meta"})
-            (dom/text (e/server (str/join " · " (remove nil? [(:lang code)
+            (dom/text (e/server (str/join ", " (remove nil? [(:lang code)
                                                              (some-> (:byte-size code) format-bytes)])))))
           (when (and markdown? source? view)
             (ViewToggle view set-view!))

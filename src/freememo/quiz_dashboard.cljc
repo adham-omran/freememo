@@ -211,7 +211,7 @@
             (dom/text "← Back")
             (dom/On "click" (fn [_] (reset! !result-sid nil)) nil))
           (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text (str (if (= kind "exam") "Timed Quiz" "Quiz") " · " started)))
+            (dom/text (str (if (= kind "exam") "Timed Quiz" "Quiz") ": " started)))
           (dom/span (dom/props {:style {:font-size "16px" :font-weight "700" :margin-left "auto"}})
             (dom/text (str (or score "—") "%"))))
         (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
@@ -293,7 +293,7 @@
             (dom/text "← Back")
             (dom/On "click" (fn [_] (reset! !review-id nil)) nil))
           (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text (str "Review · " reviewed_at)))
+            (dom/text (str "Review: " reviewed_at)))
           (dom/span (dom/props {:style {:font-weight "700" :color color :font-size "14px"
                                         :margin-left "auto"}})
             (dom/text label))
@@ -482,7 +482,7 @@
           (dom/text "← Back")
           (dom/On "click" (fn [_] (reset! !day nil)) nil))
         (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-          (dom/text (str "Review · " day)))
+          (dom/text (str "Review: " day)))
         (dom/span (dom/props {:style {:font-size "16px" :font-weight "700"
                                       :margin-left "auto"}})
           (dom/text (str (or (retention reviewed again) "—") "%"))))
@@ -491,11 +491,11 @@
                             :color "var(--color-text-secondary)"}})
         (dom/text (str reviewed " reviewed"
                     (when (pos? (or new 0)) (str ", " new " new"))
-                    " · " again " again, " hard " hard, " good " good, " easy " easy"
+                    ". " again " again, " hard " hard, " good " good, " easy " easy"
                     (cond
-                      (zero? (or timed 0)) " · time not recorded"
-                      (= timed reviewed) (str " · " (fmt-duration duration_ms))
-                      :else (str " · " (fmt-duration duration_ms)
+                      (zero? (or timed 0)) ". Time not recorded"
+                      (= timed reviewed) (str ". Time " (fmt-duration duration_ms))
+                      :else (str ". Time " (fmt-duration duration_ms)
                               " over " timed " of " reviewed)))))
       (ReviewLogList user-id !review-id day))))
 
@@ -550,7 +550,7 @@
                 (dom/button
                   (dom/props {:class "btn btn-primary btn-sm"})
                   (dom/props {:data-tour "quiz-start"})
-                  (dom/text (if (pos? due) (str "Start Review · " due) "Start Review"))
+                  (dom/text (if (pos? due) (str "Start Review (" due " due)") "Start Review"))
                   (dom/On "click" (fn [_] (start-review!)) nil))))
             (DashboardTiles stats)
             (dom/div

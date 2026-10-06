@@ -440,8 +440,8 @@
           error (e/server (:error ov))
           display-name (e/server (:display-name ov))
           own-name (e/server (:name ov))
-          about (e/server (str (:repo-title ov) " · " (short-sha (:sha-from ov)) " → "
-                            (short-sha (:sha-b ov)) " · " (:commit-count ov)
+          about (e/server (str (:repo-title ov) ", " (short-sha (:sha-from ov)) " → "
+                            (short-sha (:sha-b ov)) ", " (:commit-count ov)
                             (if (= 1 (:commit-count ov)) " commit" " commits")))
           !renaming (atom nil)
           phase (e/server (phase* (e/watch (us/get-atom user-id :preparing-walkthroughs)) wid))]

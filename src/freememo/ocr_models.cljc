@@ -19,32 +19,32 @@
    sent verbatim by openrouter/model-fields — the only way a lane names a
    provider. Absent means OpenRouter picks the provider."
   [{:id "openai-gpt-6-sol"
-    :label "OpenAI · GPT-6 Sol"
+    :label "GPT-6 Sol (OpenAI)"
     :shape :chat
     :openrouter-model "openai/gpt-6-sol"}
    {:id "openai-gpt-6-luna"
-    :label "OpenAI · GPT-6 Luna"
+    :label "GPT-6 Luna (OpenAI)"
     :shape :chat
     :openrouter-model "openai/gpt-6-luna"}
    {:id "gemini-3.8-flash"
-    :label "Google · Gemini 3.8 Flash"
+    :label "Gemini 3.8 Flash (Google)"
     :shape :chat
     :openrouter-model "google/gemini-3.8-flash"}
    {:id "gemini-3.5-flash-lite"
-    :label "Google · Gemini 3.5 Flash-Lite"
+    :label "Gemini 3.5 Flash-Lite (Google)"
     :shape :chat
     :openrouter-model "google/gemini-3.5-flash-lite"}
    ;; Routed fastest-first under a price ceiling — same reasoning as the
    ;; card-models entry, including why the sort is "throughput", why the ceiling
    ;; sits at the undiscounted rate and why the key must be :max_price.
    {:id "glm-5.3-flash"
-    :label "Z.ai · GLM 5.3 Flash"
+    :label "GLM 5.3 Flash (Z.ai)"
     :shape :chat
     :openrouter-model "z-ai/glm-5.3-flash"
     :provider {:sort "throughput"
                :max_price {:prompt 0.15 :completion 0.50}}}
    {:id "mistral-ocr-4"
-    :label "Mistral · OCR 4"
+    :label "OCR 4 (Mistral)"
     :shape :plugin
     :plugin-engine "mistral-ocr"}])
 
@@ -56,27 +56,27 @@
    by implication. The 2026-09-23 retirement was decided for both lanes at once,
    so the two lists match on the models they share."
   [{:id "gemini-3.5-flash"
-    :label "Google · Gemini 3.5 Flash"
+    :label "Gemini 3.5 Flash (Google)"
     ;; Pointed at 3.6 until 3.6 itself retired; effective-id takes one hop.
     :superseded-by "gemini-3.8-flash"}
    ;; Removed from the picker on 2026-09-23 by product decision.
    {:id "openai-gpt-5.1"
-    :label "OpenAI · GPT-5.1"
+    :label "GPT-5.1 (OpenAI)"
     :superseded-by "openai-gpt-6-sol"}
    {:id "openai-gpt-5.6-luna"
-    :label "OpenAI · GPT-5.6 Luna"
+    :label "GPT-5.6 Luna (OpenAI)"
     :superseded-by "openai-gpt-6-luna"}
    {:id "openai-gpt-5.6-terra"
-    :label "OpenAI · GPT-5.6 Terra"
+    :label "GPT-5.6 Terra (OpenAI)"
     :superseded-by "openai-gpt-6-sol"}
    {:id "openai-gpt-5.6-sol"
-    :label "OpenAI · GPT-5.6 Sol"
+    :label "GPT-5.6 Sol (OpenAI)"
     :superseded-by "openai-gpt-6-sol"}
    {:id "gemini-3-flash"
-    :label "Google · Gemini 3 Flash"
+    :label "Gemini 3 Flash (Google)"
     :superseded-by "gemini-3.8-flash"}
    {:id "gemini-3.6-flash"
-    :label "Google · Gemini 3.6 Flash"
+    :label "Gemini 3.6 Flash (Google)"
     :superseded-by "gemini-3.8-flash"}])
 
 (def ^:private supersessions

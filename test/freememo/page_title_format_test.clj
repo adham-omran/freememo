@@ -40,6 +40,6 @@
       (str "tabs with no label: " (vec (remove fmt/tab-labels tabs))))))
 
 (deftest a-walkthrough-is-titled-by-its-name-then-its-repository
-  (is (= "Split hold · owner/grid | FreeMemo"
+  (is (= "Split hold (owner/grid) | FreeMemo"
         (fmt/page-title (fmt/walkthrough-name "Split hold" "owner/grid"))))
   (is (= "Not found | FreeMemo" (fmt/page-title (fmt/walkthrough-name nil nil)))))

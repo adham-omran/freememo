@@ -26,8 +26,8 @@
 (defn round-to
   "Round `v` to `decimals` places, half-up.
    Pre : `v` is a finite number. `decimals` is a non-negative integer.
-   Post: a floating value, exact whenever |v · 10^decimals| < 2^53. The
-         priority domain tops out at 100 · 10^3 = 100000, far inside that."
+   Post: a floating value, exact whenever |v × 10^decimals| < 2^53. The
+         priority domain tops out at 100 × 10^3 = 100000, far inside that."
   [v decimals]
   (let [factor (Math/pow 10 decimals)
         scaled (* v factor)]

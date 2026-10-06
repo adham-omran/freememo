@@ -70,8 +70,8 @@
         (dom/span
           (dom/props {:class "repo-update-bar__source" :dir "ltr"})
           (dom/text (if summary
-                      (str (kinds/forge-label (:forge summary)) " · " (:repo-url summary)
-                        " · follows " (:ref summary) " · " (:commits summary)
+                      (str (kinds/forge-label (:forge summary)) ": " (:repo-url summary)
+                        ", follows " (:ref summary) ", " (:commits summary)
                         (if (= 1 (:commits summary)) " commit" " commits"))
                       "")))
         (e/for [[t _] (forms/Button! [::update] :class "btn btn-sm btn-primary" :label "Update")]

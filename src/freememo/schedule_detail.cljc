@@ -502,7 +502,7 @@
       (dom/td (dom/props {:class "sched-cell sched-dim"})
         (dom/text (if (zero? (:day r)) "today" (str "+" (:day r)))))
       (dom/td (dom/props {:class "sched-cell"})
-        (dom/text (str (:date r) " · " (:weekday r))))
+        (dom/text (str (:date r) " (" (:weekday r) ")")))
       ;; An em dash, never 0. A maturation day asks for no reading, and a 0
       ;; reads as a day the user failed to fill.
       ;;

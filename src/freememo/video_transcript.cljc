@@ -251,7 +251,7 @@
           (dom/props {:style {:flex "1" :min-width "60px" :font-size "12px" :font-weight "600"
                               :color "var(--color-text-secondary)"}})
           (dom/text (if (pos? seg-count)
-                      (str "Transcript · " seg-count " segments")
+                      (str "Transcript: " seg-count " segments")
                       "Transcript")))
         ;; e/amb, never a `do` — a `do` returns only the last value and would
         ;; swallow the other button's token, hanging that control.

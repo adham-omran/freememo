@@ -46,7 +46,7 @@
     (is (= "E4" (:citation-key (first evidence))) "keys run on from the current topic")
     (is (= (+ 4 (count evidence)) next-index))
     (let [block (some #(when (str/includes? (:quoted-text %) "Every slot") %) evidence)]
-      (is (str/starts-with? (:display-label block) "6.1 Axes · excerpt "))
+      (is (str/starts-with? (:display-label block) "6.1 Axes, excerpt "))
       (is (= "docs/ir-spec.md" (:document-title block)))
       (is (nil? (:page-number block)) "a tree ordinal is not a page")
       (is (= 42 (:document-topic-id block)) "a citation opens the referenced file")

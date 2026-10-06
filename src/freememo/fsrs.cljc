@@ -86,7 +86,7 @@
 
 (defn retrievability
   "Probability of recall after `elapsed-days` for a card of given `stability`.
-   R = (1 + FACTOR·t/S)^DECAY. Pre: stability > 0, elapsed-days >= 0."
+   R = (1 + FACTOR×t/S)^DECAY. Pre: stability > 0, elapsed-days >= 0."
   [scheduler stability elapsed-days]
   (Math/pow (+ 1.0 (/ (* (:factor scheduler) (double elapsed-days)) stability))
             (:decay scheduler)))
@@ -95,7 +95,7 @@
   (clamp-stability (double (nth params (dec rating)))))
 
 (defn- initial-difficulty
-  "D0(g) = w4 − e^(w5·(g−1)) + 1."
+  "D0(g) = w4 − e^(w5×(g−1)) + 1."
   [params rating clamp?]
   (let [d (+ (- (double (nth params 4)) (Math/exp (* (double (nth params 5)) (dec rating)))) 1.0)]
     (if clamp? (clamp-difficulty d) d)))

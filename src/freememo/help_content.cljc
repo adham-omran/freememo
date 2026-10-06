@@ -638,7 +638,7 @@
              :detail "Open Filters and use Find a concept. Type a name, use the arrow keys, and press Enter."
              :commands #{}}
             {:label "Use rich-text editors"
-             :detail "In the document editor, press Tab to indent a line and Shift+Tab to outdent it. Press Escape, then Tab, to leave the editor. In a card field, Tab moves to the next field. Select text, open ··· in the format menu, and use its indent buttons to indent there. In a dialog, press Escape a second time to close it."
+             :detail "In the document editor, press Tab to indent a line and Shift+Tab to outdent it. Press Escape, then Tab, to leave the editor. In a card field, Tab moves to the next field. Select text, open More formatting in the format menu, and use its indent buttons to indent there. In a dialog, press Escape a second time to close it."
              :commands #{}}
             {:label "Use dialogs"
              :detail "Press Tab or Shift+Tab to move inside a dialog. Press Escape to close it and restore focus."

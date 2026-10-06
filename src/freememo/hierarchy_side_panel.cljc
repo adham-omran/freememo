@@ -280,7 +280,7 @@
         (when body-open? (Body))))))
 
 ;; ---------------------------------------------------------------------------
-;; HierarchySidePanel is split into three e/defns (row · tree · panel). One
+;; HierarchySidePanel is split into three e/defns (row, tree, panel). One
 ;; ~190-line deeply-nested e/defn overflowed the Electric compiler's
 ;; macroexpansion recursion on the default JVM stack; splitting caps each
 ;; form's nesting depth so `-M:dev` boots without a -Xss flag.

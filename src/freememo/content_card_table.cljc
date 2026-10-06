@@ -184,12 +184,12 @@
                 ;; them differ — the same dual idiom /library/cards uses.
                 (dom/text (str row-count " row" (when (not= row-count 1) "s")
                             (when (not= row-count card-count)
-                              (str " · " card-count " cards"))
+                              (str ", " card-count " cards"))
                             (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))
                 (when review-message
                   (dom/span
                     (dom/props {:class "card-review-message"})
-                    (dom/text " · " review-message)))))
+                    (dom/text ", " review-message)))))
             (let [[offset limit] (Scroll-window row-height total-row-count dom/node {:overquery-factor 2})
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)

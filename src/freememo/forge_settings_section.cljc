@@ -122,7 +122,7 @@
             (e/for [{:keys [forge host]} (e/diff-by (juxt :forge :host) saved)]
               (dom/li
                 (dom/props {:class "forge-tokens__row"})
-                (dom/span (dom/props {:dir "ltr"}) (dom/text (str (kinds/forge-label forge) " · " host)))
+                (dom/span (dom/props {:dir "ltr"}) (dom/text (str (kinds/forge-label forge) " (" host ")")))
                 (e/for [[t _] (forms/Button! [::remove] :class "btn btn-sm btn-danger" :label "Remove")]
                   (case (e/server (e/Offload #(delete-token!* user-id forge host)))
                     (t)))))))

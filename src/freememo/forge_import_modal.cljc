@@ -333,8 +333,8 @@
         (dom/props {:class "forge-picker"})
         (dom/p
           (dom/props {:class "forge-picker__source" :dir "ltr"})
-          (dom/text (str path " · " (subs sha 0 7) (when ref (str " (" ref ")"))
-                      " · " (:file-count staged) " files")))
+          (dom/text (str path ", " (subs sha 0 7) (when ref (str " (" ref ")"))
+                      ", " (:file-count staged) " files")))
 
         (dom/div
           (dom/props {:class "forge-picker__heading"})

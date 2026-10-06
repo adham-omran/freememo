@@ -594,8 +594,8 @@
    `settings/prompt-override-state`. :default has none. Never \"Custom\": the
    task level chip uses that word, and a saved prompt does not change the level."
   {:edited "Edited"
-   :stale "Edited · default changed"
-   :unknown-base "Edited · default may have changed"})
+   :stale "Edited, default changed"
+   :unknown-base "Edited, default may have changed"})
 
 (def ^:private stale-notice-text
   {:stale "The default prompt changed after you saved yours. Your version is still in use."

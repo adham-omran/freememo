@@ -51,7 +51,7 @@
              (let [docs (get doc-counts id 0)]
                {:id id
                 :label (str label)
-                :description (str (item-count-label degree "connection") " · "
+                :description (str (item-count-label degree "connection") ", "
                                (item-count-label docs "document"))})))
       (sort-by (comp str/lower-case :label))
       vec)))
@@ -441,7 +441,7 @@
           (DepthPicker !depth depth))
         (dom/div
           (dom/props {:class "graph-scene-hint"})
-          (dom/text "Drag to pan · Scroll to zoom · Select a concept to inspect it"))))))
+          (dom/text "Drag to pan. Scroll to zoom. Select a concept to inspect it."))))))
 
 (e/defn ConnectedFacts [facts selected-id !linked-entity navigate!]
   (e/client

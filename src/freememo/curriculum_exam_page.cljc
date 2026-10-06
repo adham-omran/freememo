@@ -611,7 +611,7 @@
       (e/on-unmount #(stop-tick! timer))
       (dom/time
         (dom/text (str "Elapsed " (format-elapsed (+ (or base-seconds 0) tick))
-                    " · suggested 45 min · no enforced limit"))))
+                    ". Suggested time is 45 min. No enforced limit."))))
     (e/amb)))
 
 (e/defn AnswerField [index question fields]
@@ -753,8 +753,8 @@
                                    (when (not= 1 (count history)) "s"))))
           (e/for [revision (e/diff-by :revision history)]
             (dom/p
-              (dom/text (str "Revision " (:revision revision) " · "
-                          (:raw_score revision) "% · "
+              (dom/text (str "Revision " (:revision revision) ", score "
+                          (:raw_score revision) "%, "
                           (if (:passed revision) "passed" "not passed"))))))
         (RecordedCharge "Graded for" (:grading_cost_credits grade))
         (e/amb
@@ -960,8 +960,8 @@
   (e/client
     (dom/div
       (dom/props {:class "curriculum-form-status"})
-      (dom/span (dom/text (str "Form v" (e/server (:version form)) " · "
-                            (str/capitalize (str (e/server (:status form)))) " · "
+      (dom/span (dom/text (str "Form version " (e/server (:version form)) ", "
+                            (str/lower-case (str (e/server (:status form)))) ", "
                             (e/server (:threshold form)) "% pass mark")))
       (when (e/server (:stale? form))
         (dom/span (dom/props {:class "curriculum-stale-badge"})
@@ -972,8 +972,8 @@
           (dom/summary (dom/text (str (count versions) " form versions")))
           (e/for [version (e/diff-by :id versions)]
             (dom/p
-              (dom/text (str "Version " (:version version) " · "
-                          (str/capitalize (str (:status version))) " · "
+              (dom/text (str "Version " (:version version) ", "
+                          (str/lower-case (str (:status version))) ", "
                           (:threshold version) "% pass mark")))))))
     (e/amb)))
 

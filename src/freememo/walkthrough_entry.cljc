@@ -29,8 +29,8 @@
    and the subject, so typing either finds a commit."
   [commits]
   (mapv (fn [{:keys [sha subject date author]}]
-          {:id sha :label (str (short-sha sha) " · " subject)
-           :description (str (subs (str date) 0 (min 10 (count (str date)))) " · " author)})
+          {:id sha :label (str (short-sha sha) ": " subject)
+           :description (str (subs (str date) 0 (min 10 (count (str date)))) ", " author)})
     commits))
 
 (defn- index-of [options id]

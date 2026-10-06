@@ -539,7 +539,7 @@
           (dom/props {:style {:margin-top "16px" :padding-top "12px"
                               :border-top "1px solid var(--color-bg-subtle)"
                               :font-size "12px" :color "var(--color-text-label)"}})
-          (dom/text (str "freememo · " commit)))))))
+          (dom/text (str "freememo - " commit)))))))
 
 (e/defn UsageSection
   "Settings → Usage: the credit balance, storage, and the AI cost ledger.

@@ -40,11 +40,11 @@
    ;; names GPT-6 their successor: that statement could not be read (HTTP 403).
    ;; Both accepted `openrouter:web_search` with engine "native" on 2026-09-23.
    {:id "gpt-6-sol"
-    :label "OpenAI · GPT-6 Sol"
+    :label "GPT-6 Sol (OpenAI)"
     :openrouter-model "openai/gpt-6-sol"
     :supported-parameters json-and-reasoning-parameters}
    {:id "gpt-6-luna"
-    :label "OpenAI · GPT-6 Luna"
+    :label "GPT-6 Luna (OpenAI)"
     :openrouter-model "openai/gpt-6-luna"
     :supported-parameters json-and-reasoning-parameters}
    ;; $0.75 / $3.75 per million tokens. Gemini 3.6 Flash and Gemini 3 Flash
@@ -58,17 +58,17 @@
    ;; Benchmarks and speed disagree here; pick per lane, and re-measure before
    ;; trusting these numbers, which move.
    {:id "gemini-3.8-flash"
-    :label "Google · Gemini 3.8 Flash"
+    :label "Gemini 3.8 Flash (Google)"
     :openrouter-model "google/gemini-3.8-flash"
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "gemini-3.5-flash-lite"
-    :label "Google · Gemini 3.5 Flash-Lite"
+    :label "Gemini 3.5 Flash-Lite (Google)"
     :openrouter-model "google/gemini-3.5-flash-lite"
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "claude-sonnet-5"
-    :label "Anthropic · Claude Sonnet 5"
+    :label "Claude Sonnet 5 (Anthropic)"
     :openrouter-model "anthropic/claude-sonnet-5"
     :supported-parameters json-reasoning-and-verbosity-parameters}
    ;; A dated snapshot, not an alias. OpenRouter publishes no `-latest` slug for
@@ -78,7 +78,7 @@
    ;; https://openrouter.ai/api/v1/models before shipping it; this one retires
    ;; when DeepSeek withdraws the snapshot.
    {:id "deepseek-v4-flash"
-    :label "DeepSeek · V4 Flash"
+    :label "V4 Flash (DeepSeek)"
     :openrouter-model "deepseek/deepseek-v4-flash-0731"
     :supported-parameters json-and-reasoning-parameters}
    ;; Routed fastest-first under a price ceiling, NOT pinned to Z.ai. The
@@ -117,7 +117,7 @@
    ;; it is enforced and not advisory. openrouter-test guards the encoded name.
    ;; See plans/add-glm-5.3-flash-z-ai-pin.md.
    {:id "glm-5.3-flash"
-    :label "Z.ai · GLM 5.3 Flash"
+    :label "GLM 5.3 Flash (Z.ai)"
     :openrouter-model "z-ai/glm-5.3-flash"
     :supported-parameters json-and-reasoning-parameters
     :reasoning-mandatory? true
@@ -141,7 +141,7 @@
    ;; "none" returns HTTP 200 with 0 reasoning tokens, so the Settings None works.
    ;; "low" and "high" did not differ, so any value other than "none" means on.
    {:id "ling-3.0-flash"
-    :label "inclusionAI · Ling 3.0 Flash"
+    :label "Ling 3.0 Flash (inclusionAI)"
     :openrouter-model "inclusionai/ling-3.0-flash"
     :supported-parameters json-and-reasoning-parameters}])
 
@@ -161,32 +161,32 @@
    These entries carry NO :openrouter-model, so a path that reaches one without
    going through `resolve-model` cannot call the retired model by accident."
   [{:id "gemini-3.5-flash"
-    :label "Google · Gemini 3.5 Flash"
+    :label "Gemini 3.5 Flash (Google)"
     ;; Pointed at 3.6 until 3.6 itself retired. effective-id takes one hop,
     ;; so a retired successor must be followed by hand here.
     :superseded-by "gemini-3.8-flash"}
    ;; Removed from the picker on 2026-09-23 by product decision. Each points
    ;; at the nearest current model of its vendor and tier.
    {:id "gpt-5.1"
-    :label "OpenAI · GPT-5.1"
+    :label "GPT-5.1 (OpenAI)"
     :superseded-by "gpt-6-sol"}
    {:id "gpt-5.6-luna"
-    :label "OpenAI · GPT-5.6 Luna"
+    :label "GPT-5.6 Luna (OpenAI)"
     :superseded-by "gpt-6-luna"}
    {:id "gpt-5.6-terra"
-    :label "OpenAI · GPT-5.6 Terra"
+    :label "GPT-5.6 Terra (OpenAI)"
     :superseded-by "gpt-6-sol"}
    {:id "gpt-5.6-sol"
-    :label "OpenAI · GPT-5.6 Sol"
+    :label "GPT-5.6 Sol (OpenAI)"
     :superseded-by "gpt-6-sol"}
    {:id "gemini-3-flash"
-    :label "Google · Gemini 3 Flash"
+    :label "Gemini 3 Flash (Google)"
     :superseded-by "gemini-3.8-flash"}
    {:id "gemini-3.6-flash"
-    :label "Google · Gemini 3.6 Flash"
+    :label "Gemini 3.6 Flash (Google)"
     :superseded-by "gemini-3.8-flash"}
    {:id "claude-haiku-4.5"
-    :label "Anthropic · Claude Haiku 4.5"
+    :label "Claude Haiku 4.5 (Anthropic)"
     :superseded-by "claude-sonnet-5"}])
 
 (def ^:private supersessions

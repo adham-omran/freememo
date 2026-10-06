@@ -227,7 +227,7 @@
         (is (= {:id wid :name nil :status "ready" :display-name "split hold and 1 more"
                 :progress "0 / 2"}
               (select-keys (row) [:id :name :status :display-name :progress])))
-        (is (= (str (subs (second shas) 0 7) " → " (subs (last shas) 0 7) " · 2 commits")
+        (is (= (str (subs (second shas) 0 7) " → " (subs (last shas) 0 7) ", 2 commits")
               (:range (row))))
         (is (string? (:progressed (row)))))
       (testing "§4.3.3: a name is trimmed, shows everywhere, and clears when blank"

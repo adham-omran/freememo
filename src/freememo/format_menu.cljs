@@ -35,7 +35,7 @@
    the card once, and returns a teardown fn that removes them and the card.
 
    Layout (plans/format-menu-notion-layout.md), top to bottom: a full-width
-   block-type row; a 5×2 icon grid whose last cell, `···`, opens Size, Align,
+   block-type row; a 5×2 icon grid whose last cell, More formatting, opens Size, Align,
    indent, direction and table; an Insert section; then a labelled Cloze or
    Cards section. Every glyph is a freememo.icon-paths entry, so the whole card
    draws on one grid at one stroke weight. At most one popup is open, and
@@ -330,7 +330,7 @@
     (popover group trigger popup)))
 
 (defn- overflow-popover
-  "The `···` cell: Size, Align, then indent, direction and table, flat in one
+  "The More formatting cell: Size, Align, then indent, direction and table, flat in one
    popup. Returns the wrapping element.
 
    Post: a Size, Align, direction or table control applies and closes the
@@ -482,7 +482,7 @@
     :card-count-sync (fn [] | nil)}.
 
    Layout, top to bottom: the block-type row; a 5×2 grid (colour, bold,
-   italic, underline, clear / strike, code, bullet, numbered, `···`); Insert;
+   italic, underline, clear / strike, code, bullet, numbered, More formatting); Insert;
    then Cloze (:cloze?) or Cards (:card-gen?).
 
    `refresh` syncs active-state from the cached range. Every control, after

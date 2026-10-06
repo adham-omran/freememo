@@ -247,9 +247,9 @@
 (defn- evidence-display-label [{:keys [section-title block-index]} page-number]
   (let [excerpt (str "excerpt " block-index)]
     (cond
-      (and page-number section-title) (str "Page " page-number " · " section-title " · " excerpt)
-      page-number (str "Page " page-number " · " excerpt)
-      section-title (str section-title " · " excerpt)
+      (and page-number section-title) (str "Page " page-number ", " section-title ", " excerpt)
+      page-number (str "Page " page-number ", " excerpt)
+      section-title (str section-title ", " excerpt)
       :else (str "Source " excerpt))))
 
 (defn- blocks-evidence

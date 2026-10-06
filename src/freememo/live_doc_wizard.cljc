@@ -258,7 +258,7 @@
                                   :opacity (if (or busy converting? (empty? staged)) "0.6" "1")}})
               (dom/text (cond busy "Uploading…"
                               converting? "Preparing…"
-                              :else (str "Done · " (count staged) " page" (when (not= 1 (count staged)) "s"))))
+                              :else (str "Done (" (count staged) " page" (when (not= 1 (count staged)) "s") ")")))
               (dom/On "click" (fn [_] (commit!)) nil))))))))
 
 (e/defn LiveDocAddPhotos

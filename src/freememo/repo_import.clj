@@ -200,12 +200,12 @@
     (if (> (count s) input/title-max) (subs s 0 input/title-max) s)))
 
 (defn- commit-title
-  "`a1b2c3d · main`. The sha is the identity (frame: a branch moves); the ref
+  "`a1b2c3d (main)`. The sha is the identity (frame: a branch moves); the ref
    records what the user asked for, and is dropped when it is the sha itself."
   [sha ref]
   (str (subs sha 0 7)
     (when (and ref (not (str/starts-with? sha ref)))
-      (str " · " ref))))
+      (str " (" ref ")"))))
 
 (defn- partition-by-bytes
   "Post: a lazy seq of vectors that concatenate to `rows`. Each holds at most

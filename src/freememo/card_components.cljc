@@ -159,9 +159,10 @@
    Pre:  mask-count is every rect in the group (db's :occlusion_mask_count);
          card-count is how many flashcard rows it fans out to, i.e. how many
          mask groups it holds.
-   Post: reads \"Occlusion · N masks → M cards\" — the same idiom the authoring
-         modal's footer and the optimistic pending row use, so one occlusion
-         reads the same before and after it lands."
+   Post: reads \"Occlusion: N masks → M cards, mode, header\" — the same
+         `masks → cards` idiom the authoring modal's footer
+         (`occlusion-modal/mask-summary`) and the optimistic pending row use, so
+         one occlusion reads the same before and after it lands."
   [image-media-id mask-count card-count mode header-html]
   (let [header-text (some-> header-html (str/replace #"<[^>]+>" "") str/trim not-empty)
         n (or mask-count 0)
@@ -169,12 +170,12 @@
     (str "<img src=\"/api/media/" image-media-id "\""
       " style=\"height:28px;max-width:60px;object-fit:cover;border-radius:3px;"
       "vertical-align:middle;margin-right:6px\" />"
-      "<span>Occlusion · "
+      "<span>Occlusion: "
       n " mask" (when (not= 1 n) "s")
       " → " m " card" (when (not= 1 m) "s")
-      " · "
+      ", "
       (if (= mode "hide-one") "Hide One" "Hide All")
-      (when header-text (str " · " (truncate-html-for-row header-text 80)))
+      (when header-text (str ", " (truncate-html-for-row header-text 80)))
       "</span>")))
 
 (defn- format-ms-brief [ms]
@@ -187,9 +188,9 @@
    where a score card stands alone rather than as a group — the card-history
    modal, whose renditions are single cards."
   [direction start-ms end-ms]
-  (str "<span>Score · "
+  (str "<span>Score: "
     (if (= direction "audio-front") "Audio → Sheet" "Sheet → Audio")
-    " · " (format-ms-brief start-ms) "–" (format-ms-brief end-ms)
+    ", " (format-ms-brief start-ms) "–" (format-ms-brief end-ms)
     "</span>"))
 
 (defn score-row-html
@@ -205,8 +206,8 @@
     (if (= 1 n)
       (score-direction-html (:flashcards/score_direction m)
         (:score_start_ms m) (:score_end_ms m))
-      (str "<span>Score · " n " directions"
-        " · " (format-ms-brief (:score_start_ms m)) "–" (format-ms-brief (:score_end_ms m))
+      (str "<span>Score: " n " directions"
+        ", " (format-ms-brief (:score_start_ms m)) "–" (format-ms-brief (:score_end_ms m))
         "</span>"))))
 
 (defn overlapping-row-html
@@ -218,8 +219,8 @@
         label (or (not-empty (some-> (:question ol) (str/replace #"<[^>]+>" "") str/trim))
                 (first items)
                 "Overlapping list")]
-    (str "<span>Overlapping · " (truncate-html-for-row label 80)
-      " · " n " item" (when (not= 1 n) "s") "</span>")))
+    (str "<span>Overlapping: " (truncate-html-for-row label 80)
+      ", " n " item" (when (not= 1 n) "s") "</span>")))
 
 (defn row-front-html
   "Front-cell HTML for a display row, one branch per kind. Built from the row's
@@ -369,16 +370,16 @@
       "occlusion" (let [rects (:rects geometry)
                         n (count rects)
                         cards (ord/card-count rects)]
-                    (str "Image occlusion · " n " mask" (when (not= 1 n) "s")
+                    (str "Image occlusion: " n " mask" (when (not= 1 n) "s")
                       " → " cards " card" (when (not= 1 cards) "s")))
       "score" (let [n (transduce (map (comp count :rects)) + 0 (:pages geometry))]
-                (str "Score · " (count directions) " card"
+                (str "Score: " (count directions) " card"
                   (when (not= 1 (count directions)) "s")
-                  " · " n " rect" (when (not= 1 n) "s")))
+                  ", " n " rect" (when (not= 1 n) "s")))
       "overlapping" (let [items (:items c)
                           n (count items)]
-                      (str "Overlapping · " (or (not-empty (:question c)) (first items) "list")
-                        " · " n " item" (when (not= 1 n) "s")))
+                      (str "Overlapping: " (or (not-empty (:question c)) (first items) "list")
+                        ", " n " item" (when (not= 1 n) "s")))
       "cloze" (:c c)
       (:q c))))
 

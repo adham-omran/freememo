@@ -275,7 +275,7 @@
   (mapv (fn [w]
           {:id (:id w) :name (:name w) :status (:status w)
            :display-name (wname/display-name (:name w) (:steps w) (:sha_from w) (:sha_b w))
-           :range (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) " · "
+           :range (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) ", "
                     (:commit_count w) (if (= 1 (:commit_count w)) " commit" " commits"))
            :progress (progress-text w)
            :progressed (progressed-text (:updated_at w))})
@@ -553,7 +553,7 @@
               (conj out {:citation-key (evidence-key i)
                          :document-topic-id (:repo_topic_id w) :page-topic-id nil :page-number nil
                          :anchor nil :document-title path
-                         :display-label (str "Change in " (short-sha (:commit_sha h)) " · "
+                         :display-label (str "Change in " (short-sha (:commit_sha h)) ": "
                                           (subject-of (:commit_sha h)))
                          :source-revision (:commit_sha h)
                          :quoted-text (or added (apply str (map #(subs % 1) (:lines d))))
@@ -570,7 +570,7 @@
   (when-let [{:keys [source]} (docref/content user-id ref)]
     (let [blocks (if (docref/markdown? ref)
                    (mapv (fn [b] {:text (:text b) :html (:html b) :anchor (:anchor b)
-                                  :label (str (or (:section-title b) "Passage") " · excerpt "
+                                  :label (str (or (:section-title b) "Passage") ", excerpt "
                                            (:block-index b))})
                      (evidence-excerpt/evidence-blocks
                        (repo-md/render source (:path ref) (constantly {}) nil)))
@@ -585,7 +585,7 @@
             (conj out {:citation-key (evidence-key i)
                        :document-topic-id (:repo-id ref) :page-topic-id nil :page-number nil
                        :anchor (:anchor b) :document-title (:path ref)
-                       :display-label (str (:label b) " · at " (short-sha (:sha ref)))
+                       :display-label (str (:label b) ", at " (short-sha (:sha ref)))
                        :source-revision (:sha ref)
                        :quoted-text (:text b) :quoted-html (:html b)
                        :snapshot-content (:text b)

@@ -260,7 +260,7 @@
                      (when (> (count names) 3)
                        (str " and " (- (count names) 3) " more")))))]
     (not-empty
-      (str/join " · " (remove nil? [(clause "Not a supported video: " rejected)
+      (str/join ". " (remove nil? [(clause "Not a supported video: " rejected)
                                     (clause "Already staged: " duplicates)])))))
 
 (defn derive-playlist-title
@@ -473,7 +473,7 @@
           (dom/props {:style {:font-size "13px" :margin-bottom "6px"
                               :white-space "nowrap" :overflow "hidden"
                               :text-overflow "ellipsis"}})
-          (dom/text (str (when (> count 1) (str "File " (inc index) " of " count " · "))
+          (dom/text (str (when (> count 1) (str "File " (inc index) " of " count ": "))
                       filename " — " pct "%")))
         (dom/div
           (dom/props {:style {:height "6px" :background "var(--color-bg-subtle)"
@@ -679,7 +679,7 @@
         (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
         (dom/text (if (seq files)
                     (str (count files) " file" (when (> (count files) 1) "s")
-                      " · " (format-bytes (total-bytes files)))
+                      ", " (format-bytes (total-bytes files)))
                     "Drop video files here or click to browse"))))
     (dom/input
       (dom/props {:type "file" :accept accept-attr :multiple true
