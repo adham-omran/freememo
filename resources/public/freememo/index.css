@@ -8934,8 +8934,11 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    carries a class from `walkthrough/line-class`: wt-c is this step's change,
    wt-e an earlier step's (Since A only), wt-o another step's, outlined.
    Everything else is unchanged since A and reads dimmed. Code sits on the
-   code pane's dark `pre` (#23241f), so its colors are for a dark ground. */
-.wt-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+   code pane's dark `pre` (#23241f), so its colors are for a dark ground.
+   The screen is a size container: the side panels, not the window, set how
+   wide it is, so its layout answers its own width (`@container wt`). */
+.wt-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+    container: wt / inline-size; }
 .wt-screen__header {
     display: flex; align-items: center; gap: 12px; padding: 8px 16px;
     border-bottom: 1px solid var(--color-border);
@@ -8953,17 +8956,19 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-panel__hint { font-size: 13px; color: var(--color-text-secondary); margin: 0 0 12px; }
 .wt-panel--error { color: var(--color-danger-text); }
 .wt-steps {
-    display: flex; align-items: flex-start; gap: 12px; padding: 8px 16px;
+    display: flex; align-items: center; gap: 12px; padding: 6px 16px;
     border-bottom: 1px solid var(--color-border);
 }
 /* The chips wrap, so no chip runs under the coloring toggle beside them. */
 .wt-steps__list { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0;
     flex: 1; min-width: 0; }
-.wt-steps__list > li { flex: none; max-width: 100%; }
+/* The item, not the chip, carries the cap: an uncapped item keeps the
+   full label's width and leaves a gap after its clipped chip. */
+.wt-steps__list > li { flex: none; display: flex; max-width: min(240px, 100%); }
 .wt-step {
     border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-bg-card);
     color: var(--color-text-primary); padding: 3px 10px; font-size: 12px; white-space: nowrap;
-    cursor: pointer; max-width: min(240px, 100%); overflow: hidden; text-overflow: ellipsis;
+    cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
 }
 .wt-inline-code {
     padding: 0.1em 0.35em; border-radius: var(--radius-sm); background: var(--color-bg-subtle);
@@ -8973,22 +8978,44 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     color: var(--color-primary-tint-text); font-weight: 600; }
 .wt-step--done::before { content: "✓ "; color: var(--color-success-dark); }
 .wt-step--noise { opacity: 0.7; font-style: italic; }
-.wt-mode { display: inline-flex; gap: 4px; flex: none; }
-.wt-mode button[aria-pressed="true"] { border-color: var(--color-primary); color: var(--color-primary-text); }
+/* One segmented control: the two modes touch, so they read as one choice. */
+.wt-mode { display: inline-flex; flex: none; }
+.wt-mode .btn { padding: 3px 10px; font-size: 12px; }
+.wt-mode .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.wt-mode .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+.wt-mode button[aria-pressed="true"] { position: relative; border-color: var(--color-primary);
+    background: var(--color-primary-tint); color: var(--color-primary-tint-text); }
 .wt-ready { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .wt-opener-host { overflow: auto; }
 .wt-opener__concepts { font-size: 14px; line-height: 1.5; padding-left: 20px; }
 .wt-opener__concepts li { margin-bottom: 6px; }
 .wt-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
 .wt-step-view .wt-actions { padding: 0; }
-.wt-actions__rename { width: 200px; font-size: 13px; }
-.wt-actions__merge-host { display: inline-flex; }
-.wt-actions__merge { font-size: 13px; }
+/* Edit step: rename and merge, in a popover under its toggle. */
+.wt-edit { position: relative; }
+.wt-edit__toggle { list-style: none; }
+.wt-edit__toggle::-webkit-details-marker { display: none; }
+.wt-edit__toggle::after { content: "▾"; font-size: 10px; }
+.wt-edit[open] > .wt-edit__toggle { border-color: var(--color-primary); }
+.wt-edit__panel {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; width: 320px;
+    max-width: calc(100cqw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 10px;
+    background: var(--color-bg-card); border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-modal);
+}
+.wt-edit__row { display: flex; gap: 6px; }
+.wt-edit__name { flex: 1; min-width: 0; font-size: 13px; }
+.wt-edit__merge { flex: 1; min-width: 0; font-size: 13px; }
+.wt-edit__hint { margin: 0; font-size: 12px; color: var(--color-text-secondary); }
 .wt-step-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.wt-step-view__head { padding: 10px 16px 8px; border-bottom: 1px solid var(--color-border-light); }
-.wt-step-view__title { margin: 0 0 4px; font-size: 16px; }
-.wt-step-view__summary { margin: 0 0 8px; font-size: 13px; color: var(--color-text-secondary); }
-.wt-step-view__tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Title and tools share a line while the title keeps 240px; the summary
+   takes the next line. */
+.wt-step-view__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+    padding: 8px 16px; border-bottom: 1px solid var(--color-border-light); }
+.wt-step-view__title { flex: 1 1 240px; min-width: 0; margin: 0; font-size: 16px; }
+.wt-step-view__tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wt-step-view__summary { flex-basis: 100%; margin: 0; font-size: 13px;
+    color: var(--color-text-secondary); }
 .wt-step-view__main { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .wt-canvas { flex: 1; min-width: 0; }
 .wt-canvas__notice { font-size: 12px; color: var(--color-text-secondary); padding: 4px 16px; }
@@ -9031,8 +9058,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
 /* Rail */
 .wt-rail {
-    width: 280px; flex: none; overflow: auto; border-left: 1px solid var(--color-border);
-    padding: 8px; font-size: 13px;
+    width: clamp(200px, 26cqw, 280px); flex: none; overflow: auto;
+    border-left: 1px solid var(--color-border); padding: 8px; font-size: 13px;
 }
 .wt-rail__title { font-weight: 600; margin-bottom: 6px; }
 .wt-rail__files, .wt-rail__hunks { list-style: none; margin: 0; padding: 0; }
@@ -9059,9 +9086,24 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-picker__field select { max-width: 100%; }
 .wt-picker__error { color: var(--color-danger-text); font-size: 13px; margin: 0; }
 
-@media (max-width: 720px) {
+/* Below 1000px the chips take one row that scrolls sideways, and the bar
+   shows the current chip (`reveal-current-step!`). */
+@container wt (max-width: 1000px) {
+    .wt-steps__list { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin;
+        padding-bottom: 2px; }
+    .wt-steps__list > li { max-width: 200px; }
+}
+/* Below 760px the canvas takes the full width: the files go above it, as
+   one row that scrolls sideways. */
+@container wt (max-width: 760px) {
     .wt-step-view__main { flex-direction: column; }
-    .wt-rail { width: auto; border-left: 0; border-top: 1px solid var(--color-border); max-height: 40%; }
+    .wt-rail { order: -1; width: auto; max-height: 40%; flex: none; display: flex;
+        align-items: flex-start; gap: 8px; border-left: 0;
+        border-bottom: 1px solid var(--color-border); }
+    .wt-rail__title { flex: none; margin: 4px 0 0; }
+    .wt-rail__files { display: flex; gap: 6px; min-width: 0; overflow-x: auto; }
+    .wt-rail__file { flex: none; width: 220px; margin-bottom: 0; }
+    .wt-canvas { flex: 1; min-height: 0; }
 }
 
 /* ── Repository home and commit card (plans/repository-home.md) ─────────
