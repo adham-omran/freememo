@@ -163,7 +163,7 @@
             (dom/li
               (dom/button
                 (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-entry__open"})
-                (dom/text (str (short-sha (:sha_a w)) " → " (short-sha (:sha_b w)) " · "
+                (dom/text (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) " · "
                             (:commit_count w) " commits · "
                             (case (:status w) "ready" (str "step " (:step w) " of " (:concepts w))
                                              "preparing" "preparing"

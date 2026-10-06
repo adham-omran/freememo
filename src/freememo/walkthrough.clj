@@ -219,7 +219,7 @@
 (defn list-for-repo
   "`user-id`'s walkthroughs of repository node `repo-id`, newest first."
   [user-id repo-id]
-  (mapv #(select-keys % [:id :sha_a :sha_b :status :error :step :concepts :commit_count])
+  (mapv #(select-keys % [:id :sha_a :sha_from :sha_b :status :error :step :concepts :commit_count])
     (db/list-walkthroughs user-id repo-id)))
 
 (defn- hunk-key-of [{:keys [commit_sha old_path new_path hunk_index]}]
