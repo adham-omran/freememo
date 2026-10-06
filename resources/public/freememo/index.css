@@ -3189,107 +3189,214 @@ textarea:hover {
    format wiring, not its (colliding) tooltip placement. */
 .ql-bubble .ql-tooltip { display: none !important; }
 
-/* Custom floating format menu (Notion-inspired). position:fixed is set inline
-   by format-menu/place!; this is presentation only. */
+/* Custom floating format menu (freememo.format-menu), laid out after Notion's
+   selection menu — plans/format-menu-notion-layout.md. position:fixed is set
+   inline by format-menu/place!; this is presentation only.
+
+   The width is fixed, and the grid sets it: 5 cells of 32px with 6px gaps
+   make 184px, the grid's 4px side padding makes 192px (the content box), and
+   the card's 6px padding and 1px border make 206px. Every row and every popup
+   is sized to fit that content box, so nothing extends past the card's side
+   edges. */
 .format-menu {
     position: fixed;
     /* 1100 (not 1000) so the card clears .modal-backdrop (1000) inside card
        modals, matching the [data-tooltip] precedent. */
     z-index: 1100;
     box-sizing: border-box;
-    max-width: min(320px, calc(100vw - 16px));
+    width: 206px;
+    max-width: calc(100vw - 16px);
     padding: 6px;
     display: none;
-    /* visible so dropdown popups aren't clipped; place! switches to overflow-y
-       auto only when it has to cap the card height to the viewport region. */
+    /* visible so popups are not clipped. */
     overflow: visible;
     background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
     border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
     border-radius: 12px;
     box-shadow: 0 8px 28px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
     color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
-    font-size: 14px;
+    font-size: 13px;
 }
-.format-menu .fmt-row {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
+/* Sections: a rule between each pair, in the card and in the overflow popup. */
+.format-menu .fmt-section + .fmt-section {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--color-border, light-dark(#ececec, #333));
 }
-.format-menu .fmt-divider {
-    height: 1px;
-    margin: 4px 2px;
-    background: var(--color-border, light-dark(#ececec, #333));
+.format-menu .fmt-heading {
+    padding: 4px 8px 2px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
 }
-.format-menu .fmt-btn {
+.format-menu .fmt-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 32px);
+    justify-content: space-between;
+    row-gap: 2px;
+    padding: 2px 4px;
+}
+.format-menu .fmt-grid-4 { grid-template-columns: repeat(4, 32px); }
+
+/* Buttons. One cell size; a labelled row (.fmt-item) widens it to the row. */
+.format-menu .fmt-btn,
+.format-menu .fmt-dd-trigger,
+.format-menu .fmt-dd-item,
+.format-menu .fmt-segment {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    min-width: 30px;
-    height: 30px;
-    padding: 0 7px;
+    box-sizing: border-box;
     border: none;
-    border-radius: 7px;
+    border-radius: 6px;
     background: transparent;
     color: inherit;
-    font-size: 15px;
-    line-height: 1;
+    font: inherit;
     cursor: pointer;
+}
+.format-menu .fmt-btn {
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     position: relative;
 }
-.format-menu .fmt-btn:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
+.format-menu svg { flex-shrink: 0; }
+.format-menu .fmt-btn:hover,
+.format-menu .fmt-dd-trigger:hover,
+.format-menu .fmt-dd-item:hover,
+.format-menu .fmt-segment:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
 .format-menu .fmt-btn.active { background: light-dark(rgba(35,131,226,0.14), rgba(35,131,226,0.32)); }
-.format-menu .fmt-btn b, .format-menu .fmt-btn i,
-.format-menu .fmt-btn u, .format-menu .fmt-btn s { font-style: inherit; }
-.format-menu .fmt-btn i { font-style: italic; }
+.format-menu .fmt-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.format-menu .fmt-btn:disabled:hover { background: transparent; }
 
-/* Card-gen row (document editor only): count stepper + Generate-here. Reuses
-   the global .number-stepper* classes for the stepper; only the plain display
-   value + the action button need local rules. */
-.format-menu .fmt-cardgen-row { justify-content: space-between; gap: 8px; padding: 4px 2px; }
+/* Labelled row: icon, label, then an optional chord at the end. The chord
+   shortens first, with an ellipsis, rather than widen the row; the tooltip
+   carries it whole. */
+.format-menu .fmt-item {
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 0 8px;
+    text-align: start;
+}
+.format-menu .fmt-item-label,
+.format-menu .fmt-item-end {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.format-menu .fmt-item-label { flex-shrink: 0; max-width: 100%; }
+.format-menu .fmt-item-end {
+    margin-inline-start: auto;
+    padding-inline-start: 8px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+/* Insert: rows sized to their labels, two to a line when two fit. */
+.format-menu .fmt-insert { display: flex; flex-wrap: wrap; gap: 2px; }
+.format-menu .fmt-insert .fmt-item { flex: 1 1 auto; width: auto; }
+
+/* Cards: the count stepper. Reuses the global .number-stepper* classes; only
+   the row and the plain display value need local rules. */
+.format-menu .fmt-cardgen-row {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 8px;
+}
 .format-menu .number-stepper-value {
     min-width: 22px;
     text-align: center;
     font-size: 13px;
     color: var(--color-text-primary);
 }
-.format-menu .fmt-cardgen-btn {
-    gap: 6px;
-    padding: 0 10px;
-    font-size: 13px;
-    color: var(--color-primary-text, #2383e2);
+
+/* Popups: block type, colour, overflow. format-menu's popup-group keeps at
+   most one open. */
+.format-menu .fmt-dd { position: relative; }
+.format-menu .fmt-dd-popup {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    box-sizing: border-box;
+    padding: 4px;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 10px;
+    box-shadow: 0 8px 24px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    z-index: 1;
 }
-.format-menu .fmt-cardgen-btn svg { flex-shrink: 0; }
-.format-menu .fmt-parse-questions-row { padding-top: 0; }
-.format-menu .fmt-parse-questions-btn {
-    justify-content: flex-start;
-    width: 100%;
-    gap: 7px;
-    padding: 0 10px;
-    font-size: 13px;
-}
-.format-menu .fmt-parse-questions-btn [aria-hidden="true"] {
-    color: var(--color-primary-text, #2383e2);
-    font-weight: 700;
+.format-menu .fmt-dd-popup.open { display: block; }
+/* Card placed ABOVE the selection (format-menu/place! sets .fmt-above): its
+   popups must open upward. A downward popup is ~150px against an 8px gap, so
+   it would reach back over the selected text the placement just cleared.
+   The mirror case is deliberately NOT handled: a card placed below, near the
+   window's bottom edge, opens its popup downward past that edge. That popup
+   covers no selected text — the selection is above the card — so it falls
+   outside the never-cover contract, and clipping it would need a second
+   measured flip. Recorded as out of scope in
+   plans/format-menu-never-obscure-selection.md §6. */
+.format-menu.fmt-above .fmt-dd-popup {
+    top: auto;
+    bottom: calc(100% + 4px);
 }
 
-/* Colour presets: the "A" trigger opens a popup of Text + Background swatches. */
-.format-menu .fmt-colour-trigger { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
-.format-menu .fmt-colour-popup { padding: 10px; min-width: 210px; }
+/* The block-type row: full width, icon, label, chevron. Its list spans the
+   row. */
+.format-menu .fmt-dd-trigger {
+    gap: 8px;
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    white-space: nowrap;
+    text-align: start;
+}
+.format-menu .fmt-block-icon,
+.format-menu .fmt-dd-caret { display: inline-flex; }
+.format-menu .fmt-dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.format-menu .fmt-dd-caret { color: var(--color-text-secondary); }
+.format-menu .fmt-dd-caret svg { width: 16px; height: 16px; }
+.format-menu .fmt-block-popup { right: 0; }
+.format-menu .fmt-dd-item {
+    gap: 8px;
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    text-align: start;
+}
+
+/* Overflow (···): right-aligned under its cell, the last column. 188px is the
+   widest popup whose left edge stays inside the card's content box. */
+.format-menu .fmt-overflow-popup { left: auto; right: 0; width: 188px; }
+.format-menu .fmt-segments { display: flex; gap: 2px; padding: 2px 4px; }
+.format-menu .fmt-segment {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+    height: 28px;
+    padding: 0 2px;
+    font-size: 12px;
+}
+
+/* Colour presets: the baseline-A cell opens a popup of Text + Background
+   swatches. 5 swatches of 28px with 5px gaps and 10px padding make 182px, so
+   the popup ends inside the card from the first column. */
+.format-menu .fmt-colour-popup { padding: 10px; }
 .format-menu .fmt-colour-section + .fmt-colour-section { margin-top: 10px; }
 .format-menu .fmt-section-label {
     font-size: 12px;
-    color: light-dark(#6b6b6b, #9a9a9a);
+    color: var(--color-text-secondary);
     margin: 0 2px 6px;
 }
 .format-menu .fmt-swatch-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 6px;
+    grid-template-columns: repeat(5, 28px);
+    gap: 5px;
 }
 .format-menu .fmt-swatch {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3297,7 +3404,7 @@ textarea:hover {
     border-radius: 7px;
     background: transparent;
     color: inherit;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
 }
@@ -3310,65 +3417,6 @@ textarea:hover {
     border-radius: 3px;
     background: linear-gradient(to top left, transparent calc(50% - 1px), light-dark(#c0392b, #e06c65) 50%, transparent calc(50% + 1px));
 }
-
-/* Dropdowns (block type, size, align). */
-.format-menu .fmt-dd { position: relative; }
-.format-menu .fmt-dd-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 30px;
-    padding: 0 8px;
-    border: none;
-    border-radius: 7px;
-    background: transparent;
-    color: inherit;
-    font-size: 14px;
-    cursor: pointer;
-    white-space: nowrap;
-}
-.format-menu .fmt-dd-trigger:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
-.format-menu .fmt-dd-caret { font-size: 11px; opacity: 0.6; }
-.format-menu .fmt-dd-popup {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 148px;
-    padding: 4px;
-    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
-    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
-    border-radius: 9px;
-    box-shadow: 0 8px 24px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
-    z-index: 1;
-}
-.format-menu .fmt-dd-popup.open { display: block; }
-/* Card placed ABOVE the selection (format-menu/place! sets .fmt-above): its
-   lists must open upward. A downward list is ~150px against an 8px gap, so it
-   would reach back over the selected text the placement just cleared.
-   The mirror case is deliberately NOT handled: a card placed below, near the
-   window's bottom edge, opens its list downward past that edge. That list
-   covers no selected text — the selection is above the card — so it falls
-   outside the never-cover contract, and clipping it would need a second
-   measured flip. Recorded as out of scope in
-   plans/format-menu-never-obscure-selection.md §6. */
-.format-menu.fmt-above .fmt-dd-popup {
-    top: auto;
-    bottom: calc(100% + 4px);
-}
-.format-menu .fmt-dd-item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 6px 10px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: inherit;
-    font-size: 14px;
-    cursor: pointer;
-}
-.format-menu .fmt-dd-item:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
 
 /* Custom code-block language picker (freememo.code-lang-picker). Hide Quill's
    native <select> — its open options list renders as detached browser chrome —
