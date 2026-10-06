@@ -14145,11 +14145,12 @@
 
 (defn list-walkthroughs
   "`user-id`'s walkthroughs of repository node `repo-id`, newest first.
-   Post: [{:id :sha_a :sha_b :status :step :concepts :created_at}], without
-         the range."
+   Post: [{:id :sha_a :sha_from :sha_b :status :step :concepts :created_at}],
+         without the range. `:sha_from` is the first commit taught."
   [user-id repo-id]
   (jdbc/execute! ds
-    ["SELECT w.id, w.sha_a, w.sha_b, w.status, w.error, w.step, w.created_at,
+    ["SELECT w.id, w.sha_a, w.commits->0->>'sha' AS sha_from, w.sha_b, w.status, w.error,
+             w.step, w.created_at,
              (SELECT count(*) FROM walkthrough_concepts c WHERE c.walkthrough_id = w.id) AS concepts,
              jsonb_array_length(w.commits) AS commit_count
         FROM walkthroughs w

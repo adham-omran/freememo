@@ -304,25 +304,66 @@
              :commands #{}}]}
    {:slug "commit-walkthrough"
     :title "Walking through commits"
-    :intro "Learn what changed between two commits of an imported repository, one concept at a time, with the tutor."
-    :steps [{:label "Start one"
-             :detail "Open the repository and choose Walk through commits…. Search for the first commit to learn and the last one, on one branch, and choose Start walkthrough. Both are taught, and the two can be the same commit. A walkthrough takes at most 50 commits. FreeMemo reads every change between them and groups the changes by concept. The Activity panel shows the work, and Cancel stops it. When a preparation fails, Try again prepares the same range again."
-             :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough
-                         :restart-walkthrough}}
+    :intro "Learn what changed between two commits of an imported repository. FreeMemo groups the changes by concept, and the tutor teaches one concept per step, from what you already know."
+    :steps [{:label "What you need"
+             :detail "A repository imported from a forge, with Import → More sources → Code. A repository uploaded as a .zip has no history, so it has no walkthrough. Preparing a walkthrough calls the AI model, and the tutor calls it for each answer. Settings → Usage → AI costs lists the preparation as Walkthrough concepts and Walkthrough grouping, and the recording of known ideas as Walkthrough linking."
+             :commands #{}}
+            {:label "Open the picker"
+             :detail "Open the repository topic and choose Walk through commits…, or run Walk through commits… from the command palette. FreeMemo first fetches the repository, so the lists show its newest commits. While it reads, the picker says Reading the repository's history…. The lists hold the newest 500 commits of the branch you imported."
+             :commands #{:start-walkthrough}}
+            {:label "Choose the commits"
+             :detail "In First commit to learn and Last commit to learn, type part of a short commit id or of a commit message, and pick a commit. Both commits are taught. Choose the same commit in both fields to learn that commit alone. After you pick one field, the other offers only the commits that make a valid range. A line under the fields says how many commits the walkthrough teaches. Then choose Start walkthrough."
+             :commands #{}}
+            {:label "Know the limits"
+             :detail "A walkthrough teaches at most 50 commits. Both commits must be on one branch line: the first commit must be on the line of first parents that leads to the last one. So a commit that is only on a merged side branch cannot be the first. The repository's very first commit cannot be the first commit either, because nothing comes before it to compare with. Choose the commit after it."
+             :commands #{}}
+            {:label "Wait for the preparation"
+             :detail "The walkthrough opens at once and shows what it does: reading diffs, finding concepts, grouping changes, saving. First the model names the concepts the commits add, and orders them so each concept comes after the concepts it needs. Then it puts each change into one concept. You can leave the page. The Activity panel shows the work, and Cancel stops it. A model call that already ran keeps its charge."
+             :commands #{:start-walkthrough :prepare-walkthrough :cancel-walkthrough}}
+            {:label "When the preparation fails"
+             :detail "The walkthrough says why it could not be prepared. Try again prepares the same range again. A failed preparation stores no grouping, so nothing is lost. A cancelled walkthrough also shows as failed, with the reason Cancelled, and Try again starts it again."
+             :commands #{:restart-walkthrough}}
+            {:label "Open a walkthrough again"
+             :detail "The repository topic lists its walkthroughs beside Walk through commits…, newest first. Each shows its first and last commit, its number of commits, and its step, or preparing or failed. Select one to open it at the step where you stopped."
+             :commands #{}}
+            {:label "Find your way on the screen"
+             :detail "The walkthrough replaces the repository's document column, and the Assistant panel stays on the right. ← Repository goes back to the repository. The header names the repository, the first and the last commit, and the number of commits. The step bar under it holds Start and one chip for each step, in teaching order. Select a chip to open its step. A step you finished shows ✓."
+             :commands #{}}
+            {:label "Other changes and Noise"
+             :detail "When they exist, two steps come last. Other changes holds the changes that fit no concept. Noise holds the changes nobody reads line by line. These are files that the repository's .gitattributes marks as vendored or generated, and changes of more than 1500 lines. Noise shows in italics, and you can skip it."
+             :commands #{}}
             {:label "Test what you know first"
-             :detail "Before step 1, choose Test what I know about the starting commit. The tutor asks about the code just before your first commit, and an idea you show you know is remembered with that state."
+             :detail "Start lists the steps ahead, each with a short summary. Choose Test what I know about the starting commit. This starts a new chat in the Assistant panel, so no earlier conversation is in it. The tutor asks about the code just before your first commit, one question at a time. It corrects a wrong belief briefly and does not teach the changes yet. An idea you show you know is recorded as known, with that commit. Later steps read it, so the tutor skips what you know. It also tells you when a step changes an idea you learned before. Choose I understand to go to step 1."
              :commands #{:ask-walkthrough-tutor :apply-walkthrough-known}}
             {:label "Read a step"
-             :detail "Each step shows its main file whole. The step's changes are colored, other steps' changes are outlined, and unchanged text is gray. Since A also colors the changes of earlier steps. The rail lists the step's other files; select one to show it. Long unchanged runs of code fold; select a fold to open it."
+             :detail "A step shows its name and summary, then its main file whole. The main file is a Markdown file when the step changes one. Otherwise it is the file with the most changed lines. The file shows as it was after the last commit in which this step changes it. A file the step deletes shows as it was just before the deletion. Markdown is rendered, as in the code pane."
+             :commands #{}}
+            {:label "Read the colors"
+             :detail "The colors show which step wrote each line. In code, a line this step wrote has a blue tint and a blue bar. A line another step wrote has a gray bar, and an unchanged line is dim. In Markdown, a block takes the color of its strongest change, a block another step wrote is outlined, and an unchanged block is gray. The colors do not mark lines as added or removed. A removed line is not in the file, so the canvas cannot show it. The file list counts removed lines, and the tutor sees them. When FreeMemo cannot tell which change wrote each line, the file shows plainly, with a note."
+             :commands #{}}
+            {:label "Since previous step and Since A"
+             :detail "A is the code just before your first commit. Since previous step, the default, colors only this step's changes and marks every other step's. Since A also colors the changes of earlier steps, in a lighter tint. Use it to see everything that changed from A up to this step. The toggle changes the colors only."
+             :commands #{}}
+            {:label "Open folded code"
+             :detail "In a code file longer than 150 lines, long runs of unchanged lines fold into a bar such as ⋯ 120 unchanged lines. Select the bar to open the run, and ⋯ hide unchanged lines to close it. A few lines next to each change stay open. Long lines wrap, so no line runs past the right edge."
+             :commands #{}}
+            {:label "Use the file list"
+             :detail "Files, at the right, lists every file the step changes, with its number of changes, and deleted when the step deletes it. Select a file name to show that file. Changes lists each change in the file: its commit, the lines it adds and removes, and where in the file it is."
              :commands #{}}
             {:label "Move on"
-             :detail "Choose I understand when the step is clear. The walkthrough remembers the step, so closing it and coming back opens where you left."
+             :detail "Choose I understand when the step is clear, or run I understand this step from the command palette. The step gets ✓, and the next step opens. Select any chip to go back. The walkthrough remembers your step, so closing it and coming back opens where you stopped."
              :commands #{:walkthrough-step}}
             {:label "Fix the grouping"
-             :detail "Open a file's Changes in the rail and pick another step to move a change there. Rename a step, or merge it into another, from the step's header."
+             :detail "The model sometimes groups a change wrongly, and three fixes are available. To move one change, open its file's Changes in the file list and pick another step: the change moves at once. To rename a step, edit its name beside I understand and choose Rename. Two steps cannot have the same name. To merge, pick a step in Merge into…. This step's changes move into that step, this step is deleted, and the later steps are numbered again. A merge runs as soon as you pick."
              :commands #{:move-walkthrough-hunk :rename-walkthrough-concept :merge-walkthrough-concepts}}
             {:label "Ask about a step"
-             :detail "Ask the tutor in the Assistant panel. It reads the step's changes, the file you are reading, and why the commits changed it, and cites them. Pin questions on the file and ask them together as on any repository file."
+             :detail "Ask the tutor in the Assistant panel. It knows which step and which file you are reading. It reads the step's changes, the file, and why the commits changed it. The why is the commit messages and their changes to plan files, which are Markdown files in a plans/ directory. It teaches the concept, cites a change or a passage for each claim, and asks you questions to check your understanding."
+             :commands #{}}
+            {:label "Follow a citation"
+             :detail "Point at a citation in an answer to light the cited file in the file list. Select the citation to show that file and point at the cited passage."
+             :commands #{}}
+            {:label "Pin questions on a step"
+             :detail "Select a passage in the file and choose Ask, as on any repository file. Type a question, or press Enter to say you do not understand the passage. Pins lists them, and Ask sends the open pins to the tutor together. A pin keeps the commit it was made on. When that commit is imported, the pin also shows on the file's topic there."
              :commands #{}}]}
    {:slug "ai-assistant"
     :title "Asking the AI assistant"
