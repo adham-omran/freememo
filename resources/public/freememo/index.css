@@ -8927,3 +8927,120 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     border: 1px solid var(--color-border); background: transparent; color: inherit;
 }
 .question-map__actions { display: flex; gap: 4px; margin-top: 4px; }
+
+/* ── Commit-range walkthrough (plans/commit-range-walkthrough.md §6.6) ─────
+   The screen replaces the content column on a repository node. The canvas
+   reuses the code pane's rendered-Markdown styles. A changed block or line
+   carries a class from `walkthrough/line-class`: wt-c is this step's change,
+   wt-e an earlier step's (Since A only), wt-o another step's, outlined.
+   Everything else is unchanged since A and reads gray. */
+.wt-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.wt-screen__header {
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+    border-bottom: 1px solid var(--color-border);
+}
+.wt-screen__title { margin: 0; font-size: 15px; font-weight: 600; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-screen__body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.wt-panel { padding: 20px; max-width: 760px; }
+.wt-panel__line { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.wt-panel__hint { font-size: 13px; color: var(--color-text-secondary); margin: 0 0 12px; }
+.wt-panel--error { color: var(--color-danger-text); }
+.wt-steps {
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+    border-bottom: 1px solid var(--color-border); overflow-x: auto;
+}
+.wt-steps__list { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+.wt-step {
+    border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-bg-card);
+    color: var(--color-text-primary); padding: 3px 10px; font-size: 12px; white-space: nowrap;
+    cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+}
+.wt-step--current { border-color: var(--color-primary); background: var(--color-primary-tint);
+    color: var(--color-primary-tint-text); font-weight: 600; }
+.wt-step--done::before { content: "✓ "; color: var(--color-success-dark); }
+.wt-step--noise { opacity: 0.7; font-style: italic; }
+.wt-mode { display: inline-flex; gap: 4px; flex: none; }
+.wt-mode button[aria-pressed="true"] { border-color: var(--color-primary); color: var(--color-primary-text); }
+.wt-ready { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.wt-opener-host { overflow: auto; }
+.wt-opener__concepts { font-size: 14px; line-height: 1.5; padding-left: 20px; }
+.wt-opener__concepts li { margin-bottom: 6px; }
+.wt-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
+.wt-step-view .wt-actions { padding: 0; }
+.wt-actions__rename { width: 200px; font-size: 13px; }
+.wt-actions__merge { font-size: 13px; }
+.wt-step-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.wt-step-view__head { padding: 10px 16px 8px; border-bottom: 1px solid var(--color-border-light); }
+.wt-step-view__title { margin: 0 0 4px; font-size: 16px; }
+.wt-step-view__summary { margin: 0 0 8px; font-size: 13px; color: var(--color-text-secondary); }
+.wt-step-view__tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wt-step-view__main { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.wt-canvas { flex: 1; min-width: 0; }
+.wt-canvas__notice { font-size: 12px; color: var(--color-text-secondary); padding: 4px 16px; }
+
+/* Markdown: a block colored by the change that wrote it. */
+.wt-canvas[data-kind="markdown"] > :not([data-wt]) { color: var(--color-text-secondary); }
+.wt-canvas [data-wt="wt-c"] {
+    background: var(--color-primary-tint); box-shadow: -4px 0 0 var(--color-primary);
+    border-radius: 2px;
+}
+.wt-canvas [data-wt="wt-e"] {
+    background: color-mix(in srgb, var(--color-primary-tint) 45%, transparent);
+    box-shadow: -4px 0 0 var(--color-primary-light);
+}
+.wt-canvas [data-wt="wt-o"] { outline: 1px dashed var(--color-border-strong); outline-offset: 2px; }
+
+/* Code: one span per line; the newline sits outside it. */
+.wt-code { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre; overflow-x: auto;
+    color: var(--color-text-secondary); }
+.wt-line { display: inline-block; min-width: 100%; box-sizing: border-box; }
+.wt-line.wt-c { background: var(--color-primary-tint); color: var(--color-text-primary);
+    box-shadow: inset 3px 0 0 var(--color-primary); }
+.wt-line.wt-e { background: color-mix(in srgb, var(--color-primary-tint) 45%, transparent);
+    color: var(--color-text-primary); }
+.wt-line.wt-o { color: var(--color-text-primary); box-shadow: inset 3px 0 0 var(--color-border-strong); }
+.wt-fold::before {
+    content: attr(data-label); display: block; cursor: pointer; font-style: italic;
+    color: var(--color-text-hint); background: var(--color-bg-subtle); padding: 0 8px;
+}
+.wt-fold__body { display: none; }
+.wt-fold--open .wt-fold__body { display: inline; }
+.wt-fold--open::before { content: "⋯ hide unchanged lines"; }
+
+/* Rail */
+.wt-rail {
+    width: 280px; flex: none; overflow: auto; border-left: 1px solid var(--color-border);
+    padding: 8px; font-size: 13px;
+}
+.wt-rail__title { font-weight: 600; margin-bottom: 6px; }
+.wt-rail__files, .wt-rail__hunks { list-style: none; margin: 0; padding: 0; }
+.wt-rail__file { border: 1px solid transparent; border-radius: 6px; padding: 4px; margin-bottom: 4px; }
+.wt-rail__file--current { border-color: var(--color-primary); background: var(--color-primary-tint); }
+.wt-rail__file--lit { border-color: var(--color-highlight-gold);
+    background: color-mix(in srgb, var(--color-highlight-gold) 25%, transparent); }
+.wt-rail__open {
+    display: flex; flex-direction: column; align-items: flex-start; width: 100%;
+    background: none; border: 0; padding: 2px; cursor: pointer; color: inherit; text-align: left;
+}
+.wt-rail__path { font-family: var(--font-mono, monospace); word-break: break-all; }
+.wt-rail__count { font-size: 12px; color: var(--color-text-secondary); }
+.wt-rail__toggle { margin-top: 2px; }
+.wt-rail__hunk { padding: 4px 0; border-top: 1px solid var(--color-border-light); }
+.wt-rail__hunk-head { display: block; font-family: var(--font-mono, monospace); font-size: 11px;
+    word-break: break-all; color: var(--color-text-secondary); }
+.wt-rail__move { font-size: 12px; margin-top: 2px; max-width: 100%; }
+
+/* Entry and picker on the repository node */
+.wt-entry { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wt-entry__list { display: contents; list-style: none; }
+.wt-picker-host { display: contents; }
+.wt-picker { width: min(640px, 95vw); display: flex; flex-direction: column; gap: 10px; }
+.wt-picker__field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.wt-picker__field select { max-width: 100%; }
+.wt-picker__error { color: var(--color-danger-text); font-size: 13px; margin: 0; }
+
+@media (max-width: 720px) {
+    .wt-step-view__main { flex-direction: column; }
+    .wt-rail { width: auto; border-left: 0; border-top: 1px solid var(--color-border); max-height: 40%; }
+}

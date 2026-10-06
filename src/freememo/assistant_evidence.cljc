@@ -9,15 +9,19 @@
    [freememo.modal-shell :as modal]))
 
 (defn citation-target
-  "Return the Viewer path for retained evidence."
+  "Return the Viewer path for retained evidence. Evidence of a file at a
+   commit that a walkthrough showed opens that walkthrough, never the bare
+   repository node (plans/commit-range-walkthrough.md §6.3.5)."
   [source]
   (when-let [document-id (or (:document_topic_id source)
                            (:document-topic-id source))]
-    (str "/viewer/topic/" document-id
+    (if-let [wid (or (:walkthrough_id source) (:walkthrough-id source))]
+     (str "/viewer/topic/" document-id "/walkthrough/" wid)
+     (str "/viewer/topic/" document-id
       (when-let [page (or (:page_number source) (:page-number source))]
         (str "/" page))
       (when-let [anchor (:anchor source)]
-        (str "#" anchor)))))
+        (str "#" anchor))))))
 
 (defn source-for-target
   "Find retained evidence for a citation path."

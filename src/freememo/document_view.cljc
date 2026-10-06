@@ -17,6 +17,8 @@
    [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.code-pane :refer [CodePane]]
    [freememo.repo-update-bar :refer [RepoUpdateBar]]
+   [freememo.walkthrough-screen :refer [WalkthroughScreen]]
+   [freememo.walkthrough-state :as walkthrough-state]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.poem-pane :refer [PoemPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
@@ -177,7 +179,13 @@
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id kind dctx/kind
           is-pdf? dctx/is-pdf? top-bottom? dctx/top-bottom?
           editor-hidden? dctx/editor-hidden?
-          effective-content dctx/effective-content navigate! dctx/navigate!]
+          effective-content dctx/effective-content navigate! dctx/navigate!
+          ;; A walkthrough the route opens on this repository node replaces
+          ;; the panes; the editor stays mounted, hidden, so its Quill and
+          ;; auto-save survive (plans/commit-range-walkthrough.md §6.6.7.2).
+          walkthrough-id (when (= kind "repo")
+                           (walkthrough-state/open-on (e/watch walkthrough-state/!route)
+                             page-topic-id))]
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                             :min-width "0" :min-height "0" :overflow "hidden"}})
@@ -187,8 +195,10 @@
           (ScoreWaveformStrip))
         ;; Repository nodes: the Update control across the top, the one place it
         ;; exists (plans/git-forge-integration.md §4.6 6.1).
-        (when (= kind "repo")
+        (when (and (= kind "repo") (not walkthrough-id))
           (RepoUpdateBar))
+        (when walkthrough-id
+          (WalkthroughScreen walkthrough-id))
         (dom/div
           ;; The focus-reader class is the ONLY scope for the centered-column
           ;; CSS. `.ql-editor` also styles card fields and every other Quill
@@ -202,7 +212,7 @@
                                (and dctx/focus-available? dctx/focus?) "focus-reader-column"
                                editor-hidden? "editor-hidden"
                                :else "")
-                      :style {:flex "1" :display "flex"
+                      :style {:flex "1" :display (if walkthrough-id "none" "flex")
                               :flex-direction (if (and is-pdf? top-bottom?)
                                                 "column"
                                                 "row")

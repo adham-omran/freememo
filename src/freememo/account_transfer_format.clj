@@ -117,6 +117,9 @@
    :curriculum_exam_sittings
    :curriculum_grade_revisions
    :curriculum_unlock_overrides
+   :walkthroughs
+   :walkthrough_concepts
+   :walkthrough_hunks
    :assistant_chats
    :assistant_messages
    :assistant_runs
@@ -427,6 +430,22 @@
    :question_pins {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
                             " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
                    :params 2 :order "t.id"}
+
+   ;; Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.9.2),
+   ;; scoped through their repository node as maps are. The clone is a cache
+   ;; on disk and is never exported: the importing instance clones again on
+   ;; first use. `commits` and the hunk rows hold shas and paths, never an id
+   ;; or HTML.
+   :walkthroughs {:where (str "t.user_id = ? AND t.repo_topic_id IN (" owned-topics ")")
+                  :params 2 :order "t.id"}
+
+   :walkthrough_concepts {:where (str "t.walkthrough_id IN (SELECT w.id FROM walkthroughs w"
+                                   " WHERE w.user_id = ? AND w.repo_topic_id IN (" owned-topics "))")
+                          :params 2 :order "t.id"}
+
+   :walkthrough_hunks {:where (str "t.walkthrough_id IN (SELECT w.id FROM walkthroughs w"
+                                " WHERE w.user_id = ? AND w.repo_topic_id IN (" owned-topics "))")
+                       :params 2 :order "t.id"}
 
    ;; Keyed on (entity_id, source) with no id column. The owner is the
    ;; entity's owner.

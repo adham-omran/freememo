@@ -43,6 +43,7 @@
           :curriculum-mutations (atom 0)
           :activity-mutations (atom 0)
           :question-mutations (atom 0)
+          :walkthrough-mutations (atom 0)
           :card-gen-status  (atom {})
           ;; Card generation cancels QUEUED work only. The processor is an m/ap
           ;; over a mailbox with `m/?> 3`, which hands out no per-item cancel fn,
@@ -95,9 +96,17 @@
           :importing-accounts (atom #{})
           ;; Git forge imports and updates (freememo.repo-import):
           ;; `host/owner/name` -> phase while the work runs. A map rather than a
-          ;; set because the phase moves — resolving, downloading, extracting,
-          ;; creating topics — while one activity row stays open.
+          ;; set because the phase moves — cloning or fetching, resolving,
+          ;; downloading, creating topics — while one activity row stays open.
           :importing-repos  (atom {})
+          ;; Commit-range walkthroughs being prepared (freememo.walkthrough,
+          ;; plans/commit-range-walkthrough.md §6.5.4): walkthrough id -> phase.
+          ;; Errors outlive membership so the reporter reads the outcome; the
+          ;; cancel mark is cooperative, as a repository import's is.
+          :preparing-walkthroughs (atom {})
+          :walkthrough-errors (atom {})
+          :walkthrough-cancellers (atom {})
+          :walkthrough-cancelled (atom #{})
           ;; `host/owner/name` -> error, written before membership drops so the
           ;; reporter closes a failed run as failed. A later success clears it.
           :repo-import-errors (atom {})

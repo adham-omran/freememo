@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-45-in-a-fixed-order
-  (is (= 45 (count fmt/entity-tables)))
-  (is (= 45 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-48-in-a-fixed-order
+  (is (= 48 (count fmt/entity-tables)))
+  (is (= 48 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -124,7 +124,13 @@
              [:question_pins :question_maps]
              [:question_pins :question_roots]
              [:question_pins :topics]
-             [:known_marks :kg_entities]]]
+             [:known_marks :kg_entities]
+             [:known_marks :topics]
+             [:walkthroughs :topics]
+             [:walkthrough_concepts :walkthroughs]
+             [:walkthrough_hunks :walkthroughs]
+             [:walkthrough_hunks :walkthrough_concepts]
+             [:assistant_evidence :walkthroughs]]]
       (is (before? referenced referrer)
         (str (name referrer) " references " (name referenced) " and must follow it"))))
   (testing "settings is last — its keys embed topic ids (§5.4.8)"

@@ -372,7 +372,21 @@
     :canceller-key :repo-import-cancellers :cancelled-key :repo-import-cancelled
     ;; Without this a failed download closes as a success (§4.3 3.8).
     :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :repo-import-errors) work-key))}})
+                (get @(us/get-atom uid :repo-import-errors) work-key))}
+
+   ;; A commit-range walkthrough being grouped (plans/commit-range-walkthrough.md
+   ;; §6.5.4). SERVER tier: a future no browser owns runs it. The member is the
+   ;; walkthrough id, and the value its phase. Cooperative cancel: the
+   ;; canceller marks the walkthrough failed at once, and the thread reads the
+   ;; mark before each model call and before its write (§6.5.5).
+   :walkthrough-prepare
+   {:label "Preparing walkthrough"
+    :tier :server :subject :none :work-key id->key
+    :state-key :preparing-walkthroughs
+    :entry->state (fn [phase] {:phase phase})
+    :canceller-key :walkthrough-cancellers :cancelled-key :walkthrough-cancelled
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :walkthrough-errors) (key->id work-key)))}})
 
 (def registry
   "`entries`, with each server-tier entry's `:read` derived from its own data."

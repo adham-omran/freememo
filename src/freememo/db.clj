@@ -2240,6 +2240,91 @@
       PRIMARY KEY (entity_id, source)
     )"]))
 
+(defn- setup-schema-walkthroughs!
+  "Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.4, §6.8),
+   and the columns they add to feature 1's tables. Must run after
+   setup-schema-question-pins! and setup-schema-assistant!.
+
+   A walkthrough is one reader's path from sha A to sha B of one repository
+   node. `commits` holds the range as `git log` gave it, oldest first, so the
+   screen never asks git for it again. `step` 0 is the opener (§6.7.1); step n
+   is the concept at position n.
+
+   A hunk row is the key of one diff hunk, never its text: the clone holds the
+   text and gives it back on demand. Its concept is NOT NULL, so no hunk ends
+   with no concept (§6.5.2), and the key is unique per walkthrough, so none
+   ends with two. A concept is deleted only by a merge, which moves its hunks
+   first.
+
+   Known marks gain `as_of`, a repository node and a sha (K2, §6.8.1). The
+   key stays (entity_id, source): the version is metadata about when the
+   reader learned the idea, never a second mark.
+
+   Pins gain the sha they were made at and, on code, an offset hint.
+
+   Evidence gains `walkthrough_id`, so a citation of a file at a commit that
+   is not a topic opens the walkthrough that showed it (§6.3.5)."
+  []
+  (jdbc/execute! ds ["ALTER TABLE known_marks
+                      ADD COLUMN IF NOT EXISTS as_of_repo_topic_id INTEGER
+                        REFERENCES topics(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["ALTER TABLE known_marks ADD COLUMN IF NOT EXISTS as_of_sha TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE question_pins ADD COLUMN IF NOT EXISTS snapshot_sha TEXT"])
+  ;; A pin on code anchors by its exact quote and a character offset into the
+  ;; whole source, the hint that picks among repeated quotes (§6.3.7).
+  (jdbc/execute! ds ["ALTER TABLE question_pins ADD COLUMN IF NOT EXISTS offset_hint INTEGER"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS walkthroughs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      repo_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      sha_a TEXT NOT NULL,
+      sha_b TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing'
+        CHECK (status IN ('preparing', 'ready', 'failed')),
+      error TEXT,
+      commits JSONB NOT NULL DEFAULT '[]',
+      step INTEGER NOT NULL DEFAULT 0 CHECK (step >= 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_walkthroughs_repo
+                      ON walkthroughs(repo_topic_id, id)"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS walkthrough_concepts (
+      id SERIAL PRIMARY KEY,
+      walkthrough_id INTEGER NOT NULL REFERENCES walkthroughs(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 1),
+      label TEXT NOT NULL CHECK (label <> ''),
+      summary TEXT NOT NULL DEFAULT '',
+      commits JSONB NOT NULL DEFAULT '[]',
+      noise BOOLEAN NOT NULL DEFAULT false,
+      understood_at TIMESTAMPTZ,
+      UNIQUE (walkthrough_id, label)
+    )"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS walkthrough_hunks (
+      id SERIAL PRIMARY KEY,
+      walkthrough_id INTEGER NOT NULL REFERENCES walkthroughs(id) ON DELETE CASCADE,
+      concept_id INTEGER NOT NULL REFERENCES walkthrough_concepts(id) ON DELETE CASCADE,
+      commit_sha TEXT NOT NULL,
+      old_path TEXT,
+      new_path TEXT,
+      header TEXT NOT NULL,
+      hunk_index INTEGER NOT NULL CHECK (hunk_index >= 0),
+      added INTEGER NOT NULL DEFAULT 0,
+      removed INTEGER NOT NULL DEFAULT 0,
+      CHECK (old_path IS NOT NULL OR new_path IS NOT NULL)
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_walkthrough_hunks_key
+                      ON walkthrough_hunks(walkthrough_id, commit_sha,
+                        coalesce(old_path, ''), coalesce(new_path, ''), hunk_index)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_walkthrough_hunks_concept
+                      ON walkthrough_hunks(concept_id)"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_evidence
+                      ADD COLUMN IF NOT EXISTS walkthrough_id INTEGER
+                        REFERENCES walkthroughs(id) ON DELETE SET NULL"]))
+
 (defn- setup-schema-document-summaries!
   "Install the maintained root-document progress read model.
 
@@ -2913,6 +2998,7 @@
   (setup-schema-document-summaries!)
   (setup-schema-reading-positions!)
   (setup-schema-question-pins!)
+  (setup-schema-walkthroughs!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
 
@@ -3397,7 +3483,7 @@
         {:insert-into :assistant_evidence
          :values (mapv (fn [{:keys [citation-key document-topic-id page-topic-id
                                     page-number anchor quoted-text quoted-html document-title
-                                    display-label source-revision]}]
+                                    display-label source-revision walkthrough-id]}]
                          {:run_id run-id
                           :citation_key citation-key
                           :document_topic_id document-topic-id
@@ -3408,7 +3494,8 @@
                           :quoted_html quoted-html
                           :document_title document-title
                           :display_label display-label
-                          :source_revision source-revision})
+                          :source_revision source-revision
+                          :walkthrough_id walkthrough-id})
                    evidence)}))))
 
 (defn create-assistant-answer-run!
@@ -4781,18 +4868,35 @@
              OR f.topic_id IN (SELECT id FROM subtree))"
      topic-id]))
 
+(defn- delete-repo-clones!
+  "Remove the git clones of the repository nodes `repo-ids`
+   (plans/commit-range-walkthrough.md §6.1.5). Runs AFTER the transaction that
+   deleted the rows commits, so a rollback keeps the clone its row still
+   needs. Resolved at call time: `freememo.git-clone` is a filesystem concern
+   this namespace does not otherwise load."
+  [repo-ids]
+  (when (seq repo-ids)
+    (let [delete! (requiring-resolve 'freememo.git-clone/delete-clone!)]
+      (doseq [id repo-ids] (delete! id)))))
+
 (defn delete-topic-for-user!
   "Delete a topic scoped to user. Decrements usage_bytes by the subtree's
    total stored bytes, unlinks its large objects, and tombstones the Anki notes
-   of every synced card it destroys — all atomically.
+   of every synced card it destroys — all atomically. A deleted repository
+   node's git clone is removed once that transaction commits.
 
    §4.7 7.2: this is the hard-delete path (the staged path is
    stage-topic-for-deletion! + purge-staged-documents!). Unlinking here is safe
    precisely because the row disappears in the same transaction — there is no
    undo window to preserve."
   [user-id id]
-  (jdbc/with-transaction [tx ds]
-    (let [freed (subtree-file-bytes tx id)
+  (let [[result repo-ids]
+        (jdbc/with-transaction [tx ds]
+    (let [repo-ids (mapv :id (jdbc/execute! tx
+                               ["SELECT id FROM topics WHERE id = ? AND user_id = ? AND kind = 'repo'"
+                                id user-id]
+                               {:builder-fn rs/as-unqualified-maps}))
+          freed (subtree-file-bytes tx id)
           oids (subtree-large-object-oids tx id)
           ;; Both reads happen BEFORE the delete — the cards cascade away with
           ;; the topics.
@@ -4806,7 +4910,9 @@
         (bump-user-usage! tx user-id (- freed)))
       (log/audit! {:id ::topic-deleted :user-id user-id :action :delete
                    :entity :document :entity-id id})
-      result)))
+      [result repo-ids]))]
+    (delete-repo-clones! repo-ids)
+    result))
 
 ;; ---------------------------------------------------------------------------
 ;; File operations
@@ -9183,10 +9289,19 @@
    time: staging is reversible for 12 h, and `restore-staged-document!` must be
    able to hand back a playable video. The OIDs are read before the DELETE (the
    topic_videos rows cascade away with the topics) and unlinked after it, in the
-   same transaction."
+   same transaction. A purged repository node's git clone is removed once that
+   transaction commits (plans/commit-range-walkthrough.md §6.1.5); staging
+   keeps it, as it keeps the large objects."
   []
-  (jdbc/with-transaction [tx ds]
-    (let [oids (mapv :lo_oid
+  (let [[n repo-ids]
+        (jdbc/with-transaction [tx ds]
+    (let [repo-ids (mapv :id (jdbc/execute! tx
+                               ["SELECT id FROM topics WHERE kind = 'repo' AND staged_delete_id IN
+                                   (SELECT id FROM undo_log
+                                     WHERE action_type = 'delete-document'
+                                       AND occurred_at < now() - interval '12 hours')"]
+                               {:builder-fn rs/as-unqualified-maps}))
+          oids (mapv :lo_oid
                  (jdbc/execute! tx
                    ["SELECT tv.lo_oid FROM topic_videos tv
                      JOIN topics t ON tv.topic_id = t.id
@@ -9214,7 +9329,9 @@
         ["DELETE FROM undo_log
           WHERE action_type = 'delete-document'
             AND occurred_at < now() - interval '12 hours'"])
-      n)))
+      [n repo-ids]))]
+    (delete-repo-clones! repo-ids)
+    n))
 
 (defn purge-staged-curricula!
   "Hard-delete curricula whose staged Undo entries are older than 12 hours.
@@ -10571,6 +10688,20 @@
                        id-by-label (into {} (map (juxt :label :id)) returned)]
                    (mapv (comp id-by-label sanitize-utf8) chunk))))
        (partition-all entity-batch-chunk-size labels)))))
+
+(defn kg-entity-ids-by-labels
+  "`user-id`'s entities whose label matches one of `labels`, ignoring case.
+   Post: {lower-label id}, the oldest entity of a label when several match."
+  [user-id labels]
+  (if (empty? labels)
+    {}
+    (reduce (fn [m {:keys [k id]}] (if (contains? m k) m (assoc m k id)))
+      {}
+      (jdbc/execute! ds
+        ["SELECT lower(label) AS k, id FROM kg_entities
+           WHERE user_id = ? AND lower(label) = ANY(?) ORDER BY id"
+         user-id (into-array String (map #(str/lower-case (str %)) labels))]
+        {:builder-fn rs/as-unqualified-maps}))))
 
 (defn get-or-create-kg-entities!
   "Batched exact get-or-create of entities by (user-id, label) — the
@@ -13633,6 +13764,50 @@
      topic-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn question-doc-ref
+  "The document ref of `user-id`'s repository file `topic-id`
+   (plans/commit-range-walkthrough.md §6.3.2): its repository node, its path,
+   and the sha of the commit node above it.
+   Post: {:repo_topic_id :repo_path :commit_sha}, or nil as `question-doc-key`."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["WITH RECURSIVE up AS (
+        SELECT id, parent_id, kind, repo_path, commit_sha, NULL::text AS sha
+          FROM topics WHERE id = ? AND user_id = ? AND kind = 'code'
+                        AND repo_path IS NOT NULL AND repo_path <> ''
+        UNION ALL
+        SELECT t.id, t.parent_id, t.kind, up.repo_path, t.commit_sha,
+               coalesce(up.sha, CASE WHEN t.kind = 'commit' THEN t.commit_sha END)
+          FROM topics t JOIN up ON t.id = up.parent_id)
+      SELECT id AS repo_topic_id, repo_path, sha AS commit_sha FROM up
+       WHERE parent_id IS NULL AND kind = 'repo'"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn find-file-topic-at
+  "The live file topic of `user-id`'s repository node `repo-id` at `path` under
+   the commit node of `sha`, or nil when that commit or file was not imported."
+  [user-id repo-id path sha]
+  (:id (jdbc/execute-one! ds
+         ["WITH RECURSIVE down AS (
+             SELECT c.id FROM topics c
+              WHERE c.parent_id = ? AND c.kind = 'commit' AND c.commit_sha = ?
+                AND c.user_id = ? AND c.staged_delete_id IS NULL
+             UNION ALL
+             SELECT t.id FROM topics t JOIN down ON t.parent_id = down.id
+              WHERE t.kind IN ('dir', 'code'))
+           SELECT t.id FROM down JOIN topics t ON t.id = down.id
+            WHERE t.kind = 'code' AND t.repo_path = ? LIMIT 1"
+          repo-id sha user-id path]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn owned-repo-node?
+  "Post: true when `repo-id` is a live `repo` node `user-id` owns."
+  [user-id repo-id]
+  (some? (jdbc/execute-one! ds
+           ["SELECT 1 FROM topics WHERE id = ? AND user_id = ? AND kind = 'repo'
+               AND staged_delete_id IS NULL" repo-id user-id])))
+
 (defn question-map-id
   "The id of the question map for a document key, or nil when none exists."
   [user-id repo-topic-id repo-path]
@@ -13658,12 +13833,15 @@
 (defn create-question-pin!
   "Create one open pin in map `map-id` and give it the map's next label.
    Pre:  `quote` is non-blank. `snapshot-topic-id` is the file topic it was
-         made on; a topic the user does not own is stored as NULL.
+         made on, or nil for a file at a commit that is not a topic; a topic
+         the user does not own is stored as NULL. `snapshot-sha` is the
+         commit it was made at (plans/commit-range-walkthrough.md §6.3.4).
    Post: the new row as an unqualified map, or nil when the map is not the
          user's. The label is taken and the counter moved in one transaction,
          so two concurrent creates never share a label, and a deleted pin's
          label is never given out again (§6.2.3)."
-  [user-id map-id {:keys [snapshot-topic-id quote heading-anchor question]}]
+  [user-id map-id {:keys [snapshot-topic-id snapshot-sha quote heading-anchor offset-hint
+                          question]}]
   (jdbc/with-transaction [tx ds]
     (when-let [label (:label (jdbc/execute-one! tx
                                ["UPDATE question_maps SET next_label = next_label + 1
@@ -13673,11 +13851,12 @@
                                {:builder-fn rs/as-unqualified-maps}))]
       (jdbc/execute-one! tx
         ["INSERT INTO question_pins
-            (map_id, label, snapshot_topic_id, quote, heading_anchor, question)
-          VALUES (?, ?, (SELECT id FROM topics WHERE id = ? AND user_id = ?), ?, ?, ?)
-          RETURNING id, label, quote, heading_anchor, question, status, root_id"
-         map-id label snapshot-topic-id user-id (sanitize-utf8 quote)
-         heading-anchor (sanitize-utf8 (or question ""))]
+            (map_id, label, snapshot_topic_id, snapshot_sha, quote, heading_anchor,
+             offset_hint, question)
+          VALUES (?, ?, (SELECT id FROM topics WHERE id = ? AND user_id = ?), ?, ?, ?, ?, ?)
+          RETURNING id, label, quote, heading_anchor, offset_hint, question, status, root_id"
+         map-id label snapshot-topic-id user-id snapshot-sha (sanitize-utf8 quote)
+         heading-anchor offset-hint (sanitize-utf8 (or question ""))]
         {:builder-fn rs/as-unqualified-maps}))))
 
 (def ^:private owned-pin-clause
@@ -13714,7 +13893,7 @@
   "Every pin of `user-id`'s map `map-id`, in label order."
   [user-id map-id]
   (jdbc/execute! ds
-    [(str "SELECT id, label, quote, heading_anchor, question, status, root_id
+    [(str "SELECT id, label, quote, heading_anchor, offset_hint, question, status, root_id
              FROM question_pins WHERE map_id = ? AND " owned-pin-clause
           " ORDER BY label")
      map-id user-id]
@@ -13760,6 +13939,7 @@
      :pin-roots   {pin-label root-label}
      :learned     #{root-label}
      :next        root-label or nil
+     :as-of-sha   the commit of the document the reply was about, or nil
 
    Pre:  every label the plan names is a root after :new-roots is applied —
          the planner guarantees it.
@@ -13767,8 +13947,10 @@
          new roots exist; each named pin links its root; each learned root is
          `learned`, its open pins are `closed`, and its entity has a `tutor`
          known mark (§6.4.5); the `next` root, when named and not learned, is
-         the map's one `next` root. Returns {:closed-pins n}."
-  [user-id map-id {:keys [new-roots relinks pin-roots learned next]}]
+         the map's one `next` root. A `tutor` mark records the map's
+         repository node and `as-of-sha` as its version (§6.8.2 of
+         plans/commit-range-walkthrough.md). Returns {:closed-pins n}."
+  [user-id map-id {:keys [new-roots relinks pin-roots learned next as-of-sha]}]
   (jdbc/with-transaction [tx ds]
     (when (jdbc/execute-one! tx ["SELECT 1 FROM question_maps WHERE id = ? AND user_id = ?"
                                  map-id user-id])
@@ -13802,11 +13984,18 @@
                          (jdbc/execute! tx ["UPDATE question_roots SET status = 'learned', updated_at = now()
                                               WHERE map_id = ? AND id = ANY(?)"
                                             map-id ids])
-                         (jdbc/execute! tx ["INSERT INTO known_marks (entity_id, source)
-                                             SELECT entity_id, 'tutor' FROM question_roots
-                                              WHERE map_id = ? AND id = ANY(?) AND entity_id IS NOT NULL
-                                             ON CONFLICT DO NOTHING"
-                                            map-id ids])
+                         (jdbc/execute! tx ["INSERT INTO known_marks
+                                               (entity_id, source, as_of_repo_topic_id, as_of_sha)
+                                             SELECT r.entity_id, 'tutor', m.repo_topic_id, ?
+                                               FROM question_roots r
+                                               JOIN question_maps m ON m.id = r.map_id
+                                              WHERE r.map_id = ? AND r.id = ANY(?)
+                                                AND r.entity_id IS NOT NULL
+                                             ON CONFLICT (entity_id, source) DO UPDATE
+                                               SET as_of_repo_topic_id = excluded.as_of_repo_topic_id,
+                                                   as_of_sha = coalesce(excluded.as_of_sha,
+                                                                        known_marks.as_of_sha)"
+                                            as-of-sha map-id ids])
                          (::jdbc/update-count
                            (jdbc/execute-one! tx ["UPDATE question_pins SET status = 'closed', updated_at = now()
                                                     WHERE map_id = ? AND status = 'open' AND root_id = ANY(?)"
@@ -13854,15 +14043,28 @@
 
 (defn set-known-mark!
   "Write a known mark with `source` on `user-id`'s entity. Idempotent.
-   Post: true when the entity is the user's."
-  [user-id entity-id source]
-  {:pre [(#{"self" "tutor"} source)]}
-  (some? (jdbc/execute-one! ds
-           ["INSERT INTO known_marks (entity_id, source)
-             SELECT id, ? FROM kg_entities WHERE id = ? AND user_id = ?
-             ON CONFLICT (entity_id, source) DO UPDATE SET source = excluded.source
-             RETURNING entity_id"
-            source entity-id user-id])))
+   `as-of` is {:repo-id :sha}, the commit the reader learned the idea at, or
+   nil when it is not about a repository (K2, plans/commit-range-walkthrough.md
+   §6.8). A repeated mark records the newer version: the reader knows the idea
+   as it stands there.
+   Post: true when the entity is the user's. A repository node the user does
+         not own is stored as no version."
+  ([user-id entity-id source] (set-known-mark! user-id entity-id source nil))
+  ([user-id entity-id source {:keys [repo-id sha]}]
+   {:pre [(#{"self" "tutor"} source)]}
+   (some? (jdbc/execute-one! ds
+            ["INSERT INTO known_marks (entity_id, source, as_of_repo_topic_id, as_of_sha)
+              SELECT e.id, ?, r.id, CASE WHEN r.id IS NULL THEN NULL ELSE ? END
+                FROM kg_entities e
+                LEFT JOIN topics r ON r.id = ? AND r.user_id = e.user_id AND r.kind = 'repo'
+               WHERE e.id = ? AND e.user_id = ?
+              ON CONFLICT (entity_id, source) DO UPDATE
+                SET as_of_repo_topic_id = coalesce(excluded.as_of_repo_topic_id,
+                                                   known_marks.as_of_repo_topic_id),
+                    as_of_sha = CASE WHEN excluded.as_of_repo_topic_id IS NULL
+                                     THEN known_marks.as_of_sha ELSE excluded.as_of_sha END
+              RETURNING entity_id"
+             source sha repo-id entity-id user-id]))))
 
 (defn delete-known-marks!
   "Remove every known mark on `user-id`'s entity, of both sources (§6.4.4).
@@ -13874,3 +14076,275 @@
          WHERE entity_id IN (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?)"
        entity-id user-id])))
 
+
+(defn known-marks-for-entities
+  "The known marks on `user-id`'s entities `entity-ids`.
+   Post: [{:entity_id :label :source :as_of_repo_topic_id :as_of_sha}]."
+  [user-id entity-ids]
+  (if (empty? entity-ids)
+    []
+    (jdbc/execute! ds
+      ["SELECT k.entity_id, e.label, k.source, k.as_of_repo_topic_id, k.as_of_sha
+          FROM known_marks k JOIN kg_entities e ON e.id = k.entity_id
+         WHERE e.user_id = ? AND k.entity_id = ANY(?)
+         ORDER BY e.label, k.source"
+       user-id (into-array Integer (map int entity-ids))]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn known-marks-on-repo
+  "Every known mark of `user-id` whose version is a commit of repository node
+   `repo-id` (K2, plans/commit-range-walkthrough.md §6.8).
+   Post: [{:entity_id :label :source :as_of_sha}], by label."
+  [user-id repo-id]
+  (jdbc/execute! ds
+    ["SELECT k.entity_id, e.label, k.source, k.as_of_sha
+        FROM known_marks k JOIN kg_entities e ON e.id = k.entity_id
+       WHERE e.user_id = ? AND k.as_of_repo_topic_id = ?
+       ORDER BY e.label, k.source"
+     user-id repo-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+;; ---------------------------------------------------------------------------
+;; Commit-range walkthroughs — plans/commit-range-walkthrough.md §6.4–§6.6
+;;
+;; Ownership is a clause of every statement: a walkthrough row holds
+;; `user_id`, and concepts and hunks are reached only through one the caller
+;; owns. A forged id therefore reads and writes nothing.
+;; ---------------------------------------------------------------------------
+
+(def ^:private owned-walkthrough-clause
+  "walkthrough_id IN (SELECT id FROM walkthroughs WHERE user_id = ?)")
+
+(defn- walkthrough-row [row]
+  (some-> row (update :commits pgobject->clj)))
+
+(defn create-walkthrough!
+  "Start a walkthrough of `user-id`'s repository node `repo-id` from `sha-a`
+   to `sha-b`, in status `preparing`.
+   Pre : `commits` is the range, oldest first.
+   Post: the new id, or nil when the repository node is not the user's."
+  [user-id repo-id sha-a sha-b commits]
+  (:id (jdbc/execute-one! ds
+         ["INSERT INTO walkthroughs (user_id, repo_topic_id, sha_a, sha_b, commits)
+           SELECT ?, t.id, ?, ?, ? FROM topics t
+            WHERE t.id = ? AND t.user_id = ? AND t.kind = 'repo' AND t.staged_delete_id IS NULL
+           RETURNING id"
+          user-id sha-a sha-b (->jsonb (vec commits)) repo-id user-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-walkthrough
+  "Post: `user-id`'s walkthrough `walkthrough-id` with `:commits` as data, or nil."
+  [user-id walkthrough-id]
+  (walkthrough-row
+    (jdbc/execute-one! ds
+      ["SELECT w.*, r.title AS repo_title FROM walkthroughs w
+          JOIN topics r ON r.id = w.repo_topic_id
+         WHERE w.id = ? AND w.user_id = ?"
+       walkthrough-id user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn list-walkthroughs
+  "`user-id`'s walkthroughs of repository node `repo-id`, newest first.
+   Post: [{:id :sha_a :sha_b :status :step :concepts :created_at}], without
+         the range."
+  [user-id repo-id]
+  (jdbc/execute! ds
+    ["SELECT w.id, w.sha_a, w.sha_b, w.status, w.error, w.step, w.created_at,
+             (SELECT count(*) FROM walkthrough_concepts c WHERE c.walkthrough_id = w.id) AS concepts,
+             jsonb_array_length(w.commits) AS commit_count
+        FROM walkthroughs w
+       WHERE w.user_id = ? AND w.repo_topic_id = ?
+       ORDER BY w.id DESC"
+     user-id repo-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn set-walkthrough-failed!
+  "Mark `user-id`'s walkthrough failed with `error`. Post: the update count."
+  [user-id walkthrough-id error]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      ["UPDATE walkthroughs SET status = 'failed', error = ?, updated_at = now()
+         WHERE id = ? AND user_id = ?"
+       (sanitize-utf8 (str error)) walkthrough-id user-id])))
+
+(defn save-walkthrough-grouping!
+  "Store the grouping of `user-id`'s walkthrough and make it `ready`, in one
+   transaction (§6.5).
+
+   Pre : `concepts` is [{:label :summary :commits [sha] :noise?}] in step
+         order, labels distinct. `hunks` is [{:commit-sha :old-path :new-path
+         :header :index :added :removed :concept label}], and every
+         `:concept` names one of `concepts`.
+   Post: true when the walkthrough is the user's and still `preparing`; the
+         concepts hold positions 1..n and every hunk one row. False and
+         nothing written otherwise: a cancelled preparation has been marked
+         `failed`, and its grouping must not land (§6.5.5)."
+  [user-id walkthrough-id concepts hunks]
+  (jdbc/with-transaction [tx ds]
+    (if-not (jdbc/execute-one! tx ["SELECT 1 FROM walkthroughs
+                                     WHERE id = ? AND user_id = ? AND status = 'preparing'
+                                     FOR UPDATE"
+                                    walkthrough-id user-id])
+      false
+      (let [ids (into {}
+                  (map-indexed
+                    (fn [i {:keys [label summary commits noise?]}]
+                      [label (:id (jdbc/execute-one! tx
+                                    ["INSERT INTO walkthrough_concepts
+                                        (walkthrough_id, position, label, summary, commits, noise)
+                                      VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+                                     walkthrough-id (inc i) (sanitize-utf8 label)
+                                     (sanitize-utf8 (or summary "")) (->jsonb (vec commits))
+                                     (boolean noise?)]
+                                    {:builder-fn rs/as-unqualified-maps}))]))
+                  concepts)]
+        (doseq [batch (param-bounded-batches
+                        (mapv (fn [{:keys [commit-sha old-path new-path header index added removed concept]}]
+                                {:walkthrough_id walkthrough-id
+                                 :concept_id (or (ids concept)
+                                               (throw (ex-info "A hunk names no concept"
+                                                        {:concept concept})))
+                                 :commit_sha commit-sha :old_path old-path :new_path new-path
+                                 :header (sanitize-utf8 (or header "")) :hunk_index index
+                                 :added (or added 0) :removed (or removed 0)})
+                          hunks))]
+          (jdbc/execute! tx (sql/format {:insert-into :walkthrough_hunks :values (vec batch)})))
+        (jdbc/execute! tx ["UPDATE walkthroughs SET status = 'ready', error = NULL, step = 0,
+                                   updated_at = now()
+                             WHERE id = ?" walkthrough-id])
+        true))))
+
+(defn walkthrough-concepts
+  "The concepts of `user-id`'s walkthrough, in step order.
+   Post: [{:id :position :label :summary :commits :noise :understood_at
+           :hunk_count}]."
+  [user-id walkthrough-id]
+  (mapv #(update % :commits pgobject->clj)
+    (jdbc/execute! ds
+      [(str "SELECT c.id, c.position, c.label, c.summary, c.commits, c.noise, c.understood_at,
+                    (SELECT count(*) FROM walkthrough_hunks h WHERE h.concept_id = c.id) AS hunk_count
+               FROM walkthrough_concepts c
+              WHERE c.walkthrough_id = ? AND c." owned-walkthrough-clause
+            " ORDER BY c.position")
+       walkthrough-id user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn walkthrough-hunks
+  "Every hunk row of `user-id`'s walkthrough, in commit and file order.
+   Post: [{:id :concept_id :commit_sha :old_path :new_path :header
+           :hunk_index :added :removed}]."
+  [user-id walkthrough-id]
+  (jdbc/execute! ds
+    [(str "SELECT h.id, h.concept_id, h.commit_sha, h.old_path, h.new_path, h.header,
+                  h.hunk_index, h.added, h.removed
+             FROM walkthrough_hunks h
+            WHERE h.walkthrough_id = ? AND h." owned-walkthrough-clause
+          " ORDER BY h.id")
+     walkthrough-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn set-walkthrough-step!
+  "Move `user-id`'s walkthrough to `step`, clamped to 0..its concept count.
+   Post: the step stored, or nil when the walkthrough is not the user's."
+  [user-id walkthrough-id step]
+  (:step (jdbc/execute-one! ds
+           ["UPDATE walkthroughs w
+               SET step = greatest(0, least(?, (SELECT count(*) FROM walkthrough_concepts c
+                                                 WHERE c.walkthrough_id = w.id))),
+                   updated_at = now()
+             WHERE w.id = ? AND w.user_id = ?
+             RETURNING step"
+            step walkthrough-id user-id]
+           {:builder-fn rs/as-unqualified-maps})))
+
+(defn mark-concept-understood!
+  "\"I understand\" on the concept at `user-id`'s walkthrough's current step
+   (§6.6.5): the concept records when, and the walkthrough moves to the next
+   step. On the opener (step 0) only the step moves.
+   Post: the new step, or nil when the walkthrough is not the user's."
+  [user-id walkthrough-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [{:keys [step]} (jdbc/execute-one! tx
+                                ["SELECT step FROM walkthroughs WHERE id = ? AND user_id = ?
+                                  FOR UPDATE" walkthrough-id user-id]
+                                {:builder-fn rs/as-unqualified-maps})]
+      (jdbc/execute! tx ["UPDATE walkthrough_concepts SET understood_at = coalesce(understood_at, now())
+                           WHERE walkthrough_id = ? AND position = ?"
+                         walkthrough-id step])
+      (:step (jdbc/execute-one! tx
+               ["UPDATE walkthroughs w
+                   SET step = least(? + 1, (SELECT count(*) FROM walkthrough_concepts c
+                                             WHERE c.walkthrough_id = w.id)),
+                       updated_at = now()
+                 WHERE w.id = ? RETURNING step"
+                step walkthrough-id]
+               {:builder-fn rs/as-unqualified-maps})))))
+
+(defn move-walkthrough-hunk!
+  "Move `user-id`'s hunk `hunk-id` to concept `concept-id` of the same
+   walkthrough (§6.5.7.1). Post: the update count, 0 when either is not the
+   user's or they belong to different walkthroughs."
+  [user-id hunk-id concept-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      [(str "UPDATE walkthrough_hunks h SET concept_id = c.id
+               FROM walkthrough_concepts c
+              WHERE h.id = ? AND c.id = ? AND c.walkthrough_id = h.walkthrough_id
+                AND h." owned-walkthrough-clause)
+       hunk-id concept-id user-id])))
+
+(defn rename-walkthrough-concept!
+  "Rename `user-id`'s concept (§6.5.7.2). Post: the update count; 0 when the
+   label is taken in its walkthrough or the concept is not the user's."
+  [user-id concept-id label]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      [(str "UPDATE walkthrough_concepts c SET label = ?
+              WHERE c.id = ? AND c." owned-walkthrough-clause
+            " AND NOT EXISTS (SELECT 1 FROM walkthrough_concepts o
+                               WHERE o.walkthrough_id = c.walkthrough_id
+                                 AND o.label = ? AND o.id <> c.id)")
+       (sanitize-utf8 label) concept-id user-id (sanitize-utf8 label)])))
+
+(defn merge-walkthrough-concepts!
+  "Merge `user-id`'s concept `from-id` into `into-id` of the same walkthrough
+   (§6.5.7.3): its hunks move, it is deleted, and the positions after it close
+   up. The walkthrough's step stays on the concept it showed.
+   Post: true when both are the user's and in one walkthrough."
+  [user-id from-id into-id]
+  (jdbc/with-transaction [tx ds]
+    (let [rows (jdbc/execute! tx
+                 [(str "SELECT id, walkthrough_id, position FROM walkthrough_concepts
+                         WHERE id = ANY(?) AND " owned-walkthrough-clause " FOR UPDATE")
+                  (into-array Integer [(int from-id) (int into-id)]) user-id]
+                 {:builder-fn rs/as-unqualified-maps})
+          by-id (into {} (map (juxt :id identity)) rows)
+          from (by-id from-id)
+          into* (by-id into-id)]
+      (when (and from into* (not= from-id into-id)
+              (= (:walkthrough_id from) (:walkthrough_id into*)))
+        (let [wid (:walkthrough_id from)
+              pos (:position from)]
+          (jdbc/execute! tx ["UPDATE walkthrough_hunks SET concept_id = ? WHERE concept_id = ?"
+                             into-id from-id])
+          (jdbc/execute! tx ["UPDATE walkthrough_concepts c
+                                 SET commits = (SELECT coalesce(jsonb_agg(DISTINCT v), '[]')
+                                                  FROM (SELECT jsonb_array_elements(c.commits) v
+                                                        UNION SELECT jsonb_array_elements(f.commits)
+                                                          FROM walkthrough_concepts f WHERE f.id = ?) x)
+                               WHERE c.id = ?" from-id into-id])
+          (jdbc/execute! tx ["DELETE FROM walkthrough_concepts WHERE id = ?" from-id])
+          (jdbc/execute! tx ["UPDATE walkthrough_concepts SET position = position - 1
+                               WHERE walkthrough_id = ? AND position > ?" wid pos])
+          (jdbc/execute! tx ["UPDATE walkthroughs SET step = CASE WHEN step > ? THEN step - 1
+                                                                   ELSE step END,
+                                                      updated_at = now()
+                               WHERE id = ?" pos wid])
+          true)))))
+
+(defn delete-walkthrough!
+  "Delete `user-id`'s walkthrough. Post: the update count."
+  [user-id walkthrough-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds ["DELETE FROM walkthroughs WHERE id = ? AND user_id = ?"
+                           walkthrough-id user-id])))

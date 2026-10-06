@@ -161,6 +161,8 @@
         ;; (plans/anchored-questions.md §6.2.5).
         (e/for [_request (bus/Requests :ask-question-pins)]
           (show-right-pane! "assistant"))
+        (e/for [_request (bus/Requests :ask-walkthrough-tutor)]
+          (show-right-pane! "assistant"))
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]

@@ -1,12 +1,13 @@
 (ns freememo.forge
   "Read access to repositories on GitHub, GitLab and Forgejo
-   (plans/git-forge-integration.md §4.2, D1).
+   (plans/git-forge-integration.md §4.2).
 
-   Three operations per forge and nothing more: list the account's
-   repositories, resolve a ref to a commit sha, and download the zip archive at
-   that sha. The archive is the only byte transport, so pagination, tree
-   truncation and per-file limits — the parts the three APIs disagree on — never
-   reach this namespace.
+   One REST operation per forge and nothing more: list the account's
+   repositories, for the import picker. Every byte of a repository arrives
+   through its git clone instead (`freememo.git-clone`,
+   plans/commit-range-walkthrough.md §6.2, which reverses D1). This namespace
+   also owns the parsing of origins and repository paths, the address gate, and
+   the forge's file URLs.
 
    Every request passes the same three gates:
      1. The address gate. `url-validate/safe-url?` runs on the first URL AND on
@@ -14,13 +15,11 @@
         `config/forge-private-hosts-allowed?`. A forge host is user input, and a
         per-user switch would let any user of a hosted instance probe its
         internal network (D8).
-     2. Explicit connection and socket timeouts on every call (§4.2 2.5), and a
-        wall-clock limit on an archive download.
+     2. Explicit connection and socket timeouts on every call (§4.2 2.5).
      3. A status check that turns a refusal into a message the user can act on.
 
-   A token never follows a redirect to another host. GitHub sends a private
-   archive to codeload with a signed URL, so the header is not needed there,
-   and forwarding it would hand the credential to whatever host a forge names.
+   A token never follows a redirect to another host: forwarding it would hand
+   the credential to whatever host a forge names.
 
    Failures are `ex-info` with `:type ::forge-failure` and a message written for
    the user. The import services catch that type and show the message as is."
@@ -29,29 +28,18 @@
             [freememo.config :as config]
             [freememo.forge-kinds :as kinds]
             [freememo.url-validate :as url-validate])
-  (:import [java.io File FileOutputStream IOException InputStream]
-           [java.net URI URLEncoder]
-           [java.nio.file Files]
-           [java.nio.file.attribute FileAttribute]))
+  (:import [java.io IOException InputStream]
+           [java.net URI URLEncoder]))
 
 ;; ── Limits ─────────────────────────────────────────────────────────
 
 (def ^:private connect-timeout-ms 10000)
 
 (def ^:private socket-timeout-ms
-  "Longest silence between two reads. A hung host fails here; a slow one that
-   keeps sending is bounded by `max-download-ms` instead."
+  "Longest silence between two reads."
   30000)
 
-(def ^:private max-download-ms (* 15 60 1000))
-
 (def ^:private max-redirects 5)
-
-(def max-archive-bytes
-  "Largest archive one download may write to disk. FORGE_MAX_ARCHIVE_BYTES
-   overrides the 1 GiB default."
-  (or (some-> (System/getenv "FORGE_MAX_ARCHIVE_BYTES") parse-long)
-    (* 1024 1024 1024)))
 
 (defn- failure [msg data]
   (ex-info msg (assoc data :type ::forge-failure)))
@@ -254,7 +242,7 @@
     (check-status! forge {:origin origin :what what :token? (not (str/blank? token))})
     :body))
 
-;; ── The three operations ───────────────────────────────────────────
+;; ── The operation ─────────────────────────────────────────────────
 
 (defn list-repositories
   "The repositories the token's account can read.
@@ -287,56 +275,6 @@
                        :private? (boolean (:private r))})
           (get-json! forge origin token (str base "/user/repos?limit=50") what))))))
 
-(def ^:private sha-re #"[0-9a-f]{40}|[0-9a-f]{64}")
-
-(defn resolve-commit
-  "The commit a ref names now.
-
-   Pre : `path` passed `valid-repository-path?` for `forge`.
-   Post: {:sha S :ref R}. `R` is `ref` trimmed, or the repository's default
-         branch when `ref` is blank. `S` is the full sha `R` names at the moment
-         of the call — a branch, a tag and a sha all resolve the same way.
-   Throws ::forge-failure."
-  [forge origin token path ref]
-  (let [repo (repo-api forge origin path)
-        token? (not (str/blank? token))
-        ref (or (some-> ref str/trim not-empty)
-              (not-empty (str (:default_branch (get-json! forge origin token repo
-                                                 (str "repository " path)))))
-              (throw (failure (str path " has no default branch. It may be empty.")
-                       {:reason :empty})))
-        what (str "ref " ref " in " path)
-        sha (case forge
-              ;; The sha media type answers with the bare sha, not a commit
-              ;; object that carries up to 300 file diffs.
-              "github"
-              (-> (request! (str repo "/commits/" (enc ref))
-                    {:headers (assoc base-headers "Accept" "application/vnd.github.sha")
-                     :auth (auth-headers forge token) :as :string})
-                (check-status! forge {:origin origin :what what :token? token?})
-                :body str str/trim)
-
-              "gitlab"
-              (:id (get-json! forge origin token (str repo "/repository/commits/" (enc ref)) what))
-
-              "forgejo"
-              (:sha (first (get-json! forge origin token
-                             (str repo "/commits?sha=" (enc ref)
-                               "&limit=1&stat=false&verification=false&files=false")
-                             what))))]
-    (if (and (string? sha) (re-matches sha-re sha))
-      {:sha sha :ref ref}
-      (throw (failure (str (str/capitalize what) " does not name a commit.") {:reason :no-commit})))))
-
-(defn archive-url
-  "Post: the URL of the zip archive of `sha`."
-  [forge origin path sha]
-  (let [repo (repo-api forge origin path)]
-    (case forge
-      "github" (str repo "/zipball/" sha)
-      "gitlab" (str repo "/repository/archive.zip?sha=" sha)
-      "forgejo" (str repo "/archive/" sha ".zip"))))
-
 (defn blob-url
   "Post: the forge's web page for file `path` at commit `sha` in the repository
    at `repo-url` (`origin-url` + \"/\" + owner/name, as the import stores it).
@@ -348,52 +286,3 @@
       "github" (str repo-url "/blob/" sha "/" segments)
       "gitlab" (str repo-url "/-/blob/" sha "/" segments)
       "forgejo" (str repo-url "/src/commit/" sha "/" segments))))
-
-(defn download-archive!
-  "Stream the zip archive of `sha` to a temp file.
-
-   Pre : `sha` came from `resolve-commit` for the same repository.
-   Post: a temp File holding the archive. The caller owns it and MUST delete it.
-   Invariant: heap holds one copy buffer; the body streams to disk.
-   Invariant: past `max-archive-bytes` or `max-download-ms` the transfer stops,
-         the partial file is deleted, and ::forge-failure is thrown.
-   Invariant: `cancelled?` is read after every buffer; once it answers true the
-         transfer stops the same way, with `:reason :cancelled`. An interrupt
-         cannot do this: the socket read ignores it."
-  ^File [forge origin token path sha cancelled?]
-  (let [what (str "the archive of " path)
-        resp (-> (request! (archive-url forge origin path sha)
-                   {:headers (assoc base-headers "Accept" "*/*")
-                    :auth (auth-headers forge token) :as :stream})
-               (check-status! forge {:origin origin :what what
-                                     :token? (not (str/blank? token))}))
-        f (.toFile (Files/createTempFile "forge-archive" ".zip" (make-array FileAttribute 0)))
-        deadline (+ (System/currentTimeMillis) max-download-ms)]
-    (try
-      (with-open [^InputStream in (:body resp)
-                  out (FileOutputStream. f)]
-        (let [buf (byte-array 262144)]
-          (loop [total 0]
-            (let [n (try (.read in buf)
-                      (catch IOException e
-                        (throw (failure (str "The download of " what " stopped: " (.getMessage e))
-                                 {:reason :unreachable}))))]
-              (when (pos? n)
-                (when (cancelled?)
-                  (throw (failure (str "The download of " what " was cancelled.")
-                           {:reason :cancelled})))
-                (let [total (+ total n)]
-                  (when (> total max-archive-bytes)
-                    (throw (failure (str "The archive of " path " is larger than "
-                                      (quot max-archive-bytes (* 1024 1024)) " MB.")
-                             {:reason :too-large})))
-                  (when (> (System/currentTimeMillis) deadline)
-                    (throw (failure (str "The download of " what " took longer than "
-                                      (quot max-download-ms 60000) " minutes.")
-                             {:reason :too-slow})))
-                  (.write out buf 0 n)
-                  (recur total)))))))
-      f
-      (catch Throwable t
-        (.delete f)
-        (throw t)))))

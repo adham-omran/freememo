@@ -18,6 +18,7 @@
             [freememo.curriculum-page :refer [CurriculumPage]]
             [freememo.learn-session :refer [LearnSession]]
             [freememo.topic-page :refer [TopicPage]]
+            [freememo.walkthrough-screen :refer [WalkthroughRoute]]
             [freememo.knowledge-page :refer [KnowledgePage]]
             [freememo.graph-page :refer [GraphPage]]
             [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
@@ -130,6 +131,10 @@
        :topic (if-let [p (:page nav-map)]
                 (list 'viewer 'topic (:topic-id nav-map) p)
                 (list 'viewer 'topic (:topic-id nav-map)))
+       ;; A sub-route of the repository node, so neither the Routes nor the
+       ;; Nav-destination count moves (plans/commit-range-walkthrough.md
+       ;; §6.6.7.1). ViewerContent reads the two segments after the id.
+       :walkthrough (list 'viewer 'topic (:topic-id nav-map) 'walkthrough (:walkthrough-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        ;; /schedule/<id>. One extra segment, read back by `r/pop` in
        ;; SchedulePage, so a forecast survives a reload and is linkable.
@@ -200,17 +205,25 @@
             (r/pop
               ;; /viewer/topic/<id>[/<page>] — page is the URL anchor for PDF
               ;; restore (nil for a bare URL → last-page fallback downstream).
-              (let [[topic-id page-seg] r/route
-                    url-page (some-> page-seg str parse-long)
+              (let [[topic-id page-seg walkthrough-seg] r/route
+                    ;; /viewer/topic/<repo-id>/walkthrough/<id>: the repository
+                    ;; node with its walkthrough open (§6.6.7 of
+                    ;; plans/commit-range-walkthrough.md).
+                    walkthrough-id (when (= "walkthrough" (str page-seg))
+                                     (some-> walkthrough-seg str parse-long))
+                    url-page (when-not walkthrough-id (some-> page-seg str parse-long))
                     authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
                 (if (not authorized?)
                   (NotFoundView)
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
                     (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil url-page)))
+                (WalkthroughRoute topic-id walkthrough-id)
                 ;; The route owns the title, never TopicPage: the Learn session and
                 ;; subset review mount TopicPage too, and title themselves.
-                (PageTitle user-id [:topic topic-id])))
+                (PageTitle user-id (if walkthrough-id
+                                     [:walkthrough walkthrough-id]
+                                     [:topic topic-id]))))
 
             learn-session
             ;; Freeze the queue for the session: fetch once on mount, do NOT watch

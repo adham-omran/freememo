@@ -36,6 +36,10 @@
    "kg.distill"        "KG distill"
    "kg.questions"      "KG questions"
    "ocr.extract"       "OCR extract"
+   "question-map.link" "Question map linking"
+   "walkthrough.concepts" "Walkthrough concepts"
+   "walkthrough.classify" "Walkthrough grouping"
+   "walkthrough.link" "Walkthrough linking"
    "curriculum.exam-form"  "Exam form generation"
    "curriculum.exam-grade" "Exam grading"
    ;; One endpoint for both the audio kind and video: same model, same price,

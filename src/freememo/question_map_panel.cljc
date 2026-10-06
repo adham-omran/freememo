@@ -13,14 +13,16 @@
    [freememo.command-bus :as bus]
    [freememo.question-pin-pane :as pin-pane]
    [freememo.question-pin-state :as pin-state]
+   #?(:clj [freememo.document-ref :as docref])
    #?(:clj [freememo.question-map :as qm])
    #?(:clj [freememo.user-state :as us])))
 
-(defn map-card* [_rev user-id topic-id]
-  #?(:clj (qm/map-card user-id topic-id) :cljs nil))
+(defn map-card* [_rev user-id spec]
+  #?(:clj (qm/map-card user-id (docref/resolve-spec user-id spec)) :cljs nil))
 
-(defn set-root-known!* [user-id root-id known?]
-  #?(:clj (qm/set-root-known! user-id root-id known?) :cljs nil))
+(defn set-root-known!* [user-id root-id known? spec]
+  #?(:clj (qm/set-root-known! user-id root-id known? (docref/resolve-spec user-id spec))
+     :cljs nil))
 
 (defn teach-root!* [user-id root-id]
   #?(:clj (qm/teach-root! user-id root-id) :cljs nil))
@@ -80,11 +82,14 @@
 
 (e/defn QuestionMapCard
   "The map of the open file: each root, its pins and its passages, with I know
-   it and Teach me (§6.3.7). Shows nothing while the file has no roots."
+   it and Teach me (§6.3.7). Shows nothing while the file has no roots. The
+   file is the one a mounted pin pane publishes, a walkthrough canvas
+   included, else the page topic."
   [user-id page-topic-id]
   (e/client
-    (let [rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
-          roots (e/server (e/Offload #(map-card* rev user-id page-topic-id)))]
+    (let [spec (or (:question-pane-ref (e/watch bus/!ctx)) {:topic-id page-topic-id})
+          rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
+          roots (e/server (e/Offload #(map-card* rev user-id spec)))]
       (dom/div
         (dom/props {:class "question-map-host"})
         (when (seq roots)
@@ -101,7 +106,7 @@
                         result (e/server
                                  (e/Offload
                                    #(if (= ::known kind)
-                                      (set-root-known!* user-id root-id known?)
+                                      (set-root-known!* user-id root-id known? spec)
                                       (teach-root!* user-id root-id))))]
                     (case result (t))))))))))))
 
@@ -134,3 +139,26 @@
                                  :web-search? web-search?})
             (case (bus/consume! invocation-id)
               (t))))))))
+
+(e/defn WalkthroughAskEffect
+  "Turn each :ask-walkthrough-tutor invocation into a submit of the panel
+   with the invocation's text (plans/commit-range-walkthrough.md §6.7.1). The
+   server reads the walkthrough's step from the screen's focus, so the text
+   is an ordinary turn."
+  [!submit !active mode-id web-search?]
+  (e/client
+    (e/for [{:keys [invocation-id payload]} (bus/Requests :ask-walkthrough-tutor)]
+      (let [[t _] (e/Token invocation-id)]
+        (when t
+          (case (reset! !submit {:id (str (random-uuid)) :text (str (:text payload))
+                                 :chat @!active :refs [] :mode mode-id
+                                 :web-search? web-search?})
+            (case (bus/consume! invocation-id)
+              (t))))))))
+
+(e/defn AskEffects
+  "Both command-to-submit effects of the assistant panel, in one call."
+  [!submit !active mode-id web-search?]
+  (e/client
+    (AskPinsEffect !submit !active mode-id web-search?)
+    (WalkthroughAskEffect !submit !active mode-id web-search?)))

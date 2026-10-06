@@ -26,6 +26,13 @@
    ;; anchor. nil for every non-PDF nav — nav->route omits the segment then.
    {:type :topic :topic-id topic-id :origin origin :page page}))
 
+(defn nav-walkthrough
+  "/viewer/topic/<repo-id>/walkthrough/<id>: a commit-range walkthrough, a
+   sub-route of its repository node (plans/commit-range-walkthrough.md
+   §6.6.7.1)."
+  [repo-id walkthrough-id]
+  {:type :walkthrough :topic-id repo-id :walkthrough-id walkthrough-id})
+
 (defn nav-learn-session []
   {:type :learn-session})
 

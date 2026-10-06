@@ -1,9 +1,14 @@
 (ns freememo.question-map
-  "Anchored questions on rendered Markdown: pins, the question map, and the
+  "Anchored questions on repository files: pins, the question map, and the
    tutor reply that builds and updates it (plans/anchored-questions.md).
 
+   Every function takes a document ref (`freememo.document-ref`), never a
+   topic id: a walkthrough shows files at commits that are not topics
+   (plans/commit-range-walkthrough.md §6.3). A caller holding a topic converts
+   it with `document-ref/for-topic` at its boundary.
+
    This namespace owns three things and nothing else touches them:
-     - where a pin or a citation sits in a snapshot (`locate-in-topic`),
+     - where a pin or a citation sits in a file at a commit (`locate`),
      - what a run about a document with a map is told (`request-tail`), and
      - what a finished reply writes into the map (`apply-reply!`).
 
@@ -15,6 +20,7 @@
    [freememo.commands :as commands]
    [freememo.credits :as credits]
    [freememo.db :as db]
+   [freememo.document-ref :as docref]
    [freememo.kg-extract :as kg-extract]
    [freememo.kg-llm :as llm]
    [freememo.question-map-block :as block]
@@ -24,40 +30,68 @@
 
 ;; ── Locating ───────────────────────────────────────────────────────
 
-(defn- rendered-text-html
-  "The rendered Markdown of `user-id`'s file `topic-id`, for locating text.
+(defn rendered-text-html
+  "The rendered Markdown of `user-id`'s file at `ref`, for locating text.
    Links are left unresolved: an unresolved link is unwrapped to its text, so
    the text a reader sees, and every offset in it, is the same either way.
-   Post: HTML, or nil when the topic has no Markdown source the user owns."
-  [user-id topic-id]
-  (when-let [{:keys [source lang repo_path]} (db/get-topic-code user-id topic-id)]
-    (when (and (= "markdown" lang) (seq source))
-      (repo-md/render source repo_path (constantly {}) nil))))
+   Post: HTML, or nil when the file is not Markdown or has no source."
+  [user-id ref]
+  (when (docref/markdown? ref)
+    (when-let [{:keys [source]} (docref/content user-id ref)]
+      (when (seq source)
+        (repo-md/render source (:path ref) (constantly {}) nil)))))
+
+(defn locate-in-source
+  "Where `quote` sits in code `source` (§6.3.7 of
+   plans/commit-range-walkthrough.md): an exact match, whitespace and all.
+   A repeated quote resolves to the occurrence whose start is nearest
+   `offset`, the first one when `offset` is nil.
+   Post: {:offsets [start end]}, character offsets into `source`, or nil."
+  [^String source ^String quote offset]
+  (when (and (seq source) (seq quote))
+    (let [starts (loop [from 0 acc []]
+                   (let [i (.indexOf source quote (int from))]
+                     (if (neg? i) acc (recur (inc i) (conj acc i)))))]
+      (when-let [best (if (and offset (seq starts))
+                        (apply min-key #(Math/abs (long (- % offset))) starts)
+                        (first starts))]
+        {:offsets [best (+ best (count quote))]}))))
 
 (def ^:private max-cached-locations 4096)
 
 (defonce ^:private !locations
-  ;; {[topic-id quote anchor] location-or-::none}. A snapshot's source never
-  ;; changes, so an entry never goes stale (§6.1.3.1). The map is emptied when
-  ;; it outgrows its bound rather than evicted entry by entry: a miss costs one
-  ;; render, and the next paint refills what is in view.
+  ;; {[repo-id path sha quote anchor offset] location-or-::none}. A file at a
+  ;; commit never changes, so an entry never goes stale, and two snapshots of
+  ;; one file share no entry (§6.3.3). The map is emptied when it outgrows its
+  ;; bound rather than evicted entry by entry: a miss costs one render, and
+  ;; the next paint refills what is in view.
   (atom {}))
 
-(defn locate-in-topic
-  "Where each of `passages` sits in `user-id`'s file `topic-id`.
-   `passages` is [{:quote :anchor}]. Post: a vector in the same order, each a
-   `quote-anchor/locate` result or nil. The file is rendered at most once, and
+(defn locate
+  "Where each of `passages` sits in `user-id`'s file at `ref`.
+   `passages` is [{:quote :anchor :offset}]. Post: a vector in the same order,
+   each a `quote-anchor/locate` result for Markdown, a `locate-in-source`
+   result for code, or nil. The file is read and rendered at most once, and
    not at all when every passage is cached."
-  [user-id topic-id passages]
-  (let [k (fn [{:keys [quote anchor]}] [topic-id quote anchor])
+  [user-id {:keys [repo-id path sha topic-id] :as ref} passages]
+  (let [;; A commit node always has its sha; one seeded without it falls back
+        ;; to its file topic, so two such snapshots never share an entry.
+        version (or sha [:topic topic-id])
+        k (fn [{:keys [quote anchor offset]}] [repo-id path version quote anchor offset])
         cached @!locations
         misses (remove #(contains? cached (k %)) passages)
         found (when (seq misses)
-                (when-let [html (rendered-text-html user-id topic-id)]
-                  (into {}
-                    (map (fn [p] [(k p) (or (quote-anchor/locate html (:quote p) (:anchor p))
-                                          ::none)]))
-                    misses)))]
+                (if (docref/markdown? ref)
+                  (when-let [html (rendered-text-html user-id ref)]
+                    (into {}
+                      (map (fn [p] [(k p) (or (quote-anchor/locate html (:quote p) (:anchor p))
+                                            ::none)]))
+                      misses))
+                  (when-let [source (:source (docref/content user-id ref))]
+                    (into {}
+                      (map (fn [p] [(k p) (or (locate-in-source source (:quote p) (:offset p))
+                                            ::none)]))
+                      misses))))]
     (when (seq found)
       (swap! !locations (fn [m] (merge (if (> (count m) max-cached-locations) {} m) found))))
     (mapv (fn [p] (let [v (get (merge cached found) (k p))]
@@ -66,30 +100,26 @@
 
 ;; ── Document view ──────────────────────────────────────────────────
 
-(defn doc-key
-  "The document key of `user-id`'s file `topic-id`, or nil (§4)."
-  [user-id topic-id]
-  (when topic-id (db/question-doc-key user-id topic-id)))
+(defn map-id-for-ref
+  "The question map of the ref's document key, or nil when it has none."
+  [user-id {:keys [repo-id path] :as ref}]
+  (when ref (db/question-map-id user-id repo-id path)))
 
-(defn map-id-for-topic
-  "The question map of the file's document key, or nil when it has none."
-  [user-id topic-id]
-  (when-let [{:keys [repo_topic_id repo_path]} (doc-key user-id topic-id)]
-    (db/question-map-id user-id repo_topic_id repo_path)))
+(defn- pin-passage [p]
+  {:quote (:quote p) :anchor (:heading_anchor p) :offset (:offset_hint p)})
 
 (defn snapshot-view
-  "Everything the rendered pane and the map panel show for `user-id`'s file
-   `topic-id`.
-   Post: nil when the file has no document key. Otherwise
+  "Everything a pane and the map panel show for `user-id`'s file at `ref`.
+   Post: nil when there is no ref. Otherwise
          {:map-id (or nil) :pins [...] :roots [...] :open-count n}, where each
-         pin carries `:range`, its location in THIS snapshot, or nil when its
-         quote no longer matches here (§6.1.3). Nothing is written."
-  [user-id topic-id]
-  (when (doc-key user-id topic-id)
-    (if-let [map-id (map-id-for-topic user-id topic-id)]
+         pin carries `:range`, its location in THIS file at this commit, or
+         nil when its quote no longer matches here (§6.1.3). Nothing is
+         written."
+  [user-id ref]
+  (when ref
+    (if-let [map-id (map-id-for-ref user-id ref)]
       (let [pins (db/question-pins user-id map-id)
-            ranges (locate-in-topic user-id topic-id
-                     (map (fn [p] {:quote (:quote p) :anchor (:heading_anchor p)}) pins))
+            ranges (locate user-id ref (map pin-passage pins))
             roots (db/question-roots user-id map-id)
             root-label (into {} (map (juxt :id :label)) roots)]
         {:map-id map-id
@@ -100,32 +130,31 @@
       {:map-id nil :pins [] :roots [] :open-count 0})))
 
 (defn pin-counts
-  "{:open n :total m} for the pins of `user-id`'s file `topic-id`. No match is
-   computed, so the code pane's header can read it cheaply."
-  [user-id topic-id]
-  (let [pins (some->> (map-id-for-topic user-id topic-id) (db/question-pins user-id))]
+  "{:open n :total m} for the pins of `user-id`'s file at `ref`. No match is
+   computed, so a pane header can read it cheaply."
+  [user-id ref]
+  (let [pins (some->> (map-id-for-ref user-id ref) (db/question-pins user-id))]
     {:open (count (filter #(= "open" (:status %)) pins)) :total (count pins)}))
 
 (defn locate-for-finger
-  "Where the reader's pointed-at passage sits in `user-id`'s file `topic-id`,
-   or nil (§6.5.1). `source-topic-id` is the file the quote came from, nil for
-   a map citation. A quote from another file is located only when that file is
-   a snapshot of the same document, because a passage of another document
-   would light up text that merely matches it."
-  [user-id topic-id source-topic-id quote anchor]
-  (when (and topic-id (seq quote)
-          (or (nil? source-topic-id) (= source-topic-id topic-id)
-            (= (doc-key user-id source-topic-id) (doc-key user-id topic-id))))
-    (first (locate-in-topic user-id topic-id [{:quote quote :anchor anchor}]))))
+  "Where the reader's pointed-at passage sits in `user-id`'s file at `ref`,
+   or nil (§6.5.1). `source-doc` is the document key [repo-id path] the quote
+   came from, nil for a map citation. A quote from another document is never
+   located, because a passage of another document would light up text that
+   merely matches it."
+  [user-id ref source-doc quote anchor]
+  (when (and ref (seq quote)
+          (or (nil? source-doc) (= source-doc (docref/doc-key ref))))
+    (first (locate user-id ref [{:quote quote :anchor anchor}]))))
 
 (defn map-card
-  "The roots of `user-id`'s file `topic-id`, for the map card (§6.3.7).
+  "The roots of `user-id`'s file at `ref`, for the map card (§6.3.7).
    Post: [{:id :label :status :in_document :citations :known_sources
            :pin-labels}], `:pin-labels` being the labels of the root's open
          pins. The `next` root comes first, learned roots last. Empty when
          the file has no map. No match is computed."
-  [user-id topic-id]
-  (if-let [map-id (map-id-for-topic user-id topic-id)]
+  [user-id ref]
+  (if-let [map-id (map-id-for-ref user-id ref)]
     (let [pins (db/question-pins user-id map-id)
           open-by-root (group-by :root_id (filter #(= "open" (:status %)) pins))]
       (->> (db/question-roots user-id map-id)
@@ -140,21 +169,25 @@
 (def max-question-chars 2000)
 
 (defn create-pin!
-  "Pin `quote` on `user-id`'s file `topic-id`, under heading `anchor`.
+  "Pin `quote` on `user-id`'s file at `ref`, under heading `anchor` on
+   Markdown, or at character `offset` on code (§6.3.7 of
+   plans/commit-range-walkthrough.md). A code quote is kept exactly, because
+   it anchors by an exact match.
    Pre:  `quote` is non-blank. Post: {:ok pin} or {:error message}."
-  [user-id topic-id {:keys [quote anchor question]}]
-  (let [quote (str/trim (str quote))
+  [user-id ref {:keys [quote anchor offset question]}]
+  (let [quote (if (and ref (not (docref/markdown? ref))) (str quote) (str/trim (str quote)))
         question (str/trim (str question))]
     (cond
       (str/blank? quote) {:error "Select some text first."}
       (> (count quote) max-quote-chars) {:error "That selection is too long to pin."}
       (> (count question) max-question-chars) {:error "That question is too long."}
       :else
-      (if-let [{:keys [repo_topic_id repo_path]} (doc-key user-id topic-id)]
-        (let [map-id (db/ensure-question-map! user-id repo_topic_id repo_path)
+      (if ref
+        (let [map-id (db/ensure-question-map! user-id (:repo-id ref) (:path ref))
               pin (db/create-question-pin! user-id map-id
-                    {:snapshot-topic-id topic-id :quote quote
-                     :heading-anchor anchor :question question})]
+                    {:snapshot-topic-id (:topic-id ref) :snapshot-sha (:sha ref) :quote quote
+                     :heading-anchor anchor :offset-hint (when (integer? offset) offset)
+                     :question question})]
           (commands/bump! user-id :save-question-pin)
           {:ok pin})
         {:error "Questions can be pinned only on a file from a repository."}))))
@@ -183,11 +216,14 @@
 (defn set-root-known!
   "\"I know it\" (`known?` true) or its undo (false) on `user-id`'s root.
    A mark is written on the root's entity, which is created when the root has
-   none (§6.4.2.4). Undo removes the marks of both sources (§6.4.4)."
-  [user-id root-id known?]
+   none (§6.4.2.4), with the commit of `ref`, the file the reader is reading,
+   as its version (K2, plans/commit-range-walkthrough.md §6.8.2). Undo removes
+   the marks of both sources (§6.4.4)."
+  [user-id root-id known? ref]
   (if-let [entity-id (db/ensure-question-root-entity! user-id root-id)]
     (do (if known?
-          (db/set-known-mark! user-id entity-id "self")
+          (db/set-known-mark! user-id entity-id "self"
+            (when ref {:repo-id (:repo-id ref) :sha (:sha ref)}))
           (db/delete-known-marks! user-id entity-id))
         (commands/bump! user-id :mark-question-root-known)
         {:ok true})
@@ -207,11 +243,11 @@
     "\n\nFind what these questions have in common, then teach me."))
 
 (defn open-pins-message
-  "The Ask turn for `user-id`'s file `topic-id`: {:map-id :text} built from
+  "The Ask turn for `user-id`'s file at `ref`: {:map-id :text} built from
    every open pin of its map, or {:error} when it has none. The one place a pin
    set is built for an Ask, whichever control started it (§6.2.5.1)."
-  [user-id topic-id]
-  (let [map-id (map-id-for-topic user-id topic-id)
+  [user-id ref]
+  (let [map-id (map-id-for-ref user-id ref)
         open (when map-id (filterv #(= "open" (:status %)) (db/question-pins user-id map-id)))]
     (if (seq open)
       {:map-id map-id :text (diagnosis-user-message open)}
@@ -258,16 +294,16 @@
         ")"))))
 
 (defn request-tail
-  "The system message a run about `user-id`'s file `page-topic-id` carries, or
-   nil when the file has no map and this is not an Ask.
+  "The system message a run about `user-id`'s file at `ref` carries, or nil
+   when the file has no map and this is not an Ask.
 
    It goes in the request's tail, never the cached head (see
    `assistant/annotation-instructions`). On an Ask (`diagnosis?`), it also
    carries `tutor-persona`: the run teaches as the Tutor whatever the chat's
    mode is, and the chat's mode is not changed (§6.3.1.2).
    Post: {:map-id :content}."
-  [user-id page-topic-id diagnosis? tutor-persona]
-  (when-let [map-id (map-id-for-topic user-id page-topic-id)]
+  [user-id ref diagnosis? tutor-persona]
+  (when-let [map-id (map-id-for-ref user-id ref)]
     (let [roots (db/question-roots user-id map-id)
           open (filterv #(= "open" (:status %)) (db/question-pins user-id map-id))
           root-of (into {} (map (juxt :id :label)) roots)]
@@ -291,12 +327,13 @@
            "\n\n" block-instructions
            (when diagnosis? (str "\n" diagnosis-instructions)))}))))
 
-(defn- link-roots!
-  "Entity ids for root `labels`, through the extraction linker (§6.4.2.1).
+(defn link-labels!
+  "Entity ids for idea `labels`, through the extraction linker (§6.4.2.1),
+   billed under `endpoint`.
    Post: {lower-label entity-id}. A missing key or credit, or a failed call,
-         yields {} and the roots stay unlinked: `ensure-question-root-entity!`
-         gives each one an entity when the reader marks it."
-  [user-id labels]
+         yields {} and the labels stay unlinked: `ensure-question-root-entity!`
+         gives a root an entity when the reader marks it."
+  [user-id labels endpoint]
   (if (empty? labels)
     {}
     (try
@@ -304,7 +341,7 @@
             {:keys [by-label cost tokens]} (kg-extract/link-entities! api-key model-fields
                                              user-id labels {:from-diagnosis? true})]
         (when (and cost (pos? cost))
-          (credits/record-cost-charge! user-id :question-map.link (:id entry) cost tokens))
+          (credits/record-cost-charge! user-id endpoint (:id entry) cost tokens))
         by-label)
       (catch Exception e
         (tel/log! {:level :warn :id ::link-failed
@@ -314,27 +351,29 @@
 
 (defn- citations
   "The {:quote :anchor} passages behind evidence `keys` of one run.
-   A key the run did not retain is dropped. So is a citation of another file:
-   the map belongs to this file, and only its passages can light up in it. A
-   repo file's evidence names the repository node as its document and the file
-   as its page (`assistant/topic-parts`), so the page is what is compared."
-  [evidence keys file-topic-id]
+   A key the run did not retain is dropped. So is a citation of another
+   document: the map belongs to this document key, and only its passages can
+   light up in it. Evidence of a repository file, a topic or not, names the
+   repository node as its document and the path as its title
+   (`assistant/topic-parts`, plans/commit-range-walkthrough.md §6.3.5), so
+   that pair is what is compared."
+  [evidence keys {:keys [repo-id path]}]
   (into []
     (keep (fn [k]
-            (let [{:keys [quoted_text anchor page_topic_id]} (get evidence k)]
-              (when (and (seq quoted_text) (= page_topic_id file-topic-id))
+            (let [{:keys [quoted_text anchor document_topic_id document_title]} (get evidence k)]
+              (when (and (seq quoted_text) (= document_topic_id repo-id) (= document_title path))
                 {:quote quoted_text :anchor anchor}))))
     keys))
 
 (defn apply-reply!
   "Write the map block at the start of `text`, if any, into map `map-id`.
 
-   `run` is {:map-id :diagnosis? :run-uuid :page-topic-id}.
+   `run` is {:map-id :diagnosis? :run-uuid :ref}.
    Post: {:prose text-without-block :problem nil-or-message}. The prose is
          what the transcript stores. When the block cannot be parsed or
          checked, nothing is written and :problem says why (§6.3.2). Writes
          go through `db/apply-question-map-plan!` in one transaction."
-  [user-id {:keys [map-id diagnosis? run-uuid page-topic-id]} text]
+  [user-id {:keys [map-id diagnosis? run-uuid ref]} text]
   (let [{:keys [block prose]} (block/split-reply text)]
     (if-not block
       {:prose text :problem (when diagnosis? "The tutor did not send a map.")}
@@ -359,7 +398,8 @@
                                                     :root-label (root-label (:root_id pin))})))
                                   pins)})
                 unlinked (into [] (comp (filter #(nil? (:entity_id %))) (map :label)) roots)
-                by-lower (link-roots! user-id (into (mapv :label (:new-roots p)) unlinked))
+                by-lower (link-labels! user-id (into (mapv :label (:new-roots p)) unlinked)
+                           :question-map.link)
                 entity-of #(get by-lower (str/lower-case (str/trim %)))
                 evidence (into {} (map (juxt :citation_key identity))
                            (db/get-assistant-run-evidence user-id run-uuid))]
@@ -367,9 +407,9 @@
               (assoc p
                 :new-roots (mapv (fn [{:keys [label citation-keys] :as r}]
                                    (assoc r :entity-id (entity-of label)
-                                     :citations (citations evidence citation-keys
-                                                  page-topic-id)))
+                                     :citations (citations evidence citation-keys ref)))
                              (:new-roots p))
-                :relinks (into {} (keep (fn [l] (when-let [e (entity-of l)] [l e]))) unlinked)))
+                :relinks (into {} (keep (fn [l] (when-let [e (entity-of l)] [l e]))) unlinked)
+                :as-of-sha (:sha ref)))
             (commands/bump! user-id :apply-question-map)
             {:prose prose :problem nil}))))))

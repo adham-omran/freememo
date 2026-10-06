@@ -292,8 +292,25 @@
                      (let [node dom/node]
                        (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
                        [node (show-rendered! node rendered)]))]
-      (pin-pane/PinLayer user-id (:topic-id rendered) node pin-list-open?
-        !pin-list-open?))))
+      (pin-pane/PinLayer user-id {:topic-id (:topic-id rendered)} node :blocks
+        pin-list-open? !pin-list-open?))))
+
+(e/defn SourceView
+  "The source view of a file, and its question pins on code
+   (plans/commit-range-walkthrough.md §6.3.7).
+   Pre : `body` is {:topic-id :source} from one `get-topic-code*` read.
+   Inv : every text node under the `code` element is the source, in order, so
+         a pin's character offsets index both."
+  [body lang user-id pin-list-open? !pin-list-open?]
+  (e/client
+    (let [node (dom/pre
+                 (dom/props {:class "code-pane-source" :dir "ltr" :tabindex "0"})
+                 (dom/code
+                   (dom/props {:class "hljs"})
+                   (render-source! dom/node body lang)
+                   dom/node))]
+      (pin-pane/PinLayer user-id {:topic-id (:topic-id body)} node :source
+        pin-list-open? !pin-list-open?))))
 
 (e/defn CodePane
   "Pre : dctx/page-topic-id names a code topic (dctx/is-code?).
@@ -357,8 +374,8 @@
                                                              (some-> (:byte-size code) format-bytes)])))))
           (when (and markdown? source? view)
             (ViewToggle view set-view!))
-          (when rendered?
-            (pin-pane/PinHeaderControls user-id topic-id !pin-list-open?))
+          (when (and source? (or rendered? show-source?))
+            (pin-pane/PinHeaderControls user-id {:topic-id topic-id} !pin-list-open?))
           ;; Copy to notes copies source lines, which the rendered view has
           ;; none of (§2.8). A hidden editor pane would take the lines out of
           ;; sight (plans/editor-pane-toggle.md §4.3).
@@ -391,11 +408,8 @@
           rendered? (RenderedMarkdown rendered user-id pin-list-open? !pin-list-open?)
 
           show-source?
-          (dom/pre
-            (dom/props {:class "code-pane-source" :dir "ltr" :tabindex "0"})
-            (dom/code
-              (dom/props {:class "hljs"})
-              (render-source! dom/node (e/server (select-keys code [:topic-id :source])) lang)))))
+          (SourceView (e/server (select-keys code [:topic-id :source])) lang user-id
+            pin-list-open? !pin-list-open?)))
 
       ;; One position per view (plans/reading-position-memory.md §4 3.5.4). A
       ;; view switch changes the key, so the old view's tracker flushes and the

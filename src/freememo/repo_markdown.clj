@@ -212,6 +212,37 @@
       (rewrite-links! body file-path (resolve-paths (repo-link-paths file-path body)) origin)
       (cleaner/clean-html (.html body)))))
 
+;; ── Source lines ───────────────────────────────────────────────────
+
+(defn top-level-block-lines
+  "The source lines each top-level rendered element of `source` came from,
+   in order: [[first-line last-line] …], 0-based and inclusive
+   (plans/commit-range-walkthrough.md §6.6.3, which colors a block by the
+   change that wrote its lines).
+   A link reference definition renders nothing and is skipped. Footnote
+   definitions render as ONE trailing container, so they give one range.
+   Post: the ranges. The caller must check their count against the rendered
+         elements: raw HTML and lifted math can render a different number,
+         and then the ranges name nothing."
+  [source]
+  (let [nodes (iterator-seq (.iterator (.getChildren (.parse parser (or source "")))))
+        ranges (keep (fn [node]
+                       (case (.getSimpleName (class node))
+                         ("Reference" "BlankLine") nil
+                         "FootnoteBlock" [::footnote (.getStartLineNumber node) (.getEndLineNumber node)]
+                         [(.getStartLineNumber node) (.getEndLineNumber node)]))
+                 nodes)
+        notes (filter #(= ::footnote (first %)) ranges)]
+    (cond-> (vec (remove #(= ::footnote (first %)) ranges))
+      (seq notes) (conj [(apply min (map second notes)) (apply max (map #(nth % 2) notes))]))))
+
+(defn top-level-elements
+  "The top-level elements of rendered `html`, as Jsoup elements of one parse.
+   Post: [body elements]; edit them, then read `(.html body)`."
+  [html]
+  (let [body (.body (parse-body (or html "")))]
+    [body (vec (.children body))]))
+
 ;; ── Extract ────────────────────────────────────────────────────────
 
 (defn- fences->quill-code-blocks!

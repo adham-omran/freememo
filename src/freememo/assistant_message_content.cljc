@@ -53,8 +53,11 @@
   (when-let [source (some->> (evidence/clicked-citation event)
                       (evidence/source-for-citation sources))]
     (when-let [quote (not-empty (evidence-text source))]
+      ;; Repository evidence names the repository node as its document and the
+      ;; file's path as its title, a topic or not, so the pair is the document
+      ;; key a pane compares (plans/commit-range-walkthrough.md §6.3.5).
       {:quote quote :anchor (:anchor source)
-       :source-topic-id (:page_topic_id source)})))
+       :source-doc [(:document_topic_id source) (:document_title source)]})))
 
 (defn- point-at-citation!
   "Light up the passage of the citation under the pointer in the open file,
@@ -63,14 +66,20 @@
   (pin-state/point! (pointed-passage event sources)))
 
 (defn- scroll-to-citation!
-  "A citation of the file the rendered pane shows scrolls there instead of
-   opening the evidence dialog (§6.5.4). Post: true when it did."
+  "A citation of the file a pin pane shows scrolls there instead of opening
+   the evidence dialog (§6.5.4). A citation of another file of the open
+   walkthrough step swaps that file into its canvas first
+   (plans/commit-range-walkthrough.md §6.6.4). Post: true when it did either."
   [event sources]
   (let [passage (pointed-passage event sources)
-        pane-topic-id (:question-pane-topic-id @bus/!ctx)]
-    (if (and passage pane-topic-id (= pane-topic-id (:source-topic-id passage)))
+        {:keys [question-pane-doc walkthrough-docs]} @bus/!ctx]
+    (cond
+      (nil? passage) false
+      (and question-pane-doc (= question-pane-doc (:source-doc passage)))
       (do (pin-state/point! (assoc passage :scroll? true)) true)
-      false)))
+      (contains? (set walkthrough-docs) (:source-doc passage))
+      (do (pin-state/open-in-canvas! (assoc passage :scroll? true)) true)
+      :else false)))
 
 (e/defn AssistantRichTextLeaf [safe-html]
   (e/client

@@ -61,7 +61,7 @@
   #{:sources :media :topics :poem_packages :topic_repetitions :study_schedules
     :curricula :curriculum_exam_forms :curriculum_exam_sittings :assistant_chats
     :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings
-    :question_maps})
+    :question_maps :walkthroughs})
 
 (def ^:private fk-columns
   "column → id space, per table. The id space is the table whose ledger map
@@ -110,7 +110,8 @@
                            :covered_from_message_id :assistant_messages
                            :covered_through_message_id :assistant_messages}
    :assistant_evidence {:run_id :assistant_runs
-                        :document_topic_id :topics :page_topic_id :topics}
+                        :document_topic_id :topics :page_topic_id :topics
+                        :walkthrough_id :walkthroughs}
    :video_transcripts {:topic_id :topics}
    :video_segments {:topic_id :topics}
    :kg_facts {:subject_entity_id :kg_entities :predicate_id :kg_predicates
@@ -122,7 +123,10 @@
    :question_roots {:map_id :question_maps :entity_id :kg_entities}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
                    :root_id :question_roots}
-   :known_marks {:entity_id :kg_entities}})
+   :known_marks {:entity_id :kg_entities :as_of_repo_topic_id :topics}
+   :walkthroughs {:repo_topic_id :topics}
+   :walkthrough_concepts {:walkthrough_id :walkthroughs}
+   :walkthrough_hunks {:walkthrough_id :walkthroughs :concept_id :walkthrough_concepts}})
 
 (def ^:private required-fk-columns
   "Foreign keys whose row is worthless without them. A row whose value here does
@@ -171,7 +175,13 @@
    :question_roots #{:map_id}
    :question_pins #{:map_id}
    ;; Half of the primary key.
-   :known_marks #{:entity_id}})
+   :known_marks #{:entity_id}
+   ;; A walkthrough is its repository's range, and its concepts and hunks
+   ;; are nothing without it. A hunk with no concept would break the
+   ;; one-concept-per-hunk invariant (§6.5.2).
+   :walkthroughs #{:repo_topic_id}
+   :walkthrough_concepts #{:walkthrough_id}
+   :walkthrough_hunks #{:walkthrough_id :concept_id}})
 
 (def ^:private dropped-columns
   "Columns removed before insert. `id` everywhere — the target's sequence issues
