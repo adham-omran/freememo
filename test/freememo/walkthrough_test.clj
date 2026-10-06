@@ -99,6 +99,21 @@
       (let [{:keys [html]} (wt/canvas user wid 2 "src/ir.zig" :previous)]
         (is (str/includes? html "<span class=\"wt-line wt-c\">const Op = enum { loop, hold };</span>"))))))
 
+(deftest a-canvas-read-with-an-unreachable-remote-returns-its-error
+  (with-walkthrough [user repo-id wid shas]
+    (testing "the clone's remote is refused, as the forge gate refuses a private host"
+      (with-redefs [git/remote-url (fn [_ _]
+                                     (throw (ex-info (str "FreeMemo does not connect to gitlab.example.com."
+                                                       " The address is private or not valid.")
+                                              {:type :freememo.forge/forge-failure :reason :address})))]
+        ;; A throw here errors the test, which is the crash this guards.
+        (let [c (wt/canvas user wid 2 "docs/ir-spec.md" :previous)]
+          (is (= {:error "FreeMemo does not connect to gitlab.example.com. The address is private or not valid."}
+                c)
+            "an error map, never nil: nil reads as a read still in flight"))))
+    (testing "a canvas for a path outside the step is still nil, not an error"
+      (is (nil? (wt/canvas user wid 2 "no/such/file.md" :previous))))))
+
 (deftest steps-move-and-the-grouping-can-be-fixed
   (with-walkthrough [user repo-id wid shas]
     (is (= {:ok 1} (wt/understood! user wid)) "the opener moves to step 1")
