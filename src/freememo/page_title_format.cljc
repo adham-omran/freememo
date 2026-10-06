@@ -34,10 +34,11 @@
   #{:viewer :schedule :curriculum :knowledge})
 
 (defn walkthrough-name
-  "The name of a walkthrough of the repository titled `repo-title`
-   (plans/commit-range-walkthrough.md §6.6.7.3), or nil when there is none."
-  [repo-title]
-  (when repo-title (str repo-title " walkthrough")))
+  "The tab name of the walkthrough named `display-name`, of the repository
+   titled `repo-title` (plans/repository-home.md §4.3.5), or nil when there
+   is no such walkthrough."
+  [display-name repo-title]
+  (when (and display-name repo-title) (str display-name " (" repo-title ")")))
 
 (defn page-title
   "Pre: item-name is a page's name as a string, or nil when the page's item

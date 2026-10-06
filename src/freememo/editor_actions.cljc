@@ -171,7 +171,7 @@
 
 (defn install-cloze-bindings!
   "Register the two cloze-insert chords on `ed`'s keyboard module — the keyboard
-   twins of the format-menu's {+} / {=} buttons.
+   twins of the format menu's New cloze / Same cloze rows.
 
      mod+shift+C      → insert-cloze! :inc (next cloze number)
      mod+shift+alt+C  → insert-cloze! :eq  (reuse the current max)

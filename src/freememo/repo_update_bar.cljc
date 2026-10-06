@@ -7,7 +7,9 @@
    adds a commit node beside the old ones (§4.6 6.2). A sha that is already a
    child adds nothing and says so (§4.6 6.3).
 
-   The user starts every update. No schedule exists."
+   The user starts every update. No schedule exists.
+
+   It is the header of the repository home (`repo-home`)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -15,7 +17,6 @@
    [freememo.doc-context :as dctx]
    [freememo.forge-kinds :as kinds]
    [freememo.navigation :as nav]
-   [freememo.walkthrough-entry :refer [WalkthroughEntry]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.repo-import :as repo-import])
    #?(:clj [freememo.user-state :as us])))
@@ -97,7 +98,4 @@
             (dom/text "Open commit")
             (dom/On "click"
               (fn [_] (navigate! :viewer (nav/nav-topic (:topic-id result) nil)))
-              nil)))
-        ;; Commit-range walkthroughs start here (plans/commit-range-walkthrough.md
-        ;; §6.6.1).
-        (WalkthroughEntry user-id repo-id navigate!)))))
+              nil)))))))

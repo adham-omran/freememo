@@ -26,6 +26,7 @@
    takes that handle. A plain defn, never an Electric body, owns the state
    (CLAUDE.md, \"JS Library Init Side Effects in e/defn\")."
   (:require [clojure.string :as str]
+            [freememo.line-bands :as line-bands]
             [freememo.selection-placement :as sel-place]))
 
 ;; ── Text model ─────────────────────────────────────────────────────
@@ -277,6 +278,16 @@
                                         :left (.-left r) :right (.-right r)}))))
           (.appendChild badges b)))))))
 
+(defn- finger-bands
+  "One rect per visual line of `rects`, as maps. Outlining the raw rects draws
+   a box around every inline fragment, and two nested ones around a `<code>`
+   run (`freememo.line-bands`)."
+  [rects]
+  (line-bands/bands
+    (map (fn [^js r] {:left (.-left r) :top (.-top r)
+                      :right (.-right r) :bottom (.-bottom r)})
+      rects)))
+
 (defn- paint-finger!
   "Outline the finger's range where it is visible inside the pane, and point
    at it from the pane's edge when it is not (§6.5.1, §6.5.2)."
@@ -287,12 +298,12 @@
           ^js box (.getBoundingClientRect rng)
           rects (visible-rects rng container)]
       (if (seq rects)
-        (doseq [^js r rects]
+        (doseq [{:keys [left top right bottom]} (finger-bands rects)]
           (let [o (el "div" "question-finger")]
-            (set! (.. o -style -left) (str (- (.-left r) 2) "px"))
-            (set! (.. o -style -top) (str (- (.-top r) 2) "px"))
-            (set! (.. o -style -width) (str (+ (.-width r) 4) "px"))
-            (set! (.. o -style -height) (str (+ (.-height r) 4) "px"))
+            (set! (.. o -style -left) (str (- left 2) "px"))
+            (set! (.. o -style -top) (str (- top 2) "px"))
+            (set! (.. o -style -width) (str (+ (- right left) 4) "px"))
+            (set! (.. o -style -height) (str (+ (- bottom top) 4) "px"))
             (.appendChild finger o)))
         (let [below? (>= (.-top box) (.-bottom c))
               m (el "div" (str "question-finger-edge question-finger-edge--"
