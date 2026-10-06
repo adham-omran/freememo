@@ -169,7 +169,7 @@
           (e/on-unmount (install-outside-click! node mode !popover))
           (dom/div
             (dom/props {:class "question-pin-popover__quote" :dir "auto"})
-            (dom/text (str (if edit? (str "Pin " (:label pin) " · ") "")
+            (dom/text (str (if edit? (str "Pin " (:label pin) ": ") "")
                         "“" (excerpt (if edit? (:quote pin) (:quote popover)) 90) "”")))
           (dom/div
             (dom/props {:class "question-pin-popover__error" :role "alert"

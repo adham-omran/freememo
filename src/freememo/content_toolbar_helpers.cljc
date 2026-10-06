@@ -50,7 +50,7 @@
   [card-count card-type use-context context-window]
   (str (gen-label card-count card-type)
     (when use-context
-      (str " · " context-window " page" (when (not= 1 context-window) "s") " context"))))
+      (str " with " context-window " page" (when (not= 1 context-window) "s") " of context"))))
 
 ;; Save generated cards to DB. Routes through cards/save-cards so bake-card-html
 ;; runs and topic pins land in :q / :a (basic) or :c (cloze) per P3d.

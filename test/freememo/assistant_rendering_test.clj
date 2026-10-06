@@ -130,7 +130,7 @@
     (is (= ["E4" "E5" "E6"] (mapv :citation-key sources)))
     (is (= ["Memory" "Stack values." "Heap values."]
           (mapv :quoted-text sources)))
-    (is (= ["Memory · excerpt 1" "Memory · excerpt 2" "Memory · excerpt 3"]
+    (is (= ["Memory, excerpt 1" "Memory, excerpt 2" "Memory, excerpt 3"]
           (mapv :display-label sources)))
     (is (= ["memory" "memory" "memory"] (mapv :anchor sources)))
     (is (every? :quoted-html sources))))

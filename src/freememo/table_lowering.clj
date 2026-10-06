@@ -103,9 +103,10 @@
 
 (def inline-block-separator
   "What joins two former block siblings inside one cell. A cell can hold no
-   newline, so the separator has to be text. A middle dot reads as a list,
-   which is what the constructs reaching this step are."
-  " · ")
+   newline, so the separator has to be text. The constructs reaching this step
+   are lists, and a semicolon separates list items that can themselves hold
+   commas."
+  "; ")
 
 (def ^:private max-colspan
   "The largest `colspan` worth expanding into real cells.
@@ -595,7 +596,7 @@
          trailing `br` yields none.
 
    The trailing case is why this is not a plain replace. A `<td>a<br></td>` gave
-   `<td>a ·</td>`, because the separator landed as the cell's last child and
+   `<td>a;</td>`, because the separator landed as the cell's last child and
    `doc-html/squeeze-whitespace!` then trimmed its trailing space — a mark the
    reader sees, separating nothing.
 

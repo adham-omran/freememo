@@ -37,7 +37,7 @@
   "The name of a walkthrough of the repository titled `repo-title`
    (plans/commit-range-walkthrough.md §6.6.7.3), or nil when there is none."
   [repo-title]
-  (when repo-title (str "Walkthrough · " repo-title)))
+  (when repo-title (str repo-title " walkthrough")))
 
 (defn page-title
   "Pre: item-name is a page's name as a string, or nil when the page's item

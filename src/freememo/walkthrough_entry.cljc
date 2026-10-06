@@ -33,8 +33,8 @@
    and the subject, so typing either finds a commit."
   [commits]
   (mapv (fn [{:keys [sha subject date author]}]
-          {:id sha :label (str (short-sha sha) " · " subject)
-           :description (str (subs (str date) 0 (min 10 (count (str date)))) " · " author)})
+          {:id sha :label (str (short-sha sha) ": " subject)
+           :description (str (subs (str date) 0 (min 10 (count (str date)))) ", " author)})
     commits))
 
 (defn- index-of [options id]
@@ -163,8 +163,8 @@
             (dom/li
               (dom/button
                 (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-entry__open"})
-                (dom/text (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) " · "
-                            (:commit_count w) " commits · "
+                (dom/text (str (short-sha (:sha_from w)) " → " (short-sha (:sha_b w)) ", "
+                            (:commit_count w) " commits, "
                             (case (:status w) "ready" (str "step " (:step w) " of " (:concepts w))
                                              "preparing" "preparing"
                                              (str "failed"))))

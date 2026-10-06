@@ -907,12 +907,12 @@
               ;; WHICH schedule the face is about, and the wrong-schedule
               ;; defect this selection fixes was invisible for that reason.
               :tooltip (str (fc/pace-phrase state (:delta p))
-                         " · target " (:study_schedules/target_date row)
+                         ", target " (:study_schedules/target_date row)
                          (when (< 1 (count rows))
-                           (str " · covers pages "
+                           (str ", covers pages "
                              (or (:study_schedules/first_page row) 1) "–"
                              (or (:study_schedules/last_page row) "end")
-                             " · " (count rows) " schedules on this document")))}))))
+                             ", " (count rows) " schedules on this document")))}))))
      :cljs nil))
 
 (defn schedule-summaries

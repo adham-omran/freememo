@@ -192,7 +192,7 @@
         (e/for [bar (e/diff-by :date bars)]
           (svg/g
             (svg/title (dom/text (str (:count bar)
-                                   (if (= 1 (:count bar)) " topic · " " topics · ")
+                                   (if (= 1 (:count bar)) " topic on " " topics on ")
                                    (:date bar))))
             (svg/rect
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
@@ -257,7 +257,7 @@
             (svg/title (dom/text (if (:backlog bar)
                                    (str (:count bar) " overdue (backlog)")
                                    (str (:count bar)
-                                        (if (= 1 (:count bar)) " topic · " " topics · ")
+                                        (if (= 1 (:count bar)) " topic on " " topics on ")
                                         (:date bar)))))
             (svg/rect
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
@@ -421,7 +421,7 @@
               (dom/props {:class (str "learn-chart-region"
                                   (when (= phase :refreshing)
                                     " progressive-region-refreshing"))})
-              (Chart-card "Studied · last 14 days" studied)
+              (Chart-card "Studied: last 14 days" studied)
               (loading/RegionNotice phase error)))
           (e/fn [_phase] (LearnChartSkeleton))
           (e/fn [error] (DashboardRegionFailure error "184px")))
@@ -439,7 +439,7 @@
                                     " progressive-region-refreshing"))})
               (dom/div (dom/props {:class "dash-card"})
                 (dom/div (dom/props {:class "dash-cap"})
-                  (dom/text "Future due · backlog + 30 days"))
+                  (dom/text "Future due: backlog + 30 days"))
                 (Future-due-chart future-due))
               (loading/RegionNotice phase error)))
           (e/fn [_phase] (LearnChartSkeleton))

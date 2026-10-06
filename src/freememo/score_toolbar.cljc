@@ -458,7 +458,7 @@
                   (str "Audio " (format-ms (:start-ms region))
                     " – " (format-ms (:end-ms region)))
                   "Drag on the waveform to select audio")
-                " · "
+                ", "
                 total-rects " rect" (when (not= 1 total-rects) "s"))))
           (dom/div
             (dom/props {:style {:margin-left "auto"}})

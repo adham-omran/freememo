@@ -99,8 +99,8 @@
       (dom/props {:class "wt-rail__hunk"})
       (dom/span
         (dom/props {:class "wt-rail__hunk-head" :dir "ltr"})
-        (dom/text (str (short-sha (:commit-sha hunk)) " · +" (:added hunk) " −" (:removed hunk)
-                    " · " (:header hunk))))
+        (dom/text (str (short-sha (:commit-sha hunk)) ", +" (:added hunk) " −" (:removed hunk)
+                    ", " (:header hunk))))
       (e/for [[t {:keys [concept]}] (forms-ext/Select! :concept (str concept-id) concept-options
                                        :class "input wt-rail__move"
                                        :aria-label "Move this change to another step")]
@@ -127,7 +127,7 @@
           (dom/span (dom/props {:class "wt-rail__path"}) (dom/text (:path file)))
           (dom/span (dom/props {:class "wt-rail__count"})
             (dom/text (str n " change" (when (not= 1 n) "s")
-                        (when (:deleted? file) " · deleted"))))
+                        (when (:deleted? file) ", deleted"))))
           (dom/On "click" (fn [_] (pick-path! (:path file))) nil))
         (dom/button
           (dom/props {:type "button" :class "btn btn-sm btn-secondary wt-rail__toggle"

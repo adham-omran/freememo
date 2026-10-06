@@ -414,13 +414,13 @@
           (dom/props {:type "button"
                       :class (str "btn btn-sm curriculum-exam-chip-open"
                                (when passed? " is-passed"))})
-          (dom/text (str "Exam v" (:version summary) " · "
+          (dom/text (str "Exam version " (:version summary) ", "
                       (cond
-                        (= "draft" (:status summary)) "Draft"
-                        (:stale? summary) "Outdated"
-                        :else "Approved")
-                      (when score (str " · " score "%"))
-                      (when passed? " · passed")))
+                        (= "draft" (:status summary)) "draft"
+                        (:stale? summary) "outdated"
+                        :else "approved")
+                      (when score (str ", score " score "%"))
+                      (when passed? ", passed")))
           (dom/On "click"
             (fn [_] (navigate! :curriculum
                       {:type :curriculum-exam :curriculum-id curriculum-id
@@ -434,7 +434,7 @@
       (if-not editing?
         (dom/button
           (dom/props {:type "button" :class "link-button curriculum-estimate-edit"})
-          (dom/text (str (:estimated_minutes material) " min estimate · edit"))
+          (dom/text (str (:estimated_minutes material) " min estimate (edit)"))
           (dom/On "click" (fn [_] (reset! !editing? true)) nil))
         (let [commits
               (dom/div
@@ -642,7 +642,7 @@
           (icons/Icon :clock :size 16)
           (dom/strong (dom/text "Curriculum schedule")))
         (dom/p
-          (dom/text (str (:total-minutes plan) " minutes remaining · "
+          (dom/text (str (:total-minutes plan) " minutes remaining, "
                       (:daily-minutes plan) " minutes per study day")))
         (if (:feasible? plan)
           (dom/p (dom/props {:class "curriculum-feasible"})

@@ -375,7 +375,7 @@
             (when-some [limit (:limit chip)]
               (dom/span
                 (dom/props {:class "import-chip-limit"})
-                (dom/text (str " · " limit))))))))))
+                (dom/text (str " (" limit ")"))))))))))
 
 ;; The hidden input behind the intake area's click. Its `accept` names every
 ;; group, because the intake area accepts everything the app imports; the drop

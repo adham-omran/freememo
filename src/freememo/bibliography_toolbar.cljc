@@ -74,7 +74,7 @@
           (dom/props {:class "toolbar-badge tooltip-right"})
           ;; The pace verdict lives HERE now, in words, through `pace-phrase`.
           ;; It left the face because a cumulative lag and a daily share are
-          ;; measured against different lines: `Behind · today 16 pages` beside
+          ;; measured against different lines: `Behind, today 16 pages` beside
           ;; `9 pages behind` asked the reader to reconcile two numbers that
           ;; need not agree.
           (tooltip/Tooltip! (e/server (:tooltip pace)))

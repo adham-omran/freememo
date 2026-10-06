@@ -140,5 +140,5 @@
 (deftest the-badge-face-keeps-its-today-anchor-past-the-target
   (testing "the label drops only when the day token is itself `today`, so an
             overdue face still anchors its quota"
-    (is (= "today 3 pages · 12d overdue" (fc/schedule-badge-face 3 -12)))
-    (is (= "3 pages · today" (fc/schedule-badge-face 3 0)))))
+    (is (= "today 3 pages, 12d overdue" (fc/schedule-badge-face 3 -12)))
+    (is (= "3 pages, today" (fc/schedule-badge-face 3 0)))))

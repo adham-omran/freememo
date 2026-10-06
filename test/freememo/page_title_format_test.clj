@@ -40,5 +40,5 @@
       (str "tabs with no label: " (vec (remove fmt/tab-labels tabs))))))
 
 (deftest a-walkthrough-is-named-after-its-repository
-  (is (= "Walkthrough · owner/grid | FreeMemo" (fmt/page-title (fmt/walkthrough-name "owner/grid"))))
+  (is (= "owner/grid walkthrough | FreeMemo" (fmt/page-title (fmt/walkthrough-name "owner/grid"))))
   (is (= "Not found | FreeMemo" (fmt/page-title (fmt/walkthrough-name nil)))))

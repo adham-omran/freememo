@@ -36,7 +36,7 @@
 (defn- parse-iso-date-parts
   "Parse common publication-date string shapes into a CSL :date-parts vec:
    [[Y]] [[Y M]] or [[Y M D]]. Returns nil on unparseable input.
-   Handles: 2023-01-19 · 2023/01/19 · 2023-01 · 2023 · 2023-01-19T18:59:59Z."
+   Handles: 2023-01-19, 2023/01/19, 2023-01, 2023, 2023-01-19T18:59:59Z."
   [s]
   (when (and s (string? s) (not (str/blank? s)))
     (let [stripped (-> s str/trim (str/replace #"T.*$" "") (str/replace "/" "-"))

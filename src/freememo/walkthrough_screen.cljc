@@ -370,8 +370,8 @@
           ov (e/server (e/Offload #(overview* rev user-id wid)))
           status (e/server (:status ov))
           error (e/server (:error ov))
-          title (e/server (str (:repo-title ov) " · " (short-sha (:sha-from ov)) " → "
-                            (short-sha (:sha-b ov)) " · " (:commit-count ov) " commits"))
+          title (e/server (str (:repo-title ov) ", " (short-sha (:sha-from ov)) " → "
+                            (short-sha (:sha-b ov)) ", " (:commit-count ov) " commits"))
           phase (e/server (phase* (e/watch (us/get-atom user-id :preparing-walkthroughs)) wid))]
       (dom/div
         (dom/props {:class "wt-screen" :data-testid "walkthrough-screen" :data-status (or status "")})
@@ -382,7 +382,7 @@
             (dom/text "← Repository")
             (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-topic repo-id nil))) nil))
           (dom/h2 (dom/props {:class "wt-screen__title" :dir "auto"})
-            (dom/text (str "Walkthrough · " title))))
+            (dom/text (str "Walkthrough: " title))))
         (dom/div
           (dom/props {:class "wt-screen__body"})
           (when (= "preparing" status) (PreparingPanel user-id wid phase))

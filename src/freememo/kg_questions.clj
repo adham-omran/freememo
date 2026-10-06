@@ -291,7 +291,7 @@
                                (when (not= 1 (:questions result)) "s")
                                " generated"
                                (when (pos? (:omitted result 0))
-                                 (str " · " (:omitted result)
+                                 (str "; " (:omitted result)
                                    " fact(s) skipped — too few distinguishing facts"))
                                (when (pos? (:batch-errors result 0))
                                  (str " (" (:batch-errors result) " batch(es) failed)")))}))

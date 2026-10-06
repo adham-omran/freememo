@@ -92,7 +92,7 @@
     "cloze" (cond-> [["Cloze" cloze]]
               (not (str/blank? answer)) (conj ["Back extra" answer]))
     "overlapping" [["List" (cc/overlapping-row-html overlapping)]]
-    "occlusion" [[(str "Masks · " (if (= occlusion_mode "hide-one") "Hide One" "Hide All"))
+    "occlusion" [[(str "Masks: " (if (= occlusion_mode "hide-one") "Hide One" "Hide All"))
                   (occlusion-rendition-html occlusion_image_media_id geometry)]]
     "score" [["Segment" (cc/score-direction-html score_direction score_start_ms score_end_ms)]]
     [["Rendition" (str "<span style=\"color:var(--color-text-secondary)\">"
@@ -134,7 +134,7 @@
         (dom/span
           (dom/props {:style {:font-family "ui-monospace, monospace"}})
           (dom/text "−" ordinal
-            (when (not= "card" (:scope_type version)) " · group edit"))))
+            (when (not= "card" (:scope_type version)) ", group edit"))))
       (e/for [[label html] (e/diff-by first (rendition-panes version))]
         (RenditionPane label html)))))
 

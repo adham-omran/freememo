@@ -85,7 +85,7 @@
        (let [names (distinct (map #(get titles % "—") src-ids))
              extra (dec (count names))
              head  (str (first names) (when (pos? extra) (str " +" extra " more")))]
-         (if cnt (str head " · " cnt " card" (when (not= 1 cnt) "s")) head)))))
+         (if cnt (str head ", " cnt " card" (when (not= 1 cnt) "s")) head)))))
 
 #?(:clj
    (defn- card-cell
@@ -222,7 +222,7 @@
                                   :justify-content "space-between" :gap "12px"}})
               (dom/h3
                 (dom/props {:style {:margin "0" :font-size "16px" :font-weight "500"}})
-                (dom/text (str "Actions · " n " undoable")))
+                (dom/text (str "Actions: " n " undoable")))
               (dom/button
                 (dom/props {:aria-label "Close"
                             :style {:width "28px" :height "28px" :display "inline-flex"

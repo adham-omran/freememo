@@ -63,7 +63,7 @@
         (dom/props {:class "question-map__meta"})
         (dom/text (str (if (:in_document root) "In this file" "Outside this file")
                     (when (seq (:pin-labels root))
-                      (str " · pins " (str/join ", " (:pin-labels root)))))))
+                      (str " (pins " (str/join ", " (:pin-labels root)) ")")))))
       (dom/div
         (dom/props {:class "question-map__citations"})
         (e/for [[i c] (e/diff-by first (map-indexed vector (:citations root)))]
@@ -96,7 +96,7 @@
           (dom/element "details"
             (dom/props {:class "question-map" :open true})
             (dom/element "summary"
-              (dom/text (str "Question map · " (count roots) " idea"
+              (dom/text (str "Question map: " (count roots) " idea"
                           (when (not= 1 (count roots)) "s"))))
             (dom/ul
               (dom/props {:class "question-map__roots"})

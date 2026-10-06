@@ -287,7 +287,7 @@
           (import-modal/selection-message {:rejected ["a.txt"] :duplicates []})))
     (is (= "Already staged: a.mp4"
           (import-modal/selection-message {:rejected [] :duplicates ["a.mp4"]})))
-    (is (= "Not a supported video: a.txt · Already staged: b.mp4"
+    (is (= "Not a supported video: a.txt. Already staged: b.mp4"
           (import-modal/selection-message {:rejected ["a.txt"] :duplicates ["b.mp4"]}))))
 
   (testing "long lists are summarised, not dumped"

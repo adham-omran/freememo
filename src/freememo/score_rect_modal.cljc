@@ -129,7 +129,7 @@
               (dom/span
                 (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                                     :margin-left "auto"}})
-                (dom/text (str page-rects " on this page · " total-rects " total"))))
+                (dom/text (str page-rects " on this page, " total-rects " total"))))
             ;; Editor host — keyed by page × zoom so page switches AND zoom
             ;; changes remount the Konva stage; drawn rects live in
             ;; !score-pages, so remounts never lose them.

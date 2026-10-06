@@ -187,7 +187,7 @@
                      " to " label)
                    :else
                    (str "Set " prose-blocks " code block" (when (not= 1 prose-blocks) "s")
-                     " to " label " · " cards " card" (when (not= 1 cards) "s") " updated"))})))
+                     " to " label ", " cards " card" (when (not= 1 cards) "s") " updated"))})))
 
 (defn apply-code-language!*
   "Rewrite the topic's cards, then report the run.
@@ -318,7 +318,7 @@
             ;; `(str nil)` would render " card s". Read it through `or`.
             (let [cards (or card-count 0)]
               (dom/text (str prose-blocks " code block"
-                          (when (not= 1 prose-blocks) "s") " in this document · "
+                          (when (not= 1 prose-blocks) "s") " in this document, "
                           cards " card" (when (not= 1 cards) "s")
                           " with code"))))
 

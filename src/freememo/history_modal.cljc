@@ -151,7 +151,7 @@
               (dom/span
                 (dom/props {:style {:font-family "ui-monospace, monospace"}})
                 (dom/text next-at))
-              (dom/span (dom/text " · "))
+              (dom/span (dom/text ", "))
               (dom/span (dom/text (or status "—"))))))))))
 
 (e/defn ActionPill [event-type]
@@ -264,7 +264,7 @@
                                         :text-overflow "ellipsis"
                                         :white-space "nowrap"}})
                     (dom/text (str (or topic-title "Topic")
-                                " · " row-count " event" (when (not= row-count 1) "s")))))
+                                ", " row-count " event" (when (not= row-count 1) "s")))))
                 (dom/button
                   (dom/props {:aria-label "Close"
                               :style {:width "28px"

@@ -285,7 +285,7 @@
       (is (str/includes? out (str "a" tl/inline-block-separator "b"))))))
 
 (deftest a-separator-is-never-left-with-nothing-on-one-side
-  (testing "a trailing br gave `<td>a ·</td>` — the separator landed last and
+  (testing "a trailing br gave `<td>a;</td>` — the separator landed last and
             doc-html/squeeze-whitespace! trimmed its trailing space, leaving a
             mark the reader sees that separates nothing"
     (is (= "<table><tbody><tr><td>a</td></tr></tbody></table>"
@@ -312,11 +312,11 @@
   (testing "and a nested trailing br still leaves no mark"
     (let [out (lower "<table><tbody><tr><td><span>a<br></span></td></tr></tbody></table>")]
       (is (zero? (tag-count out "td br")))
-      (is (not (str/includes? out "·")))))
+      (is (not (str/includes? out (str/trim tl/inline-block-separator))))))
   (testing "a br whose only preceding content is in an outer element still counts
             it — the test is over document order, not over siblings. Asserted on
             the rendered TEXT, because the separator lands inside the span and the
-            markup therefore reads `a<span> · b</span>`."
+            markup therefore reads `a<span>; b</span>`."
     (let [out (lower "<table><tbody><tr><td>a<span><br>b</span></td></tr></tbody></table>")]
       (is (= [(str "a" tl/inline-block-separator "b")] (row-texts out))))))
 
@@ -329,7 +329,7 @@
                   "</td><td>x</td></tr></tbody></table>"))]
       (is (str/includes? out (str "first" tl/inline-block-separator "second"))))
     (let [out (dh/doc-html->quill-html "<table><tbody><tr><td>a<br></td><td>x</td></tr></tbody></table>")]
-      (is (not (str/includes? out "·"))
+      (is (not (str/includes? out (str/trim tl/inline-block-separator)))
         "and a br that separates nothing must leave no mark behind")
       (is (str/includes? out "<td>a</td>")))))
 

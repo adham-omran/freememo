@@ -153,7 +153,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Line diff — git-style :- :+ := ops via LCS. Inputs are stripped text;
-;; fields are card-sized, so the O(n·m) table is trivial.
+;; fields are card-sized, so the O(n×m) table is trivial.
 ;; ---------------------------------------------------------------------------
 
 (defn diff-lines
@@ -523,7 +523,7 @@
         (dom/On "click" (fn [_] (navigate! :library {:type :library-cards})) nil)))))
 
 ;; ---------------------------------------------------------------------------
-;; Row — status dot · kind badge · front · back · document · added · delete.
+;; Row — status dot, kind badge, front, back, document, added, delete.
 ;; Row click opens EditCardModal ({:id :kind :question :answer :cloze :topic-id
 ;; :root-topic-id} contract); document cell click navigates to the card's topic
 ;; instead.
@@ -859,7 +859,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                                     :font-size "11px" :color "var(--color-text-hint)"
                                     :margin-bottom "8px"}})
                 (dom/span (dom/props {:class "source-chip source-chip-fm"}) (dom/text "FM"))
-                (dom/span (dom/text "removed  ·"))
+                (dom/span (dom/text "removed,"))
                 (dom/span (dom/props {:class "source-chip source-chip-anki"}) (dom/text "Anki"))
                 (dom/span (dom/text "added")))
               (CardDiffSections id cloze? local-front local-back note-id anki-result)
@@ -1074,7 +1074,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           (dom/props {:style {:font-weight "600"}})
           (dom/text (str (count selected) " selected"
                       (when (not= (count selected) selected-cards)
-                        (str " · " selected-cards " cards")))))
+                        (str ", " selected-cards " cards")))))
         (ResolveConflictButtons conflicts none-selected? no-conflicts-selected?
           busy? anki-ready?
           !selected !action-result !scan-result !bulk-phase)
@@ -1118,10 +1118,10 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
         ;; Rows AND cards: an occlusion group is one row and k Anki notes, and
         ;; the unpushed/modified counts below describe the notes.
         (dom/text (str row-count " row" (when (not= row-count 1) "s")
-                    " · " card-count " card" (when (not= card-count 1) "s")
-                    " · " unpushed-count " unpushed"
-                    " · " modified-count " modified"
-                    (when (= ov-status :unavailable) " · Anki not connected")))
+                    ", " card-count " card" (when (not= card-count 1) "s")
+                    ", " unpushed-count " unpushed"
+                    ", " modified-count " modified"
+                    (when (= ov-status :unavailable) ", Anki not connected")))
         ;; Always in the DOM at a reserved width — only visibility toggles — so
         ;; the action cluster beside it does not jump right on every chip click.
         ;; visibility:hidden also keeps it out of the a11y tree; aria-busy above
@@ -1396,7 +1396,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
             (dom/props {:style {:display "contents"}})
             (SelectAllCell result filtered-count all-filtered-selected? !selected)
             (SortHeaderCell "\u0394" :status :asc "cards-th-center" sort-col sort-dir !sort-col !sort-dir
-              "Sync direction (\u25B2 push pending \u00B7 \u25BC pull pending \u00B7 \u25B2\u25BC conflict \u00B7 \u25CB unpushed) — sorts by DB state")
+              "Sync direction (\u25B2 push pending, \u25BC pull pending, \u25B2\u25BC conflict, \u25CB unpushed) — sorts by DB state")
             (dom/th (dom/text "Kind"))
             (dom/th (dom/text "Front"))
             (dom/th (dom/text "Back"))

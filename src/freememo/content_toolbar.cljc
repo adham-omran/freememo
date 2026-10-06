@@ -259,8 +259,8 @@
               (OverflowPanel biblio-target-id is-pdf? unsynced-count extract-status !overflow-open)
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:
-          ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete
-          ;; · 5 Transcribe/Jump-to-source/Document-options.
+          ;; 1 Extract/Add, 2 Generate, 3 Sync, 4 History/Priority/Done/Delete,
+          ;; 5 Transcribe/Jump-to-source/Document-options.
           ;; Collapse tiers are by CSS class (not position). Dividers between
           ;; groups carry the collapse class of the neighbor that disappears so
           ;; they hide in lockstep (no dangling separator): the Sync→lifecycle
