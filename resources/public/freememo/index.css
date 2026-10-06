@@ -9067,6 +9067,7 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-step-view__main { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .wt-canvas { flex: 1; min-width: 0; }
 .wt-canvas__notice { font-size: 12px; color: var(--color-text-secondary); padding: 4px 16px; }
+.wt-canvas__notice--error { color: var(--color-danger-text); font-size: 13px; }
 
 /* Markdown: a block colored by the change that wrote it. */
 .wt-canvas[data-kind="markdown"] > :not([data-wt]) { color: var(--color-text-secondary); }

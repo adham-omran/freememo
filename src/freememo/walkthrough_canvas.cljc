@@ -61,6 +61,8 @@
 
 (e/defn Canvas
   "The file at `path` in step `position`, colored for `mode`, and its pins.
+   A read that fails, such as a forge that is down, shows its message in
+   the notice instead of the file.
    Post: the canvas element, empty while the read is in flight."
   [user-id wid position path mode list-open? !list-open?]
   (e/client
@@ -71,7 +73,8 @@
           html (e/server (:html c))
           markdown? (e/server (boolean (:markdown? c)))
           spec (e/server (:ref-spec c))
-          plain? (e/server (and (some? c) (not (:attributed? c))))
+          error (e/server (:error c))
+          plain? (e/server (and (some? c) (nil? (:error c)) (not (:attributed? c))))
           [node _] (dom/div
                      (dom/props {:class "wt-canvas code-pane-rendered" :tabindex "0" :dir "ltr"
                                  :data-testid "walkthrough-canvas"})
@@ -79,11 +82,16 @@
                        (dom/On "click" (fn [e] (toggle-fold! e)) nil)
                        [node (show-canvas! node html markdown?)]))]
       (dom/props node {:data-kind (if markdown? "markdown" "code")})
+      ;; One notice, always mounted, for both messages: a failed read and a
+      ;; file shown plainly cannot happen together.
       (dom/div
-        (dom/props {:class "wt-canvas__notice" :role "status"})
-        (dom/props {:style {:display (if plain? "block" "none")}})
-        (dom/text (str "FreeMemo could not tell which change wrote each line of this "
-                    "file, so it shows the file plainly.")))
+        (dom/props {:class (if error "wt-canvas__notice wt-canvas__notice--error" "wt-canvas__notice")
+                    :role (if error "alert" "status")
+                    :data-testid "walkthrough-canvas-notice"})
+        (dom/props {:style {:display (if (or plain? error) "block" "none")}})
+        (dom/text (or error
+                    (str "FreeMemo could not tell which change wrote each line of this "
+                      "file, so it shows the file plainly."))))
       (when spec
         (pin-pane/PinLayer user-id spec node (if markdown? :blocks :source)
           list-open? !list-open?)))))

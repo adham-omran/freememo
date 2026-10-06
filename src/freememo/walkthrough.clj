@@ -418,27 +418,32 @@
 (defn canvas
   "The canvas of the file at `path` in the step at `position`, colored for
    `mode` (:previous or :start) (§6.6.3).
-   Post: nil, or {:path :sha :markdown? :html :attributed? :ref-spec}.
+   Post: nil, or {:path :sha :markdown? :html :attributed? :ref-spec}, or
+         {:error S} when the clone cannot be read: a forge that is down or a
+         remote the gate refuses. It never throws, because the canvas reads
+         it inside an `e/Offload`, and an exception there ends the session.
          `:ref-spec` names the file at that commit for pins (§6.6.6)."
   [user-id wid position path mode]
-  (when-let [{:keys [w commits position-of]} (step-context user-id wid position)]
-    (when-let [{:keys [sha deleted?]} (some #(when (= path (:path %)) %) (step-files user-id wid position))]
-      (let [repo-id (:repo_topic_id w)
-            {:keys [dir] :as ctx} (repo-import/clone-context user-id repo-id)
-            in-range? (and (not deleted?) (some #(= sha (:sha %)) commits))
-            state (if in-range?
-                    (wr/file-state dir (:sha_a w) commits sha path ctx)
-                    (when-let [{:keys [source]} (docref/content user-id {:repo-id repo-id :path path :sha sha})]
-                      {:text source :attributed? false
-                       :lines (mapv (fn [l] {:text l :origin nil}) (diff/lines source))}))]
-        (when state
-          (let [classes (mapv #(line-class (some-> (:origin %) position-of) position mode) (:lines state))
-                markdown? (= "markdown" (tree/language-for path))]
-            {:path path :sha sha :markdown? markdown? :attributed? (:attributed? state)
-             :ref-spec {:repo-id repo-id :path path :sha sha}
-             :html (if markdown?
-                     (markdown-html (:text state) path classes)
-                     (code-html (:lines state) classes))}))))))
+  (try
+    (when-let [{:keys [w commits position-of]} (step-context user-id wid position)]
+      (when-let [{:keys [sha deleted?]} (some #(when (= path (:path %)) %) (step-files user-id wid position))]
+        (let [repo-id (:repo_topic_id w)
+              {:keys [dir] :as ctx} (repo-import/clone-context user-id repo-id)
+              in-range? (and (not deleted?) (some #(= sha (:sha %)) commits))
+              state (if in-range?
+                      (wr/file-state dir (:sha_a w) commits sha path ctx)
+                      (when-let [{:keys [source]} (docref/content user-id {:repo-id repo-id :path path :sha sha})]
+                        {:text source :attributed? false
+                         :lines (mapv (fn [l] {:text l :origin nil}) (diff/lines source))}))]
+          (when state
+            (let [classes (mapv #(line-class (some-> (:origin %) position-of) position mode) (:lines state))
+                  markdown? (= "markdown" (tree/language-for path))]
+              {:path path :sha sha :markdown? markdown? :attributed? (:attributed? state)
+               :ref-spec {:repo-id repo-id :path path :sha sha}
+               :html (if markdown?
+                       (markdown-html (:text state) path classes)
+                       (code-html (:lines state) classes))})))))
+    (catch Throwable t {:error (failure-message t)})))
 
 ;; ── Writes ─────────────────────────────────────────────────────────
 
