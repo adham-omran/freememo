@@ -9,6 +9,7 @@
    [honey.sql :as sql]
    [cheshire.core :as json]
    [taoensso.telemere :as tel]
+   [clojure.set :as set]
    [clojure.string :as str]
    [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-digest :as digest]
@@ -7663,19 +7664,25 @@
    Invariant: database triggers update the summary inside the source write's
    transaction. A missing summary row is an implementation bug."
   [user-id]
-  (jdbc/execute! ds
-    ["SELECT t.id, t.title, t.kind, t.created_at,
-             s.title, s.csl_type, s.container_title,
-             summary.total_items AS total_items,
-             summary.done_items AS done_items,
-             summary.total_cards AS total_cards,
-             summary.synced_cards AS synced_cards
-      FROM topics t
-      LEFT JOIN sources s ON s.id = t.source_id
-      JOIN document_summaries summary ON summary.root_topic_id = t.id
-      WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
-      ORDER BY t.created_at DESC"
-     user-id]))
+  ;; The four counts are plain columns, so pgjdbc reports their base table and
+  ;; next.jdbc qualifies them as :document_summaries/*. An AS alias does not
+  ;; change that. Readers take the bare keys, which the computed columns of the
+  ;; query before the summary table returned; a qualified key reads as 0 there.
+  (mapv #(set/rename-keys % {:document_summaries/total_items :total_items
+                             :document_summaries/done_items :done_items
+                             :document_summaries/total_cards :total_cards
+                             :document_summaries/synced_cards :synced_cards})
+    (jdbc/execute! ds
+      ["SELECT t.id, t.title, t.kind, t.created_at,
+               s.title, s.csl_type, s.container_title,
+               summary.total_items, summary.done_items,
+               summary.total_cards, summary.synced_cards
+        FROM topics t
+        LEFT JOIN sources s ON s.id = t.source_id
+        JOIN document_summaries summary ON summary.root_topic_id = t.id
+        WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
+        ORDER BY t.created_at DESC"
+       user-id])))
 
 ;; ---------------------------------------------------------------------------
 ;; Scheduling (unified — no topic-type dispatch)
