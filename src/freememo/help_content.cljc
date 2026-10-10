@@ -8,6 +8,7 @@
    search can never disagree about what a step says."
   (:require
    [clojure.string :as str]
+   [freememo.assistant-slash :as slash]
    [freememo.commands :as commands]))
 
 (def sections
@@ -420,6 +421,16 @@
              :commands #{}}
             {:label "Manage an answer"
              :detail "Answers stream into the saved chat. Stop an active answer. Answer details shows its request, timing, provider, and sources. Failed answers offer Retry."
+             :commands #{}}
+            {:label "Fork a chat"
+             :detail (str "Select Fork here (⑂) under an answer, or use Fork chat to fork at the latest message, then send a question. Type " slash/fork-command " and a question to do both at once. The fork is a new chat that starts with this chat's conversation up to that point, and it does not see what this chat says later. A fork can have forks of its own. History shows each fork under the chat it came from, and the row under the chat bar opens a parent or a fork.")
+             :commands #{:fork-assistant-chat}}
+            {:label "Combine what forks found"
+             :detail "Each answer in a chat reads the conversations of all its forks, and of their forks, after the point where each one forked. A fork does not read its sibling forks. Exclude a fork that is no longer relevant: select Exclude from parent in the row under the chat bar or in its history menu. An excluded fork and its own forks are not read until you include it again, and you can still open and fork it."
+             :commands #{:exclude-assistant-branch :include-assistant-branch
+                         :set-assistant-chat-excluded}}
+            {:label "Long chats"
+             :detail (str "When a chat and its forks are too large for the model, the assistant compacts before it answers and shows Compacting context…. It summarizes the forks used least recently first, then the conversation this chat forked from, then this chat's own conversation. Each summary shows as a Context compacted row. Type " slash/compact-command " to summarize this chat's own conversation yourself. Deleting a chat also deletes its forks, and Undo restores them all.")
              :commands #{}}]}
    {:slug "reading-schedule"
     :title "Planning a reading schedule"

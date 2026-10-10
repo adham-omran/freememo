@@ -18,6 +18,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.assistant-chat-lineage :as lineage]
+   [freememo.assistant-chat-tree :as tree]
    [freememo.assistant-composer :as composer]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
@@ -57,24 +59,38 @@
                      (str/lower-case (str/trim query)))))
 
 (defn history-sections
-  "Split `chats` into the four history sections, in display order.
+  "Split `chats` into the four history sections, in display order, each a
+   tree (plans/assistant-chat-forks.md §4.6.1).
 
    Pre: each chat carries :id, :label, :activity-ms and :pinned-ms (nil when
-   unpinned), all epoch ms; `now-ms` is the client clock.
-   Post: {:pinned :today :week :older}, each a vector. A pinned chat is in
-   :pinned only, most recently pinned first. The rest keep their incoming order
-   (newest activity first) and are bucketed by local calendar day. Only chats
-   whose title matches `query` appear."
+   unpinned), all epoch ms, and :parent-id (nil for a root); `now-ms` is the
+   client clock.
+   Post: {:pinned :today :week :older}, each a vector of rows with :depth.
+   The sections place top-level chats: a pinned one is in :pinned only, most
+   recently pinned first, and the rest keep their incoming order (newest
+   activity first) and are bucketed by local calendar day. Each top-level
+   chat is followed by its descendants, depth first, in fork order, so a fork
+   always sits in its root's section and a pin on a fork marks it in place.
+   Only chats whose title matches `query`, and their ancestors, appear
+   (§4.6.4), so a matched fork still shows the path to it."
   [chats query now-ms]
   (let [today-start (local-day-start-ms now-ms 0)
         week-start (local-day-start-ms now-ms 7)
-        shown (filterv #(title-matches? query %) chats)
-        unpinned (remove :pinned-ms shown)]
-    {:pinned (vec (sort-by :pinned-ms > (filter :pinned-ms shown)))
-     :today (filterv #(>= (:activity-ms %) today-start) unpinned)
-     :week (filterv #(and (< (:activity-ms %) today-start)
-                          (>= (:activity-ms %) week-start)) unpinned)
-     :older (filterv #(< (:activity-ms %) week-start) unpinned)}))
+        by-id (into {} (map (juxt :id identity)) chats)
+        shown-ids (into #{}
+                    (comp (filter #(title-matches? query %))
+                      (mapcat #(cons (:id %) (map :id (tree/lineage by-id (:id %))))))
+                    chats)
+        shown (filterv #(shown-ids (:id %)) chats)
+        top-level (remove #(shown-ids (:parent-id %)) shown)
+        children (tree/children-index shown)
+        expand #(tree/with-descendants % children)
+        unpinned (remove :pinned-ms top-level)]
+    {:pinned (expand (sort-by :pinned-ms > (filter :pinned-ms top-level)))
+     :today (expand (filter #(>= (:activity-ms %) today-start) unpinned))
+     :week (expand (filter #(and (< (:activity-ms %) today-start)
+                              (>= (:activity-ms %) week-start)) unpinned))
+     :older (expand (filter #(< (:activity-ms %) week-start) unpinned))}))
 
 (def ^:private section-labels
   [[:pinned "Pinned"] [:today "Today"] [:week "Previous 7 days"] [:older "Older"]])
@@ -97,7 +113,7 @@
 (defn chat-action
   "One request for ChatActionEffect. The nonce makes every request a distinct
    value, so repeating an action still opens a new token.
-   Pre: op ∈ #{:open :rename :pin :delete}."
+   Pre: op ∈ #{:open :rename :pin :delete :exclude}."
   [op chat-id & {:as more}]
   (merge {:op op :chat-id chat-id :nonce (str (random-uuid))} more))
 
@@ -145,6 +161,11 @@
 (defn- chat-liveness*
   [rev user-id chat-id]
   #?(:clj (assistant/chat-liveness* rev user-id chat-id)
+     :cljs nil))
+
+(defn- chat-branch-state*
+  [rev user-id chat-id]
+  #?(:clj (assistant/chat-branch-state* rev user-id chat-id)
      :cljs nil))
 
 (defn- apply-chat-action!*
@@ -240,7 +261,7 @@
   #?(:clj nil
      :cljs (let [rect (.getBoundingClientRect view)
                  menu-w 168
-                 menu-h 112
+                 menu-h 150
                  x (- (:x anchor) (.-left rect))
                  y (- (:y anchor) (.-top rect))
                  left (max 4 (min (- x (if (:right-aligned? anchor) menu-w 0))
@@ -350,7 +371,7 @@
    closes the menu after queuing its effect."
   [menu view-node !menu !editing-id !chat-action]
   (e/client
-    (let [{:keys [chat-id pinned?]} menu
+    (let [{:keys [chat-id pinned? fork? excluded?]} menu
           close! (fn [] (reset! !menu nil) (focus-history-row! view-node chat-id))]
       (dom/div
         (dom/props {:class "assistant-history__menu" :role "menu"
@@ -377,6 +398,17 @@
               (request-chat-action! !chat-action :pin chat-id :pinned? (not pinned?))
               (close!))
             nil))
+        ;; Always mounted and hidden for a root, so the items never shift
+        ;; under a menu that is open (plans/assistant-chat-forks.md §4.6.3).
+        (dom/button
+          (dom/props {:type "button" :role "menuitem" :hidden (not fork?)
+                      :class "assistant-history__menu-item"})
+          (dom/text (if excluded? "Include in parent" "Exclude from parent"))
+          (dom/On "click"
+            (fn [_]
+              (request-chat-action! !chat-action :exclude chat-id :excluded? (not excluded?))
+              (close!))
+            nil))
         (dom/button
           (dom/props {:type "button" :role "menuitem"
                       :class "assistant-history__menu-item assistant-history__menu-item--danger"})
@@ -396,12 +428,18 @@
   (e/client
     (let [chat-id (:id chat)
           active? (= active chat-id)
-          pinned? (some? (:pinned-ms chat))]
+          pinned? (some? (:pinned-ms chat))
+          fork? (some? (:parent-id chat))
+          excluded? (:excluded? chat)
+          menu-state (fn [style] {:chat-id chat-id :pinned? pinned? :fork? fork?
+                                  :excluded? excluded? :style style})]
       (dom/div
-        (dom/props {:class (str row-class (when active? " assistant-history__row--active"))
+        (dom/props {:class (str row-class (when active? " assistant-history__row--active")
+                             (when excluded? " assistant-history__row--excluded"))
                     :tabindex "0" :role "button"
                     :data-chat-id (str chat-id)
-                    :aria-current (when active? "true")})
+                    :aria-current (when active? "true")
+                    :style {:--depth (:depth chat 0)}})
         (if (= editing-id chat-id)
           (ChatTitleEditor (:label chat)
             (fn [title] (request-chat-action! !chat-action :rename chat-id :title title))
@@ -409,6 +447,11 @@
           (dom/span
             (dom/props {:class "assistant-history__title"})
             (dom/text (:label chat))))
+        (when excluded?
+          (dom/span
+            (dom/props {:class "assistant-history__excluded"
+                        :data-tooltip "Its parent chat does not read it"})
+            (dom/text "excluded")))
         (when pinned?
           (dom/span
             (dom/props {:class "assistant-history__pin" :aria-label "Pinned"})
@@ -423,9 +466,8 @@
           (dom/On "click"
             (fn [event]
               (.stopPropagation event)
-              (reset! !menu {:chat-id chat-id :pinned? pinned?
-                             :style (menu-placement view-node
-                                      (menu-anchor-from-button (.-currentTarget event)))}))
+              (reset! !menu (menu-state (menu-placement view-node
+                                          (menu-anchor-from-button (.-currentTarget event))))))
             nil))
         (dom/On "click"
           (fn [event]
@@ -435,9 +477,8 @@
         (dom/On "contextmenu"
           (fn [event]
             (.preventDefault event)
-            (reset! !menu {:chat-id chat-id :pinned? pinned?
-                           :style (menu-placement view-node
-                                    (menu-anchor-from-pointer event))}))
+            (reset! !menu (menu-state (menu-placement view-node
+                                        (menu-anchor-from-pointer event)))))
           nil)))))
 
 (e/defn HistorySection
@@ -617,6 +658,14 @@
       (e/on-unmount #(bus/retract-ctx! [:reset-assistant-composer!]))
       (ChatBar active active-title renaming-active? new-chat!
         !history-open? !renaming-active? !chat-action)
+      (lineage/ChatLineage chat-options active
+        (fn [chat-id]
+          (trail/record! :assistant {:action :select-chat :chat-id chat-id})
+          (reset! !active chat-id)
+          (reset! !error nil)
+          (request-chat-action! !chat-action :open chat-id))
+        (fn [chat-id excluded?]
+          (request-chat-action! !chat-action :exclude chat-id :excluded? excluded?)))
       ;; Over the bar and the transcript while open; always mounted, so the
       ;; transcript beside it never remounts (§3.2).
       (ChatHistoryView chat-options active history-open? new-chat!
@@ -632,17 +681,19 @@
      no starters before then, so a reload never flashes them.
    - The liveness rule (§3.7.1): a delete here or in another tab clears the
      active chat on the next :assistant-mutations bump.
-   - The palette's chat commands (§5.1), published with :active-chat-id. Each
-     opens the assistant tab first where it shows UI; `show-right-pane!` is
-     RightSidePanel's.
+   - The palette's chat commands (§5.1), published with :active-chat-id, and
+     the fork commands (plans/assistant-chat-forks.md §4.7.1), published with
+     :active-chat-branch. Each opens the assistant tab first where it shows
+     UI; `show-right-pane!` is RightSidePanel's.
    - ChatActionEffect, which runs every chat write."
   [user-id root-topic-id show-right-pane!
-   !active !history-open? !renaming-active? !chat-action !seeded?]
+   !active !history-open? !renaming-active? !chat-action !seeded? !pending-fork]
   (e/client
     (let [active (e/watch !active)
           seed-chat-id (e/server (e/snapshot (last-opened-chat-id* user-id root-topic-id)))
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
-          liveness (e/server (chat-liveness* assistant-rev user-id active))]
+          liveness (e/server (chat-liveness* assistant-rev user-id active))
+          branch-state (e/server (chat-branch-state* assistant-rev user-id active))]
       (bus/publish-ctx!
         {:show-assistant-history!
          (fn []
@@ -660,11 +711,28 @@
              (reset! !history-open? false)
              (reset! !renaming-active? true)))
          :delete-assistant-chat!
-         (fn [chat-id] (request-chat-action! !chat-action :delete chat-id))})
+         (fn [chat-id] (request-chat-action! !chat-action :delete chat-id))
+         ;; plans/assistant-chat-forks.md §4.7.1. Fork chat stages a fork at
+         ;; the active chat's latest message, and the next send creates it.
+         :fork-active-assistant-chat!
+         (fn []
+           (when-let [chat-id @!active]
+             (show-right-pane! "assistant")
+             (reset! !history-open? false)
+             (reset! !pending-fork {:chat-id chat-id :message-id nil})))
+         :set-assistant-chat-excluded!
+         (fn [chat-id excluded?]
+           (request-chat-action! !chat-action :exclude chat-id :excluded? excluded?))})
       (bus/publish-ctx! {:active-chat-id active})
+      ;; [chat-id excluded?] while the active chat is a fork, else nil. The
+      ;; palette's Exclude and Include read it to decide which one applies.
+      (bus/publish-ctx! {:active-chat-branch branch-state})
       (e/on-unmount #(bus/retract-ctx! [:show-assistant-history! :new-assistant-chat!
                                         :rename-active-assistant-chat!
-                                        :delete-assistant-chat! :active-chat-id]))
+                                        :delete-assistant-chat! :active-chat-id
+                                        :fork-active-assistant-chat!
+                                        :set-assistant-chat-excluded!
+                                        :active-chat-branch]))
       (apply-last-chat-seed! !active !seeded? seed-chat-id)
       (drop-dead-active-chat! !active !renaming-active? liveness)
       (ChatActionEffect user-id !chat-action))))

@@ -83,6 +83,7 @@
                 db/get-kg-facts-context (fn [& _] [])
                 db/get-fact-mastery (fn [& _] {})
                 db/latest-assistant-checkpoint (fn [& _] nil)
+                db/get-assistant-chat-descendants (fn [& _] [])
                 db/question-doc-ref (fn [& _] nil)
                 db/get-assistant-messages
                 (fn [_] [{:assistant_messages/id 1 :assistant_messages/role "user"

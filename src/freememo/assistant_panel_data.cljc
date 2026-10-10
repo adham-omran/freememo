@@ -97,7 +97,10 @@
                  :mode (:mode chat)
                  :web-search? (:web_search chat)
                  :activity-ms (:activity_ms chat)
-                 :pinned-ms (:pinned_ms chat)})
+                 :pinned-ms (:pinned_ms chat)
+                 :parent-id (:parent_chat_id chat)
+                 :fork-message-id (:fork_message_id chat)
+                 :excluded? (boolean (:excluded chat))})
               (assistant/chats* assistant-rev user-id root-topic-id)))
           active-run
           (e/server

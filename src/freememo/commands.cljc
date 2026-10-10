@@ -260,6 +260,16 @@
                              :data {:chat-id :payload}
                              :table #{:assistant_chats :assistant_runs :undo_log}
                              :views #{:assistant-mutations :undo-mutations}}
+     ;; Written by the history row menu and the fork row under the chat bar
+     ;; (plans/assistant-chat-forks.md §4.6.3). Hidden for the reason the three
+     ;; above are; the palette reaches it through :exclude-assistant-branch and
+     ;; :include-assistant-branch below.
+     :set-assistant-chat-excluded {:label "Exclude or include an assistant chat fork"
+                                   :class :mutation
+                                   :palette-hidden true
+                                   :data {:chat-id :payload :excluded? :payload}
+                                   :table #{:assistant_chats}
+                                   :views #{:assistant-mutations}}
      ;; Read only by the last-chat seed on the next mount, so it bumps nothing —
      ;; the shape of :save-reading-position.
      :mark-assistant-chat-opened {:label "Mark an assistant chat opened" :class :mutation
@@ -453,6 +463,19 @@
                                  :when #{:viewer} :views #{}}
      :delete-active-assistant-chat {:label "Delete assistant chat" :class :nav :exec :client
                                     :when #{:viewer} :views #{}}
+     ;; Chat forks (plans/assistant-chat-forks.md §4.7.1). Fork stages a fork
+     ;; at the active chat's latest message, and the next send creates it, so
+     ;; it writes nothing itself. Exclude and Include act on the active chat
+     ;; when it is a fork, and their preparers hide the one that does not
+     ;; apply.
+     :fork-assistant-chat {:label "Fork assistant chat" :class :nav :exec :client
+                           :when #{:viewer} :views #{}}
+     :exclude-assistant-branch {:label "Exclude this fork from its parent chat"
+                                :class :nav :exec :client
+                                :when #{:viewer} :views #{}}
+     :include-assistant-branch {:label "Include this fork in its parent chat"
+                                :class :nav :exec :client
+                                :when #{:viewer} :views #{}}
      :toggle-left-pane {:label "Toggle Left pane" :class :query :exec :client
                         :when #{:viewer} :views #{}}
      :show-hierarchy {:label "Show Hierarchy" :class :query :exec :client

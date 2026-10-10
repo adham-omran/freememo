@@ -101,14 +101,19 @@
    :curriculum_unlock_overrides {:curriculum_id :curricula
                                  :from_block_id :curriculum_blocks
                                  :to_block_id :curriculum_blocks}
-   :assistant_chats {:root_topic_id :topics}
+   ;; A fork's two ids are translated by `link-imported-forks!`, after the
+   ;; messages exist. `table-specific-remap` holds both back from the insert.
+   :assistant_chats {:root_topic_id :topics
+                     :parent_chat_id :assistant_chats
+                     :fork_message_id :assistant_messages}
    :assistant_messages {:chat_id :assistant_chats}
    :assistant_runs {:chat_id :assistant_chats
                     :user_message_id :assistant_messages
                     :assistant_message_id :assistant_messages}
    :assistant_checkpoints {:chat_id :assistant_chats :run_id :assistant_runs
                            :covered_from_message_id :assistant_messages
-                           :covered_through_message_id :assistant_messages}
+                           :covered_through_message_id :assistant_messages
+                           :for_chat_id :assistant_chats}
    :assistant_evidence {:run_id :assistant_runs
                         :document_topic_id :topics :page_topic_id :topics
                         :walkthrough_id :walkthroughs}
@@ -745,8 +750,13 @@
                     m))
           row (get jsonb-html-columns table []))]
     (case table
+      ;; A fork arrives as a root. Chats import before messages, so its fork
+      ;; message has no id here yet, and the pair CHECK refuses a parent
+      ;; without one. `link-imported-forks!` sets both after the messages.
       :assistant_chats
-      {:row (assoc with-jsonb-html :provider_session_id (str (UUID/randomUUID)))}
+      {:row (-> with-jsonb-html
+              (assoc :provider_session_id (str (UUID/randomUUID)))
+              (dissoc :parent_chat_id :fork_message_id))}
       :assistant_runs
       (let [session-id (:provider_session_id
                          (jdbc/execute-one! tx
@@ -793,6 +803,25 @@
          with-jsonb-html [:blueprint :questions])}
       :settings (remap-settings-row with-jsonb-html (get maps :topics))
       {:row with-jsonb-html})))
+
+(defn- link-imported-forks!
+  "Make each imported fork a fork again (plans/assistant-chat-forks.md
+   §4.1.4). `table-specific-remap` inserted every chat as a root, because a
+   chat's fork message is imported after it.
+   Pre:  `archive-chats` are the archive's assistant_chats rows. `maps` holds
+         the :assistant_chats and :assistant_messages id maps of this import.
+   Post: a chat whose parent and fork message both imported has both set. Any
+         other chat stays a root, with its own transcript intact."
+  [tx archive-chats maps]
+  (doseq [{:keys [id parent_chat_id fork_message_id]} archive-chats
+          :when (and parent_chat_id fork_message_id)
+          :let [chat-id (get-in maps [:assistant_chats id])
+                parent-id (get-in maps [:assistant_chats parent_chat_id])
+                message-id (get-in maps [:assistant_messages fork_message_id])]
+          :when (and chat-id parent-id message-id)]
+    (jdbc/execute! tx ["UPDATE assistant_chats SET parent_chat_id = ?, fork_message_id = ?
+                         WHERE id = ?"
+                       parent-id message-id chat-id])))
 
 (def ^:private phase-1-tables
   "Tables phase 1 inserts. `media` landed in phase 0, and the two blob tables
@@ -1058,6 +1087,7 @@
                                     (seq (:unknown-columns r))
                                     (assoc :unknown-columns (:unknown-columns r))))))
                             (do
+                              (link-imported-forks! tx (entity-rows dir :assistant_chats) maps)
                               (doseq [space id-bearing-tables]
                                 (record-ids! tx import-id space
                                   (if (= space :media) (:media-map media) (get maps space))))

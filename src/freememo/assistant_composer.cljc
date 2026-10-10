@@ -11,15 +11,26 @@
    [freememo.assistant-panel-rows :as rows]
    #?(:clj [freememo.assistant :as assistant])))
 
+(defn active-pending-fork
+  "The pending fork when it was made in chat `active`, else nil. A fork made
+   in another chat waits, unseen, until the learner opens that chat again."
+  [pending-fork active]
+  (when (and pending-fork (= active (:chat-id pending-fork)))
+    pending-fork))
+
 (defn- submit-edit
   "The submit payload, or nil when there is nothing to send. Annotations make a
-   send with a blank draft valid: their message is the turn."
-  [draft-atom active-atom refs-atom annotation-items mode-id web-search?]
-  (let [text (str/trim @draft-atom)]
+   send with a blank draft valid: their message is the turn. A pending fork of
+   the open chat rides along as :fork, so the send creates that fork
+   (plans/assistant-chat-forks.md §4.3.3)."
+  [draft-atom active-atom refs-atom annotation-items mode-id web-search? pending-fork-atom]
+  (let [text (str/trim @draft-atom)
+        fork (active-pending-fork @pending-fork-atom @active-atom)]
     (when (or (not (str/blank? text)) (seq annotation-items))
       {:id (str (random-uuid)) :text text :chat @active-atom
        :refs (mapv :id @refs-atom) :mode mode-id :web-search? web-search?
-       :annotations (annotations/wire-annotations annotation-items)})))
+       :annotations (annotations/wire-annotations annotation-items)
+       :fork (when fork {:message-id (:message-id fork)})})))
 
 (defn- annotation-preview
   "One line of an annotation for the composer's list."
@@ -100,10 +111,25 @@
            sending? mode-entry web-search? web-search-supported? draft user-id active root-topic-id
            annotations]}
    reference-documents !picked !refs !mention-index !at-open? !draft !active !submit !pending-mode
-   !pending-web-search? !error !annotations]
+   !pending-web-search? !error !annotations !pending-fork]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__composer-shell"})
+      ;; Outside the Input! `e/amb` below, for the prop-loss reason recorded
+      ;; there. Cancelling is browser state only, so it needs no token.
+      (when-let [fork (active-pending-fork (e/watch !pending-fork) active)]
+        (dom/div
+          (dom/props {:class "assistant-panel__fork-banner" :role "status"})
+          (dom/span
+            (dom/props {:class "assistant-panel__fork-text" :dir "auto"})
+            (dom/text (if (:excerpt fork)
+                        (str "Forking at “" (:excerpt fork) "”")
+                        "Forking at the latest message")))
+          (dom/button
+            (dom/props {:class "assistant-panel__ref-remove" :type "button"
+                        :title "Cancel the fork" :aria-label "Cancel the fork"})
+            (dom/text "×")
+            (dom/On "click" (fn [_] (reset! !pending-fork nil)) nil))))
       ;; Keep the virtual-scroll frame stable while the form processes an input
       ;; event. Conditional mounting in the same frame strips Forms5 input props.
       (rows/ReferenceMenu at-open? reference-documents reference-document-count
@@ -196,7 +222,7 @@
                 (.preventDefault event)
                 (when-let [edit
                            (submit-edit !draft !active !refs annotations
-                             (:id mode-entry) web-search?)]
+                             (:id mode-entry) web-search? !pending-fork)]
                   (reset! !submit edit)))
 
               (= (.-key event) "@")
@@ -283,7 +309,7 @@
               (case
                 (when-let [edit
                            (submit-edit !draft !active !refs annotations
-                             (:id mode-entry) web-search?)]
+                             (:id mode-entry) web-search? !pending-fork)]
                   (reset! !submit edit))
                 (command-token))
 

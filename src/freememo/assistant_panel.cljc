@@ -6,8 +6,8 @@
    sources stay outside the transcript and remain available in the answer
    details.
 
-   The active chat, the history view's open flag, the bar's rename flag and the
-   chat-action queue belong to RightSidePanel, which outlives this component
+   The active chat, the history view's open flag, the bar's rename flag, the
+   chat-action queue and the pending fork belong to RightSidePanel, which outlives this component
    across a panel collapse and a poem tab switch. They arrive as positional
    parameters.
 
@@ -44,7 +44,7 @@
 (e/defn AssistantPanel
   "Pre: `seeded?` is true once the last-chat seed has answered."
   [page-topic-id root-topic-id user-id seeded?
-   !active !history-open? !renaming-active? !chat-action]
+   !active !history-open? !renaming-active? !chat-action !pending-fork]
   (e/client
     (let [active (e/watch !active)
           !draft (atom "")
@@ -111,7 +111,7 @@
       (submit-effect/SubmitEffect
         {:submit submit :refs refs :annotation-state annotation-state :user-id user-id
          :root-topic-id root-topic-id :page-topic-id page-topic-id}
-        t !draft !refs !echo !active !error !annotations)
+        t !draft !refs !echo !active !error !annotations !pending-fork)
 
       (selection-cards/SelectionCardsEffect user-id page-topic-id !selection-cards !error)
 
@@ -139,7 +139,7 @@
            :page-topic-id page-topic-id :root-topic-id root-topic-id
            :web-search? web-search? :seeded? seeded? :annotations annotations}
           !submit !active !refs !details-run !evidence !error !echo
-          !annotations !selection-cards !side)
+          !annotations !selection-cards !side !pending-fork)
 
         (overlays/PanelOverlays details user-id root-topic-id page-topic-id
           !details-run !evidence !side !error)
@@ -162,7 +162,7 @@
            :root-topic-id root-topic-id
            :annotations annotations}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
-          !pending-mode !pending-web-search? !error !annotations)
+          !pending-mode !pending-web-search? !error !annotations !pending-fork)
 
         ;; Diagnostics LAST, and wrapping nothing: see PanelDiagnostics.
         (overlays/PanelDiagnostics root-topic-id page-topic-id active active-run
