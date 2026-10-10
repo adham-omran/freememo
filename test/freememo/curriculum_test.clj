@@ -1,7 +1,7 @@
 (ns freememo.curriculum-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [freememo.curriculum :as curriculum]
    [freememo.curriculum-exam :as exam]
    [freememo.db :as db]
@@ -101,6 +101,13 @@
 
 (defn- db-up? []
   (try (jdbc/execute-one! db/ds ["SELECT 1"]) true (catch Exception _ false)))
+
+;; The database tests below write to tables that only `setup-schema` creates.
+;; Without this, an empty database fails each of them on a missing relation.
+(use-fixtures :once
+  (fn [run]
+    (when (db-up?) (db/setup-schema))
+    (run)))
 
 (deftest moving-one-step-writes-positions-a-check-constraint-accepts
   ;; `curriculum_materials.position` carries CHECK (position >= 0) and
