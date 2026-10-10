@@ -7,15 +7,34 @@
    [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-composer :as composer]
    [freememo.assistant-diagnostics :as diagnostics]
+   [freememo.assistant-slash :as slash]
    [freememo.interaction-trail :as trail]
    #?(:clj [freememo.assistant :as assistant])))
 
+(defn- echo-text
+  "What the optimistic echo of a send shows: the text the server will store.
+   nil for `/compact`, which stores no turn. A `/fork` stores its question
+   (plans/assistant-chat-forks.md §4.3.2)."
+  [text wire-annotations question-pins?]
+  (let [command (when-not (or (seq wire-annotations) question-pins?)
+                  (slash/parse text))]
+    (cond
+      question-pins? "Asking about my open pins…"
+      (seq wire-annotations) (annotations/user-message wire-annotations text)
+      (= :compact (:command command)) nil
+      (= :fork (:command command)) (:question command)
+      :else text)))
+
 (e/defn SubmitEffect
+  "Send one composer submit and settle the panel.
+   Post: on success the panel shows the chat the server names, which is the
+   new fork for a fork, and a pending fork the send consumed is cleared. On an
+   error the draft, references and annotations come back."
   [{:keys [submit refs annotation-state user-id root-topic-id page-topic-id]}
-   token !draft !refs !echo !active !error !annotations]
+   token !draft !refs !echo !active !error !annotations !pending-fork]
   (e/client
     (when token
-      (let [{:keys [id text chat mode web-search? question-pins?] ref-ids :refs
+      (let [{:keys [id text chat mode web-search? question-pins? fork] ref-ids :refs
              wire-annotations :annotations} submit
             refs-snapshot (e/snapshot refs)
             annotation-snapshot (e/snapshot annotation-state)
@@ -23,8 +42,8 @@
             ;; An Ask over pins carries no text: the server builds the turn
             ;; from the open pins (plans/anchored-questions.md §6.2.5.1).
             question-pins? (boolean question-pins?)
-            compact? (and (not annotated?) (not question-pins?)
-                       (= "/compact" (str/trim text)))]
+            echo (echo-text text wire-annotations question-pins?)
+            compact? (and (nil? echo) (not question-pins?))]
         (if (and (str/blank? text) (not annotated?) (not question-pins?))
           (token)
           (case
@@ -41,12 +60,7 @@
                 (reset! !annotations answer-selection/empty-annotations))
               ;; The echo is the text the server stores, so the row that
               ;; retires it shows the same words.
-              (reset! !echo (when-not compact?
-                              {:id id
-                               :text (cond
-                                       question-pins? "Asking about my open pins…"
-                                       annotated? (annotations/user-message wire-annotations text)
-                                       :else text)}))
+              (reset! !echo (when echo {:id id :text echo}))
               (let [result
                     (e/server
                       (e/Offload
@@ -55,7 +69,7 @@
                              user-id root-topic-id page-topic-id chat mode web-search? id)
                            (assistant/submit-chat-input!
                              user-id root-topic-id page-topic-id chat mode web-search?
-                             text ref-ids id wire-annotations))))]
+                             text ref-ids id wire-annotations fork))))]
                 (case result
                   (case
                     (diagnostics/replace-state!
@@ -69,7 +83,9 @@
                     (do
                       (reset! !active (:chat-id result))
                       (if (:ok result)
-                        (reset! !error nil)
+                        (do (reset! !error nil)
+                            (when (= :fork (:command result))
+                              (reset! !pending-fork nil)))
                         (do
                           (reset! !error (:error result))
                           (when-not question-pins?

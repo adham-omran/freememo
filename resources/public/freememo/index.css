@@ -4858,6 +4858,22 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 .assistant-history__pin { display: inline-flex; flex-shrink: 0; color: var(--color-text-secondary); }
 
+/* A fork sits under the chat it came from (plans/assistant-chat-forks.md
+   §4.6.1). --depth is set per row; 0 is a root. */
+.assistant-history__row { padding-left: calc(8px + var(--depth, 0) * 14px); }
+.assistant-history__row--excluded .assistant-history__title {
+    color: var(--color-text-secondary);
+    text-decoration: line-through;
+}
+.assistant-history__excluded {
+    flex-shrink: 0;
+    font-size: 10px;
+    padding: 0 5px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-text-secondary);
+}
+
 .assistant-history__time { flex-shrink: 0; font-size: 11px; color: var(--color-text-secondary); }
 
 @container (max-width: 240px) {
@@ -5052,6 +5068,77 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 12px;
 }
 .assistant-compact-event summary { cursor: pointer; font-weight: 600; }
+
+/* A fork's inherited rows, then the divider, then its own rows
+   (plans/assistant-chat-forks.md §4.2.3). */
+.assistant-msg--inherited,
+.assistant-msg-group--inherited .assistant-msg--assistant { opacity: 0.72; }
+.assistant-fork-divider {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+}
+.assistant-fork-divider::before,
+.assistant-fork-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--color-border);
+}
+
+/* The fork row under the chat bar (freememo.assistant-chat-lineage). */
+.assistant-lineage {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 8px 4px;
+    flex-shrink: 0;
+    font-size: 12px;
+}
+.assistant-lineage__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.assistant-lineage__loop,
+.assistant-lineage__step { display: contents; }
+.assistant-lineage__label,
+.assistant-lineage__sep { color: var(--color-text-secondary); }
+.assistant-lineage__link {
+    max-width: 14em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 4px;
+    font-size: 12px;
+    color: var(--color-primary-text, #1d4ed8);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.assistant-lineage__link:hover { background: var(--color-bg-hover); }
+.assistant-lineage__link--excluded {
+    color: var(--color-text-secondary);
+    text-decoration: line-through;
+}
+.assistant-lineage__here {
+    max-width: 14em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+.assistant-lineage__here--excluded { color: var(--color-text-secondary); }
+.assistant-lineage__exclude {
+    margin-left: auto;
+    padding: 1px 6px;
+    font-size: 11px;
+}
 .assistant-compact-event__range { margin: 7px 0 4px; font-size: 11px; }
 .assistant-compact-event__summary { white-space: pre-wrap; color: var(--color-text-primary); }
 
@@ -5292,6 +5379,27 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     padding: 9px 10px;
     color: var(--color-text-secondary);
     font-size: 12px;
+}
+
+/* A fork that the next send creates (plans/assistant-chat-forks.md §4.3.3). */
+.assistant-panel__fork-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 6px;
+    padding: 4px 6px 4px 8px;
+    font-size: 12px;
+    background: var(--color-primary-light);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+.assistant-panel__fork-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Queued @-reference chips. */

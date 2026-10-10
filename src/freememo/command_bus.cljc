@@ -339,6 +339,34 @@
     (when-let [delete! (:delete-assistant-chat! ctx)]
       (delete! (:chat-id payload)))))
 
+;; Chat forks (plans/assistant-chat-forks.md §4.7.1). :active-chat-branch is
+;; [chat-id excluded?] while the active chat is a fork, else nil.
+(register-preparer! :fork-assistant-chat
+  (fn [ctx] (when (some? (:active-chat-id ctx)) {})))
+
+(register-handler! :fork-assistant-chat
+  (fn [ctx _payload]
+    (when-let [fork! (:fork-active-assistant-chat! ctx)]
+      (fork!))))
+
+(register-preparer! :exclude-assistant-branch
+  (fn [ctx] (when-let [[chat-id excluded?] (:active-chat-branch ctx)]
+              (when-not excluded? {:chat-id chat-id}))))
+
+(register-handler! :exclude-assistant-branch
+  (fn [ctx payload]
+    (when-let [set-excluded! (:set-assistant-chat-excluded! ctx)]
+      (set-excluded! (:chat-id payload) true))))
+
+(register-preparer! :include-assistant-branch
+  (fn [ctx] (when-let [[chat-id excluded?] (:active-chat-branch ctx)]
+              (when excluded? {:chat-id chat-id}))))
+
+(register-handler! :include-assistant-branch
+  (fn [ctx payload]
+    (when-let [set-excluded! (:set-assistant-chat-excluded! ctx)]
+      (set-excluded! (:chat-id payload) false))))
+
 (register-handler! :toggle-left-pane
   (fn [ctx _payload]
     (when-let [toggle! (:toggle-left-pane! ctx)]

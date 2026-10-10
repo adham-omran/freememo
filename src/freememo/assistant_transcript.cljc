@@ -37,7 +37,7 @@
   [{:keys [sending? echo active mode-entry web-search? active-run user-id page-topic-id
            root-topic-id seeded? annotations]}
    !submit !active !refs !details-run !evidence !error !echo
-   !annotations !selection-cards !side]
+   !annotations !selection-cards !side !pending-fork]
   (e/client
     (dom/div
       (dom/props {:class "assistant-panel__transcript"})
@@ -97,8 +97,8 @@
           (dom/props {:class "assistant-panel__rows"})
           (e/for [display-message message-rows]
             (transcript-entry/AssistantTranscriptEntry
-              display-message user-id page-topic-id root-topic-id sending?
-              !details-run !evidence !error)))
+              display-message user-id page-topic-id root-topic-id sending? active
+              !details-run !evidence !error !pending-fork)))
         (when (zero? message-count)
           (if (and (not sending?) (nil? echo))
             ;; Starters only for "no chat yet", and only once the last-chat

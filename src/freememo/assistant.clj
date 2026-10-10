@@ -12,9 +12,12 @@
    [freememo.openrouter :as openrouter]
    [freememo.settings :as settings]
    [freememo.assistant-annotations :as annotations]
+   [freememo.assistant-budget :as budget]
+   [freememo.assistant-chat-tree :as tree]
    [freememo.assistant-evidence :as evidence]
    [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
+   [freememo.assistant-slash :as slash]
    [freememo.card-models :as card-models]
    [freememo.cards :as cards]
    [freememo.cards-from-facts :as cff]
@@ -24,6 +27,7 @@
    [freememo.content-toolbar-helpers :as card-gen]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
+   [freememo.model-context :as model-context]
    [freememo.document-ref :as docref]
    [freememo.question-map :as question-map]
    [freememo.question-map-block :as map-block]
@@ -65,7 +69,7 @@
 (defn- bump-stream! [user-id]
   (commands/bump-channels! user-id #{:assistant-stream}))
 
-(declare start-compact-run! transcript-message-view)
+(declare start-compact-run! transcript-message-view answer-context-text)
 
 ;; ── Context resolution ─────────────────────────────────────────────────────
 
@@ -605,19 +609,83 @@
                          (str grounding "\n\nEvidence key for these established facts: "
                            "[evidence:" (:citation-key facts-source) "]."))}))
 
-(defn- transcript-messages-after-checkpoint
-  "Provider transcript after the newest checkpoint's covered range.
-   Blank assistant placeholders never enter a request."
-  [chat-id checkpoint]
-  (into []
-    (comp
-      (filter #(> (:assistant_messages/id %) (or (:covered_through_message_id checkpoint) 0)))
-      (filter #(or (= "user" (:assistant_messages/role %))
-                 (not (str/blank? (:assistant_messages/content %)))))
-      (map (fn [message]
-             {:role (:assistant_messages/role message)
-              :content (:assistant_messages/content message)})))
-    (db/get-assistant-messages chat-id)))
+(defn- sendable-rows
+  "Message `rows` after message id `after-id` that a request carries. Blank
+   assistant placeholders never enter a request."
+  [rows after-id]
+  (filterv #(and (> (:assistant_messages/id %) (or after-id 0))
+              (or (= "user" (:assistant_messages/role %))
+                (not (str/blank? (:assistant_messages/content %)))))
+    rows))
+
+(defn- provider-turns
+  "The provider turns of message `rows` after message id `after-id`."
+  [rows after-id]
+  (mapv (fn [message]
+          {:role (:assistant_messages/role message)
+           :content (:assistant_messages/content message)})
+    (sendable-rows rows after-id)))
+
+(defn- chat-node
+  "A chat row as freememo.assistant-chat-tree reads it."
+  [{:keys [id parent_chat_id fork_message_id title excluded activity_ms]}]
+  {:id id :parent-id parent_chat_id :fork-message-id fork_message_id
+   :title (or title "Untitled") :excluded? (boolean excluded) :activity-ms activity_ms})
+
+(defn- chat-lineage
+  "id → chat node for `chat` and its ancestors, or {} for a root chat, which
+   reads no lineage."
+  [user-id chat]
+  (if (:assistant_chats/parent_chat_id chat)
+    (into {} (map (juxt :id chat-node))
+      (db/get-assistant-chat-lineage user-id (:assistant_chats/id chat)))
+    {}))
+
+(defn- inherited-path
+  "`chat`'s inherited path (plans/assistant-chat-forks.md §4.2.1)."
+  [user-id chat]
+  (tree/inherited-path (chat-lineage user-id chat) (:assistant_chats/id chat)))
+
+(defn- inherited-rows
+  "The message rows that `path` names, oldest first."
+  [path]
+  (into [] (mapcat (fn [[chat-id through]] (db/get-assistant-messages chat-id through))) path))
+
+(defn- checkpoint-message [heading checkpoint]
+  {:role "system" :content (str "# " heading "\n\n" (:summary checkpoint))})
+
+(defn- request-transcript
+  "The conversation part of a request about `chat` (§4.2.2).
+
+   The order is the inherited checkpoint, the inherited rows after it, the own
+   checkpoint, and the own rows after that. `:head-messages` is the first
+   checkpoint, which goes in the head's checkpoint slot before the sources, as
+   a root chat's checkpoint always has. `:messages` is the rest, which follows
+   the sources.
+   Post: for a root chat, {:head-messages [own checkpoint?] :messages own
+         rows}, the same request as before forks existed. For a child,
+         {:head-messages [inherited checkpoint?] :messages inherited rows, own
+         checkpoint?, own rows}."
+  [user-id chat]
+  (let [chat-id (:assistant_chats/id chat)
+        path (inherited-path user-id chat)
+        own-checkpoint (db/latest-assistant-checkpoint user-id chat-id "own")
+        own (provider-turns (db/get-assistant-messages chat-id)
+              (:covered_through_message_id own-checkpoint))
+        own-message (some->> own-checkpoint (checkpoint-message "Conversation checkpoint"))]
+    (if (empty? path)
+      {:head-messages (cond-> [] own-message (conj own-message))
+       :messages own}
+      (let [inherited-checkpoint (db/latest-assistant-checkpoint user-id chat-id "inherited")]
+        {:head-messages (cond-> []
+                          inherited-checkpoint
+                          (conj (checkpoint-message
+                                  "Checkpoint of the conversation this chat forked from"
+                                  inherited-checkpoint)))
+         :messages (-> (provider-turns (inherited-rows path)
+                         (:covered_through_message_id inherited-checkpoint))
+                     (cond-> own-message (conj own-message))
+                     (into own))}))))
 
 (defn- with-cache-breakpoint
   "`messages` with a `cache_control` breakpoint on the last one. Its text
@@ -643,32 +711,30 @@
    Gemini caches only up to an explicit breakpoint. When `cache-breakpoint?`,
    the last current-topic source turn carries one. Every system message here
    comes before it, because Gemini fixes its system instruction with the cache.
+   The one exception is a fork's own checkpoint, which `request-transcript`
+   puts after the inherited rows it follows in time. It is a system message in
+   the tail, as the per-turn instructions of `answer-request` are.
    See plans/assistant-request-prefix-cache.md.
 
    Post: {:messages head :reference-messages refs :evidence sources}. The
          reference turns are separate: they belong to one turn, not the head."
   [user-id chat page-topic-id ref-topic-ids cache-breakpoint?]
-  (let [chat-id (:assistant_chats/id chat)
-        root-topic-id (:assistant_chats/root_topic_id chat)
+  (let [root-topic-id (:assistant_chats/root_topic_id chat)
         mode (modes/resolve-mode (:assistant_chats/mode chat))
         ctx (resolve-context user-id root-topic-id page-topic-id)
         sources (run-source-packet user-id ctx mode ref-topic-ids)
-        checkpoint (db/latest-assistant-checkpoint user-id chat-id)
+        transcript (request-transcript user-id chat)
         system-content (str (mode-system-prompt (:id mode))
                          (mission-suffix user-id root-topic-id)
                          evidence-system-instructions)
         facts-message (when-let [grounding (:grounding-suffix sources)]
-                        {:role "system" :content grounding})
-        checkpoint-message (when checkpoint
-                             {:role "system"
-                              :content (str "# Conversation checkpoint\n\n"
-                                         (:summary checkpoint))})]
+                        {:role "system" :content grounding})]
     {:messages (-> [{:role "system" :content system-content}]
-                 (cond-> facts-message (conj facts-message)
-                         checkpoint-message (conj checkpoint-message))
+                 (cond-> facts-message (conj facts-message))
+                 (into (:head-messages transcript))
                  (into (cond-> (:current-messages sources)
                          cache-breakpoint? with-cache-breakpoint))
-                 (into (transcript-messages-after-checkpoint chat-id checkpoint)))
+                 (into (:messages transcript)))
      :reference-messages (:reference-messages sources)
      :evidence (:evidence sources)}))
 
@@ -688,9 +754,46 @@
   (or (walkthrough/focused-ref user-id page-topic-id)
     (docref/for-topic user-id page-topic-id)))
 
+(defn- branch-content
+  "The text of one branch's system message (§4.4.2). An answer's evidence
+   tokens are removed, because they name sources of another run."
+  [titles fork-text checkpoint turns]
+  (str "# Branch " (str/join " › " (map #(str "\"" % "\"") titles))
+    ", forked at \"" (tree/excerpt (answer-context-text fork-text) 120) "\"\n\n"
+    "This is a separate conversation that branched from this chat. "
+    "Use what it found when it helps the learner. Its sources are not supplied "
+    "now, so do not cite them."
+    (when checkpoint
+      (str "\n\n## Checkpoint\n\n" (:summary checkpoint)))
+    (when (seq turns)
+      (str "\n\n## Transcript\n\n"
+        (str/join "\n\n"
+          (map (fn [{:keys [role content]}]
+                 (str (if (= "user" role) "Learner: " "Assistant: ")
+                   (answer-context-text content)))
+            turns))))))
+
+(defn- branch-messages
+  "The branch step of an answer in `chat-id` (§4.4): one system message for
+   each included descendant, in `tree/included-branches` order. A branch
+   contributes its own checkpoint and its own rows after it, never what it
+   inherited, so no turn reaches the request twice.
+   Post: a vector, empty for a chat with no included descendant."
+  [user-id chat-id]
+  (let [descendants (map chat-node (db/get-assistant-chat-descendants user-id chat-id))]
+    (mapv (fn [{branch-id :chat-id :keys [titles fork-message-id]}]
+            (let [checkpoint (db/latest-assistant-checkpoint user-id branch-id "own")]
+              {:role "system"
+               :content (branch-content titles
+                          (:content (db/get-assistant-message user-id fork-message-id))
+                          checkpoint
+                          (provider-turns (db/get-assistant-messages branch-id)
+                            (:covered_through_message_id checkpoint)))}))
+      (tree/included-branches descendants chat-id))))
+
 (defn- answer-request
   "Render the exact provider request for one new answer: `request-head`, then
-   this turn's @ references, the annotation instructions when the turn carries
+   the branch step (`branch-messages`), this turn's @ references, the annotation instructions when the turn carries
    annotations, the walkthrough message while a walkthrough screen is open on
    the page, the question-map message when the page's file has a map or the
    turn is an Ask, and the new user turn. While the learner stays on one page,
@@ -716,6 +819,7 @@
                     (mode-system-prompt "tutor"))
          evidence (into (vec (:evidence head)) (:evidence walk-tail))
          messages (-> (:messages head)
+                    (into (branch-messages user-id (:assistant_chats/id chat)))
                     (into (:reference-messages head))
                     (cond-> (= :annotated turn)
                       (conj {:role "system" :content annotation-instructions}))
@@ -859,37 +963,63 @@
     {:success false :error "Chat not found."}))
 
 (defn stage-chat-deletion!
-  "Delete an owned chat with a 12-hour undo window.
+  "Delete an owned chat and its forks with a 12-hour undo window.
    Pre: none — a foreign, missing or already staged chat returns an error.
-   Post: the chat is hidden from every chat read, no run in it is active, one
-   live undo entry names it, and an Undo toast is queued. A run that was
+   Post: the chat and its live descendants are hidden from every chat read, no
+   run in them is active, one live undo entry names them, and an Undo toast
+   that counts the branches is queued (plans/assistant-chat-forks.md §4.1.5). A run that was
    streaming is stopped first: its provider request keeps draining and its
    credits are spent, but no further text reaches the chat."
   [user-id chat-id]
-  (if-let [{:keys [entry-id]} (db/stage-assistant-chat-for-deletion! user-id chat-id)]
+  (if-let [{:keys [entry-id count]} (db/stage-assistant-chat-for-deletion! user-id chat-id)]
     (do
       (toasts/push! user-id
         {:level :success
-         :message "Chat deleted. You can undo this for 12 hours."
+         :message (case (dec count)
+                    0 "Chat deleted. You can undo this for 12 hours."
+                    1 "Chat and its 1 branch deleted. You can undo this for 12 hours."
+                    (str "Chat and its " (dec count) " branches deleted. "
+                      "You can undo this for 12 hours."))
          :dedup? false
          :actions [{:label "Undo" :undo-id entry-id}]})
       (commands/bump! user-id :delete-assistant-chat)
       {:success true})
     {:success false :error "Chat not found."}))
 
+(defn set-chat-excluded!
+  "Exclude an owned fork from its parent's answers, or include it again
+   (plans/assistant-chat-forks.md §4.6.3). Excluding a chat also excludes its
+   descendants, because the branch walk stops at it.
+   Post: {:success true} and :set-assistant-chat-excluded bumped, or {:error}
+         for a root, foreign or staged chat."
+  [user-id chat-id excluded?]
+  (if (db/set-assistant-chat-excluded! user-id chat-id (boolean excluded?))
+    (do (commands/bump! user-id :set-assistant-chat-excluded)
+        {:success true})
+    {:success false :error "Only a forked chat can be excluded."}))
+
+(defn chat-branch-state*
+  "[chat-id excluded?] when `chat-id` is a live owned fork, else nil. The
+   palette reads it to offer Exclude or Include. `_rev` forces a re-query."
+  [_rev user-id chat-id]
+  (when-let [chat (and chat-id (db/get-assistant-chat user-id chat-id))]
+    (when (:assistant_chats/parent_chat_id chat)
+      [chat-id (some? (:assistant_chats/excluded_at chat))])))
+
 (defn apply-chat-history-action!
   "Run one request from the history view (freememo.assistant-chat-history).
-   Pre: `op` ∈ #{:open :rename :pin :delete}; :rename carries :title, :pin
-   carries :pinned?.
+   Pre: `op` ∈ #{:open :rename :pin :delete :exclude}; :rename carries :title,
+   :pin carries :pinned?, :exclude carries :excluded?.
    Post: the matching operation's result. A failed rename, pin or delete is
    also reported as an error toast, because the view that asked may be closed
    by the time it fails. A failed :open is silent: it only feeds the seed."
-  [user-id {:keys [op chat-id title pinned?]}]
+  [user-id {:keys [op chat-id title pinned? excluded?]}]
   (let [result (case op
                  :open (mark-chat-opened! user-id chat-id)
                  :rename (rename-chat! user-id chat-id title)
                  :pin (set-chat-pinned! user-id chat-id pinned?)
-                 :delete (stage-chat-deletion! user-id chat-id))]
+                 :delete (stage-chat-deletion! user-id chat-id)
+                 :exclude (set-chat-excluded! user-id chat-id excluded?))]
     (when (and (not (:success result)) (not= :open op))
       (toasts/push! user-id {:level :error :message (:error result)}))
     result))
@@ -1056,16 +1186,43 @@
   (when question-map
     (apply-question-map-reply! user-id run-uuid question-map response)))
 
+(def oversized-answer-error
+  "The error of an answer that does not fit after every compaction (§4.5.7)."
+  (str "This chat and its branches are too large even after compaction. "
+    "Exclude a branch to continue."))
+
+(defn context-overflow-error?
+  "True when a provider error says the request is longer than the model's
+   context. No overflow reply from OpenRouter has been captured yet
+   (plans/assistant-chat-forks.md §5, item 6), so these patterns cover the
+   wordings providers are known to use, and HTTP 413.
+   Pre: `error` is a Throwable, or nil."
+  [error]
+  (let [message (str/lower-case (or (ex-message error) ""))]
+    (or (= 413 (:status (ex-data error)))
+      (boolean (re-find (re-pattern (str "context.{0,12}(length|window|limit)"
+                                      "|maximum context|too many tokens"
+                                      "|prompt is too long|input is too long"
+                                      "|exceeds? the (maximum|model)"))
+                 message)))))
+
+(declare claim-preparation! retry-after-overflow!)
+
 (defn- execute-provider-run!
   "Drain one provider stream and settle its durable answer or checkpoint.
 
    Pre: run is queued and provider-request is its immutable request snapshot.
+   `compact-range` is {:from :through :scope :for-chat-id} for a compaction.
+   `answer` is the answer's parameters (`start-answer!`) for an answer that may
+   be rebuilt, else nil.
    Post: the run is completed, stopped, or failed. Provider metadata can update
-   every state. Billing uses the final known cost once in this worker.
+   every state. Billing uses the final known cost once in this worker. An
+   answer that fails because the request is longer than the model's context
+   is compacted once and sent again as a new request (§4.5.6).
    Invariant: on-delta writes through the database's active-state predicate.
    This worker never writes late response text after Stop."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request
-   compact-range reply-blocks]
+   compact-range reply-blocks answer]
   (let [started-ns (System/nanoTime)
         metadata* (volatile! {})
         charged?* (volatile! false)
@@ -1112,7 +1269,8 @@
           (db/fail-assistant-run! run-uuid "The model returned an empty response.")
           (if (= "compact" run-kind)
             (db/complete-assistant-compact-run! run-uuid (str/trim response)
-              (:from compact-range) (:through compact-range))
+              (:from compact-range) (:through compact-range)
+              (:scope compact-range "own") (:for-chat-id compact-range))
             (do
               (when reply-blocks
                 (apply-reply-blocks! user-id run-uuid reply-blocks response))
@@ -1145,7 +1303,13 @@
         (let [known @metadata*
               reconciled (or (poll-generation-metadata
                                api-key (:generation-id known) user-id) {})
-              metadata (merge known reconciled)]
+              metadata (merge known reconciled)
+              ;; Claimed before the run fails, so the chat never reads as idle
+              ;; between the failure and the retry: a send in that gap would
+              ;; take the turn the retry is about to write.
+              retry? (and answer (= "answer" run-kind) (not (:overflow-retried? answer))
+                       (context-overflow-error? error)
+                       (claim-preparation! chat-id))]
           (db/update-assistant-run-metadata! run-uuid metadata)
           (charge-known! metadata)
           (db/fail-assistant-run! run-uuid
@@ -1163,20 +1327,22 @@
                                        ""))
                               :publish-count @publish-count*}} error)
           (bump! user-id)
+          (when retry?
+            (retry-after-overflow! answer api-key run-uuid))
           {:success false :error (ex-message error)})))))
 
 (defn- start-provider-run!
   "Submit one accepted run to the bounded assistant executor.
    Post: returns immediately. The worker owns every terminal transition."
   [user-id chat-id run-uuid run-kind api-key model-id provider-request compact-range
-   reply-blocks]
+   reply-blocks answer]
   (tel/log! {:level :info :id ::assistant-run-started
              :data {:user-id user-id :chat-id chat-id :run-uuid run-uuid
                     :kind run-kind :model-id model-id}}
     "Assistant run started")
   ((m/via assistant-run-executor
      (execute-provider-run! user-id chat-id run-uuid run-kind api-key model-id
-       provider-request compact-range reply-blocks))
+       provider-request compact-range reply-blocks answer))
    (fn [_result] nil)
    (fn [error]
      (db/fail-assistant-run! run-uuid
@@ -1188,78 +1354,382 @@
      (bump! user-id)))
   nil)
 
-(defn start-answer-run!
+;; ── Answers ────────────────────────────────────────────────────────────────
+;;
+;; An answer starts in one of two ways. When its request fits the model's
+;; budget, the run is created at once and a worker streams it. When it does
+;; not, the chat enters PREPARATION: a worker compacts until the request fits,
+;; and only then creates the run (plans/assistant-chat-forks.md §4.5.4). The
+;; order is forced by `idx_assistant_runs_one_active`: a compaction of the chat
+;; itself is a run, so the answer's run cannot exist while it is active.
+;;
+;; A preparing chat has no run row, so `!preparing` stands for one. It refuses
+;; a second send, `active-run*` reports it as compacting, and Stop cancels it.
+
+(defonce ^:private !preparing
+  ;; chat id → {:cancelled? bool}
+  (atom {}))
+
+(defn- preparing? [chat-id]
+  (contains? @!preparing chat-id))
+
+(defn- claim-preparation!
+  "Mark `chat-id` as preparing. Post: true when this call claimed it."
+  [chat-id]
+  (let [[before _] (swap-vals! !preparing
+                     #(if (contains? % chat-id) % (assoc % chat-id {:cancelled? false})))]
+    (not (contains? before chat-id))))
+
+(defn- release-preparation!
+  "End `chat-id`'s preparation. Idempotent."
+  [user-id chat-id]
+  (let [[before _] (swap-vals! !preparing dissoc chat-id)]
+    (when (contains? before chat-id)
+      (bump! user-id))))
+
+(defn- cancel-preparation!
+  "Ask the preparation of the owned chat `chat-id` to stop.
+   Post: true when a preparation was running."
+  [user-id chat-id]
+  (boolean
+    (when (and (preparing? chat-id) (db/get-assistant-chat user-id chat-id))
+      (swap! !preparing #(cond-> % (contains? % chat-id)
+                           (assoc-in [chat-id :cancelled?] true)))
+      true)))
+
+(defn- preparation-cancelled? [chat-id]
+  (boolean (:cancelled? (get @!preparing chat-id))))
+
+(def ^:private compaction-overhead-tokens
+  "Tokens a compaction request keeps for its instructions and the previous
+   checkpoint's summary, outside the rows it summarizes."
+  4000)
+
+(def ^:private summarize-instructions
+  (str "Summarize this conversation for future model turns. "
+    "Preserve decisions, definitions, unresolved questions, "
+    "and source references. Return only the summary."))
+
+(defn- compaction-request
+  "The provider request that summarizes `turns` into a checkpoint of `chat`,
+   building on `prior`, the checkpoint it replaces, when there is one."
+  [model-fields chat prior turns]
+  (assoc model-fields
+    :stream true
+    :session_id (:assistant_chats/provider_session_id chat)
+    :messages (-> [{:role "system" :content summarize-instructions}]
+                (cond-> prior
+                  (conj {:role "system"
+                         :content (str "Existing conversation checkpoint:\n\n"
+                                    (:summary prior))}))
+                (into turns))))
+
+(defn- run-model
+  "The model entry and request fields for one run of `user-id`. An exact
+   model id from a replayed request wins over the current setting."
+  [user-id exact-model-id]
+  (let [entry (or (some-> exact-model-id card-models/resolve-model)
+                (model-entry user-id nil))]
+    {:entry entry
+     :model-id (or exact-model-id (:id entry))
+     :model-fields (openrouter/chat-completion-fields entry
+                     {:reasoning_effort (settings/get-assistant-reasoning user-id)})}))
+
+(defn- render-answer
+  "The request for `answer` in its chat as the chat is now, and the budget it
+   must fit.
+   Post: {:chat :entry :model-id :rendered :budget}, or nil when the chat is
+         gone. :budget is nil when the model's context length is unknown."
+  [{:keys [user-id chat-id page-topic-id user-text ref-topic-ids turn]}]
+  (when-let [chat (db/get-assistant-chat user-id chat-id)]
+    (let [{:keys [entry model-id model-fields]} (run-model user-id nil)]
+      {:chat chat :entry entry :model-id model-id
+       :rendered (answer-request user-id chat page-topic-id user-text ref-topic-ids
+                   model-fields (card-models/web-search-supported? model-id)
+                   (card-models/cache-breakpoint? model-id) turn)
+       :budget (budget/budget-tokens
+                 (model-context/context-length (:openrouter-model entry)))})))
+
+(defn- request-fits? [{:keys [rendered budget]}]
+  (budget/fits? (get-in rendered [:provider-request :messages]) budget))
+
+(defn- create-answer-run!
+  "Create the durable run of `answer` from `rendered`.
+   Post: {:ok true :run-uuid} with :assistant-mutations bumped, or {:error}."
+  [{:keys [user-id chat-id user-text client-id retry-of-run-uuid]} chat model-id rendered]
+  (let [run-uuid (str (random-uuid))
+        created (db/create-assistant-answer-run!
+                  chat-id user-text client-id
+                  {:run-uuid run-uuid
+                   :retry-of-run-uuid retry-of-run-uuid
+                   :provider-session-id (:assistant_chats/provider_session_id chat)
+                   :requested-model model-id
+                   :request-snapshot (:provider-request rendered)
+                   :source-snapshot (:source-snapshot rendered)
+                   :evidence (:evidence rendered)})]
+    (cond
+      (:chat-missing? created)
+      {:error "Chat not found."}
+
+      (not (:created created))
+      {:error "This chat already has an active operation."
+       :active-run-uuid (:active-run-uuid created)}
+
+      :else
+      (do (bump! user-id)
+          {:ok true :run-uuid run-uuid}))))
+
+(defn- answer-parameters
+  "The parts of `answer` a rebuilt request needs, carried by its run worker."
+  [answer]
+  (select-keys answer [:user-id :chat-id :page-topic-id :user-text :ref-topic-ids
+                       :turn :overflow-retried?]))
+
+(defn- sendable-sizes
+  "{:id :chars} for each of `rows` a request carries after `after-id`."
+  [rows after-id]
+  (mapv (fn [row] {:id (:assistant_messages/id row)
+                   :chars (count (:assistant_messages/content row))})
+    (sendable-rows rows after-id)))
+
+(defn- compaction-targets
+  "The plan for an answer in `chat` that does not fit `budget-tokens`
+   (`budget/compaction-plan`). An unknown budget plans with
+   `budget/fallback-budget-tokens`."
+  [user-id chat budget-tokens]
+  (let [chat-id (:assistant_chats/id chat)
+        path (inherited-path user-id chat)
+        descendants (map chat-node (db/get-assistant-chat-descendants user-id chat-id))
+        activity (into {} (map (juxt :id :activity-ms)) descendants)
+        own-checkpoint (db/latest-assistant-checkpoint user-id chat-id "own")
+        inherited-checkpoint (when (seq path)
+                               (db/latest-assistant-checkpoint user-id chat-id "inherited"))
+        budget-tokens (or budget-tokens budget/fallback-budget-tokens)]
+    (budget/compaction-plan
+      {:branches (mapv (fn [{branch-id :chat-id}]
+                         (let [checkpoint (db/latest-assistant-checkpoint user-id branch-id "own")]
+                           {:chat-id branch-id
+                            :activity-ms (activity branch-id)
+                            :rows (sendable-sizes (db/get-assistant-messages branch-id)
+                                    (:covered_through_message_id checkpoint))}))
+                   (tree/included-branches descendants chat-id))
+       :inherited (when (seq path)
+                    {:chat-id chat-id
+                     :rows (sendable-sizes (inherited-rows path)
+                             (:covered_through_message_id inherited-checkpoint))})
+       :own {:chat-id chat-id
+             :rows (sendable-sizes (db/get-assistant-messages chat-id)
+                     (:covered_through_message_id own-checkpoint))}
+       :slice-budget (max 1000 (- budget-tokens compaction-overhead-tokens))})))
+
+(defn- compact-slice!
+  "Summarize `turns` into a new checkpoint of `target-chat`, in this thread.
+   Pre:  `covered` is {:from :through :scope :for-chat-id}. `prior` is the
+         target's newest checkpoint of that scope, or nil.
+   Post: true when the checkpoint landed. False when the chat had an active
+         run, or the compaction failed or was stopped."
+  [user-id api-key {:keys [entry model-fields]} target-chat covered prior turns]
+  (let [chat-id (:assistant_chats/id target-chat)
+        run-uuid (str (random-uuid))
+        request (compaction-request model-fields target-chat prior turns)
+        created (db/create-assistant-compact-run!
+                  chat-id {:run-uuid run-uuid
+                           :provider-session-id (:assistant_chats/provider_session_id target-chat)
+                           :requested-model (:id entry)
+                           :request-snapshot request
+                           :source-snapshot []})]
+    (boolean
+      (when (:created created)
+        (bump! user-id)
+        (execute-provider-run! user-id chat-id run-uuid "compact" api-key (:id entry)
+          request covered nil nil)
+        (= "completed" (:status (db/get-assistant-run user-id run-uuid)))))))
+
+(defn- compact-target!
+  "Compact one plan target, slice by slice, oldest first, for an answer in
+   `for-chat-id`. Each slice builds on the checkpoint the one before it made.
+   Post: true when every slice landed."
+  [user-id api-key model for-chat-id {:keys [target chat-id slices]}]
+  (let [target-chat (db/get-assistant-chat user-id chat-id)
+        scope (if (= :inherited target) "inherited" "own")
+        rows (when target-chat
+               (if (= :inherited target)
+                 (inherited-rows (inherited-path user-id target-chat))
+                 (db/get-assistant-messages chat-id)))]
+    (boolean
+      (and target-chat
+        (every? (fn [[_ through]]
+                  (let [prior (db/latest-assistant-checkpoint user-id chat-id scope)
+                        turns (provider-turns
+                                (filter #(<= (:assistant_messages/id %) through) rows)
+                                (:covered_through_message_id prior))]
+                    (or (empty? turns)
+                      (compact-slice! user-id api-key model target-chat
+                        {:from (or (:covered_from_message_id prior)
+                                 (:assistant_messages/id (first rows)))
+                         :through through :scope scope :for-chat-id for-chat-id}
+                        prior turns))))
+          slices)))))
+
+(defn- settle-prepared-answer!
+  "Create the run of a prepared `answer` from `prepared` and end the
+   preparation. `outcome` is :run (stream it in this thread), :stop (stop it
+   at once, for a cancelled preparation) or :oversized (fail it with
+   `oversized-answer-error`). Creating the run in every case is what puts the
+   learner's turn in the transcript, so the optimistic echo retires."
+  [{:keys [user-id chat-id] :as answer} api-key {:keys [chat model-id rendered]} outcome]
+  (let [created (create-answer-run! answer chat model-id rendered)]
+    (release-preparation! user-id chat-id)
+    (when-let [run-uuid (:run-uuid created)]
+      (case outcome
+        :run (execute-provider-run! user-id chat-id run-uuid "answer" api-key model-id
+               (:provider-request rendered) nil (:reply-blocks rendered)
+               (answer-parameters answer))
+        :stop (db/stop-assistant-run! user-id chat-id)
+        :oversized (db/fail-assistant-run! run-uuid oversized-answer-error))
+      (bump! user-id))
+    created))
+
+(defn- prepare-answer!
+  "Compact until `answer`'s request fits, then create and stream its run, in
+   this thread (§4.5.3, §4.5.4).
+
+   Pre:  this call owns the chat's preparation (`claim-preparation!`).
+   Post: the preparation is released. The answer's run exists and is
+         completed, failed or stopped, unless the chat is gone. Each target is
+         tried once. With :force-compaction?, one target is compacted even when
+         the estimate says the request fits, because the provider said it did
+         not."
+  [{:keys [user-id chat-id force-compaction?] :as answer} api-key]
+  (try
+    (loop [tried #{} force? (if force-compaction? true false)]
+      (when-let [prepared (render-answer answer)]
+        (cond
+          (preparation-cancelled? chat-id)
+          (settle-prepared-answer! answer api-key prepared :stop)
+
+          (and (not force?) (request-fits? prepared))
+          (settle-prepared-answer! answer api-key prepared :run)
+
+          :else
+          (let [model (run-model user-id nil)
+                target (->> (compaction-targets user-id (:chat prepared) (:budget prepared))
+                         (remove #(tried [(:target %) (:chat-id %)]))
+                         first)]
+            (cond
+              target
+              (do (compact-target! user-id api-key model chat-id target)
+                  (recur (conj tried [(:target target) (:chat-id target)]) false))
+
+              force? (recur tried false)
+
+              :else
+              (settle-prepared-answer! answer api-key prepared :oversized))))))
+    (finally
+      (release-preparation! user-id chat-id))))
+
+(defn- start-prepared-answer!
+  "Start `answer`'s preparation on the run executor.
+   Post: {:ok true :preparing? true}, or {:error} when the chat already has
+         an active operation. Returns before the provider is called."
+  [{:keys [user-id chat-id] :as answer} api-key]
+  (if-not (claim-preparation! chat-id)
+    {:error "This chat already has an active operation."}
+    (do
+      (bump! user-id)
+      ((m/via assistant-run-executor (prepare-answer! answer api-key))
+       (fn [_] nil)
+       (fn [error]
+         (release-preparation! user-id chat-id)
+         (tel/error! {:id ::assistant-preparation
+                      :data {:user-id user-id :chat-id chat-id}} error)))
+      {:ok true :preparing? true})))
+
+(defn- retry-after-overflow!
+  "Answer `answer` again after the provider refused its request as too long
+   (§4.5.6): compact at least once, rebuild the request, and send it as a
+   retry of `failed-run-uuid`, in this thread. Never a second time for the
+   same turn.
+   Pre: the caller claimed the chat's preparation before it failed the run."
+  [{:keys [user-id] :as answer} api-key failed-run-uuid]
+  (bump! user-id)
+  (prepare-answer! (assoc answer
+                     :force-compaction? true
+                     :overflow-retried? true
+                     :retry-of-run-uuid failed-run-uuid
+                     :client-id (str (random-uuid)))
+    api-key))
+
+(defn- start-answer!
   "Create and start one streamed answer in an owned chat.
+
+   Pre:  `answer` is {:user-id :chat-id :page-topic-id :user-text
+         :ref-topic-ids :client-id :turn :retry-of-run-uuid}, plus
+         :exact-request, :exact-evidence and :exact-model-id for a replay.
+         `turn` is one of `turn-kinds`.
+   Post: {:ok true :run-uuid} after durable creation and worker submission,
+         {:ok true :preparing? true} when the request must be compacted first,
+         or {:error}. The call does not wait for the provider.
+   Invariant: the database rejects a second active operation in the chat, and
+   a preparing chat refuses one before it reaches the database."
+  [{:keys [user-id chat-id user-text exact-request exact-evidence exact-model-id]
+    :as answer}]
+  (let [chat (db/get-assistant-chat user-id chat-id)
+        api-key (settings/get-openrouter-api-key user-id)]
+    (cond
+      (nil? chat) {:error "Chat not found."}
+      (str/blank? user-text) {:error "Message is empty."}
+      (str/blank? api-key) {:error "OpenRouter API key not configured."}
+      (preparing? chat-id) {:error "This chat already has an active operation."}
+      :else
+      (let [gate (credits/check-cost-billed-balance! user-id)]
+        (cond
+          (not (:ok gate))
+          {:error (:error gate)}
+
+          exact-request
+          (let [{:keys [model-id]} (run-model user-id exact-model-id)
+                rendered {:provider-request exact-request
+                          :source-snapshot exact-evidence
+                          :evidence exact-evidence}
+                created (create-answer-run! answer chat model-id rendered)]
+            (when (:ok created)
+              (start-provider-run! user-id chat-id (:run-uuid created) "answer" api-key
+                model-id exact-request nil nil (answer-parameters answer)))
+            created)
+
+          :else
+          (let [prepared (render-answer answer)]
+            (if (request-fits? prepared)
+              (let [{:keys [model-id rendered]} prepared
+                    created (create-answer-run! answer chat model-id rendered)]
+                (when (:ok created)
+                  (start-provider-run! user-id chat-id (:run-uuid created) "answer"
+                    api-key model-id (:provider-request rendered) nil
+                    (:reply-blocks rendered) (answer-parameters answer)))
+                created)
+              (start-prepared-answer! answer api-key))))))))
+
+(defn start-answer-run!
+  "Create and start one streamed answer in an owned chat (`start-answer!`).
 
    Pre: user-text is non-blank. `turn` is one of `turn-kinds`: `:annotated`
    exactly when user-text is an `annotations/user-message`, `:question-pins`
-   exactly when it is `question-map/open-pins-message` text. Post: {:ok true
-   :run-uuid} after durable creation and worker submission, or {:error}. The
-   call does not wait for the provider. Invariant: the database rejects a
-   second active operation in the chat."
+   exactly when it is `question-map/open-pins-message` text."
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
      client-id nil))
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id turn]
-   (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id nil nil nil nil turn))
+   (start-answer! {:user-id user-id :chat-id chat-id :page-topic-id page-topic-id
+                   :user-text user-text :ref-topic-ids ref-topic-ids
+                   :client-id client-id :turn turn}))
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
     retry-of-run-uuid exact-request exact-evidence exact-model-id]
-   (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
-     client-id retry-of-run-uuid exact-request exact-evidence exact-model-id nil))
-  ([user-id chat-id page-topic-id user-text ref-topic-ids client-id
-    retry-of-run-uuid exact-request exact-evidence exact-model-id turn]
-   (let [chat (db/get-assistant-chat user-id chat-id)
-         api-key (settings/get-openrouter-api-key user-id)]
-     (cond
-       (nil? chat) {:error "Chat not found."}
-       (str/blank? user-text) {:error "Message is empty."}
-       (str/blank? api-key) {:error "OpenRouter API key not configured."}
-       :else
-       (let [gate (credits/check-cost-billed-balance! user-id)]
-         (if-not (:ok gate)
-           {:error (:error gate)}
-           (let [entry (or (some-> exact-model-id card-models/resolve-model)
-                         (model-entry user-id (:assistant_chats/root_topic_id chat)))
-                 run-model-id (or exact-model-id (:id entry))
-                 model-fields (openrouter/chat-completion-fields entry
-                                {:reasoning_effort (settings/get-assistant-reasoning user-id)})
-                 rendered (if exact-request
-                            {:provider-request exact-request
-                             :source-snapshot exact-evidence
-                             :evidence exact-evidence}
-                            (answer-request user-id chat page-topic-id user-text
-                              ref-topic-ids model-fields
-                              (card-models/web-search-supported?
-                                (:id entry))
-                              (card-models/cache-breakpoint? run-model-id)
-                              turn))
-                 run-uuid (str (random-uuid))
-                 created (db/create-assistant-answer-run!
-                           chat-id user-text client-id
-                           {:run-uuid run-uuid
-                            :retry-of-run-uuid retry-of-run-uuid
-                            :provider-session-id
-                            (:assistant_chats/provider_session_id chat)
-                            :requested-model run-model-id
-                            :request-snapshot (:provider-request rendered)
-                            :source-snapshot (:source-snapshot rendered)
-                            :evidence (:evidence rendered)})]
-             (cond
-               (:chat-missing? created)
-               {:error "Chat not found."}
-
-               (not (:created created))
-               {:error "This chat already has an active operation."
-                :active-run-uuid (:active-run-uuid created)}
-
-               :else
-               (do
-                 (bump! user-id)
-                 (start-provider-run! user-id chat-id run-uuid "answer" api-key
-                   run-model-id (:provider-request rendered) nil
-                   (:reply-blocks rendered))
-                 {:ok true :run-uuid run-uuid})))))))))
+   (start-answer! {:user-id user-id :chat-id chat-id :page-topic-id page-topic-id
+                   :user-text user-text :ref-topic-ids ref-topic-ids
+                   :client-id client-id :retry-of-run-uuid retry-of-run-uuid
+                   :exact-request exact-request :exact-evidence exact-evidence
+                   :exact-model-id exact-model-id})))
 
 (defn- start-answer-run-in-new-chat!
   "Create a chat titled from `user-text` and start its first answer.
@@ -1286,6 +1756,65 @@
             (assoc result :chat-id nil))
         (do (db/mark-assistant-chat-opened! user-id chat-id)
             (assoc result :chat-id chat-id))))))
+
+(def ^:private wait-for-answer-error "Wait for the answer to finish.")
+
+(defn- in-transcript?
+  "True when `message`, a row of `get-assistant-message`, is in `chat`'s
+   transcript: one of its own rows, or one it inherits (D1b)."
+  [user-id chat message]
+  (or (= (:assistant_chats/id chat) (:chat_id message))
+    (boolean (some (fn [[chat-id through]]
+                     (and (= chat-id (:chat_id message)) (<= (:id message) through)))
+               (inherited-path user-id chat)))))
+
+(defn fork-and-start-answer!
+  "Fork the owned chat `parent-chat-id` at `message-id`, or at its latest
+   message when `message-id` is nil, and start the child's first answer
+   (plans/assistant-chat-forks.md §4.3.2, §4.3.3).
+
+   Pre:  `message-id` is a message the learner saw in the parent's
+         transcript, which may be one the parent inherited (D1b).
+   Post: on success, :chat-id is the child. It holds the first turn, is
+         marked opened, and has the parent's mode and web-search preference
+         (§4.3.5). On an error, :chat-id is the parent, so the parent stays
+         open, and no child row remains. A message whose run is still active
+         cannot be forked at (§4.3.4).
+   Owner: this function created the child, so it removes it on failure."
+  [user-id parent-chat-id message-id page-topic-id user-text ref-topic-ids client-id turn]
+  (let [parent (db/get-assistant-chat user-id parent-chat-id)
+        fork-id (or message-id
+                  (when parent
+                    (:assistant_messages/id (last (db/get-assistant-messages parent-chat-id)))))
+        message (when fork-id (db/get-assistant-message user-id fork-id))
+        result
+        (cond
+          (nil? parent) {:error "Chat not found."}
+          (str/blank? user-text) {:error slash/fork-usage-error}
+          (or (nil? message) (not (in-transcript? user-id parent message)))
+          {:error "That message is not in this chat."}
+          (db/assistant-message-run-active? fork-id) {:error wait-for-answer-error}
+          :else
+          (if-let [child-id (db/create-assistant-fork! user-id parent-chat-id fork-id
+                              (title-from user-text))]
+            (let [started (try
+                            (start-answer! {:user-id user-id :chat-id child-id
+                                            :page-topic-id page-topic-id
+                                            :user-text user-text
+                                            :ref-topic-ids ref-topic-ids
+                                            :client-id client-id :turn turn})
+                            (catch Throwable t
+                              (db/delete-empty-assistant-chat! user-id child-id)
+                              (throw t)))]
+              (if (:error started)
+                (do (db/delete-empty-assistant-chat! user-id child-id)
+                    started)
+                (do (db/mark-assistant-chat-opened! user-id child-id)
+                    (assoc started :chat-id child-id))))
+            {:error "Chat not found."}))]
+    (if (:error result)
+      (assoc result :chat-id (when parent parent-chat-id))
+      result)))
 
 (defn ensure-and-start-answer-run!
   "Start an answer in `chat-id`, or in a new chat when `chat-id` is nil.
@@ -1323,28 +1852,47 @@
         :command :answer))))
 
 (defn submit-chat-input!
-  "Dispatch composer input at the assistant boundary.
-   `/compact` is an application command and never becomes a user message.
+  "Dispatch composer input at the assistant boundary. A slash command
+   (`freememo.assistant-slash`) is an application command and never becomes a
+   user message as typed: `/compact` compacts the open chat, and
+   `/fork <question>` forks it at its latest message with that question.
 
    `annotation-list` is the composer's annotations as `annotations/wire-annotations`
    gives them, or empty. With annotations, the stored and sent user turn is
    `annotations/user-message` over them and `draft`, and `draft` may be blank.
+   `fork` is the composer's pending fork, {:message-id id-or-nil}, or nil. It
+   makes the send the first turn of a new fork of `chat-id` (§4.3.3).
    Pre:  an annotation needs an answer to point at, so a non-empty list comes
-         with a `chat-id`.
-   Post: {:error} without a run when the list fails `annotations/problem`."
+         with a `chat-id`. So does a pending fork.
+   Post: {:error} without a run when the list fails `annotations/problem`.
+         :command is :compact, :fork or :answer."
   ([user-id root-topic-id page-topic-id chat-id mode-id web-search? draft ref-topic-ids
     client-id]
    (submit-chat-input! user-id root-topic-id page-topic-id chat-id mode-id web-search?
-     draft ref-topic-ids client-id []))
+     draft ref-topic-ids client-id [] nil))
   ([user-id root-topic-id page-topic-id chat-id mode-id web-search? draft ref-topic-ids
     client-id annotation-list]
+   (submit-chat-input! user-id root-topic-id page-topic-id chat-id mode-id web-search?
+     draft ref-topic-ids client-id annotation-list nil))
+  ([user-id root-topic-id page-topic-id chat-id mode-id web-search? draft ref-topic-ids
+    client-id annotation-list fork]
    (let [annotation-list (annotations/wire-annotations annotation-list)
-         annotated? (boolean (seq annotation-list))]
+         annotated? (boolean (seq annotation-list))
+         command (when-not annotated? (slash/parse draft))
+         text (if annotated? (annotations/user-message annotation-list draft) draft)
+         turn (when annotated? :annotated)]
      (cond
-       (and (not annotated?) (= "/compact" (str/trim draft)))
+       (= :compact (:command command))
        (if chat-id
          (assoc (start-compact-run! user-id chat-id) :chat-id chat-id :command :compact)
          {:error "Start a chat before compacting context." :chat-id nil :command :compact})
+
+       (= :fork (:command command))
+       (if chat-id
+         (assoc (fork-and-start-answer! user-id chat-id nil page-topic-id
+                  (:question command) ref-topic-ids client-id nil)
+           :command :fork)
+         {:error "Start a chat before forking it." :chat-id nil :command :fork})
 
        (and annotated? (nil? chat-id))
        {:error "Annotations need an open chat." :chat-id nil :command :answer}
@@ -1352,25 +1900,30 @@
        (and annotated? (annotations/problem annotation-list))
        {:error (annotations/problem annotation-list) :chat-id chat-id :command :answer}
 
+       (and fork chat-id)
+       (assoc (fork-and-start-answer! user-id chat-id (:message-id fork) page-topic-id
+                text ref-topic-ids client-id turn)
+         :command :fork)
+
        :else
        (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
-                chat-id mode-id web-search?
-                (if annotated?
-                  (annotations/user-message annotation-list draft)
-                  draft)
-                ref-topic-ids client-id (when annotated? :annotated))
+                chat-id mode-id web-search? text ref-topic-ids client-id turn)
          :command :answer)))))
 
 (defn start-compact-run!
   "Start `/compact` as a separate paid run without adding a user message.
-   Post: a completed worker creates one checkpoint event. Original messages stay
-   unchanged. Empty transcripts and concurrent operations return an error."
+   It covers the chat's own rows only, so in a fork the inherited rows stay as
+   they are (plans/assistant-chat-forks.md §4.5.8).
+   Post: a completed worker creates one `own` checkpoint event. Original
+   messages stay unchanged. Empty transcripts and concurrent operations return
+   an error."
   [user-id chat-id]
   (let [chat (db/get-assistant-chat user-id chat-id)
         api-key (settings/get-openrouter-api-key user-id)]
     (cond
       (nil? chat) {:error "Chat not found."}
       (str/blank? api-key) {:error "OpenRouter API key not configured."}
+      (preparing? chat-id) {:error "This chat already has an active operation."}
       :else
       (let [gate (credits/check-cost-billed-balance! user-id)
             messages (db/get-assistant-messages chat-id)]
@@ -1378,29 +1931,15 @@
           (not (:ok gate)) {:error (:error gate)}
           (empty? messages) {:error "There is no chat context to compact."}
           :else
-          (let [entry (model-entry user-id (:assistant_chats/root_topic_id chat))
-                model-fields (openrouter/chat-completion-fields entry
-                               {:reasoning_effort (settings/get-assistant-reasoning user-id)})
-                checkpoint (db/latest-assistant-checkpoint user-id chat-id)
-                later (transcript-messages-after-checkpoint chat-id checkpoint)
-                summary-input (cond-> []
-                                checkpoint
-                                (conj {:role "system"
-                                       :content (str "Existing conversation checkpoint:\n\n"
-                                                  (:summary checkpoint))})
-                                true (into later))
-                provider-request (assoc model-fields
-                                   :stream true
-                                   :session_id (:assistant_chats/provider_session_id chat)
-                                   :messages
-                                   (into [{:role "system"
-                                           :content (str "Summarize this conversation for future model turns. "
-                                                      "Preserve decisions, definitions, unresolved questions, "
-                                                      "and source references. Return only the summary.")}]
-                                     summary-input))
+          (let [{:keys [entry model-fields]} (run-model user-id nil)
+                checkpoint (db/latest-assistant-checkpoint user-id chat-id "own")
+                provider-request (compaction-request model-fields chat checkpoint
+                                   (provider-turns messages
+                                     (:covered_through_message_id checkpoint)))
                 run-uuid (str (random-uuid))
                 covered {:from (:assistant_messages/id (first messages))
-                         :through (:assistant_messages/id (last messages))}
+                         :through (:assistant_messages/id (last messages))
+                         :scope "own"}
                 created (db/create-assistant-compact-run!
                           chat-id {:run-uuid run-uuid
                                    :provider-session-id
@@ -1420,16 +1959,19 @@
               (do
                 (bump! user-id)
                 (start-provider-run! user-id chat-id run-uuid "compact" api-key
-                  (:id entry) provider-request covered nil)
+                  (:id entry) provider-request covered nil nil)
                 {:ok true :run-uuid run-uuid}))))))))
 
 (defn stop-active-run!
-  "Stop local delivery for the active run in an owned chat.
-   The provider reader keeps draining for usage and cost metadata."
+  "Stop local delivery for the active run in an owned chat, and cancel the
+   chat's preparation if one is compacting before its answer.
+   The provider reader keeps draining for usage and cost metadata. A cancelled
+   preparation still records the learner's turn, as a stopped answer."
   [user-id chat-id]
-  (let [result (db/stop-assistant-run! user-id chat-id)]
-    (when (:stopped result) (bump! user-id))
-    result))
+  (let [cancelled? (cancel-preparation! user-id chat-id)
+        result (db/stop-assistant-run! user-id chat-id)]
+    (when (or cancelled? (:stopped result)) (bump! user-id))
+    (cond-> result cancelled? (assoc :stopped true))))
 
 (defn- imported-evidence->creation-evidence
   [source]
@@ -1444,14 +1986,31 @@
    :source-revision (:source_revision source)
    :walkthrough-id (:walkthrough_id source)})
 
+(defn- rebuild-on-retry?
+  "True when a failed run's request must be built again rather than replayed:
+   it was refused for its size, and replaying it would be refused again. The
+   learner may have excluded a branch since (§4.5.7)."
+  [failed-run]
+  (let [error-text (:error_text failed-run)]
+    (or (= oversized-answer-error error-text)
+      (context-overflow-error? (ex-info (or error-text "") {})))))
+
 (defn retry-answer-run!
-  "Retry one failed answer with its exact provider request and evidence snapshot.
+  "Retry one failed answer with its exact provider request and evidence
+   snapshot. An answer refused for its size is built again instead, from the
+   chat as it is now.
    Post: creates a new user turn and run. The failed run stays unchanged."
   [user-id run-uuid client-id]
   (if-let [failed-run (db/get-assistant-run user-id run-uuid)]
     (cond
       (not= "answer" (:kind failed-run)) {:error "Only answers can be retried."}
       (not= "failed" (:status failed-run)) {:error "Only failed answers can be retried."}
+      (rebuild-on-retry? failed-run)
+      (start-answer! {:user-id user-id :chat-id (:chat_id failed-run)
+                      :user-text (:content (db/get-assistant-message
+                                             user-id (:user_message_id failed-run)))
+                      :ref-topic-ids [] :client-id client-id
+                      :retry-of-run-uuid run-uuid})
       :else
       (let [user-message (db/get-assistant-message user-id (:user_message_id failed-run))
             snapshots (into {} (map (juxt :citation-key identity))
@@ -1854,10 +2413,11 @@
 (def ^:private transcript-wire-keys
   [:assistant_messages/id :assistant_messages/role
    :assistant_messages/content :assistant_messages/client_id
+   :assistant_messages/inherited?
    :assistant_run/uuid :assistant_run/status :assistant_run/error
    :assistant_run/retry_of :assistant_run/evidence
    :assistant_event/type :assistant_event/covered_from
-   :assistant_event/covered_through])
+   :assistant_event/covered_through :assistant_event/chat_title])
 
 (def ^:private evidence-wire-keys
   [:citation_key :document_topic_id :page_topic_id :page_number :anchor
@@ -1981,47 +2541,93 @@
   [_rev user-id root-topic-id]
   (db/get-assistant-chats user-id root-topic-id))
 
+(defn- message-events
+  "`messages` of the chat `chat-id` as transcript rows. An answer row reads its
+   durable text from its run and carries only the evidence that text cites."
+  [user-id chat-id messages]
+  (let [runs (db/get-assistant-run-summaries-for-chat user-id chat-id)
+        run-by-message (into {} (keep (fn [run]
+                                        (when-let [message-id (:assistant_message_id run)]
+                                          [message-id run]))) runs)
+        evidence-by-run (group-by :run_uuid
+                          (db/get-cited-assistant-evidence-for-chat user-id chat-id))]
+    (mapv (fn [message]
+            (if-let [run (get run-by-message (:assistant_messages/id message))]
+              (assoc message
+                :assistant_messages/content (:response_text run)
+                :assistant_run/uuid (:run_uuid run)
+                :assistant_run/status (:status run)
+                :assistant_run/error (:error_text run)
+                :assistant_run/retry_of (:retry_of_run_uuid run)
+                :assistant_run/evidence (get evidence-by-run (:run_uuid run) []))
+              message))
+      messages)))
+
+(defn- checkpoint-event
+  "One checkpoint as a transcript event row. A checkpoint of another chat,
+   made for this chat's answer, names that chat (§4.5.5)."
+  [checkpoint]
+  (cond-> {:assistant_messages/id (str "checkpoint-" (:id checkpoint))
+           :assistant_messages/role "event"
+           :assistant_messages/content (:summary checkpoint)
+           :assistant_event/type "compact"
+           :assistant_event/covered_from (:covered_from_message_id checkpoint)
+           :assistant_event/covered_through (:covered_through_message_id checkpoint)
+           :assistant_run/uuid (:run_uuid checkpoint)}
+    (:chat_title checkpoint)
+    (assoc :assistant_event/chat_title (:chat_title checkpoint))))
+
 (defn messages*
   "Transcript and checkpoint events for an owned chat. `_rev` forces re-query.
    Active answer rows read their durable response text from the run authority.
-   An answer row carries only the evidence its text cites."
+   An answer row carries only the evidence its text cites.
+
+   A fork shows the rows it inherited first, each flagged
+   :assistant_messages/inherited?, then a \"fork\" event that names the parent,
+   then its own rows (plans/assistant-chat-forks.md §4.2.3). Inherited answers
+   keep their own runs, so their citations open the ancestor's evidence.
+   Checkpoints sort after the last row they cover. A checkpoint of another
+   chat made for this chat's answer sorts after the last own row written
+   before it."
   [_rev user-id chat-id]
-  (when (and chat-id (db/get-assistant-chat user-id chat-id))
-    (let [messages (db/get-assistant-messages chat-id)
-          runs (db/get-assistant-run-summaries-for-chat user-id chat-id)
-          run-by-message (into {} (keep (fn [run]
-                                          (when-let [message-id (:assistant_message_id run)]
-                                            [message-id run]))) runs)
-          evidence-by-run (group-by :run_uuid
-                            (db/get-cited-assistant-evidence-for-chat user-id chat-id))
-          message-events
-          (mapv (fn [message]
-                  (if-let [run (get run-by-message (:assistant_messages/id message))]
-                    (assoc message
-                      :assistant_messages/content (:response_text run)
-                      :assistant_run/uuid (:run_uuid run)
-                      :assistant_run/status (:status run)
-                      :assistant_run/error (:error_text run)
-                      :assistant_run/retry_of (:retry_of_run_uuid run)
-                      :assistant_run/evidence (get evidence-by-run (:run_uuid run) []))
-                    message))
-            messages)
-          checkpoint-events
-          (mapv (fn [checkpoint]
-                  {:assistant_messages/id (str "checkpoint-" (:id checkpoint))
-                   :assistant_messages/role "event"
-                   :assistant_messages/content (:summary checkpoint)
-                   :assistant_event/type "compact"
-                   :assistant_event/covered_from (:covered_from_message_id checkpoint)
-                   :assistant_event/covered_through (:covered_through_message_id checkpoint)
-                   :assistant_run/uuid (:run_uuid checkpoint)
-                   :timeline/order (inc (* 2 (:covered_through_message_id checkpoint)))})
-            (db/get-assistant-checkpoints user-id chat-id))]
+  (when-let [chat (and chat-id (db/get-assistant-chat user-id chat-id))]
+    (let [lineage (chat-lineage user-id chat)
+          path (tree/inherited-path lineage chat-id)
+          order (fn [section n] #(assoc % ::order [section n]))
+          inherited (mapcat (fn [[ancestor-id through]]
+                              (map #(assoc % :assistant_messages/inherited? true)
+                                (message-events user-id ancestor-id
+                                  (db/get-assistant-messages ancestor-id through))))
+                      path)
+          own (message-events user-id chat-id (db/get-assistant-messages chat-id))
+          checkpoints (db/get-assistant-checkpoints user-id chat-id)
+          after (fn [id] (inc (* 2 (or id 0))))]
       (->> (concat
-             (map #(assoc % :timeline/order (* 2 (:assistant_messages/id %))) message-events)
-             checkpoint-events)
-        (sort-by :timeline/order)
-        (mapv #(dissoc % :timeline/order))))))
+             (map #((order 0 (* 2 (:assistant_messages/id %))) %) inherited)
+             (keep (fn [checkpoint]
+                     (when (= "inherited" (:scope checkpoint))
+                       ((order 0 (after (:covered_through_message_id checkpoint)))
+                        (checkpoint-event checkpoint))))
+               checkpoints)
+             (when (seq path)
+               [((order 1 0)
+                 {:assistant_messages/id "fork"
+                  :assistant_messages/role "event"
+                  :assistant_event/type "fork"
+                  :assistant_messages/content
+                  (:title (get lineage (:assistant_chats/parent_chat_id chat)))})])
+             (map #((order 2 (* 2 (:assistant_messages/id %))) %) own)
+             (keep (fn [checkpoint]
+                     (when-not (= "inherited" (:scope checkpoint))
+                       ((order 2 (after (:covered_through_message_id checkpoint)))
+                        (checkpoint-event checkpoint))))
+               checkpoints)
+             (map (fn [checkpoint]
+                    ((order 2 (after (:after_message_id checkpoint)))
+                     (checkpoint-event checkpoint)))
+               (db/get-assistant-checkpoints-made-for user-id chat-id)))
+        (sort-by ::order)
+        (mapv #(dissoc % ::order))))))
 
 (defn message-client-id-present?
   "Return true when `rows` already carry the optimistic user message.
@@ -2042,11 +2648,16 @@
       (some #(= client-id (:assistant_messages/client_id %)) rows))))
 
 (defn active-run*
-  "Active run summary for an owned chat. `_rev` forces re-query."
+  "Active run summary for an owned chat. `_rev` forces re-query.
+   A chat whose answer is being prepared has no run yet. It reports a
+   compaction with status \"preparing\", so the panel shows Compacting
+   context… and offers Stop (plans/assistant-chat-forks.md §4.5.4)."
   [_rev user-id chat-id]
   (when chat-id
-    (some-> (db/get-active-assistant-run user-id chat-id)
-      (select-keys [:run_uuid :kind :status]))))
+    (or (some-> (db/get-active-assistant-run user-id chat-id)
+          (select-keys [:run_uuid :kind :status]))
+      (when (and (preparing? chat-id) (db/get-assistant-chat user-id chat-id))
+        {:run_uuid nil :kind "compact" :status "preparing"}))))
 
 (defn run-details*
   "Owner-scoped answer details with wire-safe timestamps.

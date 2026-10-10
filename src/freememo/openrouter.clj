@@ -225,6 +225,19 @@
   ([api-key body] (chat-completion! api-key body nil))
   ([api-key body ctx] (ok-body (post! api-key "/chat/completions" body ctx))))
 
+(defn list-models!
+  "GET /models, OpenRouter's model catalog. The catalog is public, so no key
+   is sent.
+   Post: the catalog's :data vector, each entry as OpenRouter returns it. A
+         non-200 throws `api-error`."
+  []
+  (let [response (http/get (str base-url "/models")
+                   {:as :json :throw-exceptions false
+                    :connection-timeout 10000 :socket-timeout 20000})]
+    (when-not (= 200 (:status response))
+      (throw (api-error response)))
+    (:data (:body response))))
+
 (def token-keys
   "The token counts `usage-tokens` reads, named as the billing ledger
    (db/debit-credits!) and assistant_runs name them."

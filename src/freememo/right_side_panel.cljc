@@ -8,8 +8,9 @@
    state therefore stays stable during page navigation within one document.
 
    The assistant's active chat lives here, not in AssistantPanel, together with
-   the history view's open flag, the bar's rename flag and the chat-action
-   queue (plans/assistant-chat-history.md §3.0). This component stays mounted
+   the history view's open flag, the bar's rename flag, the chat-action queue
+   (plans/assistant-chat-history.md §3.0) and the pending fork
+   (plans/assistant-chat-forks.md §4.3.3). This component stays mounted
    while the panel is collapsed or showing الشرح, so the chat survives both, and
    the palette's chat commands reach this state with the panel collapsed.
 
@@ -122,6 +123,12 @@
             !history-open? (atom false)
             !renaming-active? (atom false)
             !chat-action (atom nil)
+            ;; A fork waiting for its first message (plans/assistant-chat-
+            ;; forks.md §4.3.3): {:chat-id :message-id :excerpt}, or nil.
+            ;; "Fork here" and the palette's Fork chat write it, and the next
+            ;; send in that chat creates the fork. :message-id nil means the
+            ;; chat's latest message.
+            !pending-fork (atom nil)
             !seeded? (atom false)
             seeded? (e/watch !seeded?)
             toggle-assistant-pane!
@@ -153,7 +160,7 @@
                                           :request-poem-panel!]))
 
         (history/AssistantChatEffects user-id root-topic-id show-right-pane!
-          !active !history-open? !renaming-active? !chat-action !seeded?)
+          !active !history-open? !renaming-active? !chat-action !seeded? !pending-fork)
 
         ;; An Ask over pins is consumed by the AssistantPanel, which is not
         ;; mounted while this panel is closed or on another tab. Opening the
@@ -201,4 +208,5 @@
             (if (and poem? (= poem/panel-tab tab))
               (PoemPanel page-topic-id root-topic-id user-id)
               (AssistantPanel page-topic-id root-topic-id user-id seeded?
-                !active !history-open? !renaming-active? !chat-action))))))))
+                !active !history-open? !renaming-active? !chat-action
+                !pending-fork))))))))

@@ -37,8 +37,13 @@
                  :document-title "Assistant run test"
                  :display-label "document-level evidence"}]}))
 
-(def ^:private transcript-after-checkpoint
-  #'assistant/transcript-messages-after-checkpoint)
+(def ^:private provider-turns #'assistant/provider-turns)
+
+(defn- transcript-after-checkpoint
+  "The own rows a request still sends after `checkpoint`."
+  [chat-id checkpoint]
+  (provider-turns (db/get-assistant-messages chat-id)
+    (:covered_through_message_id checkpoint)))
 
 (deftest stop-closes-text-but-keeps-late-metadata
   (let [owner (create-user!)
@@ -102,8 +107,8 @@
             (is (db/complete-assistant-compact-run! compact-uuid "Summary"
                   (first message-ids) (last message-ids)))
             (is (= "Summary" (:summary
-                               (db/latest-assistant-checkpoint owner chat-id))))
-            (let [checkpoint (db/latest-assistant-checkpoint owner chat-id)]
+                               (db/latest-assistant-checkpoint owner chat-id "own"))))
+            (let [checkpoint (db/latest-assistant-checkpoint owner chat-id "own")]
               (is (= [] (transcript-after-checkpoint chat-id checkpoint)))
               (db/insert-assistant-message! chat-id "user" "Later" nil)
               (db/insert-assistant-message! chat-id "assistant" "New answer" nil)

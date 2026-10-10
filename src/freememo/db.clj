@@ -691,6 +691,26 @@
   ;; settings key because it moves through an account import with no id remap.
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP"])
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS last_opened_at TIMESTAMP"])
+  ;; Forks (plans/assistant-chat-forks.md §4.1.1). A child names its parent
+  ;; chat and the message it forked at, and references the parent's rows
+  ;; rather than copying them. The two ids are set together or not at all:
+  ;; the account import inserts a child with neither and links it once the
+  ;; messages exist (`account-import/link-imported-forks!`). excluded_at marks
+  ;; a child its parent no longer reads.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS parent_chat_id
+                      INTEGER REFERENCES assistant_chats(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS fork_message_id
+                      INTEGER REFERENCES assistant_messages(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS excluded_at TIMESTAMP"])
+  (jdbc/execute! ds ["DO $$ BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                                        WHERE conname = 'assistant_chats_fork_pair') THEN
+                          ALTER TABLE assistant_chats ADD CONSTRAINT assistant_chats_fork_pair
+                            CHECK ((parent_chat_id IS NULL) = (fork_message_id IS NULL));
+                        END IF;
+                      END $$"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_parent
+                      ON assistant_chats(parent_chat_id) WHERE parent_chat_id IS NOT NULL"])
 
   ;; A run is the authority for one answer or one /compact operation. Response
   ;; text is append-only while active. Terminal transitions close that boundary.
@@ -753,6 +773,17 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_checkpoints_chat
                       ON assistant_checkpoints(chat_id, id)"])
+  ;; A fork's request carries two histories, and each has its own checkpoint
+  ;; (§4.1.2): `own` covers the chat's own rows, `inherited` the rows it
+  ;; inherited. for_chat_id is the chat whose answer an automatic compaction
+  ;; was made for, NULL for a manual /compact (§4.1.3). A branch compacted for
+  ;; its parent's answer shows a row in both transcripts through it.
+  (jdbc/execute! ds ["ALTER TABLE assistant_checkpoints ADD COLUMN IF NOT EXISTS scope
+                      TEXT NOT NULL DEFAULT 'own' CHECK (scope IN ('own','inherited'))"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_checkpoints ADD COLUMN IF NOT EXISTS for_chat_id
+                      INTEGER REFERENCES assistant_chats(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_checkpoints_for_chat
+                      ON assistant_checkpoints(for_chat_id) WHERE for_chat_id IS NOT NULL"])
 
   ;; Evidence is separate from rendered answer text. The model cites citation_key
   ;; values. Navigation uses retained targets and degrades when live content moves.
@@ -3383,6 +3414,25 @@
                       :returning [:id]}))
      :assistant_chats/id)))
 
+(defn create-assistant-fork!
+  "Insert a child of the live owned chat `parent-chat-id`, forked at
+   `fork-message-id` (plans/assistant-chat-forks.md §4.3.5).
+   Pre:  the caller checked that the message is in the parent's transcript.
+   Post: the child has the parent's user, document, mode and web-search
+         preference, and a new provider session. Returns its id, or nil when
+         the parent is foreign, missing or staged."
+  [user-id parent-chat-id fork-message-id title]
+  (:id (jdbc/execute-one! ds
+         ["INSERT INTO assistant_chats
+             (user_id, root_topic_id, title, mode, web_search, provider_session_id,
+              parent_chat_id, fork_message_id)
+           SELECT user_id, root_topic_id, ?, mode, web_search, ?, id, ?
+             FROM assistant_chats
+            WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL
+           RETURNING id"
+          title (str (random-uuid)) fork-message-id parent-chat-id user-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
 (defn get-assistant-chat
   "Chat row for `chat-id` IFF owned by `user-id` and not staged for deletion,
    else nil (ownership gate). Every chat read and write that takes a chat id
@@ -3390,13 +3440,59 @@
    them.
    Post: {:assistant_chats/id … :assistant_chats/title … :assistant_chats/mode …}
    or nil. :mode may be NULL on a chat that predates the column — callers
-   resolve it through assistant-modes/resolve-mode, never read it raw."
+   resolve it through assistant-modes/resolve-mode, never read it raw.
+   :parent_chat_id and :fork_message_id are NULL on a root chat."
   [user-id chat-id]
   (jdbc/execute-one! ds
-    (sql/format {:select [:id :root_topic_id :title :mode :web_search :provider_session_id]
+    (sql/format {:select [:id :root_topic_id :title :mode :web_search :provider_session_id
+                          :parent_chat_id :fork_message_id :excluded_at]
                  :from [:assistant_chats]
                  :where [:and [:= :id chat-id] [:= :user_id user-id]
                          [:is :staged_delete_id nil]]})))
+
+(defn get-assistant-chat-lineage
+  "`chat-id` and every ancestor of it, IFF the chat is owned by `user-id`.
+   Ancestors are read whether staged or not: a child keeps its inherited
+   transcript while an ancestor waits in the undo window.
+   Post: unqualified rows {:id :parent_chat_id :fork_message_id :title}, in no
+         order. Empty for a foreign or missing chat."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    ["WITH RECURSIVE line AS (
+        SELECT id, parent_chat_id, fork_message_id, title, user_id
+          FROM assistant_chats WHERE id = ? AND user_id = ?
+        UNION ALL
+        SELECT c.id, c.parent_chat_id, c.fork_message_id, c.title, c.user_id
+          FROM assistant_chats c JOIN line ON c.id = line.parent_chat_id
+         WHERE c.user_id = line.user_id)
+      SELECT id, parent_chat_id, fork_message_id, title FROM line"
+     chat-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn set-assistant-chat-excluded!
+  "Exclude a live owned child chat from its parent's requests, or include it
+   again (§4.6.3).
+   Post: true when a child changed. A root chat has no parent to be excluded
+         from, so it changes nothing."
+  [user-id chat-id excluded?]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            [(str "UPDATE assistant_chats SET excluded_at = "
+               (if excluded? "CURRENT_TIMESTAMP" "NULL")
+               " WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
+               " AND parent_chat_id IS NOT NULL")
+             chat-id user-id]))))
+
+(defn assistant-message-run-active?
+  "True when the message `message-id` belongs to a run that is still active,
+   as a user turn or as an answer."
+  [message-id]
+  (some? (jdbc/execute-one! ds
+           ["SELECT 1 FROM assistant_runs
+              WHERE (assistant_message_id = ? OR user_message_id = ?)
+                AND status IN ('queued','streaming','stop-requested')
+              LIMIT 1"
+            message-id message-id])))
 
 (def ^:private local-epoch-ms-sql
   "Epoch milliseconds of a TIMESTAMP column, read as the server's local time.
@@ -3412,13 +3508,35 @@
    epoch milliseconds. No TIMESTAMP value is returned, so none crosses the wire."
   [user-id root-topic-id]
   (jdbc/execute! ds
-    [(str "SELECT id, title, mode, web_search, "
+    [(str "SELECT id, title, mode, web_search, parent_chat_id, fork_message_id, "
+       "excluded_at IS NOT NULL AS excluded, "
        (format local-epoch-ms-sql "coalesce(updated_at, created_at)") " AS activity_ms, "
        (format local-epoch-ms-sql "pinned_at") " AS pinned_ms "
        "FROM assistant_chats "
        "WHERE user_id = ? AND root_topic_id = ? AND staged_delete_id IS NULL "
        "ORDER BY coalesce(updated_at, created_at) DESC, id DESC")
      user-id root-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-chat-descendants
+  "The live descendants of the owned chat `chat-id`, without the chat itself.
+   A staged chat and everything under it is absent.
+   Post: unqualified rows {:id :parent_chat_id :fork_message_id :title
+         :excluded :activity_ms}, in no order."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    [(str "WITH RECURSIVE sub AS (
+             SELECT c.id FROM assistant_chats c
+              WHERE c.parent_chat_id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL
+             UNION ALL
+             SELECT c.id FROM assistant_chats c JOIN sub ON c.parent_chat_id = sub.id
+              WHERE c.staged_delete_id IS NULL)
+           SELECT c.id, c.parent_chat_id, c.fork_message_id, c.title,
+                  c.excluded_at IS NOT NULL AS excluded, "
+       (format local-epoch-ms-sql "coalesce(c.updated_at, c.created_at)")
+       " AS activity_ms
+           FROM assistant_chats c JOIN sub ON sub.id = c.id")
+     chat-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn get-last-opened-assistant-chat-id
@@ -3454,13 +3572,21 @@
 
 (defn get-assistant-messages
   "Transcript for `chat-id`, oldest first (learner/assistant turns only —
-   reading context is injected transiently per send, not stored here)."
-  [chat-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:id :role :content :client_id :created_at]
-                 :from [:assistant_messages]
-                 :where [:= :chat_id chat-id]
-                 :order-by [[:id :asc]]})))
+   reading context is injected transiently per send, not stored here).
+   With `through-id`, only the messages up to that id: the part of an
+   ancestor's transcript a fork inherits."
+  ([chat-id]
+   (jdbc/execute! ds
+     (sql/format {:select [:id :role :content :client_id :created_at]
+                  :from [:assistant_messages]
+                  :where [:= :chat_id chat-id]
+                  :order-by [[:id :asc]]})))
+  ([chat-id through-id]
+   (jdbc/execute! ds
+     (sql/format {:select [:id :role :content :client_id :created_at]
+                  :from [:assistant_messages]
+                  :where [:and [:= :chat_id chat-id] [:<= :id through-id]]
+                  :order-by [[:id :asc]]}))))
 
 (defn get-assistant-message
   "One message IFF its chat belongs to user-id, else nil."
@@ -3669,9 +3795,15 @@
 
 (defn complete-assistant-compact-run!
   "Complete an active compaction run and publish its checkpoint atomically.
-   Pre: the covered ids belong to the run's chat. Post: true when one checkpoint
-   was inserted, false when the run was already terminal."
-  [run-uuid summary covered-from-message-id covered-through-message-id]
+   Pre: the covered ids are rows of the run's chat for scope \"own\", or rows
+   it inherited for \"inherited\". `for-chat-id` is the chat whose answer an
+   automatic compaction was made for, or nil for a manual /compact.
+   Post: true when one checkpoint was inserted, false when the run was already
+   terminal."
+  ([run-uuid summary covered-from-message-id covered-through-message-id]
+   (complete-assistant-compact-run! run-uuid summary covered-from-message-id
+     covered-through-message-id "own" nil))
+  ([run-uuid summary covered-from-message-id covered-through-message-id scope for-chat-id]
   (jdbc/with-transaction [tx ds]
     (if-let [run (jdbc/execute-one! tx
                     [(str "UPDATE assistant_runs SET status = 'completed', response_text = ?, "
@@ -3686,9 +3818,11 @@
                        :values [{:chat_id (:chat_id run) :run_id (:id run)
                                  :summary summary
                                  :covered_from_message_id covered-from-message-id
-                                 :covered_through_message_id covered-through-message-id}]}))
+                                 :covered_through_message_id covered-through-message-id
+                                 :scope scope
+                                 :for_chat_id for-chat-id}]}))
         true)
-      false)))
+      false))))
 
 (defn fail-assistant-run!
   "Fail an active run and preserve any partial answer in its transcript row.
@@ -3838,13 +3972,37 @@
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn latest-assistant-checkpoint
-  "The newest completed checkpoint for an owned chat, or nil."
-  [user-id chat-id]
+  "The newest completed checkpoint of `scope` for an owned chat, or nil.
+   `scope` is \"own\" (the chat's own rows) or \"inherited\" (the rows a fork
+   inherited), plans/assistant-chat-forks.md §4.1.2."
+  [user-id chat-id scope]
   (jdbc/execute-one! ds
     [(str "SELECT cp.*, r.run_uuid FROM assistant_checkpoints cp "
        "JOIN assistant_runs r ON r.id = cp.run_id "
        "JOIN assistant_chats c ON c.id = cp.chat_id "
-       "WHERE c.user_id = ? AND c.id = ? ORDER BY cp.id DESC LIMIT 1")
+       "WHERE c.user_id = ? AND c.id = ? AND cp.scope = ? "
+       "ORDER BY cp.id DESC LIMIT 1")
+     user-id chat-id scope]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-assistant-checkpoints-made-for
+  "Checkpoints of OTHER chats that were compacted for an answer in the owned
+   chat `chat-id` (§4.1.3, §4.5.5), oldest first.
+   Post: each row also carries :chat_title, the compacted chat's title, and
+         :after_message_id, the newest message of `chat-id` written before the
+         checkpoint, or nil. That id places the row in `chat-id`'s transcript."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    [(str "SELECT cp.*, r.run_uuid, src.title AS chat_title, "
+       "(SELECT max(m.id) FROM assistant_messages m "
+       "  WHERE m.chat_id = cp.for_chat_id AND m.created_at <= cp.created_at) "
+       "  AS after_message_id "
+       "FROM assistant_checkpoints cp "
+       "JOIN assistant_runs r ON r.id = cp.run_id "
+       "JOIN assistant_chats src ON src.id = cp.chat_id "
+       "JOIN assistant_chats c ON c.id = cp.for_chat_id "
+       "WHERE c.user_id = ? AND c.id = ? AND cp.chat_id <> cp.for_chat_id "
+       "ORDER BY cp.id")
      user-id chat-id]
     {:builder-fn rs/as-unqualified-maps}))
 
@@ -3896,12 +4054,16 @@
 (declare insert-undo-entry-raw! prune-undo-log!)
 
 (defn stage-assistant-chat-for-deletion!
-  "Hide a live owned chat for the 12-hour undo window, stopping its active run.
+  "Hide a live owned chat and its live descendants for the 12-hour undo
+   window, stopping every active run among them.
 
    Pre: none — a foreign, missing or already staged chat returns nil.
-   Post: {:entry-id :title :stopped?}. In one transaction: the chat row is
-   locked, its active run (if any) is stopped, one delete-assistant-chat undo
-   entry is written and the chat's marker points at it, and the log is pruned.
+   Post: {:entry-id :title :stopped? :count}. In one transaction: the chats are
+   locked, each active run is stopped, one delete-assistant-chat undo entry is
+   written and every chat's marker points at it, and the log is pruned. :count
+   is the number of chats staged, the chat itself included
+   (plans/assistant-chat-forks.md §4.1.5). A descendant staged earlier keeps
+   its own entry.
    Invariant: the chat lock is the same lock run creation takes, so no run can
    start between the stop and the stage."
   [user-id chat-id]
@@ -3912,33 +4074,49 @@
                          FOR UPDATE"
                        chat-id user-id]
                       {:builder-fn rs/as-unqualified-maps})]
-      (let [stopped (stop-active-run-in! tx user-id chat-id)
+      (let [subtree (mapv :id (jdbc/execute! tx
+                                ["WITH RECURSIVE sub AS (
+                                    SELECT id FROM assistant_chats WHERE id = ?
+                                    UNION ALL
+                                    SELECT c.id FROM assistant_chats c
+                                      JOIN sub ON c.parent_chat_id = sub.id
+                                     WHERE c.staged_delete_id IS NULL)
+                                  SELECT id FROM sub"
+                                 chat-id]
+                                {:builder-fn rs/as-unqualified-maps}))
+            _ (jdbc/execute! tx ["SELECT id FROM assistant_chats WHERE id = ANY(?) FOR UPDATE"
+                                 (int-array subtree)])
+            stopped (mapv #(stop-active-run-in! tx user-id %) subtree)
             entry-id (insert-undo-entry-raw! tx user-id "delete-assistant-chat"
-                       "assistant-chat" [chat-id] {:title (:title chat)})]
-        (jdbc/execute! tx ["UPDATE assistant_chats SET staged_delete_id = ? WHERE id = ?"
-                           entry-id chat-id])
+                       "assistant-chat" [chat-id] {:title (:title chat)
+                                                   :count (count subtree)})]
+        (jdbc/execute! tx ["UPDATE assistant_chats SET staged_delete_id = ? WHERE id = ANY(?)"
+                           entry-id (int-array subtree)])
         (prune-undo-log! tx user-id)
-        {:entry-id entry-id :title (:title chat) :stopped? (:stopped stopped)}))))
+        {:entry-id entry-id :title (:title chat)
+         :stopped? (boolean (some :stopped stopped))
+         :count (count subtree)}))))
 
 (defn restore-staged-assistant-chat!
-  "Clear the marker that `entry` set on its chat.
+  "Clear the marker that `entry` set on its chats.
 
    Pre: entry is a live delete-assistant-chat entry for user-id.
-   Post: the chat, its messages and its runs are visible again, unchanged. A
-   stopped run stays stopped.
+   Post: the chat and every descendant staged with it, their messages and their
+   runs are visible again, unchanged. A stopped run stays stopped.
    Throws when no row matches: the chat's document was purged and the cascade
    removed the chat. undo-entry! catches that, reports failure and leaves the
    entry live. Clearing only the matching marker means an older entry can never
    undo a newer deletion."
   [user-id entry]
   (let [chat-id (first (:entity_refs entry))
-        row (jdbc/execute-one! ds
-              ["UPDATE assistant_chats SET staged_delete_id = NULL
-                 WHERE id = ? AND user_id = ? AND staged_delete_id = ?
+        rows (jdbc/execute! ds
+               ["UPDATE assistant_chats SET staged_delete_id = NULL
+                  WHERE user_id = ? AND staged_delete_id = ?
                  RETURNING id"
-               chat-id user-id (:id entry)]
-              {:builder-fn rs/as-unqualified-maps})]
-    (or row
+                user-id (:id entry)]
+               {:builder-fn rs/as-unqualified-maps})]
+    (or (first (filter #(= chat-id (:id %)) rows))
+      (first rows)
       (throw (ex-info "Assistant chat not found"
                {:type ::assistant-chat-not-found :chat-id chat-id})))))
 
