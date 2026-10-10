@@ -3466,6 +3466,17 @@ textarea:hover {
 .ql-lang-item:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
 .ql-lang-item.active { background: light-dark(rgba(35,131,226,0.14), rgba(35,131,226,0.32)); }
 
+/* Anchor KaTeX's hidden MathML copy to its own formula. katex.min.css makes
+   `.katex-mathml` position: absolute with no offsets, and no ancestor inside
+   the scroller is positioned. Its containing block is then `.ql-container`,
+   OUTSIDE the `.ql-editor` scroller, so the box keeps its scrollTop-0 position
+   while the text scrolls. Two measured consequences: a selection range across a
+   formula reports a bounding box ~scrollTop px too tall, which pushed the
+   format menu far below the selection; and the stranded boxes overflow
+   `.ql-container` (overflow-y: auto), which draws a second scrollbar. Relative
+   with no offsets moves nothing. */
+.katex { position: relative; }
+
 /* Formula edit popover (freememo.formula-ui). Anchored above a clicked
    `span.ql-formula`; top/left are set inline by its place!. Shell values match
    .ql-lang-popup so the two read as one family; the structure (field, preview,
