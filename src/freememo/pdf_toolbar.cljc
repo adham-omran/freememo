@@ -212,8 +212,9 @@
 
 (e/defn PdfFitToggle
   "Fit toggle: page-width ↔ page-fit. The glyph shows the CURRENT fit (⇔ width,
-   ⤢ page), outlined while a fit mode is active. No :width icon exists in the
-   icon set, so a text glyph (like −/+/⇄) is used.
+   ⤢ page). It has no outline or other active state, so it looks like the
+   buttons beside it. No :width icon exists in the icon set, so a text glyph
+   (like −/+/⇄) is used.
 
    A click applies the other fit and stores it as the document's fit, so the
    document opens at it next time (PdfViewerComponent reads it on load). The
@@ -226,13 +227,11 @@
   (e/client
     (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id
           scale-mode (e/watch viewer/!scale-mode)
-          fit? (contains? #{"page-width" "page-fit"} scale-mode)
           width? (= scale-mode "page-width")]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label (if width? "Fit page" "Fit width")
-                    :style {:font-size "14px"
-                            :outline (when fit? "1px solid currentColor")}})
+                    :style {:font-size "14px"}})
         (tooltip/Tooltip! (if width? "Fit page" "Fit width"))
         (dom/text (if width? "⇔" "⤢"))
         (let [choice (dom/On "click"
