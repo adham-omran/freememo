@@ -20,6 +20,31 @@
   "The error a `/fork` with no question gets."
   (str "Type a question after " fork-command "."))
 
+(def commands
+  "Every command, in the order the composer's menu lists them. `:completion`
+   is the text a pick writes into the draft: a command that takes an argument
+   ends in a space, so the learner types the argument next."
+  [{:text compact-command
+    :usage compact-command
+    :completion compact-command
+    :description "Summarize this chat's conversation"}
+   {:text fork-command
+    :usage (str fork-command " <question>")
+    :completion (str fork-command " ")
+    :description "Fork this chat and ask the question in the fork"}])
+
+(defn suggestions
+  "The commands the composer's menu offers for `draft`.
+   Pre:  `draft` is the composer text as typed, or nil.
+   Post: nil unless `draft` starts with `/` and holds no whitespace, which is
+         while the learner is still typing a command's name. Otherwise the
+         commands whose text starts with `draft`, possibly none."
+  [draft]
+  (when (and (string? draft)
+          (str/starts-with? draft "/")
+          (not (re-find #"\s" draft)))
+    (filterv #(str/starts-with? (:text %) draft) commands)))
+
 (defn parse
   "The command that composer text names.
 

@@ -108,6 +108,13 @@
           details
           (e/server
             (assistant/run-details* assistant-rev user-id details-run))
+          ;; A finished answer bumps :assistant-mutations, and a model saved in
+          ;; Settings bumps :settings-refresh, which moves the total.
+          context-usage
+          (e/server
+            (assistant/context-usage*
+              [assistant-rev (e/watch (us/get-atom user-id :settings-refresh))]
+              user-id active))
           mode-entry
           (modes/resolve-mode
             (or (some
@@ -131,6 +138,7 @@
        :active-title (:label active-chat)
        :active-run active-run
        :details details
+       :context-usage context-usage
        :sending? (some? active-run)
        :mode-entry mode-entry
        :web-search? (boolean web-search?)

@@ -5440,6 +5440,42 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 12px;
 }
 
+/* Slash commands (plans/assistant-context-meter-and-slash-menu.md §2). The
+   menu reuses the mention menu's box; a <ul> also needs its list styles off. */
+.assistant-panel__slash-menu {
+    margin: 0;
+    list-style: none;
+}
+
+.assistant-panel__slash-option {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.assistant-panel__slash-usage {
+    flex-shrink: 0;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-weight: 600;
+}
+
+.assistant-panel__slash-description {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    text-overflow: ellipsis;
+}
+
+/* The context meter, under the composer (same plan, §1). fit-content keeps the
+   tooltip's hover target to the text itself. */
+.assistant-panel__context-usage {
+    width: fit-content;
+    margin: 4px 0 0 auto;
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
 /* A fork that the next send creates (plans/assistant-chat-forks.md §4.3.3). */
 .assistant-panel__fork-banner {
     display: flex;

@@ -3896,6 +3896,19 @@
     (update :request_snapshot pgobject->clj)
     (update :source_snapshot pgobject->clj)))
 
+(defn get-latest-assistant-answer-tokens
+  "The token columns of the newest answer run in an owned chat that the
+   provider reported an input count for, or nil. Compact runs measure their
+   summary request, not the chat, so they never answer."
+  [user-id chat-id]
+  (jdbc/execute-one! ds
+    [(str "SELECT r.input_tokens, r.output_tokens, r.reasoning_tokens "
+       "FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+       "WHERE c.user_id = ? AND c.id = ? AND r.kind = 'answer' "
+       "AND r.input_tokens IS NOT NULL ORDER BY r.id DESC LIMIT 1")
+     user-id chat-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
 (defn get-assistant-run-evidence
   "Evidence for an owned run, ordered by stored citation key."
   [user-id run-uuid]

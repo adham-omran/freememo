@@ -14,6 +14,7 @@
    [freememo.assistant-annotations :as annotations]
    [freememo.assistant-budget :as budget]
    [freememo.assistant-chat-tree :as tree]
+   [freememo.assistant-context-usage :as context-usage]
    [freememo.assistant-evidence :as evidence]
    [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
@@ -1410,9 +1411,17 @@
     "Preserve decisions, definitions, unresolved questions, "
     "and source references. Return only the summary."))
 
-(defn- compaction-request
+(def ^:private summarize-request
+  "The user turn that ends every compaction request."
+  "Summarize the conversation above now, as the instructions say.")
+
+(defn compaction-request
   "The provider request that summarizes `turns` into a checkpoint of `chat`,
-   building on `prior`, the checkpoint it replaces, when there is one."
+   building on `prior`, the checkpoint it replaces, when there is one.
+   Post: the last message is a user turn. `turns` usually ends with an
+         assistant answer, and Gemini, whose reasoning cannot be turned off,
+         answered such a request with HTTP 400 (runs 135 and the one after it,
+         2026-10-10). Every answer request already ends with a user turn."
   [model-fields chat prior turns]
   (assoc model-fields
     :stream true
@@ -1422,7 +1431,8 @@
                   (conj {:role "system"
                          :content (str "Existing conversation checkpoint:\n\n"
                                     (:summary prior))}))
-                (into turns))))
+                (into turns)
+                (conj {:role "user" :content summarize-request}))))
 
 (defn- run-model
   "The model entry and request fields for one run of `user-id`. An exact
@@ -2658,6 +2668,23 @@
           (select-keys [:run_uuid :kind :status]))
       (when (and (preparing? chat-id) (db/get-assistant-chat user-id chat-id))
         {:run_uuid nil :kind "compact" :status "preparing"}))))
+
+(defn context-usage*
+  "How full the open chat's context is, for the composer's meter. `_rev`
+   forces a re-query: the caller passes the assistant and settings revisions,
+   so a finished answer moves `:used` and a model change moves `:total`.
+   Post: nil before the chat's first answer with a reported input count. Else
+         {:used n :total n-or-nil}, where :used counts the newest such answer
+         run and :total is the context length of the model selected now, nil
+         while the model catalog does not hold it. Only this map crosses to
+         the browser."
+  [_rev user-id chat-id]
+  (when chat-id
+    (when-let [used (some-> (db/get-latest-assistant-answer-tokens user-id chat-id)
+                      context-usage/used-tokens)]
+      {:used used
+       :total (model-context/context-length
+                (:openrouter-model (model-entry user-id nil)))})))
 
 (defn run-details*
   "Owner-scoped answer details with wire-safe timestamps.

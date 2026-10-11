@@ -263,6 +263,22 @@
                                  :slice-budget 20}))
     "a root chat has no inherited target"))
 
+(deftest a-compaction-request-ends-with-a-user-turn
+  ;; Gemini answered a compaction that ended on the assistant's answer with
+  ;; HTTP 400 (plans/assistant-context-meter-and-slash-menu.md §5).
+  (let [chat {:assistant_chats/provider_session_id "s"}
+        turns [{:role "user" :content "Q"} {:role "assistant" :content "A"}]
+        request (assistant/compaction-request {:model "m"} chat {:summary "S"} turns)
+        messages (:messages request)]
+    (is (= "user" (:role (last messages))))
+    (is (= ["system" "system" "user" "assistant" "user"] (mapv :role messages)))
+    (is (= turns (subvec messages 2 4)) "the turns are summarized as they are")
+    (is (re-find #"^Summarize this conversation" (:content (first messages)))
+      "the instructions stay first, where the DB test's stub looks for them")
+    (is (= "user" (:role (last (:messages (assistant/compaction-request
+                                            {:model "m"} chat nil [])))))
+      "with no prior and no turns too")))
+
 ;; ── §4.5.6: an overflow error ──────────────────────────────────────────────
 
 (deftest overflow-errors-are-recognized
