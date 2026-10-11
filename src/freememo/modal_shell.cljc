@@ -209,21 +209,28 @@
          (.click btn)))))
 #?(:clj (defn mod-enter-submit! [_e _!primary-btn] nil))
 
-;; Cmd/Ctrl+Enter → requestSubmit the modal's <form>. Sibling to
-;; mod-enter-submit! for Forms5-based modals whose primary action is a
-;; SubmitButton! (there is no captured button node to .click). Submitting the
-;; form runs the form's own submit pipeline — including any capture-phase flush
-;; listener on an ancestor — so the two entry points (button click, mod-enter)
-;; converge on one path. `e`'s currentTarget is the node the keydown listener is
-;; bound to; its descendant <form> is the one submitted. Top-level platform-split
-;; defn for the same capture-symmetry reason as mod-enter-submit!.
+;; Cmd/Ctrl+Enter → submit the modal's <form>. Sibling to mod-enter-submit! for
+;; Forms5-based modals whose primary action is a SubmitButton! (there is no
+;; captured button node to .click). `e`'s currentTarget is the node the keydown
+;; listener is bound to; its descendant <form> is the one submitted.
+;;
+;; It CLICKS the form's submit button when there is one, and requestSubmit is
+;; only the fallback. That is what Forms5's own Enter handling does
+;; (`forms5/event-submit-form!`): SubmitButton! tracks its commit through its
+;; own click, so a submit event with no click on the button does not reach the
+;; same path. Forms5's helper cannot be called here, because it finds the form
+;; through `e.target.form`, and focus is on the modal container when the modal
+;; opens. Top-level platform-split defn for the same capture-symmetry reason as
+;; mod-enter-submit!.
 #?(:cljs
    (defn mod-enter-request-submit!
      [e]
      (when (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
        (when-let [form (.querySelector (.-currentTarget e) "form")]
          (.preventDefault e)
-         (.requestSubmit form)))))
+         (if-let [btn (.querySelector form "button[type=submit]:not([disabled])")]
+           (when (.checkValidity form) (.click btn))
+           (.requestSubmit form))))))
 #?(:clj (defn mod-enter-request-submit! [_e] nil))
 
 (def add-card-chords

@@ -467,6 +467,7 @@
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1"})
         (modal/ModalEscape (fn [] (reset! !show false)) "Bibliography")
+        (dom/On "keydown" modal/mod-enter-request-submit! nil)
         (dom/On "click"
           (fn [e]
             (when (= (.-target e) (.-currentTarget e))
