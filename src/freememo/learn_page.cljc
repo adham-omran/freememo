@@ -602,12 +602,15 @@
                        (e/watch (us/get-atom user-id :queue-mutations))))]
         (when (not= server-revision revision)
           (case server-revision (reset! !revision server-revision))))
+      ;; The full-width outer div scrolls, so the scrollbar sits at the pane
+      ;; edge and not at the edge of the 960px column.
       (dom/div
-        (dom/props {:class "page-container"
-                    :style {:height "100%" :display "flex" :flex-direction "column"}})
-        (StartLearningRegion revision user-id navigate! viewer-nav)
-        (QueueTable revision user-id navigate!)
-        (LearnDashboard revision user-id)))))
+        (dom/props {:class "learn-page"})
+        (dom/div
+          (dom/props {:class "page-container"})
+          (StartLearningRegion revision user-id navigate! viewer-nav)
+          (QueueTable revision user-id navigate!)
+          (LearnDashboard revision user-id))))))
 
 (e/defn LearnPage [user-id navigate! viewer-nav]
   (LearnOverview user-id navigate! viewer-nav))

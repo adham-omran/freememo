@@ -6313,10 +6313,18 @@ form[aria-busy="true"] {
 }
 
 /* ── Learn Dashboard ───────────────────────────────────────────── */
+/* `#main-content` sets `overflow: hidden` for the Learn tab, so the page owns
+   its scroller. Every section keeps its natural height. When the queue was
+   the one part allowed to shrink, a short viewport (a laptop at 125% zoom)
+   squeezed it to two rows to make room for the dashboard. */
+.learn-page {
+    height: 100%;
+    overflow-y: auto;
+}
+
 .learn-start-region {
     min-height: 44px;
     margin-bottom: var(--sp-4);
-    flex-shrink: 0;
 }
 
 .learn-start-button {
@@ -6330,7 +6338,6 @@ form[aria-busy="true"] {
 .table-frame[aria-label="Due topics"] {
     display: flex;
     flex-direction: column;
-    min-height: 0;
 }
 
 .learn-queue-header {
@@ -6387,16 +6394,18 @@ form[aria-busy="true"] {
 
 .learn-queue-due,
 .learn-queue-date {
+    display: flex;
+    align-items: center;
     padding: 4px 6px;
     font-size: 12px;
 }
 
-.learn-queue-due { text-align: center; }
+.learn-queue-due { justify-content: center; }
 
 .learn-queue-date {
+    justify-content: flex-end;
     padding-inline: 10px;
     color: var(--color-text-secondary);
-    text-align: right;
 }
 
 .learn-queue-empty,
@@ -6546,7 +6555,6 @@ form[aria-busy="true"] {
     flex-direction: column;
     gap: var(--sp-3);
     margin-top: var(--sp-4);
-    flex-shrink: 0;
 }
 
 .kpi-strip { display: flex; gap: var(--sp-3); }
