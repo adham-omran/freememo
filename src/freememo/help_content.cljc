@@ -430,7 +430,12 @@
              :commands #{:exclude-assistant-branch :include-assistant-branch
                          :set-assistant-chat-excluded}}
             {:label "Long chats"
-             :detail (str "When a chat and its forks are too large for the model, the assistant compacts before it answers and shows Compacting context…. It summarizes the forks used least recently first, then the conversation this chat forked from, then this chat's own conversation. Each summary shows as a Context compacted row. Type " slash/compact-command " to summarize this chat's own conversation yourself. Deleting a chat also deletes its forks, and Undo restores them all.")
+             :detail (str "When a chat and its forks are too large for the model, the assistant compacts before it answers and shows Compacting context…. It summarizes the forks used least recently first, then the conversation this chat forked from, then this chat's own conversation. Each summary shows as a Context compacted row. Type " slash/compact-command " to summarize this chat's own conversation yourself. Deleting a chat also deletes its forks, and Undo restores them all. The count under the composer is the size of the last request and its answer, out of the model's context. The open page's text is part of it, so the count changes when you ask from another page.")
+             :commands #{}}
+            {:label "Slash commands"
+             :detail (str "Type / at the start of the composer to list the commands. Use the arrow keys to choose one, and Tab or Enter to write it into the composer. "
+                       (str/join " " (map #(str (:usage %) ": " (:description %) ".")
+                                       slash/commands)))
              :commands #{}}]}
    {:slug "reading-schedule"
     :title "Planning a reading schedule"

@@ -160,7 +160,8 @@
            :user-id user-id
            :active active
            :root-topic-id root-topic-id
-           :annotations annotations}
+           :annotations annotations
+           :context-usage (:context-usage data)}
           reference-documents !picked !refs !mention-index !at-open? !draft !active !submit
           !pending-mode !pending-web-search? !error !annotations !pending-fork)
 
