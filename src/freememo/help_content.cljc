@@ -416,8 +416,8 @@
             {:label "Work the map"
              :detail "Each idea in the map offers I know it and Teach me. I know it is remembered for every document you read, and Undo removes it. When your answers show you understand an idea, the tutor marks it learned and closes its pins."
              :commands #{:teach-question-root :mark-question-root-known}}
-            {:label "Pick its model"
-             :detail "Use the Model dropdown below the composer to set the model for this document. Leave it on your default otherwise."
+            {:label "Pick the assistant model"
+             :detail "Set the model in Settings → AI Features. The panel has no model control, and one model answers in all documents. In By task, choose a level for Reading assistant. In Advanced, choose the Assistant model under Reading assistant."
              :commands #{}}
             {:label "Manage an answer"
              :detail "Answers stream into the saved chat. Stop an active answer. Answer details shows its request, timing, provider, and sources. Failed answers offer Retry."
