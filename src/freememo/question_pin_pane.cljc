@@ -279,9 +279,54 @@
     (sort-by (juxt #({"open" 0 "closed" 1 "unmatched" 2} (:group %)) :label))
     vec))
 
+(defn deleted-header
+  "The deleted group's header for `tombstones`, as `Deleted: 1, 2`."
+  [tombstones]
+  (str "Deleted: " (str/join ", " (map :label tombstones))))
+
+(defn tombstone-text
+  "What a deleted row shows: its question, else its quote, else that the
+   number was retired before deletions were tracked."
+  [{:keys [quote question]}]
+  (cond
+    (nil? quote) "deleted before tracking"
+    (seq question) (excerpt question 80)
+    :else (str "“" (excerpt quote 80) "”")))
+
+(e/defn DeletedPins
+  "The pin list's deleted group (plans/pin-numbering-reuse-and-tombstones.md
+   §9): a header naming the numbers of the deleted pins the tutor saw, so each
+   gap in the numbering has an explanation. A click expands one row per
+   number. The rows have no buttons: a tombstone cannot be restored."
+  [tombstones]
+  (e/client
+    (let [!expanded? (atom false)
+          expanded? (e/watch !expanded?)]
+      (dom/div
+        (dom/props {:class "question-pin-list__deleted"})
+        (dom/props {:style {:display (if (seq tombstones) "block" "none")}})
+        (dom/button
+          (dom/props {:class "question-pin-list__deleted-header" :type "button"})
+          (dom/props {:aria-expanded (str expanded?)})
+          (dom/text (deleted-header tombstones))
+          (dom/On "click" (fn [_] (swap! !expanded? not)) nil))
+        (dom/ul
+          (dom/props {:class "question-pin-list__rows"})
+          (dom/props {:style {:display (if expanded? "block" "none")}})
+          (e/for [tombstone (e/diff-by :label tombstones)]
+            (dom/li
+              (dom/props {:class "question-pin-list__row question-pin-list__row--deleted"})
+              (dom/span
+                (dom/props {:class "question-pin-list__label"})
+                (dom/text (str (:label tombstone))))
+              (dom/span
+                (dom/props {:class "question-pin-list__text" :dir "auto"})
+                (dom/text (tombstone-text tombstone))))))))))
+
 (e/defn PinList
-  "Every pin of the document key, grouped (§6.2.6). Shown while `open?`."
-  [user-id pins open? !list-open? handle]
+  "Every pin of the document key, grouped (§6.2.6), then the deleted group.
+   Shown while `open?`."
+  [user-id pins tombstones open? !list-open? handle]
   (e/client
     (dom/div
       (dom/props {:class "question-pin-list-host"})
@@ -312,7 +357,8 @@
                                     (if (= ::status kind)
                                       {:op :status :status status}
                                       {:op :delete}))))]
-                  (case result (t)))))))))))
+                  (case result (t))))))
+          (DeletedPins tombstones))))))
 
 (e/defn PublishPinCommands
   "Make the pin commands available while this pane is mounted (§6.6.2), and
@@ -357,13 +403,14 @@
             ;; pins cross, with their locations in this file.
             view (e/server (e/Offload #(snapshot-view* rev user-id spec)))
             pins (e/server (vec (:pins view)))
+            tombstones (e/server (vec (:tombstones view)))
             open-count (e/server (or (:open-count view) 0))
             doc-key (e/server (e/Offload #(doc-key* user-id spec)))]
         (e/on-unmount #(teardown-layer! handle))
         (PublishPinCommands handle spec doc-key open-count)
         (Finger user-id spec handle)
         (PinPopoverHost user-id spec popover !popover)
-        (PinList user-id pins list-open? !list-open? handle)
+        (PinList user-id pins tombstones list-open? !list-open? handle)
         (show-pins! handle pins)))))
 
 (e/defn PinHeaderControls

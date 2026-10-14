@@ -256,15 +256,16 @@
           (let [h (js/Highlight.)] (doseq [[_ r] ranges] (.add h r)) h))
         (.delete (.-highlights js/CSS) highlight-name)))
     ;; Two pins can start at one point, and a badge drawn over another hides
-    ;; it and takes its clicks. Each badge at a taken point moves one badge
-    ;; width to the right.
-    (let [taken (volatile! #{})]
+    ;; it and takes its clicks. Each badge at a taken point moves right by the
+    ;; width of the badges already there. The width is measured, because a
+    ;; three-digit label makes a badge 28px wide where one digit makes it 18px
+    ;; (plans/pin-numbering-reuse-and-tombstones.md §11).
+    (let [next-x (volatile! {})]
      (doseq [[pin rng] ranges]
       (when-let [^js r (first (visible-rects rng container))]
         (let [b (el "button" "question-pin-badge")
-              x (loop [x (js/Math.round (- (.-left r) 10))]
-                  (if (contains? @taken [x (js/Math.round (.-top r))]) (recur (+ x 20)) x))]
-          (vswap! taken conj [x (js/Math.round (.-top r))])
+              start [(js/Math.round (- (.-left r) 10)) (js/Math.round (.-top r))]
+              x (get @next-x start (first start))]
           (set! (.-type b) "button")
           (set! (.-textContent b) (str (:label pin)))
           (.setAttribute b "aria-label" (str "Pin " (:label pin)
@@ -276,7 +277,9 @@
             (fn [_] (when on-open-pin
                       (on-open-pin pin {:top (.-top r) :bottom (.-bottom r)
                                         :left (.-left r) :right (.-right r)}))))
-          (.appendChild badges b)))))))
+          (.appendChild badges b)
+          ;; Appended first, so the badge has a width to read.
+          (vswap! next-x assoc start (+ x (.-offsetWidth b) 2))))))))
 
 (defn- finger-bands
   "One rect per visual line of `rects`, as maps. Outlining the raw rects draws
