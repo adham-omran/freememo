@@ -438,8 +438,16 @@
                              (when excluded? " assistant-history__row--excluded"))
                     :tabindex "0" :role "button"
                     :data-chat-id (str chat-id)
-                    :aria-current (when active? "true")
-                    :style {:--depth (:depth chat 0)}})
+                    :aria-current (when active? "true")})
+        ;; The fork lines (plans/assistant-history-fork-guides.md §3.2): one
+        ;; span per tree level, keyed by that level, in an element of its own
+        ;; that a root's row mounts empty.
+        (dom/span
+          (dom/props {:class "assistant-history__guides" :aria-hidden "true"})
+          (e/for [[_level guide] (e/diff-by first (map-indexed vector (:guides chat)))]
+            (dom/span
+              (dom/props {:class (str "assistant-history__guide assistant-history__guide--"
+                                   (name guide))}))))
         (if (= editing-id chat-id)
           (ChatTitleEditor (:label chat)
             (fn [title] (request-chat-action! !chat-action :rename chat-id :title title))
