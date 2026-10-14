@@ -55,8 +55,13 @@
 ;; Save generated cards to DB. Routes through cards/save-cards so bake-card-html
 ;; runs and topic pins land in :q / :a (basic) or :c (cloze) per P3d.
 #?(:clj
-   (defn save-cards-for-topic [user-id topic-id root-topic-id kind generated-cards]
-     (cards/save-cards user-id topic-id root-topic-id kind generated-cards)))
+   (defn save-cards-for-topic
+     "Save generated cards. With `entity-id` they are linked to that known idea
+      (plans/known-ideas.md §2.4)."
+     ([user-id topic-id root-topic-id kind generated-cards]
+      (save-cards-for-topic user-id topic-id root-topic-id kind generated-cards nil))
+     ([user-id topic-id root-topic-id kind generated-cards entity-id]
+      (cards/save-cards user-id topic-id root-topic-id kind generated-cards true entity-id))))
 
 ;; Get context from previous pages (for page-mode card generation)
 (defn get-context-pages* [root-topic-id page-number context-window]
@@ -227,7 +232,7 @@
    (defn generate-and-save! [item]
      (try
        (let [{:keys [content context card-type card-count user-id enc-key
-                     topic-id root-topic-id pre-prompt pre-prompt-mode]} item
+                     topic-id root-topic-id pre-prompt pre-prompt-mode entity-id]} item
              ;; A strict pre-prompt IS the question, so the card count collapses
              ;; to 1. Forced here, where opts is owned — never written back to
              ;; the user's saved count, which still governs plain Generate.
@@ -237,7 +242,11 @@
              model (settings/get-model user-id)
              ;; Per-document learning goal (root-topic); nil/"" leaves gen unchanged.
              goal (settings/get-learning-goal user-id root-topic-id)
-             resolved (resolve-gen-content content user-id root-topic-id)]
+             ;; Cards from a known idea are made from its quotes, which are the
+             ;; material; facts would replace them (plans/known-ideas.md §2.3).
+             resolved (if entity-id
+                        {:content content :from-facts? false}
+                        (resolve-gen-content content user-id root-topic-id))]
          (if (false? (:success resolved))
            resolved ;; fact-selection failure — carries :error-type for the toast
            (let [gen-content (:content resolved)
@@ -269,7 +278,7 @@
 
                :else
                (save-cards-for-topic user-id topic-id root-topic-id card-type
-                 (:cards gen-result))))))
+                 (:cards gen-result) entity-id)))))
        (catch Exception e
          (log/log-error (str "generate-and-save! failed: " (.getMessage e)))
          {:success false :error (.getMessage e)}))))

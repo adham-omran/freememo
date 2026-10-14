@@ -1,5 +1,7 @@
 (ns freememo.knowledge-page
-  "Knowledge tab — the fact-graph workbench (plans/knowledge-graph-quizzes.md M2).
+  "Knowledge tab — the fact-graph workbench (plans/knowledge-graph-quizzes.md M2),
+   and the known ideas a reader has learned (plans/known-ideas.md), whose views
+   live in `freememo.knowledge-known`.
 
    Three client-local sub-views (:documents default):
      :documents — root docs with fact stats; Distill / Cancel / Review actions
@@ -17,6 +19,7 @@
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
    [freememo.icons :as icons]
+   [freememo.knowledge-known :as known]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal]
@@ -290,15 +293,17 @@
    `doc-id` is taken as its OWN parameter, never derived from the sub-view value:
    Electric keeps a branch's argument exprs live during the switch frame, so
    seq-ing a value that has flipped to a keyword throws (see the dispatch below).
-   Pre:  sub-kw ∈ #{:documents :entities :questions :facts}; doc-id may be nil.
+   Pre:  sub-kw ∈ #{:documents :entities :questions :facts :known}; doc-id may
+         be nil.
    Post: Entities/Questions preserve the current doc-id; Documents drops it — it
-         is the unscoped index, where a scope has no meaning."
+         is the unscoped index, where a scope has no meaning. Known ideas has no
+         document scope (plans/known-ideas.md §3.1)."
   [navigate! sub-kw doc-id]
   (e/client
     (dom/nav
       (dom/props {:class "settings-nav"})
       (e/for [[k label] (e/diff-by first [[:documents "Documents"] [:entities "Entities"]
-                                          [:questions "Questions"]])]
+                                          [:questions "Questions"] [:known "Known ideas"]])]
         (let [active? (or (= sub-kw k) (and (= sub-kw :facts) (= k :documents)))]
           (dom/a
             (dom/props {:href "#"
@@ -314,7 +319,8 @@
                   :entities (navigate! :knowledge {:type :knowledge-entities
                                                    :doc-id doc-id})
                   :questions (navigate! :knowledge {:type :knowledge-questions
-                                                    :doc-id doc-id})))
+                                                    :doc-id doc-id})
+                  :known (navigate! :knowledge {:type :knowledge-known})))
               nil)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -1264,6 +1270,7 @@
                    entities :entities
                    questions :questions
                    facts :facts
+                   known :known
                    :documents)               ; nil / documents / unknown → documents
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))]
       (dom/div
@@ -1273,11 +1280,18 @@
           (= sub-kw :entities) (EntitiesView user-id kg-bump arg navigate!)
           (= sub-kw :questions) (QuestionsView user-id kg-bump arg navigate!)
           (= sub-kw :facts) (FactsView user-id arg navigate! kg-bump)
+          ;; /knowledge/known lists the ideas, /knowledge/known/<id> is one idea
+          ;; (plans/known-ideas.md §3.1, §5.1).
+          (= sub-kw :known) (if (some? arg)
+                              (known/IdeaPage user-id arg navigate!)
+                              (known/KnownIdeasView user-id navigate!))
           :else (dom/div (dom/props {:style {:padding "0 16px"}})
                   (DocumentsView user-id navigate! kg-bump))))
       ;; A document the user does not own reads Not found here, although the
       ;; views show an empty list for it (plans/reactive-page-title.md D16).
+      ;; A known idea is named after its entity (plans/known-ideas.md §5.2).
       (PageTitle user-id
-        (if (and (not= sub-kw :documents) (some? arg))
-          [:topic arg]
-          [:label :knowledge])))))
+        (cond
+          (and (= sub-kw :known) (some? arg)) [:entity arg]
+          (and (not= sub-kw :documents) (not= sub-kw :known) (some? arg)) [:topic arg]
+          :else [:label :knowledge])))))

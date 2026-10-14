@@ -9146,32 +9146,142 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
 .question-pin-ask-row { justify-content: flex-end; padding: 0 0 6px; flex-shrink: 0; }
 
+/* The question map as a tab of the assistant panel (plans/question-map-tab.md).
+   Both views stay mounted; the panel's view class hides one (§4.2.2). */
 .question-map-host { display: contents; }
-.question-map {
-    flex-shrink: 0; max-height: 40%; overflow-y: auto; margin: 0 0 6px;
-    font-size: 12px; border: 1px solid var(--color-border); border-radius: 8px;
-    padding: 4px 8px;
+.assistant-view-tabs {
+    display: flex; gap: 4px; padding: 0 8px 6px; flex-shrink: 0;
+    border-bottom: 1px solid var(--color-border);
 }
-.question-map > summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
-.question-map__roots { list-style: none; margin: 4px 0 0; padding: 0; }
-.question-map__root { padding: 6px 0; border-top: 1px solid var(--color-bg-subtle); }
-.question-map__root--learned .question-map__label { color: var(--color-text-secondary); }
-.question-map__root-head { display: flex; align-items: center; gap: 6px; }
-.question-map__label { font-weight: 600; }
-.question-map__badge {
-    padding: 0 6px; border-radius: 999px; font-size: 11px;
+.assistant-view-tab {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 4px 10px; border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: var(--color-text-secondary);
+}
+.assistant-view-tab--selected {
+    color: inherit; background: var(--color-bg-subtle); border-color: var(--color-border);
+}
+.assistant-view-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+.question-map-view { display: none; }
+.assistant-panel--map .question-map-view {
+    display: flex; flex-direction: column; flex: 1; min-height: 0;
+    overflow-y: auto; padding: 10px 8px; font-size: 13px;
+}
+.assistant-panel--map .assistant-panel__transcript,
+.assistant-panel--map .question-pin-ask-row,
+.assistant-panel--map .assistant-panel__composer-shell { display: none !important; }
+
+.question-map-view__trail { list-style: none; margin: 0; padding: 0; }
+.question-map-view__root {
+    position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr);
+    column-gap: 10px; padding-bottom: 14px;
+}
+/* The line that joins the markers: solid between done roots, dashed after
+   the current one (§4.3.2). */
+.question-map-view__root::before {
+    content: ""; position: absolute; left: 8px; top: 18px; bottom: 0;
+    border-left: 2px solid var(--color-success-lighter);
+}
+.question-map-view__root--next::before,
+.question-map-view__root--open::before { border-left: 2px dashed var(--color-border); }
+.question-map-view__root:last-child::before { display: none; }
+.question-map-view__marker {
+    width: 12px; height: 12px; margin: 3px 0 0 2px; box-sizing: border-box;
+    border-radius: 999px; border: 2px solid var(--color-text-secondary);
+}
+.question-map-view__root--learned .question-map-view__marker {
+    background: var(--color-success-dark); border-color: var(--color-success-dark);
+}
+.question-map-view__root--known .question-map-view__marker {
+    border-radius: 2px; background: var(--color-text-secondary);
+}
+.question-map-view__root--next .question-map-view__marker {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+.question-map-view__body { min-width: 0; }
+.question-map-view__label { font-weight: 600; }
+.question-map-view__root--next .question-map-view__label { color: var(--color-primary); }
+.question-map-view__state,
+.question-map-view__outside { color: var(--color-text-secondary); font-size: 12px; }
+.question-map-view__closed-pins { margin-left: 6px; text-decoration: line-through; }
+.question-map-view__citations { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.question-map-view__citation {
+    font: inherit; font-size: 12px; text-align: start; cursor: pointer;
+    padding: 2px 6px; border-radius: 4px; border: 0;
+    border-left: 2px solid var(--color-border); background: var(--color-bg-subtle);
+    color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.question-map-view__citation:hover { border-left-color: var(--color-primary); }
+.question-map-view__actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.question-map-view__unplaced {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto;
+    padding-top: 10px; border-top: 1px solid var(--color-border);
+    color: var(--color-text-secondary); font-size: 12px;
+}
+
+/* Known ideas and the idea page (plans/known-ideas.md §3, §5). */
+.known-ideas {
+    padding: 0 16px; display: flex; flex-direction: column;
+    height: calc(100vh - 108px - var(--app-top-chrome, 0px));
+}
+.known-ideas__due {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    margin: 10px 0 0; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--color-warning); background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+.known-ideas__due-text { flex: 1; min-width: 200px; font-size: 13px; }
+.known-ideas__filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.known-ideas__search { flex: 1; min-width: 160px; }
+.known-ideas__count { font-size: 12px; color: var(--color-text-secondary); }
+.known-ideas__idea,
+.known-ideas__cards {
+    font: inherit; padding: 0; border: 0; background: none; cursor: pointer;
+    color: var(--color-primary); text-align: start;
+}
+.known-ideas__idea:hover, .known-ideas__cards:hover { text-decoration: underline; }
+.known-ideas__row--due td:first-child { box-shadow: inset 3px 0 0 var(--color-warning); }
+.known-ideas__checked--due { color: var(--color-warning-dark); font-weight: 600; }
+.known-ideas__tip { display: inline-flex; }
+
+.idea-page { max-width: 1100px; margin: 0 auto; padding: 16px 16px 48px; font-size: 14px; }
+.idea-page__crumbs { font-size: 13px; color: var(--color-text-secondary); }
+.idea-page__crumbs a { color: var(--color-primary); }
+.idea-page__title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 8px 0 18px; }
+.idea-page__title-row h1 { margin: 0; font-size: 24px; }
+.idea-page__badge {
+    font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 10px;
     background: var(--color-bg-subtle); border: 1px solid var(--color-border);
 }
-.question-map__root--next .question-map__badge {
-    background: color-mix(in srgb, var(--color-primary, #2563eb) 14%, transparent);
+.idea-page__badge--tutor { background: var(--color-success-light); border-color: transparent; }
+.idea-page__grid { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.idea-page__main { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.idea-page__side { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.idea-page__card {
+    border: 1px solid var(--color-border); border-radius: 10px; padding: 16px 18px;
+    background: var(--color-bg-card, #fff);
 }
-.question-map__meta { color: var(--color-text-secondary); margin: 2px 0; }
-.question-map__citations { display: flex; flex-wrap: wrap; gap: 4px; }
-.question-map__citation {
-    font-size: 11px; padding: 0 6px; cursor: pointer; border-radius: 4px;
-    border: 1px solid var(--color-border); background: transparent; color: inherit;
+.idea-page__card h2 { margin: 0 0 10px; font-size: 15px; }
+.idea-page__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.idea-page__proof {
+    margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--color-success-lighter);
+    white-space: pre-wrap;
 }
-.question-map__actions { display: flex; gap: 4px; margin-top: 4px; }
+.idea-page__events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.idea-page__events li { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 10px; }
+.idea-page__event-date { color: var(--color-text-secondary); font-size: 12px; padding-top: 1px; }
+.idea-page__cards { list-style: none; margin: 0; padding: 0; }
+.idea-page__cards li {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-top: 1px solid var(--color-bg-subtle);
+}
+.idea-page__card-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idea-page__sync { font-size: 12px; color: var(--color-text-secondary); }
+.idea-page__sync--pending { color: var(--color-warning-dark); font-weight: 600; }
+.idea-page__actions { display: flex; flex-direction: column; gap: 8px; }
+.idea-page__where { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.idea-page__muted { margin: 0; color: var(--color-text-secondary); font-size: 13px; }
 
 /* ── Commit-range walkthrough (plans/commit-range-walkthrough.md §6.6) ─────
    The screen replaces the content column on a repository node. The canvas

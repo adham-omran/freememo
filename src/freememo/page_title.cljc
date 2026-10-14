@@ -46,6 +46,13 @@
               (fmt/walkthrough-name (:display-name ov) (:repo-title ov))))
      :cljs nil))
 
+(defn entity-title*
+  "Post: the label of a knowledge-graph entity the user owns, for a known
+   idea's page (plans/known-ideas.md §5.2), or nil."
+  [_rev user-id entity-id]
+  #?(:clj (when (int? entity-id) (db/entity-label user-id entity-id))
+     :cljs nil))
+
 (defn write-title!
   "Pre: item-name is a page's name, or nil when its item does not exist.
    Post: on the client, `document.title` reads `(fmt/page-title item-name)`."
@@ -58,13 +65,15 @@
   "Title the browser tab after one subject.
 
    Pre: subject is `[:topic id]`, `[:curriculum id]`, `[:walkthrough id]`,
-   `[:label tab-keyword]` or `:not-found`, and the caller is the one owner of
+   `[:entity id]`, `[:label tab-keyword]` or `:not-found`, and the caller is
+   the one owner of
    the title on its route.
    Post: once the name is known, `document.title` reads `Name | FreeMemo`. A
    missing or unowned item reads Not found. A topic rename arrives through
    `:tree-mutations`, and a curriculum rename through `:curriculum-mutations`.
    A walkthrough is named after its repository, so it watches
-   `:tree-mutations` too.
+   `:tree-mutations` too. An entity rename arrives through `:kg-mutations`, and
+   Not learned yet through `:question-mutations`.
    Invariant: the call is the LAST form of the caller's body, never inside a
    `case`, so its effect is the body's value and gates no DOM."
   [user-id subject]
@@ -84,5 +93,9 @@
                          (let [rev (+ (e/watch (us/get-atom user-id :tree-mutations))
                                      (e/watch (us/get-atom user-id :walkthrough-mutations)))]
                            (e/Offload #(walkthrough-title* rev user-id id))))
+          :entity (e/server
+                    (let [rev (+ (e/watch (us/get-atom user-id :kg-mutations))
+                                (e/watch (us/get-atom user-id :question-mutations)))]
+                      (e/Offload #(entity-title* rev user-id id))))
           :label (get fmt/tab-labels id)
           nil)))))

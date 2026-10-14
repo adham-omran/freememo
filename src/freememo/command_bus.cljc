@@ -164,6 +164,7 @@
       :open-topic          (navigate! nav-tab (nav/nav-topic (:topic-id payload) (:origin payload)))
       :start-learn-session (navigate! nav-tab (nav/nav-learn-session))
       :open-subset-review  (navigate! nav-tab (nav/nav-subset-review (:root-id payload) (:root-name payload)))
+      :go-known-ideas      (navigate! nav-tab {:type :knowledge-known})
       (navigate! nav-tab))))
 
 (defn applies-here?

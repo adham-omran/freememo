@@ -25,6 +25,7 @@
    [freememo.assistant-chat-history :as history]
    [freememo.poem-panel :as poem :refer [PoemPanel]]
    [freememo.command-bus :as bus]
+   [freememo.question-pin-state :as pin-state]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])))
@@ -170,6 +171,16 @@
           (show-right-pane! "assistant"))
         (e/for [_request (bus/Requests :ask-walkthrough-tutor)]
           (show-right-pane! "assistant"))
+        ;; Show question map: open the pane on the Map view
+        ;; (plans/question-map-tab.md §4.6.1). With no map, the panel falls
+        ;; back to Chat once its read returns (§4.2.4).
+        (e/for [{:keys [invocation-id]} (bus/Requests :show-question-map)]
+          (let [[t _] (e/Token invocation-id)]
+            (when t
+              (case (show-right-pane! "assistant")
+                (case (pin-state/show-view! :map)
+                  (case (bus/consume! invocation-id)
+                    (t)))))))
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]

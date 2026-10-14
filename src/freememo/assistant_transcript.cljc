@@ -40,7 +40,8 @@
    !annotations !selection-cards !side !pending-fork]
   (e/client
     (dom/div
-      (dom/props {:class "assistant-panel__transcript"})
+      ;; The Chat tab's `aria-controls` names this id (plans/question-map-tab.md §4.1.3).
+      (dom/props {:class "assistant-panel__transcript" :id "assistant-transcript"})
       (let [assistant-rev
             (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
             stream-rev

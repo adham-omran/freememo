@@ -2360,6 +2360,36 @@
                       ADD COLUMN IF NOT EXISTS walkthrough_id INTEGER
                         REFERENCES walkthroughs(id) ON DELETE SET NULL"]))
 
+(defn- setup-schema-known-ideas!
+  "The question map tab and the known ideas page (plans/question-map-tab.md
+   §4.5.3, plans/known-ideas.md). Must run after setup-schema-question-pins!.
+
+   `question_roots.learned_at` is when the tutor set the root `learned`.
+   `updated_at` cannot say so: Teach me and an entity relink also set it.
+   Rows learned before the column stay NULL.
+
+   `known_marks.proof_run_id` is the run whose map block set a root
+   `learned` and so wrote the `tutor` mark (known-ideas §1.1). Its user
+   message is the answer that showed the idea. It goes NULL when the chat is
+   purged (D7).
+
+   `flashcard_entities` links a card made from a known idea to that idea
+   (known-ideas §1.2). Either side's delete removes the link."
+  []
+  (jdbc/execute! ds ["ALTER TABLE question_roots
+                      ADD COLUMN IF NOT EXISTS learned_at TIMESTAMPTZ"])
+  (jdbc/execute! ds ["ALTER TABLE known_marks
+                      ADD COLUMN IF NOT EXISTS proof_run_id BIGINT
+                        REFERENCES assistant_runs(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS flashcard_entities (
+      flashcard_id INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+      entity_id INTEGER NOT NULL REFERENCES kg_entities(id) ON DELETE CASCADE,
+      PRIMARY KEY (flashcard_id, entity_id)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcard_entities_entity
+                      ON flashcard_entities(entity_id)"]))
+
 (defn- setup-schema-document-summaries!
   "Install the maintained root-document progress read model.
 
@@ -2857,13 +2887,15 @@
      - its card_schedules, one per ord: the most reps wins, then the latest
        review, then the survivor's own row;
      - its kg_reviews log, re-pointed;
+     - its flashcard_entities links, copied onto the survivor;
      - its anki_card_states, re-pointed when they describe the survivor's note;
      - its Anki note, as a tombstone when no remaining card holds that note,
        as every hard-delete path owes (see `record-anki-tombstones!`).
 
    Pre : `tx` is an open transaction that holds the locks
          setup-schema-flashcard-uniqueness! takes, and card_versions,
-         card_schedules, kg_reviews and anki_card_states exist.
+         card_schedules, kg_reviews, flashcard_entities and anki_card_states
+         exist.
    Post: no two flashcards share a key of either index, so `tx` can build both.
          Returns {:deleted n …counts :pairs [[loser survivor] …]}.
    Idempotent: with no duplicates it writes nothing and returns {:deleted 0}."
@@ -2921,6 +2953,14 @@
               reviews-moved
               (exec! "UPDATE kg_reviews r SET flashcard_id = d.survivor_id
                        FROM flashcard_dedupe d WHERE r.flashcard_id = d.loser_id")
+              ;; Copied, not moved: the survivor may hold the same link, and the
+              ;; delete below cascades the loser's rows away.
+              links-copied
+              (exec! "INSERT INTO flashcard_entities (flashcard_id, entity_id)
+                      SELECT d.survivor_id, l.entity_id
+                        FROM flashcard_dedupe d
+                        JOIN flashcard_entities l ON l.flashcard_id = d.loser_id
+                      ON CONFLICT DO NOTHING")
               ;; A state of any other note belongs to a note the tombstone below
               ;; retires, so the delete's cascade removes it, as a user delete would.
               states-moved
@@ -2954,6 +2994,7 @@
            :schedules-dropped schedules-dropped
            :schedules-moved schedules-moved
            :reviews-moved reviews-moved
+           :links-copied links-copied
            :states-moved states-moved
            :tombstones tombstones
            :pairs (mapv (juxt :loser_id :survivor_id) pairs)})))))
@@ -3034,6 +3075,7 @@
   (setup-schema-reading-positions!)
   (setup-schema-question-pins!)
   (setup-schema-walkthroughs!)
+  (setup-schema-known-ideas!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
 
@@ -12910,6 +12952,29 @@
                    [])]
     (vec (concat learning reviews news))))
 
+(defn draw-card-check
+  "The items of a check over `user-id`'s cards `flashcard-ids` (known-ideas
+   §1.4): every live ord of each card, due or not, with no daily cap. The ords
+   come from the card's text, as `fresh-card-items` reads them, so a deleted
+   cloze ord never appears.
+   Post: [[:card id ord] ...], by card id then ord. A card of another user, or
+         a kind the quiz never asks, yields nothing."
+  [user-id flashcard-ids]
+  (if (empty? flashcard-ids)
+    []
+    (into []
+      (mapcat (fn [{:keys [id kind cloze]}]
+                (if (= "basic" kind)
+                  [[:card id 0]]
+                  (map (fn [n] [:card id n]) (cloze/ords cloze)))))
+      (jdbc/execute! ds
+        [(str "SELECT f.id, f.kind, f.cloze FROM flashcards f
+               JOIN topics root ON root.id = f.root_topic_id
+               WHERE root.user_id = ? AND f.id = ANY(?) AND " (card-quiz-where "f")
+          " ORDER BY f.id")
+         user-id (into-array Integer (map int flashcard-ids))]
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn- load-question-memory!
   "The question's FSRS state, row-locked. nil when it is not this user's.
    Post: {:state :step :stability :difficulty :reps :lapses :gap_secs} or nil."
@@ -14269,7 +14334,8 @@
 (defn question-roots
   "Every root of `user-id`'s map `map-id`, oldest first.
    Post: each row carries `:known_sources`, the sources of the known marks on
-         its entity (`self`, `tutor`), empty when it has none or no entity, and
+         its entity (`self`, `tutor`), empty when it has none or no entity,
+         `:known_at`, the earliest of those marks' times, `:learned_at`, and
          `:citations` as Clojure data."
   [user-id map-id]
   (mapv #(-> %
@@ -14277,8 +14343,11 @@
            (update :known_sources (fn [a] (if a (vec (.getArray ^java.sql.Array a)) []))))
     (jdbc/execute! ds
       [(str "SELECT r.id, r.label, r.entity_id, r.in_document, r.citations, r.status,
+                    r.learned_at,
                     (SELECT array_agg(k.source ORDER BY k.source) FROM known_marks k
-                      WHERE k.entity_id = r.entity_id) AS known_sources
+                      WHERE k.entity_id = r.entity_id) AS known_sources,
+                    (SELECT min(k.created_at) FROM known_marks k
+                      WHERE k.entity_id = r.entity_id) AS known_at
                FROM question_roots r
               WHERE r.map_id = ? AND r." owned-pin-clause
             " ORDER BY r.id")
@@ -14307,17 +14376,19 @@
      :learned     #{root-label}
      :next        root-label or nil
      :as-of-sha   the commit of the document the reply was about, or nil
+     :run-uuid    the run whose reply this is, or nil
 
    Pre:  every label the plan names is a root after :new-roots is applied —
          the planner guarantees it.
    Post: nil when the map is not the user's. Otherwise, in one transaction:
          new roots exist; each named pin links its root; each learned root is
-         `learned`, its open pins are `closed`, and its entity has a `tutor`
-         known mark (§6.4.5); the `next` root, when named and not learned, is
+         `learned` with `learned_at` set, its open pins are `closed`, and its entity has a `tutor`
+         known mark (§6.4.5) whose `proof_run_id` names the run (known-ideas
+         §1.1); the `next` root, when named and not learned, is
          the map's one `next` root. A `tutor` mark records the map's
          repository node and `as-of-sha` as its version (§6.8.2 of
          plans/commit-range-walkthrough.md). Returns {:closed-pins n}."
-  [user-id map-id {:keys [new-roots relinks pin-roots learned next as-of-sha]}]
+  [user-id map-id {:keys [new-roots relinks pin-roots learned next as-of-sha run-uuid]}]
   (jdbc/with-transaction [tx ds]
     (when (jdbc/execute-one! tx ["SELECT 1 FROM question_maps WHERE id = ? AND user_id = ?"
                                  map-id user-id])
@@ -14348,12 +14419,22 @@
         (let [learned-ids (vec (keep root-id learned))
               closed (if (seq learned-ids)
                        (let [ids (into-array Integer (map int learned-ids))]
-                         (jdbc/execute! tx ["UPDATE question_roots SET status = 'learned', updated_at = now()
+                         ;; `learned_at` keeps the time a root FIRST became
+                         ;; learned; a reply that confirms it again moves nothing.
+                         (jdbc/execute! tx ["UPDATE question_roots
+                                                SET learned_at = CASE WHEN status = 'learned'
+                                                                      THEN learned_at ELSE now() END,
+                                                    status = 'learned', updated_at = now()
                                               WHERE map_id = ? AND id = ANY(?)"
                                             map-id ids])
+                         ;; A later confirmation names the later run.
                          (jdbc/execute! tx ["INSERT INTO known_marks
-                                               (entity_id, source, as_of_repo_topic_id, as_of_sha)
-                                             SELECT r.entity_id, 'tutor', m.repo_topic_id, ?
+                                               (entity_id, source, as_of_repo_topic_id, as_of_sha,
+                                                proof_run_id)
+                                             SELECT r.entity_id, 'tutor', m.repo_topic_id, ?,
+                                                    (SELECT ar.id FROM assistant_runs ar
+                                                       JOIN assistant_chats c ON c.id = ar.chat_id
+                                                      WHERE ar.run_uuid = ? AND c.user_id = m.user_id)
                                                FROM question_roots r
                                                JOIN question_maps m ON m.id = r.map_id
                                               WHERE r.map_id = ? AND r.id = ANY(?)
@@ -14361,8 +14442,10 @@
                                              ON CONFLICT (entity_id, source) DO UPDATE
                                                SET as_of_repo_topic_id = excluded.as_of_repo_topic_id,
                                                    as_of_sha = coalesce(excluded.as_of_sha,
-                                                                        known_marks.as_of_sha)"
-                                            as-of-sha map-id ids])
+                                                                        known_marks.as_of_sha),
+                                                   proof_run_id = coalesce(excluded.proof_run_id,
+                                                                           known_marks.proof_run_id)"
+                                            as-of-sha run-uuid map-id ids])
                          (::jdbc/update-count
                            (jdbc/execute-one! tx ["UPDATE question_pins SET status = 'closed', updated_at = now()
                                                     WHERE map_id = ? AND status = 'open' AND root_id = ANY(?)"
@@ -14375,13 +14458,18 @@
           {:closed-pins closed})))))
 
 (defn set-question-root-next!
-  "\"Teach me\": make `user-id`'s root `root-id` its map's one `next` root,
-   whatever its status was (§6.3.7). Post: true when the root is the user's."
+  "\"Teach me\": make `user-id`'s root `root-id` its map's one `next` root
+   (§6.3.7). A `learned` root is refused: making it `next` would lose
+   `learned` when the next Teach me demotes it to `open`
+   (plans/question-map-tab.md §4.4.7). Only `unlearn-entity!` takes `learned`
+   away.
+   Post: true when the root is the user's and not `learned`, else nil."
   [user-id root-id]
   (jdbc/with-transaction [tx ds]
     (when-let [map-id (:map_id (jdbc/execute-one! tx
                                  [(str "SELECT map_id FROM question_roots
-                                         WHERE id = ? AND " owned-pin-clause)
+                                         WHERE id = ? AND status <> 'learned' AND "
+                                       owned-pin-clause)
                                   root-id user-id]
                                  {:builder-fn rs/as-unqualified-maps}))]
       (set-next-root! tx map-id root-id)
@@ -14408,6 +14496,25 @@
                                            root-id]
                       {:builder-fn rs/as-unqualified-maps}))))))
 
+(defn- insert-known-mark!
+  "Inside `connectable`: the upsert of `set-known-mark!`.
+   Post: true when the entity is the user's."
+  [connectable user-id entity-id source {:keys [repo-id sha]}]
+  {:pre [(#{"self" "tutor"} source)]}
+  (some? (jdbc/execute-one! connectable
+           ["INSERT INTO known_marks (entity_id, source, as_of_repo_topic_id, as_of_sha)
+             SELECT e.id, ?, r.id, CASE WHEN r.id IS NULL THEN NULL ELSE ? END
+               FROM kg_entities e
+               LEFT JOIN topics r ON r.id = ? AND r.user_id = e.user_id AND r.kind = 'repo'
+              WHERE e.id = ? AND e.user_id = ?
+             ON CONFLICT (entity_id, source) DO UPDATE
+               SET as_of_repo_topic_id = coalesce(excluded.as_of_repo_topic_id,
+                                                  known_marks.as_of_repo_topic_id),
+                   as_of_sha = CASE WHEN excluded.as_of_repo_topic_id IS NULL
+                                    THEN known_marks.as_of_sha ELSE excluded.as_of_sha END
+             RETURNING entity_id"
+            source sha repo-id entity-id user-id])))
+
 (defn set-known-mark!
   "Write a known mark with `source` on `user-id`'s entity. Idempotent.
    `as-of` is {:repo-id :sha}, the commit the reader learned the idea at, or
@@ -14417,21 +14524,52 @@
    Post: true when the entity is the user's. A repository node the user does
          not own is stored as no version."
   ([user-id entity-id source] (set-known-mark! user-id entity-id source nil))
-  ([user-id entity-id source {:keys [repo-id sha]}]
-   {:pre [(#{"self" "tutor"} source)]}
-   (some? (jdbc/execute-one! ds
-            ["INSERT INTO known_marks (entity_id, source, as_of_repo_topic_id, as_of_sha)
-              SELECT e.id, ?, r.id, CASE WHEN r.id IS NULL THEN NULL ELSE ? END
-                FROM kg_entities e
-                LEFT JOIN topics r ON r.id = ? AND r.user_id = e.user_id AND r.kind = 'repo'
-               WHERE e.id = ? AND e.user_id = ?
-              ON CONFLICT (entity_id, source) DO UPDATE
-                SET as_of_repo_topic_id = coalesce(excluded.as_of_repo_topic_id,
-                                                   known_marks.as_of_repo_topic_id),
-                    as_of_sha = CASE WHEN excluded.as_of_repo_topic_id IS NULL
-                                     THEN known_marks.as_of_sha ELSE excluded.as_of_sha END
-              RETURNING entity_id"
-             source sha repo-id entity-id user-id]))))
+  ([user-id entity-id source as-of]
+   (insert-known-mark! ds user-id entity-id source as-of)))
+
+(defn mark-root-known!
+  "\"I know this\" on `user-id`'s root `root-id`, whose entity is `entity-id`
+   (plans/question-map-tab.md §4.4.5), in one transaction: a `self` mark on
+   the entity, and, when the root is its map's `next` root, `next` moves to
+   the map's first `open` root with no known mark, oldest first. With no such
+   root the map has no `next` root, which `uq_question_roots_one_next` allows.
+   Pre:  `entity-id` is the root's entity (`ensure-question-root-entity!`).
+   Post: true when the mark was written."
+  [user-id root-id entity-id as-of]
+  (jdbc/with-transaction [tx ds]
+    (when (insert-known-mark! tx user-id entity-id "self" as-of)
+      (when-let [map-id (:map_id (jdbc/execute-one! tx
+                                   [(str "SELECT map_id FROM question_roots
+                                           WHERE id = ? AND status = 'next' AND "
+                                         owned-pin-clause)
+                                    root-id user-id]
+                                   {:builder-fn rs/as-unqualified-maps}))]
+        (let [successor (:id (jdbc/execute-one! tx
+                               ["SELECT r.id FROM question_roots r
+                                  WHERE r.map_id = ? AND r.status = 'open'
+                                    AND NOT EXISTS (SELECT 1 FROM known_marks k
+                                                     WHERE k.entity_id = r.entity_id)
+                                  ORDER BY r.id LIMIT 1"
+                                map-id]
+                               {:builder-fn rs/as-unqualified-maps}))]
+          (if successor
+            (set-next-root! tx map-id successor)
+            (jdbc/execute! tx ["UPDATE question_roots SET status = 'open', updated_at = now()
+                                 WHERE id = ?" root-id]))))
+      true)))
+
+(defn delete-known-mark!
+  "Remove the one known mark of `source` on `user-id`'s entity
+   (plans/question-map-tab.md §4.4.6). The mark of the other source stays.
+   Post: the number of marks removed, 0 or 1."
+  [user-id entity-id source]
+  {:pre [(#{"self" "tutor"} source)]}
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      ["DELETE FROM known_marks
+         WHERE source = ?
+           AND entity_id IN (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?)"
+       source entity-id user-id])))
 
 (defn delete-known-marks!
   "Remove every known mark on `user-id`'s entity, of both sources (§6.4.4).
@@ -14457,6 +14595,300 @@
          ORDER BY e.label, k.source"
        user-id (into-array Integer (map int entity-ids))]
       {:builder-fn rs/as-unqualified-maps})))
+
+;; ── Known ideas (plans/known-ideas.md) ─────────────────────────────
+
+(defn- sql-array->vec [^java.sql.Array a]
+  (if a (vec (.getArray a)) []))
+
+(defn- entity-id-array [ids]
+  (into-array Integer (map int ids)))
+
+(defn known-ideas
+  "The known ideas of `user-id` (known-ideas §1.5): each of their entities with
+   a known mark. Ownership is a clause of every statement.
+   Post: [{:entity_id :label :sources [\"self\" \"tutor\"] :self_at :tutor_at
+           :origin-files [{:repo_topic_id :repo_title :repo_path}]
+           :origin-repos [{:repo_topic_id :repo_title}] :material? bool
+           :card_count n :last_check ts-or-nil :next_check ts-or-nil :due? bool}].
+         `:last_check` is the latest `card_schedules.last_review` of its idea
+         cards and `:next_check` their earliest `due`: a card has no schedule
+         row until its first review, so an idea never checked is never due.
+         Due ideas first, then by label."
+  [user-id]
+  (let [opts {:builder-fn rs/as-unqualified-maps}
+        ideas (jdbc/execute! ds
+                ["SELECT e.id AS entity_id, e.label,
+                         array_agg(k.source ORDER BY k.source) AS sources,
+                         min(k.created_at) FILTER (WHERE k.source = 'self') AS self_at,
+                         min(k.created_at) FILTER (WHERE k.source = 'tutor') AS tutor_at,
+                         array_remove(array_agg(DISTINCT k.as_of_repo_topic_id), NULL) AS repo_ids
+                    FROM kg_entities e JOIN known_marks k ON k.entity_id = e.id
+                   WHERE e.user_id = ?
+                   GROUP BY e.id, e.label"
+                 user-id]
+                opts)
+        ids (entity-id-array (map :entity_id ideas))
+        files (group-by :entity_id
+                (jdbc/execute! ds
+                  ["SELECT DISTINCT r.entity_id, m.repo_topic_id, rt.title AS repo_title,
+                           m.repo_path,
+                           (jsonb_array_length(r.citations) > 0
+                            OR EXISTS (SELECT 1 FROM question_pins p WHERE p.root_id = r.id))
+                             AS material
+                      FROM question_roots r
+                      JOIN question_maps m ON m.id = r.map_id
+                      JOIN topics rt ON rt.id = m.repo_topic_id
+                     WHERE m.user_id = ? AND r.entity_id = ANY(?)
+                     ORDER BY m.repo_path"
+                   user-id ids]
+                  opts))
+        cards (into {} (map (juxt :entity_id identity))
+                (jdbc/execute! ds
+                  ["SELECT fe.entity_id, count(DISTINCT f.id) AS card_count,
+                           max(cs.last_review) AS last_check, min(cs.due) AS next_check,
+                           coalesce(bool_or(cs.due <= now()), false) AS due
+                      FROM flashcard_entities fe
+                      JOIN flashcards f ON f.id = fe.flashcard_id
+                      JOIN topics root ON root.id = f.root_topic_id
+                      LEFT JOIN card_schedules cs ON cs.flashcard_id = f.id
+                     WHERE root.user_id = ? AND fe.entity_id = ANY(?)
+                     GROUP BY fe.entity_id"
+                   user-id ids]
+                  opts))
+        repo-ids (into #{} (mapcat #(sql-array->vec (:repo_ids %))) ideas)
+        repo-title (into {} (map (juxt :id :title))
+                     (when (seq repo-ids)
+                       (jdbc/execute! ds ["SELECT id, title FROM topics
+                                            WHERE user_id = ? AND id = ANY(?)"
+                                          user-id (entity-id-array repo-ids)]
+                         opts)))]
+    (->> ideas
+      (mapv (fn [{:keys [entity_id repo_ids] :as idea}]
+              (let [fs (files entity_id)
+                    c (cards entity_id)]
+                (-> idea
+                  (dissoc :repo_ids)
+                  (assoc :sources (sql-array->vec (:sources idea))
+                         :origin-files (mapv #(dissoc % :entity_id :material) (distinct fs))
+                         :origin-repos (into [] (keep (fn [id] (when-let [t (repo-title id)]
+                                                                 {:repo_topic_id id :repo_title t})))
+                                         (sql-array->vec repo_ids))
+                         :material? (boolean (some :material fs))
+                         :card_count (or (:card_count c) 0)
+                         :last_check (:last_check c)
+                         :next_check (:next_check c)
+                         :due? (boolean (:due c)))))))
+      (sort-by (juxt (complement :due?) #(str/lower-case (str (:label %)))))
+      vec)))
+
+(defn known-idea
+  "One entity of `user-id`, for the idea page (known-ideas §1.6).
+   Post: nil when the entity is not the user's. Otherwise
+         {:entity_id :label
+          :marks [{:source :created_at :proof_run_id :repo_topic_id :repo_title}]
+          :roots [{:id :status :learned_at :repo_topic_id :repo_title :repo_path
+                   :file_topic_id :pins [{:label :question :status :created_at}]}]
+          :cards [{:id :kind :question :cloze :synced? :last_review :due}]
+          :reviews [{:flashcard_id :rating :reviewed_at}], newest first
+          :proof {:answer :chat_id :root_topic_id} or nil}.
+         `:proof` is the user message of the newest tutor mark's proof run."
+  [user-id entity-id]
+  (let [opts {:builder-fn rs/as-unqualified-maps}]
+    (when-let [entity (jdbc/execute-one! ds
+                        ["SELECT id AS entity_id, label FROM kg_entities WHERE id = ? AND user_id = ?"
+                         entity-id user-id]
+                        opts)]
+      (let [marks (jdbc/execute! ds
+                    ["SELECT k.source, k.created_at, k.proof_run_id,
+                             k.as_of_repo_topic_id AS repo_topic_id, t.title AS repo_title
+                        FROM known_marks k
+                        LEFT JOIN topics t ON t.id = k.as_of_repo_topic_id AND t.user_id = ?
+                       WHERE k.entity_id = ?
+                       ORDER BY k.source"
+                     user-id entity-id]
+                    opts)
+            roots (jdbc/execute! ds
+                    ["SELECT r.id, r.status, r.learned_at, m.repo_topic_id,
+                             rt.title AS repo_title, m.repo_path,
+                             (SELECT p.snapshot_topic_id FROM question_pins p
+                                JOIN topics st ON st.id = p.snapshot_topic_id AND st.user_id = ?
+                               WHERE p.map_id = m.id
+                               ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS file_topic_id
+                        FROM question_roots r
+                        JOIN question_maps m ON m.id = r.map_id
+                        JOIN topics rt ON rt.id = m.repo_topic_id
+                       WHERE m.user_id = ? AND r.entity_id = ?
+                       ORDER BY m.repo_path, r.id"
+                     user-id user-id entity-id]
+                    opts)
+            pins (group-by :root_id
+                   (when (seq roots)
+                     (jdbc/execute! ds
+                       ["SELECT root_id, label, question, status, created_at
+                           FROM question_pins WHERE root_id = ANY(?) ORDER BY label"
+                        (entity-id-array (map :id roots))]
+                       opts)))
+            cards (jdbc/execute! ds
+                    [(str "SELECT f.id, f.kind, f.question, f.cloze,
+                                  NOT (" (unsynced-sql "f.") ") AS synced,
+                                  max(cs.last_review) AS last_review, min(cs.due) AS due
+                             FROM flashcard_entities fe
+                             JOIN flashcards f ON f.id = fe.flashcard_id
+                             JOIN topics root ON root.id = f.root_topic_id
+                             LEFT JOIN card_schedules cs ON cs.flashcard_id = f.id
+                            WHERE root.user_id = ? AND fe.entity_id = ?
+                            GROUP BY f.id
+                            ORDER BY f.id")
+                     user-id entity-id]
+                    opts)
+            reviews (when (seq cards)
+                      (jdbc/execute! ds
+                        ["SELECT flashcard_id, rating, reviewed_at FROM kg_reviews
+                           WHERE user_id = ? AND flashcard_id = ANY(?)
+                           ORDER BY reviewed_at DESC"
+                         user-id (entity-id-array (map :id cards))]
+                        opts))
+            proof-run (:proof_run_id (first (filter #(and (= "tutor" (:source %)) (:proof_run_id %))
+                                              marks)))
+            proof (when proof-run
+                    (jdbc/execute-one! ds
+                      ["SELECT msg.content AS answer, c.id AS chat_id, c.root_topic_id
+                          FROM assistant_runs ar
+                          JOIN assistant_chats c ON c.id = ar.chat_id
+                          JOIN assistant_messages msg ON msg.id = ar.user_message_id
+                         WHERE ar.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL"
+                       proof-run user-id]
+                      opts))]
+        (assoc entity
+          :marks marks
+          :roots (mapv #(assoc % :pins (mapv (fn [p] (dissoc p :root_id)) (pins (:id %)))) roots)
+          :cards (mapv #(-> % (assoc :synced? (boolean (:synced %))) (dissoc :synced)) cards)
+          :reviews (vec reviews)
+          :proof proof)))))
+
+(defn idea-material
+  "What cards are made from for `user-id`'s entity (known-ideas §2.1, §2.2).
+   Post: nil when the entity is not the user's or has no material. Otherwise
+         {:label :quotes [..] :questions [..] :topic-id :root-topic-id}:
+         each distinct citation quote of its roots, then each pin quote, every
+         one once; the non-blank pin questions; and the target topic, the
+         newest pin snapshot of a `learned` root, else of any root, whose root
+         topic is its repository node."
+  [user-id entity-id]
+  (let [opts {:builder-fn rs/as-unqualified-maps}
+        roots (jdbc/execute! ds
+                ["SELECT r.id, r.status, r.citations, e.label, m.repo_topic_id
+                    FROM question_roots r
+                    JOIN question_maps m ON m.id = r.map_id
+                    JOIN kg_entities e ON e.id = r.entity_id
+                   WHERE m.user_id = ? AND e.user_id = ? AND r.entity_id = ?
+                   ORDER BY r.id"
+                 user-id user-id entity-id]
+                opts)
+        pins (when (seq roots)
+               (jdbc/execute! ds
+                 ["SELECT p.root_id, p.quote, p.question, p.snapshot_topic_id, p.created_at
+                     FROM question_pins p
+                     JOIN topics t ON t.id = p.snapshot_topic_id AND t.user_id = ?
+                    WHERE p.root_id = ANY(?)
+                    ORDER BY p.created_at DESC, p.id DESC"
+                  user-id (entity-id-array (map :id roots))]
+                 opts))
+        learned (into #{} (comp (filter #(= "learned" (:status %))) (map :id)) roots)
+        target (or (first (filter #(learned (:root_id %)) pins)) (first pins))
+        root-of (into {} (map (juxt :id :repo_topic_id)) roots)
+        quotes (into [] (comp (remove str/blank?) (distinct))
+                 (concat (mapcat #(map :quote (pgobject->clj (:citations %))) roots)
+                   (map :quote pins)))]
+    (when (and (seq quotes) target)
+      {:label (:label (first roots))
+       :quotes quotes
+       :questions (into [] (comp (map :question) (remove str/blank?) (distinct)) pins)
+       :topic-id (:snapshot_topic_id target)
+       :root-topic-id (root-of (:root_id target))})))
+
+(defn entity-card-ids
+  "The ids of the cards linked to `user-id`'s entities `entity-ids`, for a
+   check (known-ideas §4.1).
+   Post: distinct ids in order. A card or an entity of another user yields none."
+  [user-id entity-ids]
+  (if (empty? entity-ids)
+    []
+    (mapv :flashcard_id
+      (jdbc/execute! ds
+        ["SELECT DISTINCT fe.flashcard_id
+            FROM flashcard_entities fe
+            JOIN kg_entities e ON e.id = fe.entity_id
+            JOIN flashcards f ON f.id = fe.flashcard_id
+            JOIN topics root ON root.id = f.root_topic_id
+           WHERE e.user_id = ? AND root.user_id = ? AND fe.entity_id = ANY(?)
+           ORDER BY fe.flashcard_id"
+         user-id user-id (entity-id-array entity-ids)]
+        {:builder-fn rs/as-unqualified-maps}))))
+
+(defn entity-label
+  "The label of `user-id`'s entity, or nil when it is not theirs."
+  [user-id entity-id]
+  (:label (jdbc/execute-one! ds ["SELECT label FROM kg_entities WHERE id = ? AND user_id = ?"
+                                 entity-id user-id]
+            {:builder-fn rs/as-unqualified-maps})))
+
+(defn unlearn-entity!
+  "Not learned yet on `user-id`'s entity (known-ideas §1.7, D4), in one
+   transaction: both known marks go, and every `learned` root linked to the
+   entity, on the user's maps, becomes `open` with no `learned_at`. Its cards
+   stay (D8). The only write that takes `learned` from a root.
+   Post: the number of marks removed, or nil when the entity is not the user's."
+  [user-id entity-id]
+  (jdbc/with-transaction [tx ds]
+    (when (jdbc/execute-one! tx ["SELECT 1 FROM kg_entities WHERE id = ? AND user_id = ?"
+                                 entity-id user-id])
+      (jdbc/execute! tx ["UPDATE question_roots r
+                             SET status = 'open', learned_at = NULL, updated_at = now()
+                            FROM question_maps m
+                           WHERE m.id = r.map_id AND m.user_id = ?
+                             AND r.entity_id = ? AND r.status = 'learned'"
+                         user-id entity-id])
+      (::jdbc/update-count
+        (jdbc/execute-one! tx ["DELETE FROM known_marks WHERE entity_id = ?" entity-id])))))
+
+(defn insert-flashcards-for-entity!
+  "Insert `rows` and link every card they name to `user-id`'s entity
+   `entity-id` (known-ideas §2.4), in one transaction, so no card lands
+   without its link. A row the uniqueness indexes skip is linked to the card
+   that holds its key (§2.4.1). An overlapping row has no key, so only its
+   inserted card is linked.
+   Post: the inserted ids, as `insert-flashcards!` returns them. Nothing is
+         written when the entity is not the user's."
+  [user-id entity-id rows]
+  (jdbc/with-transaction [tx ds]
+    (if-not (jdbc/execute-one! tx ["SELECT 1 FROM kg_entities WHERE id = ? AND user_id = ?"
+                                   entity-id user-id])
+      (throw (ex-info "That idea is not yours." {:entity-id entity-id}))
+      (let [ids (vec (insert-flashcards! tx rows))
+            keyed (into []
+                    (mapcat (fn [{:keys [topic_id kind question cloze]}]
+                              (cond
+                                (and question (nil? cloze))
+                                (jdbc/execute! tx ["SELECT id FROM flashcards
+                                                     WHERE topic_id = ? AND kind = ? AND cloze IS NULL
+                                                       AND md5(question) = md5(?)"
+                                                   topic_id kind question]
+                                  {:builder-fn rs/as-unqualified-maps})
+                                (and cloze (nil? question))
+                                (jdbc/execute! tx ["SELECT id FROM flashcards
+                                                     WHERE topic_id = ? AND kind = ? AND question IS NULL
+                                                       AND md5(cloze) = md5(?)"
+                                                   topic_id kind cloze]
+                                  {:builder-fn rs/as-unqualified-maps})
+                                :else [])))
+                    rows)]
+        (doseq [id (distinct (concat ids (map :id keyed)))]
+          (jdbc/execute! tx ["INSERT INTO flashcard_entities (flashcard_id, entity_id)
+                              VALUES (?, ?) ON CONFLICT DO NOTHING"
+                             id entity-id]))
+        ids))))
 
 (defn known-marks-on-repo
   "Every known mark of `user-id` whose version is a commit of repository node

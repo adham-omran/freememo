@@ -562,10 +562,17 @@
 
    bake? false skips bake-card-html — used by the manual Add-Card path, which
    prefills pinned images into the editor content itself (pins-prefill-html), so
-   baking would duplicate them."
+   baking would duplicate them.
+
+   With `entity-id`, the cards are made from that known idea, and the insert
+   and the links to the idea commit in one transaction
+   (db/insert-flashcards-for-entity!, plans/known-ideas.md §2.4). A card the
+   uniqueness indexes skip is linked too."
   ([user-id topic-id root-topic-id kind cards]
    (save-cards user-id topic-id root-topic-id kind cards true))
   ([user-id topic-id root-topic-id kind cards bake?]
+   (save-cards user-id topic-id root-topic-id kind cards bake? nil))
+  ([user-id topic-id root-topic-id kind cards bake? entity-id]
    (try
      (let [rows (map (fn [card]
                        (if (= kind "overlapping")
@@ -610,7 +617,10 @@
                              :unstored unstored :reason reason}}
              "save-cards rejected — pasted image could not be stored")
            {:success false :error (str "Image could not be stored: " reason)})
-         (let [ids (vec (db/insert-flashcards! (mapv :row rehosted)))
+         (let [rows (mapv :row rehosted)
+               ids (vec (if entity-id
+                          (db/insert-flashcards-for-entity! user-id entity-id rows)
+                          (db/insert-flashcards! rows)))
                skipped (- (count rehosted) (count ids))]
            (log/audit! {:id ::save-cards :user-id user-id :action :create
                         :entity :card :n (count ids)})

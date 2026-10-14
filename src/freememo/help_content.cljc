@@ -411,11 +411,11 @@
              :detail "On a file from a repository, in the rendered view of a Markdown file or in the source of any file, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
              :commands #{:ask-about-selection :save-question-pin :delete-question-pin}}
             {:label "Ask your pins together"
-             :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea marked Start here. Point at a citation to light up its passage in the file."
+             :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea it is teaching now. Point at a citation to light up its passage in the file."
              :commands #{:ask-question-pins :apply-question-map}}
             {:label "Work the map"
-             :detail "Each idea in the map offers I know it and Teach me. I know it is remembered for every document you read, and Undo removes it. When your answers show you understand an idea, the tutor marks it learned and closes its pins."
-             :commands #{:teach-question-root :mark-question-root-known}}
+             :detail "While the file has a map, the assistant panel shows two tabs: Chat and Map. The Map tab counts the ideas you are done with, for example Map 2 of 4. The map lists the ideas in order: done ideas first, then the idea the tutor is teaching now, then the open ones. A learned idea is one the tutor confirmed from your answers, and its pins are closed. A known idea is one you marked with I know this, or one the tutor confirmed on another map. Teach me makes an idea the next one, shows Chat and writes a request in the composer. Nothing is sent until you send it. I know this on the current idea moves the tutor on to the next open idea. Undo removes only your own mark. Teach again on a learned idea writes a request in the composer and keeps the idea learned. Point at a passage under an idea to light it up in the file. The palette command Show question map opens the panel on the Map tab."
+             :commands #{:teach-question-root :mark-question-root-known :show-question-map}}
             {:label "Pick the assistant model"
              :detail "Set the model in Settings → AI Features. The panel has no model control, and one model answers in all documents. In By task, choose a level for Reading assistant. In Advanced, choose the Assistant model under Reading assistant."
              :commands #{}}
@@ -586,7 +586,10 @@
              :commands #{}}
             {:label "Curate questions"
              :detail "Questions: click a row to edit its question and reference answer, or × to reject it."
-             :commands #{}}]}
+             :commands #{}}
+            {:label "Known ideas"
+             :detail "Knowledge → Known ideas lists every idea you know: the ideas the tutor confirmed from your answers, and the ideas you marked with I know this. Each row says how you know it, the files it came from, when you last checked it, and its cards. Make cards writes 3 cards from the passages and questions behind the idea. Check me opens the Quiz on the idea's cards, due or not, and the band above the table lists the ideas due for a check. Open shows the idea's page: the answer that showed it, how you got there, its cards and its checks. Undo my mark removes only your own mark. Not learned yet removes both marks and puts the idea back on every map that has it; its cards stay."
+             :commands #{:go-known-ideas :mark-idea-not-learned :undo-idea-self-mark}}]}
    {:slug "quiz"
     :title "Testing yourself — Quiz & Timed Quiz"
     :intro "Test recall against the fact graph, graded by the model."
