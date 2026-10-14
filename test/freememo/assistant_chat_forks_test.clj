@@ -305,3 +305,27 @@
     (testing "a search for a fork shows the path to it (§4.6.4)"
       (is (= [[1 0] [2 1] [3 2]]
             (rows (:today (history/history-sections chats "a1" now))))))))
+
+(deftest history-guides-draw-a-line-per-parent-ending-in-a-corner
+  ;; plans/assistant-history-fork-guides.md §3.1
+  (let [now 1000000000000
+        chats [{:id 1 :label "Root" :activity-ms now}
+               {:id 2 :label "One" :parent-id 1 :fork-message-id 4 :activity-ms now}
+               {:id 3 :label "One-a" :parent-id 2 :fork-message-id 6 :activity-ms now}
+               {:id 4 :label "One-b" :parent-id 2 :fork-message-id 7 :activity-ms now}
+               {:id 5 :label "Two" :parent-id 1 :fork-message-id 8 :activity-ms now}
+               {:id 6 :label "Two-a" :parent-id 5 :fork-message-id 9 :activity-ms now}]
+        rows (fn [query]
+               (mapv (juxt :label :guides)
+                 (:today (history/history-sections chats query now))))]
+    (testing "a parent's line passes its other children and turns at its last"
+      (is (= [["Root" []]
+              ["One" [:pass]]
+              ["One-a" [:pass :pass]]
+              ["One-b" [:pass :corner]]
+              ["Two" [:corner]]
+              ["Two-a" [:blank :corner]]]
+            (rows ""))))
+    (testing "a search counts only the shown children as siblings"
+      (is (= [["Root" []] ["One" [:corner]] ["One-a" [:blank :corner]]]
+            (rows "one-a"))))))

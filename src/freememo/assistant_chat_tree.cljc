@@ -95,14 +95,32 @@
 
 (defn with-descendants
   "Each chat of `roots` followed by its descendants, depth first and in
-   `fork-order`, every row with :depth (0 for a root).
-   Pre:  `children` is a `children-index` over the chats that may be shown."
+   `fork-order`, every row with :depth (0 for a root) and :guides
+   (plans/assistant-history-fork-guides.md §3.1).
+
+   :guides holds one entry per level, :depth entries in all, that say what the
+   history row draws in that level's column. The last entry is the row's own
+   level: :corner for the last child of its parent, :pass for any other child.
+   Each earlier entry is an ancestor's level: :pass while that ancestor has a
+   later sibling, so its line runs on past this row, and :blank when it has
+   none.
+
+   Pre:  `children` is a `children-index` over the chats that may be shown, so
+         \"last child\" means last among the shown children."
   [roots children]
-  (let [walk (fn walk [chat depth]
-               (into [(assoc chat :depth depth)]
-                 (mapcat #(walk % (inc depth)))
-                 (get children (:id chat))))]
-    (into [] (mapcat #(walk % 0)) roots)))
+  (let [walk (fn walk [chat guides ancestor-guides]
+               (let [kids (get children (:id chat))
+                     last-index (dec (count kids))]
+                 (into [(assoc chat :depth (count guides) :guides guides)]
+                   (comp (map-indexed
+                           (fn [i kid]
+                             (let [last? (= i last-index)]
+                               (walk kid
+                                 (conj ancestor-guides (if last? :corner :pass))
+                                 (conj ancestor-guides (if last? :blank :pass))))))
+                     cat)
+                   kids)))]
+    (into [] (mapcat #(walk % [] [])) roots)))
 
 (defn excerpt
   "`text` on one line, cut to `limit` characters with an ellipsis."

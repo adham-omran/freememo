@@ -4918,8 +4918,39 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .assistant-history__pin { display: inline-flex; flex-shrink: 0; color: var(--color-text-secondary); }
 
 /* A fork sits under the chat it came from (plans/assistant-chat-forks.md
-   §4.6.1). --depth is set per row; 0 is a root. */
-.assistant-history__row { padding-left: calc(8px + var(--depth, 0) * 14px); }
+   §4.6.1), and its parent's line runs down to it
+   (plans/assistant-history-fork-guides.md §3.3). Each guide is one tree level,
+   20px wide, so the guides are also the indent. The container takes back the
+   row's vertical padding, so a line meets the line in the next row, and its
+   right margin takes back the row's gap, so a root's empty container moves
+   nothing. The line sits 5px into its level, under the parent title's first
+   letter. */
+.assistant-history__guides {
+    display: flex;
+    flex-shrink: 0;
+    align-self: stretch;
+    margin: -4px -6px -4px 0;
+}
+.assistant-history__guide {
+    position: relative;
+    flex-shrink: 0;
+    width: 20px;
+}
+.assistant-history__guide--pass::before,
+.assistant-history__guide--corner::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 5px;
+    border-left: 1px solid var(--color-border);
+}
+.assistant-history__guide--pass::before { bottom: 0; }
+.assistant-history__guide--corner::before {
+    height: 50%;
+    width: 9px;
+    border-bottom: 1px solid var(--color-border);
+    border-bottom-left-radius: 6px;
+}
 .assistant-history__row--excluded .assistant-history__title {
     color: var(--color-text-secondary);
     text-decoration: line-through;
