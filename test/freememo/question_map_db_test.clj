@@ -1,7 +1,8 @@
 (ns freememo.question-map-db-test
   "Question map contracts against PostgreSQL (plans/anchored-questions.md §6.1,
-   §6.3, §6.4, and plans/question-map-tab.md §4.4, §4.5). Every test skips
-   when the database is down."
+   §6.3, §6.4, plans/question-map-tab.md §4.4, §4.5, and
+   plans/pin-numbering-reuse-and-tombstones.md). Every test skips when the
+   database is down."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
@@ -40,6 +41,7 @@
      (is true "PostgreSQL is unavailable; integration assertion skipped")
      (do (#'db/setup-schema-question-pins!)
          (#'db/setup-schema-known-ideas!)
+         (#'db/setup-schema-pin-numbering!)
          (let [~@(mapcat (fn [s] [s `(create-user!)]) syms)]
            (try ~@body
              (finally
@@ -59,19 +61,114 @@
       (is (nil? (db/question-doc-key other file)) "another user's file has no key")
       (is (nil? (db/question-doc-key u commit)) "a commit node is not a file"))))
 
-(deftest labels-are-never-reused
+(defn- entity! [user-id label]
+  (first (db/insert-kg-entities! user-id [label])))
+
+(defn- tombstone-count [map-id]
+  (:n (jdbc/execute-one! db/ds
+        ["SELECT count(*)::int AS n FROM question_pin_tombstones WHERE map_id = ?" map-id]
+        opts)))
+
+(deftest a-label-is-reused-until-the-tutor-sees-it
   (with-users [u other]
     (let [{:keys [repo file]} (repo-file! u "a.md")
           map-id (db/ensure-question-map! u repo "a.md")
-          p1 (db/create-question-pin! u map-id {:snapshot-topic-id file :quote "one"})
-          p2 (db/create-question-pin! u map-id {:snapshot-topic-id file :quote "two"
-                                                :question "Why?"})]
+          pin! #(db/create-question-pin! u map-id {:snapshot-topic-id file :quote %})
+          [_p1 p2 _p3] (mapv pin! ["one" "two" "three"])]
       (is (= map-id (db/ensure-question-map! u repo "a.md")) "one map per key")
       (is (nil? (db/ensure-question-map! other repo "a.md")) "only the owner makes a map")
-      (is (= [1 2] [(:label p1) (:label p2)]))
-      (is (= 1 (db/delete-question-pin! u (:id p2))))
-      (testing "§6.2.3: a deleted label is not given out again"
-        (is (= 3 (:label (db/create-question-pin! u map-id {:quote "three"}))))))))
+      (testing "§7.1: an unseen pin's label goes to the next pin"
+        (is (= 1 (db/delete-question-pin! u (:id p2))))
+        (is (zero? (tombstone-count map-id)) "§6.3: an unseen delete leaves nothing")
+        (is (= 2 (:label (pin! "two again")))))
+      (testing "§5.2: the tutor read marks every open pin seen"
+        (is (= [1 2 3] (mapv :label (db/open-question-pins-for-tutor! u map-id))))
+        (is (every? :tutor_seen_at (jdbc/execute! db/ds
+                                     ["SELECT tutor_seen_at FROM question_pins WHERE map_id = ?" map-id]
+                                     opts))))
+      (testing "§7.1: a seen pin's label is never given out again"
+        (let [two (first (filter #(= 2 (:label %)) (db/question-pins u map-id)))]
+          (is (= 1 (db/delete-question-pin! u (:id two)))))
+        (is (= [1 3] (mapv :label (db/question-pins u map-id))) "§6: live pins only")
+        (is (= [{:label 2 :quote "two again" :question ""}]
+               (db/question-pin-tombstones u map-id)) "§6.3")
+        (is (= 4 (:label (pin! "four")))))
+      (is (empty? (db/question-pin-tombstones other map-id)) "only the owner reads tombstones"))))
+
+(deftest the-tutor-read-marks-open-pins-only
+  (with-users [u]
+    (let [{:keys [repo]} (repo-file! u "a.md")
+          map-id (db/ensure-question-map! u repo "a.md")
+          open (db/create-question-pin! u map-id {:quote "open"})
+          closed (db/create-question-pin! u map-id {:quote "closed"})]
+      (db/set-question-pin-status! u (:id closed) "closed")
+      (is (= [(:id open)] (mapv :id (db/open-question-pins-for-tutor! u map-id))))
+      (testing "a closed pin was never named, so its label is free after a delete"
+        (db/delete-question-pin! u (:id closed))
+        (is (zero? (tombstone-count map-id)))
+        (is (= 2 (:label (db/create-question-pin! u map-id {:quote "again"}))))))))
+
+(deftest concurrent-creates-get-distinct-labels
+  (with-users [u]
+    (let [{:keys [repo]} (repo-file! u "a.md")
+          map-id (db/ensure-question-map! u repo "a.md")
+          labels (->> (range 8)
+                   (mapv (fn [i] (future (:label (db/create-question-pin! u map-id {:quote (str "q" i)})))))
+                   (mapv deref))]
+      (is (= (set (range 1 9)) (set labels)) "§7.1: one label each, none failed"))))
+
+(deftest a-tombstone-counts-nowhere-but-the-deleted-group
+  (with-users [u]
+    (let [{:keys [repo file]} (repo-file! u "a.md")
+          map-id (db/ensure-question-map! u repo "a.md")
+          e (entity! u "Ports")
+          pin (db/create-question-pin! u map-id {:snapshot-topic-id file :quote "a port"
+                                                 :question "What is a port?"})
+          material? (fn [] (:material? (first (filter #(= e (:entity_id %)) (db/known-ideas u)))))]
+      (db/apply-question-map-plan! u map-id
+        {:new-roots [{:label "Ports" :in-document? true :entity-id e}]
+         :pin-roots {1 "Ports"} :learned #{} :next "Ports"})
+      (db/set-known-mark! u e "self")
+      (is (some? (db/idea-material u e)) "a live pin is material")
+      (is (true? (material?)))
+      (db/open-question-pins-for-tutor! u map-id)
+      (is (= 1 (db/delete-question-pin! u (:id pin))))
+      (is (= 1 (tombstone-count map-id)))
+      (testing "§8.2: no card is made from a deleted quote"
+        (is (nil? (db/idea-material u e))))
+      (testing "§8.3: the list flag agrees"
+        (is (false? (material?)))))))
+
+(deftest the-migration-retires-legacy-gaps
+  (with-users [u]
+    (let [{:keys [repo]} (repo-file! u "a.md")
+          map-id (db/ensure-question-map! u repo "a.md")
+          other-map (db/ensure-question-map! u repo "b.md")
+          legacy-pin! (fn [m label]
+                        (jdbc/execute-one! db/ds
+                          ["INSERT INTO question_pins (map_id, label, quote) VALUES (?, ?, 'q')"
+                           m label]))]
+      ;; The shape the old counter left: pins 1 and 2 deleted, 3 and 4 live.
+      (jdbc/execute! db/ds ["UPDATE question_maps SET next_label = 5 WHERE id IN (?, ?)"
+                            map-id other-map])
+      (legacy-pin! map-id 3)
+      (legacy-pin! map-id 4)
+      (legacy-pin! other-map 4)
+      (db/apply-question-map-plan! u other-map
+        {:new-roots [{:label "Root" :in-document? true}] :pin-roots {} :learned #{} :next nil})
+      (jdbc/with-transaction [tx db/ds]
+        (db/retire-legacy-pin-labels! tx [map-id other-map]))
+      (testing "§10.2: every gap below next_label is a tombstone with no quote"
+        (is (= [{:label 1 :quote nil :question ""} {:label 2 :quote nil :question ""}]
+               (db/question-pin-tombstones u map-id)))
+        (is (= 5 (:label (db/create-question-pin! u map-id {:quote "new"})))))
+      (testing "§10.1: pins are seen only in a map with a root"
+        (let [seen (fn [m] (mapv :tutor_seen_at
+                             (jdbc/execute! db/ds
+                               ["SELECT tutor_seen_at FROM question_pins WHERE map_id = ? AND label < 5" m]
+                               opts)))]
+          (is (every? nil? (seen map-id)))
+          (is (every? some? (seen other-map))))))))
 
 (deftest ownership-guards-every-pin-write
   (with-users [u other]
@@ -85,9 +182,6 @@
       (is (empty? (db/question-pins other map-id)))
       (is (= 1 (db/set-question-pin-status! u (:id pin) "closed")))
       (is (= 1 (db/set-question-pin-status! u (:id pin) "open")) "§6.1.5: reopen"))))
-
-(defn- entity! [user-id label]
-  (first (db/insert-kg-entities! user-id [label])))
 
 (deftest a-plan-writes-roots-links-next-and-learned
   (with-users [u]

@@ -54,8 +54,8 @@
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
 (deftest entity-tables-is-a-set-of-49-in-a-fixed-order
-  (is (= 49 (count fmt/entity-tables)))
-  (is (= 49 (count (set fmt/entity-tables))) "no table may appear twice"))
+  (is (= 50 (count fmt/entity-tables)))
+  (is (= 50 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -124,6 +124,7 @@
              [:question_pins :question_maps]
              [:question_pins :question_roots]
              [:question_pins :topics]
+             [:question_pin_tombstones :question_maps]
              [:known_marks :kg_entities]
              [:known_marks :topics]
              [:known_marks :assistant_runs]

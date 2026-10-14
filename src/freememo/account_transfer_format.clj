@@ -135,6 +135,7 @@
    :question_maps
    :question_roots
    :question_pins
+   :question_pin_tombstones
    :known_marks
    :flashcard_entities
    :settings])
@@ -431,6 +432,13 @@
    :question_pins {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
                             " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
                    :params 2 :order "t.id"}
+
+   ;; A deleted seen pin's number (plans/pin-numbering-reuse-and-tombstones.md
+   ;; §6). It holds the number on the target too, so an imported chat that
+   ;; names it never meets a new pin with the same number. No id column.
+   :question_pin_tombstones {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
+                                      " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                             :params 2 :order "t.map_id, t.label"}
 
    ;; Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.9.2),
    ;; scoped through their repository node as maps are. The clone is a cache

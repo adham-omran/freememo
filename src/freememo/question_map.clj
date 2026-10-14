@@ -113,10 +113,12 @@
 (defn snapshot-view
   "Everything a pane and the map panel show for `user-id`'s file at `ref`.
    Post: nil when there is no ref. Otherwise
-         {:map-id (or nil) :pins [...] :roots [...] :open-count n}, where each
-         pin carries `:range`, its location in THIS file at this commit, or
-         nil when its quote no longer matches here (§6.1.3). Nothing is
-         written."
+         {:map-id (or nil) :pins [...] :tombstones [...] :roots [...]
+          :open-count n}, where each pin carries `:range`, its location in
+         THIS file at this commit, or nil when its quote no longer matches
+         here (§6.1.3). `:tombstones` are the map's deleted seen pins, for the
+         pin list only (plans/pin-numbering-reuse-and-tombstones.md §9).
+         Nothing is written."
   [user-id ref]
   (when ref
     (if-let [map-id (map-id-for-ref user-id ref)]
@@ -127,9 +129,10 @@
         {:map-id map-id
          :pins (mapv (fn [p r] (assoc p :range r :root_label (root-label (:root_id p))))
                  pins ranges)
+         :tombstones (db/question-pin-tombstones user-id map-id)
          :roots roots
          :open-count (count (filter #(= "open" (:status %)) pins))})
-      {:map-id nil :pins [] :roots [] :open-count 0})))
+      {:map-id nil :pins [] :tombstones [] :roots [] :open-count 0})))
 
 (defn pin-counts
   "{:open n :total m} for the pins of `user-id`'s file at `ref`. No match is
@@ -269,7 +272,9 @@
    set is built for an Ask, whichever control started it (§6.2.5.1)."
   [user-id ref]
   (let [map-id (map-id-for-ref user-id ref)
-        open (when map-id (filterv #(= "open" (:status %)) (db/question-pins user-id map-id)))]
+        ;; The text becomes a chat message, so its pins are seen
+        ;; (plans/pin-numbering-reuse-and-tombstones.md §5.2).
+        open (when map-id (db/open-question-pins-for-tutor! user-id map-id))]
     (if (seq open)
       {:map-id map-id :text (diagnosis-user-message open)}
       {:error "There are no open pins to ask about."})))
@@ -326,9 +331,12 @@
   [user-id ref diagnosis? tutor-persona]
   (when-let [map-id (map-id-for-ref user-id ref)]
     (let [roots (db/question-roots user-id map-id)
-          open (filterv #(= "open" (:status %)) (db/question-pins user-id map-id))
+          tail? (or diagnosis? (seq roots))
+          ;; Read, and so marked seen, only when the tail names them
+          ;; (plans/pin-numbering-reuse-and-tombstones.md §5.2).
+          open (when tail? (db/open-question-pins-for-tutor! user-id map-id))
           root-of (into {} (map (juxt :id :label)) roots)]
-      (when (or diagnosis? (seq roots))
+      (when tail?
         {:map-id map-id
          :content
          (str "# Question map\n\n"

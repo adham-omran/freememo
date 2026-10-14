@@ -56,6 +56,7 @@
   `(if-not (db-up?)
      (is true "PostgreSQL is unavailable; integration assertion skipped")
      (do (#'db/setup-schema-question-pins!)
+         (#'db/setup-schema-pin-numbering!)
          (#'db/setup-schema-walkthroughs!)
          (#'db/setup-schema-known-ideas!)
          (let [~sym (create-user!)]

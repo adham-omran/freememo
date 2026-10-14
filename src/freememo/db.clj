@@ -2209,8 +2209,9 @@
    A question map is one per document key: a repository node plus a
    `repo_path`. Each GitLab update writes a new snapshot topic for every file
    under the same repository node, so keying by the snapshot would strand pins
-   on the old file. The map row also owns the label counter, so a label is
-   never reused after a delete (§6.2.3).
+   on the old file. `next_label` was the label counter until
+   plans/pin-numbering-reuse-and-tombstones.md, and only that plan's
+   migration reads it now.
 
    A pin stores its lifecycle only. Whether its quote matches is computed per
    snapshot when one renders (§6.1.3), so no column says `stale`.
@@ -2389,6 +2390,36 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcard_entities_entity
                       ON flashcard_entities(entity_id)"]))
+
+(declare retire-legacy-pin-labels!)
+
+(defn- setup-schema-pin-numbering!
+  "Pin numbers reused until the tutor sees them
+   (plans/pin-numbering-reuse-and-tombstones.md). Must run after
+   setup-schema-question-pins!.
+
+   `question_pins.tutor_seen_at` is when a pin's number first went into text
+   built for the model. A pin with it set never gives its number back.
+
+   `question_pin_tombstones` holds a deleted seen pin's number, so
+   `question_pins` holds live pins only and no reader filters (§6). A NULL
+   `quote` marks a number retired by the one-time migration: deleted before
+   tracking, with nothing known about it (§10.2). `created_at` is NULL there
+   for the same reason."
+  []
+  (jdbc/execute! ds ["ALTER TABLE question_pins
+                      ADD COLUMN IF NOT EXISTS tutor_seen_at TIMESTAMPTZ"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS question_pin_tombstones (
+      map_id INTEGER NOT NULL REFERENCES question_maps(id) ON DELETE CASCADE,
+      label INTEGER NOT NULL CHECK (label >= 1),
+      quote TEXT,
+      question TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (map_id, label)
+    )"])
+  (run-once! "2026-10-14-pin-numbering" retire-legacy-pin-labels!))
 
 (defn- setup-schema-document-summaries!
   "Install the maintained root-document progress read model.
@@ -3076,6 +3107,7 @@
   (setup-schema-question-pins!)
   (setup-schema-walkthroughs!)
   (setup-schema-known-ideas!)
+  (setup-schema-pin-numbering!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
 
@@ -4477,6 +4509,38 @@
             ["INSERT INTO app_migrations (id) VALUES (?) ON CONFLICT DO NOTHING RETURNING id" id])
       (f tx)
       true)))
+
+(defn retire-legacy-pin-labels!
+  "The pin-numbering migration (plans/pin-numbering-reuse-and-tombstones.md
+   §10), over every map, or over `map-ids` only (a test's own maps). Run
+   through run-once!, never directly.
+   Post: a live pin whose map has a root is seen (§10.1), and every number
+         below a map's `next_label` that no live pin holds is a tombstone
+         with a NULL quote (§10.2). Whether the tutor saw those is unknown, so
+         none is given out again."
+  ([tx] (retire-legacy-pin-labels! tx nil))
+  ([tx map-ids]
+   (let [ids (when map-ids (into-array Integer (map int map-ids)))
+         seen (jdbc/execute-one! tx
+                ["UPDATE question_pins p SET tutor_seen_at = now()
+                   WHERE p.tutor_seen_at IS NULL
+                     AND (?::int[] IS NULL OR p.map_id = ANY(?::int[]))
+                     AND EXISTS (SELECT 1 FROM question_roots r WHERE r.map_id = p.map_id)"
+                 ids ids])
+         retired (jdbc/execute-one! tx
+                   ["INSERT INTO question_pin_tombstones (map_id, label, quote, question, created_at)
+                     SELECT m.id, n, NULL, '', NULL
+                       FROM question_maps m
+                       CROSS JOIN LATERAL generate_series(1, m.next_label - 1) AS n
+                      WHERE (?::int[] IS NULL OR m.id = ANY(?::int[]))
+                        AND NOT EXISTS (SELECT 1 FROM question_pins p
+                                         WHERE p.map_id = m.id AND p.label = n)
+                     ON CONFLICT (map_id, label) DO NOTHING"
+                    ids ids])]
+     (tel/log! {:level :info :id ::retired-legacy-pin-labels
+                :data {:seen (::jdbc/update-count seen)
+                       :retired (::jdbc/update-count retired)}}
+       "Marked pins seen and retired deleted pin numbers"))))
 
 (defn move-everyone-to-best-level!
   "Set every AI task of every existing user to the Best level (product decision,
@@ -14263,33 +14327,40 @@
   (question-map-id user-id repo-topic-id repo-path))
 
 (defn create-question-pin!
-  "Create one open pin in map `map-id` and give it the map's next label.
+  "Create one open pin in map `map-id` and give it the lowest free label.
    Pre:  `quote` is non-blank. `snapshot-topic-id` is the file topic it was
          made on, or nil for a file at a commit that is not a topic; a topic
          the user does not own is stored as NULL. `snapshot-sha` is the
          commit it was made at (plans/commit-range-walkthrough.md §6.3.4).
    Post: the new row as an unqualified map, or nil when the map is not the
-         user's. The label is taken and the counter moved in one transaction,
-         so two concurrent creates never share a label, and a deleted pin's
-         label is never given out again (§6.2.3)."
+         user's. The label is the lowest positive integer that no live pin
+         and no tombstone of the map holds
+         (plans/pin-numbering-reuse-and-tombstones.md §7.1). The map row is
+         locked first, so two concurrent creates never share a label."
   [user-id map-id {:keys [snapshot-topic-id snapshot-sha quote heading-anchor offset-hint
                           question]}]
   (jdbc/with-transaction [tx ds]
-    (when-let [label (:label (jdbc/execute-one! tx
-                               ["UPDATE question_maps SET next_label = next_label + 1
-                                  WHERE id = ? AND user_id = ?
-                                 RETURNING next_label - 1 AS label"
-                                map-id user-id]
-                               {:builder-fn rs/as-unqualified-maps}))]
-      (jdbc/execute-one! tx
-        ["INSERT INTO question_pins
-            (map_id, label, snapshot_topic_id, snapshot_sha, quote, heading_anchor,
-             offset_hint, question)
-          VALUES (?, ?, (SELECT id FROM topics WHERE id = ? AND user_id = ?), ?, ?, ?, ?, ?)
-          RETURNING id, label, quote, heading_anchor, offset_hint, question, status, root_id"
-         map-id label snapshot-topic-id user-id snapshot-sha (sanitize-utf8 quote)
-         heading-anchor offset-hint (sanitize-utf8 (or question ""))]
-        {:builder-fn rs/as-unqualified-maps}))))
+    (when (jdbc/execute-one! tx ["SELECT id FROM question_maps WHERE id = ? AND user_id = ? FOR UPDATE"
+                                 map-id user-id])
+      (let [label (:label (jdbc/execute-one! tx
+                            ;; Among 1..k+1, k labels held, one is free.
+                            ["WITH held AS (SELECT label FROM question_pins WHERE map_id = ?
+                                            UNION ALL
+                                            SELECT label FROM question_pin_tombstones WHERE map_id = ?)
+                              SELECT min(n)::int AS label
+                                FROM generate_series(1, (SELECT count(*) FROM held) + 1) AS n
+                               WHERE n NOT IN (SELECT label FROM held)"
+                             map-id map-id]
+                            {:builder-fn rs/as-unqualified-maps}))]
+        (jdbc/execute-one! tx
+          ["INSERT INTO question_pins
+              (map_id, label, snapshot_topic_id, snapshot_sha, quote, heading_anchor,
+               offset_hint, question)
+            VALUES (?, ?, (SELECT id FROM topics WHERE id = ? AND user_id = ?), ?, ?, ?, ?, ?)
+            RETURNING id, label, quote, heading_anchor, offset_hint, question, status, root_id"
+           map-id label snapshot-topic-id user-id snapshot-sha (sanitize-utf8 quote)
+           heading-anchor offset-hint (sanitize-utf8 (or question ""))]
+          {:builder-fn rs/as-unqualified-maps})))))
 
 (def ^:private owned-pin-clause
   "map_id IN (SELECT id FROM question_maps WHERE user_id = ?)")
@@ -14314,20 +14385,68 @@
        status pin-id user-id])))
 
 (defn delete-question-pin!
-  "Delete `user-id`'s pin. Its label is not given out again. Post: the count."
+  "Delete `user-id`'s pin (plans/pin-numbering-reuse-and-tombstones.md §6.3).
+   A pin the tutor never saw leaves nothing, so its label is free again. A
+   seen pin leaves a tombstone holding its label, in the same transaction.
+   The map row is locked first, the lock `create-question-pin!` takes.
+   Post: the count of pins deleted, 0 or 1."
   [user-id pin-id]
-  (::jdbc/update-count
-    (jdbc/execute-one! ds
-      [(str "DELETE FROM question_pins WHERE id = ? AND " owned-pin-clause)
-       pin-id user-id])))
+  (jdbc/with-transaction [tx ds]
+    (if (jdbc/execute-one! tx
+          ["SELECT m.id FROM question_maps m JOIN question_pins p ON p.map_id = m.id
+             WHERE p.id = ? AND m.user_id = ? FOR UPDATE OF m"
+           pin-id user-id])
+      ;; DELETE waits on a seen stamp that holds the row, then returns the row
+      ;; as that stamp left it (§6.4).
+      (if-let [pin (jdbc/execute-one! tx
+                     ["DELETE FROM question_pins WHERE id = ?
+                       RETURNING map_id, label, quote, question, created_at, tutor_seen_at"
+                      pin-id]
+                     {:builder-fn rs/as-unqualified-maps})]
+        (do (when (:tutor_seen_at pin)
+              (jdbc/execute-one! tx
+                ["INSERT INTO question_pin_tombstones (map_id, label, quote, question, created_at)
+                  VALUES (?, ?, ?, ?, ?)"
+                 (:map_id pin) (:label pin) (:quote pin) (:question pin) (:created_at pin)]))
+            1)
+        0)
+      0)))
 
 (defn question-pins
-  "Every pin of `user-id`'s map `map-id`, in label order."
+  "Every live pin of `user-id`'s map `map-id`, in label order."
   [user-id map-id]
   (jdbc/execute! ds
     [(str "SELECT id, label, quote, heading_anchor, offset_hint, question, status, root_id
              FROM question_pins WHERE map_id = ? AND " owned-pin-clause
           " ORDER BY label")
+     map-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn open-question-pins-for-tutor!
+  "The open pins of `user-id`'s map `map-id`, in label order, marked as seen
+   by the tutor (plans/pin-numbering-reuse-and-tombstones.md §5). The ONLY
+   read a prompt builder may use for pin text: the stamp and the read are one
+   statement, so no builder can name a pin that stays unseen.
+   Post: rows as `question-pins` returns them. Each has `tutor_seen_at` set."
+  [user-id map-id]
+  (->> (jdbc/execute! ds
+         [(str "UPDATE question_pins SET tutor_seen_at = coalesce(tutor_seen_at, now())
+                 WHERE map_id = ? AND status = 'open' AND " owned-pin-clause "
+                RETURNING id, label, quote, heading_anchor, offset_hint, question, status, root_id")
+          map-id user-id]
+         {:builder-fn rs/as-unqualified-maps})
+    (sort-by :label)
+    vec))
+
+(defn question-pin-tombstones
+  "The tombstones of `user-id`'s map `map-id`, in label order
+   (plans/pin-numbering-reuse-and-tombstones.md §9). `quote` is nil for a
+   number retired by the migration.
+   Post: [{:label :quote :question}]."
+  [user-id map-id]
+  (jdbc/execute! ds
+    [(str "SELECT label, quote, question FROM question_pin_tombstones
+            WHERE map_id = ? AND " owned-pin-clause " ORDER BY label")
      map-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 

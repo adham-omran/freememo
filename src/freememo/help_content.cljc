@@ -408,7 +408,7 @@
              :detail "Select an evidence link to read its retained excerpt. Evidence from another document includes Open document in new tab."
              :commands #{}}
             {:label "Pin questions on a repository file"
-             :detail "On a file from a repository, in the rendered view of a Markdown file or in the source of any file, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
+             :detail "On a file from a repository, in the rendered view of a Markdown file or in the source of any file, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number once the tutor has seen it. A deleted pin that the tutor saw stays in the list as Deleted. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
              :commands #{:ask-about-selection :save-question-pin :delete-question-pin}}
             {:label "Ask your pins together"
              :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea it is teaching now. Point at a citation to light up its passage in the file."

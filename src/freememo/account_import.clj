@@ -128,6 +128,7 @@
    :question_roots {:map_id :question_maps :entity_id :kg_entities}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
                    :root_id :question_roots}
+   :question_pin_tombstones {:map_id :question_maps}
    :known_marks {:entity_id :kg_entities :as_of_repo_topic_id :topics
                  :proof_run_id :assistant_runs}
    :flashcard_entities {:flashcard_id :flashcards :entity_id :kg_entities}
@@ -181,6 +182,7 @@
    :question_maps #{:repo_topic_id}
    :question_roots #{:map_id}
    :question_pins #{:map_id}
+   :question_pin_tombstones #{:map_id}
    ;; Half of the primary key.
    :known_marks #{:entity_id}
    ;; The whole primary key: a link is nothing without both ends.

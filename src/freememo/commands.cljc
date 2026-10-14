@@ -143,7 +143,9 @@
                            :views #{:question-mutations}}
      :ask-question-pins   {:label "Ask open pins" :class :mutation :exec :electric
                            :when #{:viewer}
-                           :table #{:assistant_chats :assistant_messages :assistant_runs}
+                           ;; question_pins: the Ask marks its pins seen.
+                           :table #{:assistant_chats :assistant_messages :assistant_runs
+                                    :question_pins}
                            :views #{:assistant-mutations}}
      :save-question-pin   {:label "Save a question pin" :class :mutation :palette-hidden true
                            :data {:pin-id :payload :question :payload :status :payload}
@@ -151,7 +153,7 @@
                            :views #{:question-mutations}}
      :delete-question-pin {:label "Delete a question pin" :class :mutation :palette-hidden true
                            :data {:pin-id :payload}
-                           :table #{:question_pins}
+                           :table #{:question_pins :question_pin_tombstones}
                            :views #{:question-mutations}}
      :teach-question-root {:label "Teach a question-map idea next" :class :mutation
                            :palette-hidden true
@@ -662,7 +664,8 @@
                                 :card_schedules :card_versions :assistant_chats
                                 :kg_entities :kg_predicates :kg_facts :kg_questions
                                 :kg_reviews :settings :topic_files :topic_videos
-                                :question_maps :question_roots :question_pins :known_marks}
+                                :question_maps :question_roots :question_pins
+                                :question_pin_tombstones :known_marks}
                        :views (conj document-views :card-mutations :settings-refresh)}
      :append-images   {:label "Append images" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files} :views document-views}
