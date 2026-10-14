@@ -8,11 +8,11 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
-   [freememo.card-components :refer [CardRow PendingCardRow rtl-text? unsynced?]]
+   [freememo.card-components :refer [CardRow PendingCardRow card-view rtl-text? unsynced?]]
    [freememo.card-rows :as rows]
+   [freememo.row-motion :as row-motion]
    [freememo.card-filter :as card-filter]
    [freememo.forms-ext :as forms-ext]
    [freememo.util :as util]
@@ -147,6 +147,43 @@
               {:success false :error (.getMessage e)}))
      :cljs nil))
 
+(defn arrivals!
+  "The row keys in `row-keys` that the previous call for `scope` did not hold.
+   The first call for a scope answers #{}, so opening a topic animates no row.
+   Post: !seen holds `row-keys` for `scope` alone."
+  [!seen scope row-keys]
+  (let [[old _] (swap-vals! !seen (constantly {scope row-keys}))]
+    (if-some [prev (get old scope)]
+      (into #{} (remove prev) row-keys)
+      #{})))
+
+(defn window-views
+  "The card-views of the saved rows that the scroll window shows.
+   Pre:  `visible` holds indexes into `rows`, in display order. `pending`
+         optimistic rows sit above them, so position `pos` shows at display
+         order pending + pos.
+   Post: one view per position whose display order lies in
+         [offset, offset + limit). Each carries :pos, and :fresh? when its
+         row key is in `arrived`."
+  [rows visible offset limit pending arrived]
+  (let [start (max 0 (- offset pending))
+        end (max start (min (count visible) (- (+ offset limit) pending)))]
+    (mapv (fn [pos]
+            (let [row (nth rows (nth visible pos))]
+              (assoc (card-view row)
+                :pos pos
+                :fresh? (contains? arrived (:row-key row)))))
+      (range start end))))
+
+(defn land-pending!
+  "Forget a landed overlay entry, and remember the ids of the cards it stood
+   for in !landed. A row for one of those cards takes the place of the pending
+   row that already slid in, so it must not slide in a second time."
+  [!landed tid]
+  #?(:cljs (do (swap! !landed into (get-in @(cs/get-atom :pending-cards) [tid :real-ids]))
+               (opt/forget-pending! tid))
+     :clj nil))
+
 (e/defn ContentCardTable []
   (e/client
     (let [topic-id dctx/page-topic-id card-font-size dctx/card-font-size user-id dctx/user-id
@@ -169,6 +206,10 @@
           !review-cursors (atom {})
           !review-target (atom nil)
           !review-message (atom nil)
+          ;; Row keys of the last card query, server-side, for arrivals!.
+          !seen (e/server (atom {}))
+          ;; Card ids whose pending row has landed (land-pending!).
+          !landed (atom #{})
           ;; The filters. !filter-text is the DEBOUNCED text; the input owns
           ;; what is typed. One map built here is what crosses to the server.
           !filter-text (atom "")
@@ -212,8 +253,16 @@
               cards-vec (e/server (card-filter/filter-rows filters all-rows row-texts))
               total-rows (e/server (count all-rows))
               row-member-ids (e/server (mapv :member-ids cards-vec))
-              visible-indexes (opt/VisibleCardIndexes row-member-ids (e/server (:card-revision cards-result)))
-              row-count (count visible-indexes)
+              ;; The optimistic deletions cross to the server, and the visible
+              ;; rows are computed there, beside the window that reads them.
+              deletions (e/watch (cs/get-atom :pending-deletions))
+              visible-indexes (e/server (opt/visible-card-indexes row-member-ids deletions
+                                          (:card-revision cards-result)))
+              visible-member-ids (e/server (mapv #(nth row-member-ids %) visible-indexes))
+              row-count (e/server (count visible-indexes))
+              ;; Rows new since the last query, which slide in when they mount.
+              ;; From `all-rows`, so a filter change makes no arrivals.
+              arrived (e/server (arrivals! !seen topic-id (into #{} (map :row-key) all-rows)))
               card-count (e/server (rows/card-count cards-vec))
               manifest (e/server (review/pushed-manifest all-rows))
               anki-overlay (review-overlay/AnkiOverlay
@@ -246,6 +295,9 @@
               overlay-entries (opt/visible-pending-cards pending-map topic-id present-ids)
               landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)
               pending-count (count overlay-entries)
+              ;; Cards that already have a row on screen: a pending row now, or
+              ;; one that has landed. Their saved row replaces that row in place.
+              taken-ids (into (e/watch !landed) (mapcat :real-ids) (vals pending-map))
               total-row-count (+ pending-count row-count)]
           ;; Auto-forget confirmed overlay entries once their cards have landed
           ;; in the refetched list (keeps :pending-cards from accumulating). The
@@ -254,7 +306,7 @@
           (e/for [tid (e/diff-by identity landed-tempids)]
             (let [[t _] (e/Token tid)]
               (when t
-                (e/on-unmount #(opt/forget-pending! tid))
+                (e/on-unmount #(land-pending! !landed tid))
                 (t))))
           ;; The header sits OUTSIDE the scroll box, so the filter stays in
           ;; view and row 0 starts at scrollTop 0. It shows while a row shows
@@ -289,7 +341,7 @@
             (let [scroll-node dom/node
                   find-next! (fn [state]
                                (let [matches (review/matching-row-indexes
-                                               (mapv #(nth row-member-ids %) visible-indexes) anki-overlay state)
+                                               visible-member-ids anki-overlay state)
                                      target (review/next-row-index
                                               matches (get @!review-cursors state -1))]
                                  (if (some? target)
@@ -338,18 +390,25 @@
                 ;; Pending and saved rows share one index space.
                 (e/for [[i entry] (e/diff-by (comp :tempid second) (map-indexed vector overlay-entries))]
                   (PendingCardRow entry user-id i))
-                (e/for [i (Tape offset limit)]
-                  (let [visible-index (- i pending-count)
-                        source-index (nth visible-indexes visible-index nil)
-                        card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
-                        card (second card-result)]
-                    ;; The anchor for `card`, which the client computes and
-                    ;; CardRow reads back on the server. It lives as long as the
-                    ;; row frame, as DocumentRoot's anchor lives for the ids.
-                    (e/drain (e/server (some? card)))
-                    (when (and card (= source-index (first card-result)))
-                      (CardRow card !editing-card user-id i anki-overlay (= visible-index review-target)
-                        filter-query))))
+                ;; Rows slide by key, whichever node paints them.
+                (e/on-unmount (row-motion/install! dom/node))
+                ;; Each row's VIEW is diffed, so its content crosses with it. A
+                ;; slot loop read each card with its own (e/server …) keyed on a
+                ;; client index, so a row added above moved every slot to
+                ;; another card, and each slot went empty for the round trip of
+                ;; its read. Positions come from the server; the pending count
+                ;; is added here, so a pending row moves the rows at once.
+                (let [window (e/server
+                               (e/diff-by :row-key
+                                 (window-views cards-vec visible-indexes offset limit
+                                   pending-count arrived)))]
+                  (e/for [view window]
+                    (let [pos (:pos view)]
+                      (CardRow view !editing-card user-id (+ pending-count pos) anki-overlay
+                        (= pos review-target) filter-query
+                        ;; A row that takes a pending row's place does not
+                        ;; slide in again.
+                        (and (:fresh? view) (not-any? taken-ids (:member-ids view)))))))
                 ;; Not .card-table-empty when the filters hid every row: that
                 ;; class collapses the panel on a phone, and the filter bar
                 ;; above must stay usable. `filtering?`, not `total-rows`: an

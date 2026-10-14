@@ -263,29 +263,46 @@
   (let [states (into #{} (map sync-state) (:members c))]
     (if (= 1 (count states)) (first states) :mixed)))
 
-(e/defn CardRow [card !editing-card user-id order anki-overlay review-target? filter-query]
+(defn card-view
+  "Everything CardRow renders for one display row, as plain data.
+   The table diffs these views, keyed by :row-key, so a row's shape and its
+   content cross in one frame. Reading each field through its own nested
+   (e/server …) left every row empty for a round trip after it mounted
+   (CLAUDE.md, \"A Nested (e/server …) Inside e/for Is a Second Transfer\")."
+  [row]
+  {:row-key (:row-key row)
+   :id (:flashcards/id row)
+   :member-ids (:member-ids row)
+   :kind (:flashcards/kind row)
+   :question (:flashcards/question row)
+   :answer (:flashcards/answer row)
+   :cloze (:flashcards/cloze row)
+   :overlapping (:flashcards/overlapping row)
+   :group-id (:flashcards/occlusion_group_id row)
+   :score-group-id (:flashcards/score_group_id row)
+   ;; The card's OWN topic, which is not the ambient one. On a root topic
+   ;; get-cards-for-topic* calls get-all-flashcards, so the table lists every
+   ;; descendant's cards while dctx/page-topic-id is the root — a copy sited
+   ;; from the ambient topic would land on the wrong page. Create copy… reads
+   ;; these instead.
+   :topic-id (:flashcards/topic_id row)
+   :root-topic-id (:flashcards/root_topic_id row)
+   :anki-note-id (:flashcards/anki_note_id row)
+   ;; Built from the members: a group row's front cell describes the whole
+   ;; group, and its dot folds every member's state.
+   :front-html (row-front-html row)
+   :sync-st (row-sync-state row)})
+
+(e/defn CardRow
+  "One saved card row.
+   Pre:  `view` is a card-view. `order` is the row's display index.
+   Post: the row carries its key for freememo.row-motion, which slides it in
+         when it appears while `fresh?` is true."
+  [view !editing-card user-id order anki-overlay review-target? filter-query fresh?]
   (e/client
-    (let [id (e/server (:flashcards/id card))
-          member-ids (e/server (:member-ids card))
-          kind (e/server (:flashcards/kind card))
-          question (e/server (:flashcards/question card))
-          answer (e/server (:flashcards/answer card))
-          cloze (e/server (:flashcards/cloze card))
-          ol (e/server (:flashcards/overlapping card))
-          group-id (e/server (:flashcards/occlusion_group_id card))
-          score-group-id (e/server (:flashcards/score_group_id card))
-          ;; The card's OWN topic, which is not the ambient one. On a root
-          ;; topic get-cards-for-topic* calls get-all-flashcards, so this table
-          ;; lists every descendant's cards while dctx/page-topic-id is the
-          ;; root — a copy sited from the ambient topic would land on the wrong
-          ;; page. Create copy… reads these instead.
-          topic-id (e/server (:flashcards/topic_id card))
-          root-topic-id (e/server (:flashcards/root_topic_id card))
-          anki-note-id (e/server (:flashcards/anki_note_id card))
-          ;; Built server-side from the members: a group row's front cell
-          ;; describes the whole group, and its dot folds every member's state.
-          front-html (e/server (row-front-html card))
-          sync-st (e/server (row-sync-state card))
+    (let [{:keys [id member-ids kind question answer cloze group-id score-group-id
+                  topic-id root-topic-id anki-note-id front-html sync-st]} view
+          ol (:overlapping view)
           anki-flags (review/row-flags member-ids anki-overlay)]
       (let [occ? (= kind "occlusion")
             score? (= kind "score")
@@ -322,6 +339,8 @@
         (dom/tr
           (dom/props {:class (str (review/row-class anki-flags)
                                (when review-target? " card-review-target"))
+                      :data-row-key (pr-str (:row-key view))
+                      :data-enter (when fresh? "1")
                       :style {:--order order :cursor "pointer"}})
           (dom/On "click" edit-card! nil)
           ;; Sync indicator
@@ -451,7 +470,11 @@
                :error "var(--color-danger-bg)"
                "var(--color-success-light)")]   ; pending + confirmed both light-green
       (dom/tr
+        ;; A pending row is always a card just added, so it always slides in
+        ;; (freememo.row-motion).
         (dom/props {:class "pending-card-row"
+                    :data-row-key (str tempid)
+                    :data-enter "1"
                     :style {:--order row-index :background bg
                             :transition "background-color 0.3s ease"}})
         ;; Status indicator
