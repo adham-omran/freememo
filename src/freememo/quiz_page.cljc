@@ -118,6 +118,14 @@
        (db/draw-review-queue user-id new-per-day review-per-day))))
 
 #?(:clj
+   (defn card-check-queue*
+     "The items of a check over `card-ids`, a known idea's cards
+      (plans/known-ideas.md §4.1.1): every live ord, due or not.
+      Post: vector of [:card id ord]."
+     [user-id card-ids]
+     (db/draw-card-check user-id card-ids)))
+
+#?(:clj
    (defn review-answer!*
      "Grade one Review answer and advance its FSRS schedule (no session row).
       Pre:  `duration-ms` is the turn's client measurement, or nil (untimed).
@@ -659,11 +667,17 @@
 
    A skipped item is dropped from the queue and not counted as reviewed — the
    `::unset` seed guard means the KG bump a suspension triggers recomputes
-   `initial` without reshuffling the sitting in progress."
-  [user-id !view !editing navigate-source!]
+   `initial` without reshuffling the sitting in progress.
+
+   With `check-card-ids`, the sitting is a check of a known idea's cards
+   (plans/known-ideas.md §4.1.1): every one of them, due or not. The same
+   turns grade and schedule them."
+  [user-id !view !editing navigate-source! check-card-ids]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          initial (e/server (e/Offload #(review-queue* kg-bump user-id)))
+          initial (e/server (e/Offload #(if check-card-ids
+                                          (card-check-queue* user-id check-card-ids)
+                                          (review-queue* kg-bump user-id))))
           !queue (atom ::unset) queue (e/watch !queue)
           !feedback (atom nil) feedback (e/watch !feedback)
           !draft (atom "") draft (e/watch !draft)
@@ -705,7 +719,8 @@
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
                                   :margin "10px 0"}})
-              (dom/text (str remaining " due, " reviewed " reviewed")))
+              (dom/text (str remaining (if check-card-ids " left, " " due, ")
+                          reviewed " reviewed")))
             ;; Frame isolation, keyed on the item AND the tally. Every turn-local
             ;; atom (a card's revealed?/draft) must start fresh on the next item, and
             ;; the item ref alone is not enough: requeueing the only card in the queue
@@ -726,6 +741,7 @@
 
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),
+  ;; and a known idea's check ({:card-ids [...]}, plans/known-ideas.md §4.1),
   ;; set by GlobalQuizInvokers, consumed ONCE on QuizPage mount. A resumable
   ;; session still outranks a mode preset (cond order below).
   (atom nil))
@@ -768,23 +784,33 @@
           !editing (atom nil)
           ;; Landing is the dashboard; an explicit start-quiz/start-exam invoker
           ;; (preset :mode) jumps to the custom setup, and the history preset lands
-          ;; on the dashboard it was folded into.
-          !view (atom (if (:mode preset) :custom :dashboard)) view (e/watch !view)
+          ;; on the dashboard it was folded into. A check (preset :card-ids,
+          ;; plans/known-ideas.md §4.1) opens the review over those cards.
+          !view (atom (cond (:card-ids preset) :review
+                            (:mode preset) :custom
+                            :else :dashboard))
+          view (e/watch !view)
+          ;; Cleared when the dashboard starts a plain Review, so only the first
+          ;; sitting after a check preset is the check.
+          !check-card-ids (atom (:card-ids preset)) check-card-ids (e/watch !check-card-ids)
           ;; Fact provenance in feedback navigates to the source document page —
           ;; the shortest route from "this question is wrong" to the material.
           navigate-source! (fn [topic-id page]
                              (navigate! :viewer (nav/nav-topic topic-id :quiz page)))]
       (curate/QuestionEditorModal user-id !editing)
       (cond
-        (= ::unset session) (do (reset! !session resume) nil)
+        ;; A check does not resume an open session for this mount. The session
+        ;; stays in the database and resumes on the next visit with no preset
+        ;; (plans/known-ideas.md §4.1.2).
+        (= ::unset session) (do (reset! !session (when-not (:card-ids preset) resume)) nil)
         (some? result-sid) (qd/SessionResult user-id result-sid !result-sid)
         (some? summary) (QuizSummary !session !summary summary)
         (some? session) (if (= "exam" (:kind session))
                           (ExamActive user-id !session session !result-sid !editing)
                           (QuizActive user-id !session session !summary !editing navigate-source!))
         (= :custom view) (QuizSetup user-id !session (:mode preset) !view)
-        (= :review view) (ReviewFlow user-id !view !editing navigate-source!)
+        (= :review view) (ReviewFlow user-id !view !editing navigate-source! check-card-ids)
         :else (qd/QuizDashboard user-id
-                (fn [] (reset! !view :review))
+                (fn [] (reset! !check-card-ids nil) (reset! !view :review))
                 (fn [] (reset! !view :custom))
                 navigate-source!)))))

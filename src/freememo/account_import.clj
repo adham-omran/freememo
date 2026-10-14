@@ -128,7 +128,9 @@
    :question_roots {:map_id :question_maps :entity_id :kg_entities}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
                    :root_id :question_roots}
-   :known_marks {:entity_id :kg_entities :as_of_repo_topic_id :topics}
+   :known_marks {:entity_id :kg_entities :as_of_repo_topic_id :topics
+                 :proof_run_id :assistant_runs}
+   :flashcard_entities {:flashcard_id :flashcards :entity_id :kg_entities}
    :walkthroughs {:repo_topic_id :topics}
    :walkthrough_concepts {:walkthrough_id :walkthroughs}
    :walkthrough_hunks {:walkthrough_id :walkthroughs :concept_id :walkthrough_concepts}})
@@ -181,6 +183,8 @@
    :question_pins #{:map_id}
    ;; Half of the primary key.
    :known_marks #{:entity_id}
+   ;; The whole primary key: a link is nothing without both ends.
+   :flashcard_entities #{:flashcard_id :entity_id}
    ;; A walkthrough is its repository's range, and its concepts and hunks
    ;; are nothing without it. A hunk with no concept would break the
    ;; one-concept-per-hunk invariant (§6.5.2).

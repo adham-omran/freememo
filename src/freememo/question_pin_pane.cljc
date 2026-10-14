@@ -134,6 +134,12 @@
    (bus/register-preparer! :ask-question-pins
      (fn [ctx] (when (pos? (or (:question-open-pins ctx) 0)) {}))))
 
+;; Available while a rendered pane is mounted: a file it shows can have a
+;; question map (plans/question-map-tab.md §4.6.1.2).
+#?(:cljs
+   (bus/register-preparer! :show-question-map
+     (fn [ctx] (when (:question-pane-ref ctx) {}))))
+
 (defn ask-open-pins!
   "Start an Ask over the open pins, from a button. Post: the dispatch outcome."
   []

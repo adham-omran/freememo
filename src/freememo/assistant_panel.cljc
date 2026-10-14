@@ -29,6 +29,7 @@
    [freememo.assistant-submit-effect :as submit-effect]
    [freememo.assistant-transcript :as transcript]
    [freememo.question-map-panel :as question-map]
+   [freememo.question-pin-state :as pin-state]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn mention-query
@@ -128,11 +129,16 @@
 
       (dom/div
         (dom/props {:class "assistant-panel"})
+        ;; The view class in its own props, from the client atom alone, so no
+        ;; pending server read can strip `assistant-panel`
+        ;; (plans/question-map-tab.md §4.2.3).
+        (dom/props {:class (when (= :map (e/watch pin-state/!panel-view))
+                             "assistant-panel--map")})
 
         (history/ChatBarWithHistory root-topic-id chat-options active
           (:active-title data)
           !active !history-open? !renaming-active? !chat-action !draft !error)
-        (question-map/QuestionMapCard user-id page-topic-id)
+        (question-map/QuestionMapTabs user-id page-topic-id !draft sending?)
         (transcript/AssistantTranscript
           {:sending? sending? :echo echo :active active
            :mode-entry mode-entry :active-run active-run :user-id user-id

@@ -24,8 +24,10 @@
    [freememo.kg-extract :as kg-extract]
    [freememo.kg-llm :as llm]
    [freememo.question-map-block :as block]
+   [freememo.question-map-view :as view]
    [freememo.quote-anchor :as quote-anchor]
    [freememo.repo-markdown :as repo-md]
+   [freememo.util :as util]
    [taoensso.telemere :as tel]))
 
 ;; ── Locating ───────────────────────────────────────────────────────
@@ -147,21 +149,37 @@
           (or (nil? source-doc) (= source-doc (docref/doc-key ref))))
     (first (locate user-id ref [{:quote quote :anchor anchor}]))))
 
+(defn- map-root
+  "One root of `map-card`: its state, its pin labels, and its done time as a
+   short date. The raw times stay on the server."
+  [root open-by-root closed-by-root]
+  (let [done-at (view/done-time root)]
+    (-> root
+      (assoc :state (view/root-state root)
+             :pin-labels (mapv :label (open-by-root (:id root)))
+             :closed-pin-labels (mapv :label (closed-by-root (:id root)))
+             :done-label (util/format-date-short done-at))
+      (dissoc :learned_at :known_at))))
+
 (defn map-card
-  "The roots of `user-id`'s file at `ref`, for the map card (§6.3.7).
-   Post: [{:id :label :status :in_document :citations :known_sources
-           :pin-labels}], `:pin-labels` being the labels of the root's open
-         pins. The `next` root comes first, learned roots last. Empty when
-         the file has no map. No match is computed."
+  "The map of `user-id`'s file at `ref`, for the map tab
+   (plans/question-map-tab.md §4.5.1). No match is computed.
+   Post: {:roots [...] :unplaced n}. Each root is a `db/question-roots` row
+         with `:state` (`question-map-view/root-state`), `:pin-labels` and
+         `:closed-pin-labels` (the labels of its open and closed pins), and
+         `:done-label`, the date it became done, or nil. Roots are in trail
+         order (`question-map-view/trail`). `:unplaced` counts the open pins
+         with no root. {:roots [] :unplaced 0} when the file has no map."
   [user-id ref]
   (if-let [map-id (map-id-for-ref user-id ref)]
     (let [pins (db/question-pins user-id map-id)
-          open-by-root (group-by :root_id (filter #(= "open" (:status %)) pins))]
-      (->> (db/question-roots user-id map-id)
-        (mapv #(assoc % :pin-labels (mapv :label (open-by-root (:id %)))))
-        (sort-by #({"next" 0 "open" 1 "learned" 2} (:status %)))
-        vec))
-    []))
+          {open-pins "open" closed-pins "closed"} (group-by :status pins)
+          open-by-root (group-by :root_id open-pins)
+          closed-by-root (group-by :root_id closed-pins)]
+      {:roots (mapv #(map-root % open-by-root closed-by-root)
+                (view/trail (db/question-roots user-id map-id)))
+       :unplaced (count (open-by-root nil))})
+    {:roots [] :unplaced 0}))
 
 ;; ── Pin writes ─────────────────────────────────────────────────────
 
@@ -207,24 +225,27 @@
       {:error "That pin could not be changed."})))
 
 (defn teach-root!
-  "\"Teach me\" on `user-id`'s root (§6.3.7). Post: {:ok true} or {:error}."
+  "\"Teach me\" on `user-id`'s root (§6.3.7). A `learned` root is refused
+   (plans/question-map-tab.md §4.4.7). Post: {:ok true} or {:error}."
   [user-id root-id]
   (if (db/set-question-root-next! user-id root-id)
     (do (commands/bump! user-id :teach-question-root) {:ok true})
     {:error "That idea could not be selected."}))
 
 (defn set-root-known!
-  "\"I know it\" (`known?` true) or its undo (false) on `user-id`'s root.
-   A mark is written on the root's entity, which is created when the root has
-   none (§6.4.2.4), with the commit of `ref`, the file the reader is reading,
-   as its version (K2, plans/commit-range-walkthrough.md §6.8.2). Undo removes
-   the marks of both sources (§6.4.4)."
+  "\"I know this\" (`known?` true) or its undo (false) on `user-id`'s root.
+   A `self` mark is written on the root's entity, which is created when the
+   root has none (§6.4.2.4), with the commit of `ref`, the file the reader is
+   reading, as its version (K2, plans/commit-range-walkthrough.md §6.8.2).
+   On the `next` root it also moves `next` on (plans/question-map-tab.md
+   §4.4.5). Undo removes the `self` mark only, so a tutor's confirmation
+   stays (§4.4.6)."
   [user-id root-id known? ref]
   (if-let [entity-id (db/ensure-question-root-entity! user-id root-id)]
     (do (if known?
-          (db/set-known-mark! user-id entity-id "self"
+          (db/mark-root-known! user-id root-id entity-id
             (when ref {:repo-id (:repo-id ref) :sha (:sha ref)}))
-          (db/delete-known-marks! user-id entity-id))
+          (db/delete-known-mark! user-id entity-id "self"))
         (commands/bump! user-id :mark-question-root-known)
         {:ok true})
     {:error "That idea could not be marked."}))
@@ -410,6 +431,7 @@
                                      :citations (citations evidence citation-keys ref)))
                              (:new-roots p))
                 :relinks (into {} (keep (fn [l] (when-let [e (entity-of l)] [l e]))) unlinked)
-                :as-of-sha (:sha ref)))
+                :as-of-sha (:sha ref)
+                :run-uuid run-uuid))
             (commands/bump! user-id :apply-question-map)
             {:prose prose :problem nil}))))))

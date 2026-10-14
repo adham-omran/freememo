@@ -1,6 +1,7 @@
 (ns freememo.question-map-db-test
   "Question map contracts against PostgreSQL (plans/anchored-questions.md §6.1,
-   §6.3, §6.4). Every test skips when the database is down."
+   §6.3, §6.4, and plans/question-map-tab.md §4.4, §4.5). Every test skips
+   when the database is down."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
@@ -38,6 +39,7 @@
   `(if-not (db-up?)
      (is true "PostgreSQL is unavailable; integration assertion skipped")
      (do (#'db/setup-schema-question-pins!)
+         (#'db/setup-schema-known-ideas!)
          (let [~@(mapcat (fn [s] [s `(create-user!)]) syms)]
            (try ~@body
              (finally
@@ -176,3 +178,68 @@
           labels (set (map :label (db/list-kg-entities u nil 100)))]
       (is (contains? labels "Extracted idea"))
       (is (not (contains? labels "Diagnosed idea")) "§6.4.2.3"))))
+
+(defn- status-by-label [u map-id]
+  (into {} (map (juxt :label :status)) (db/question-roots u map-id)))
+
+(defn- three-roots!
+  "A map with roots A (next), B and C (open), each with its own entity.
+   Post: {:map-id :ids {label id} :entities {label entity-id}}."
+  [u]
+  (let [{:keys [repo]} (repo-file! u "a.md")
+        map-id (db/ensure-question-map! u repo "a.md")
+        entities (into {} (map (fn [l] [l (entity! u l)])) ["A" "B" "C"])]
+    (db/apply-question-map-plan! u map-id
+      {:new-roots (mapv (fn [l] {:label l :in-document? true :entity-id (entities l)})
+                    ["A" "B" "C"])
+       :pin-roots {} :learned #{} :next "A"})
+    {:map-id map-id :entities entities
+     :ids (into {} (map (juxt :label :id)) (db/question-roots u map-id))}))
+
+(deftest i-know-this-on-the-current-root-moves-next-on
+  (with-users [u]
+    (let [{:keys [map-id ids entities]} (three-roots! u)]
+      (db/set-known-mark! u (entities "B") "tutor")
+      (testing "§4.4.5: next skips a root with a mark of either source"
+        (is (db/mark-root-known! u (ids "A") (entities "A") nil))
+        (is (= {"A" "open" "B" "open" "C" "next"} (status-by-label u map-id))))
+      (testing "on an open root, the mark moves nothing"
+        (is (db/mark-root-known! u (ids "B") (entities "B") nil))
+        (is (= "next" ((status-by-label u map-id) "C"))))
+      (testing "with no open root left, the map has no next root"
+        (is (db/mark-root-known! u (ids "C") (entities "C") nil))
+        (is (= #{"open"} (set (vals (status-by-label u map-id))))))
+      (testing "another user's entity writes nothing"
+        (with-users [other]
+          (is (not (db/mark-root-known! other (ids "A") (entities "A") nil))))))))
+
+(deftest undo-removes-the-self-mark-only
+  (with-users [u other]
+    (let [e (entity! u "Ports")]
+      (db/set-known-mark! u e "self")
+      (db/set-known-mark! u e "tutor")
+      (is (zero? (db/delete-known-mark! other e "self")))
+      (is (= 1 (db/delete-known-mark! u e "self")) "§4.4.6")
+      (is (= ["tutor"] (mapv :source (jdbc/execute! db/ds
+                                       ["SELECT source FROM known_marks WHERE entity_id = ?" e]
+                                       opts)))))))
+
+(deftest a-learned-root-keeps-learned
+  (with-users [u]
+    (let [{:keys [map-id ids]} (three-roots! u)
+          learned-at #(:learned_at (jdbc/execute-one! db/ds
+                                     ["SELECT learned_at FROM question_roots WHERE id = ?" (ids "B")]
+                                     opts))]
+      (is (nil? (learned-at)) "§4.5.3: no time until the tutor sets it learned")
+      (db/apply-question-map-plan! u map-id
+        {:new-roots [] :pin-roots {} :learned #{"B"} :next nil})
+      (let [first-time (learned-at)]
+        (is (some? first-time))
+        (testing "§4.4.7: Teach me refuses a learned root and changes nothing"
+          (is (nil? (db/set-question-root-next! u (ids "B"))))
+          (is (= {"A" "next" "B" "learned" "C" "open"} (status-by-label u map-id))))
+        (testing "§4.5.3: Teach me on another root and a second confirmation keep the time"
+          (is (db/set-question-root-next! u (ids "C")))
+          (db/apply-question-map-plan! u map-id
+            {:new-roots [] :pin-roots {} :learned #{"B"} :next nil})
+          (is (= first-time (learned-at))))))))

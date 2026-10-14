@@ -8,7 +8,9 @@
    {:quote :anchor :source-doc :scroll? :id}, or nil. `:source-doc` is the
    document key [repo-id path] the quote came from, or nil for a map
    citation, which always belongs to the open file. The rendered pane locates the quote in the
-   snapshot it shows and outlines it. `:id` makes a repeated click a new value.")
+   snapshot it shows and outlines it. `:id` makes a repeated click a new value.
+
+   `!panel-view` is the assistant panel's tab, :chat or :map.")
 
 (defonce !finger (atom nil))
 
@@ -28,4 +30,17 @@
   "Ask the walkthrough canvas to show `passage`'s file and point at it."
   [passage]
   (reset! !canvas-request (assoc passage :id (random-uuid)))
+  nil)
+
+(defonce !panel-view
+  ;; Which tab of the assistant panel shows: :chat or :map
+  ;; (plans/question-map-tab.md §4.2.1). The Ask effect, the map's Teach
+  ;; actions and the palette set it from outside the tab bar.
+  (atom :chat))
+
+(defn show-view!
+  "Show the assistant panel's `view`, :chat or :map. Post: nil."
+  [view]
+  {:pre [(#{:chat :map} view)]}
+  (reset! !panel-view view)
   nil)

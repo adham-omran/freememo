@@ -165,6 +165,9 @@
                               (list 'knowledge 'questions doc-id)
                               (list 'knowledge 'questions))
        :knowledge-facts (list 'knowledge 'facts (:doc-id nav-map))
+       ;; /knowledge/known[/<entity-id>] (plans/known-ideas.md §3.1, §5.1).
+       :knowledge-known (list 'knowledge 'known)
+       :knowledge-known-idea (list 'knowledge 'known (:entity-id nav-map))
        ;; SearchPage seeds [mode kind query] from these segments.
        :search-query (list 'search "fuzzy" "all"
                        #?(:cljs (js/encodeURIComponent (:query nav-map))

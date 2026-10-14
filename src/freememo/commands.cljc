@@ -158,6 +158,24 @@
                            :data {:root-id :payload}
                            :table #{:question_roots}
                            :views #{:question-mutations}}
+     ;; The known ideas list and idea page (plans/known-ideas.md §1.7, §1.8).
+     ;; Not learned yet is the only write that takes `learned` from a root.
+     :mark-idea-not-learned {:label "Mark a known idea not learned" :class :mutation
+                             :palette-hidden true
+                             :data {:entity-id :payload}
+                             :table #{:known_marks :question_roots}
+                             :views #{:question-mutations}}
+     :undo-idea-self-mark {:label "Undo my mark on a known idea" :class :mutation
+                           :palette-hidden true
+                           :data {:entity-id :payload}
+                           :table #{:known_marks}
+                           :views #{:question-mutations}}
+     ;; The map tab (plans/question-map-tab.md §4.6.1). RightSidePanel consumes
+     ;; it, because the AssistantPanel is not mounted while the pane is closed:
+     ;; it opens the pane and shows the Map view. The rendered pane's preparer
+     ;; lists it only on a file that can have a map.
+     :show-question-map   {:label "Show question map" :class :query :exec :electric
+                           :when #{:viewer} :views #{}}
      :mark-question-root-known {:label "Mark a question-map idea known" :class :mutation
                                 :palette-hidden true
                                 :data {:root-id :payload :known? :payload}
@@ -676,6 +694,9 @@
      :go-library    {:label "Go to Library"  :class :nav :nav-tab :library}
      :go-knowledge  {:label "Go to Facts"    :class :nav :nav-tab :knowledge}
      :go-quiz       {:label "Go to Quiz"     :class :nav :nav-tab :quiz}
+     ;; A sub-view of Knowledge, so `run-nav!` names its route
+     ;; (plans/known-ideas.md §6.1).
+     :go-known-ideas {:label "Go to Known ideas" :class :nav :nav-tab :knowledge}
      :go-search     {:label "Go to Search"   :class :nav :nav-tab :search}
      :go-import     {:label "Go to Import"   :class :nav :nav-tab :import}
      :go-settings   {:label "Go to Settings" :class :nav :nav-tab :settings}

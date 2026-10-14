@@ -81,7 +81,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 45 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 49 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -136,6 +136,7 @@
    :question_roots
    :question_pins
    :known_marks
+   :flashcard_entities
    :settings])
 
 (def excluded-tables
@@ -479,6 +480,13 @@
                        :params 3 :order "t.question_id, t.fact_id"}
 
    :kg_reviews {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   ;; A card's link to the known idea it was made from (plans/known-ideas.md
+   ;; §1.3). Scoped through BOTH owned parents, as kg_question_facts is.
+   :flashcard_entities {:where (str "t.flashcard_id IN (" owned-flashcards ")"
+                                 " AND t.entity_id IN (SELECT e.id FROM kg_entities e"
+                                 " WHERE e.user_id = ?)")
+                        :params 2 :order "t.flashcard_id, t.entity_id"}
 
    :settings {:where "t.user_id = ?" :params 1 :order "t.key"}})
 
