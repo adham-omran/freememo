@@ -1,8 +1,8 @@
   services:
     postgres:
       # Pinned to the exact minor, not floating `16-alpine`, so the minor only
-      # moves when this line moves. deploy.sh no longer starts this service
-      # (deploy.sh:142), so it is the dev database only.
+      # moves when this line moves. No deploy starts this service, so it is the
+      # dev database only.
       image: postgres:16.14-alpine
       # pg_stat_statements counts statements for the done-checks in
       # plans/server-query-performance.md (1.5). A database still needs

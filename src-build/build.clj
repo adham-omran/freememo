@@ -7,8 +7,8 @@
 (def electric-user-version (b/git-process {:git-args "describe --tags --long --always --dirty"}))
 
 ;; Deployed short commit SHA, baked into electric-manifest.edn for the About
-;; readout. nil under a Docker build (context has no .git) — the :git-commit arg
-;; from deploy.sh supplies it there, same as :version.
+;; readout. nil under a Docker build (context has no .git) — the deploy's
+;; :git-commit arg supplies it there, same as :version.
 (def default-git-commit (b/git-process {:git-args "rev-parse --short HEAD"}))
 
 (defn build-client "
