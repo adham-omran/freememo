@@ -11,6 +11,7 @@
    [taoensso.telemere :as tel]
    [clojure.set :as set]
    [clojure.string :as str]
+   [clojure.walk :as walk]
    [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-digest :as digest]
    [freememo.cloze :as cloze]
@@ -5201,12 +5202,23 @@
 ;; Sources — bibliography records (CSL-JSON shaped)
 ;; ---------------------------------------------------------------------------
 
-(defn- ->jsonb
-  "Wrap a Clojure value as a PostgreSQL JSONB parameter."
+(defn- strip-nul
+  "`v` with every NUL character removed from its strings."
   [v]
-  (doto (PGobject.)
-    (.setType "jsonb")
-    (.setValue (json/generate-string (or v {})))))
+  (walk/postwalk #(if (string? %) (str/replace % "\u0000" "") %) v))
+
+(defn- ->jsonb
+  "Wrap a Clojure value as a PostgreSQL JSONB parameter.
+   PostgreSQL rejects `\\u0000` in JSONB and fails the whole statement, so a
+   value holding NUL is encoded again with it removed. Only a value whose JSON
+   holds one pays for the walk."
+  [v]
+  (let [json-text (json/generate-string (or v {}))]
+    (doto (PGobject.)
+      (.setType "jsonb")
+      (.setValue (if (str/includes? json-text "\\u0000")
+                   (json/generate-string (strip-nul (or v {})))
+                   json-text)))))
 
 (defn- pgobject->clj
   "Parse a PGobject (jsonb) back to a Clojure value. Keywordizes keys.
