@@ -96,7 +96,9 @@
          total scroll height equals item-count rows; the body table is mounted at
          every count; at count 0 the container is at least `empty-rows` rows
          tall, so `empty-message` shows; header and body column boundaries agree
-         in Blink and WebKit."
+         in Blink and WebKit; while the body holds no row and no empty message —
+         the count or the first row reads are still pending — CSS paints
+         skeleton rows on `.tape-table-scroll` (index.css), with no DOM node."
   [headers grid-cols item-count reset-key empty-message Row]
   (e/client
     (dom/table
@@ -116,7 +118,12 @@
       ;; overlay below needs it and ten other sites share that class.
       ;; min-height is NOT here: it depends on item-count, so the props map
       ;; below owns it. Two maps that both set it race at mount.
-      (dom/props {:style {:flex "1" :overflow-y "auto"
+      ;; `tape-table-scroll` carries the loading placeholder (index.css). It is
+      ;; not `.tape-scroll`, because that class is shared with virtual-scroll
+      ;; sites that are not TapeTable. Electric counts class tokens per node, so
+      ;; two maps can both set :class.
+      (dom/props {:class "tape-table-scroll"
+                  :style {:flex "1" :overflow-y "auto"
                           :max-height (str (* visible-rows row-height) "px")
                           :scrollbar-gutter "stable" :position "relative"}})
       (let [[offset limit] (Scroll-window row-height item-count dom/node
