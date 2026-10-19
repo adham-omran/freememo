@@ -391,7 +391,10 @@
         {:strs [to scm rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
                                                 :json-body {:major desktop-version/desktop-major})
                                       :full-download)]
-    (swap! !status assoc :progress {:total-rows rows :total-bytes bytes})
+    ;; An older server reports no totals. Leave them out rather than nil.
+    (swap! !status assoc :progress (cond-> {}
+                                     (number? rows) (assoc :total-rows rows)
+                                     (number? bytes) (assoc :total-bytes bytes)))
     (apply/with-apply-tx db/ds
       (fn [tx]
         (doseq [table (reverse fmt/synced-tables)]
