@@ -51,13 +51,20 @@
   (atom {:state :idle :last-sync-at nil :error nil :license nil}))
 
 (defn status
-  "What Settings and Electron show: the sync state, the last error, and the
-   cached license (13.6). The cache is what an offline launch reads; the
-   server stays the authority for every operation."
+  "What Settings and Electron show: the sync state, the last error, the
+   cached license (13.6), and download progress.
+   `:library-ready` is true once a download has committed, the first one
+   included. Electron keeps the app closed until then, so nobody works in an
+   empty library that is about to be replaced.
+   `:progress` holds `:downloaded` rows and `:downloaded-bytes`, and during a
+   full download the totals `:total-rows` and `:total-bytes`.
+   The license cache is what an offline launch reads; the server stays the
+   authority for every operation."
   []
   (let [row (jdbc/execute-one! db/ds ["SELECT checkpoint, last_sync_at, last_error, license,
                                               full_sync_required FROM sync_state"] opts)]
-    (merge {:last-sync-at (some-> (:last_sync_at row) str)
+    (merge {:library-ready (pos? (or (:checkpoint row) 0))
+            :last-sync-at (some-> (:last_sync_at row) str)
             :error (:last_error row)
             :full-sync-required (:full_sync_required row)
             :license (some-> (:license row) str json/parse-string)
@@ -132,6 +139,7 @@
       (throw (ex-info (str "Blob download failed: HTTP " (:status resp))
                {:type ::step-failed :step :blob :status (:status resp)})))
     (with-open [in ^java.io.InputStream (:body resp)] (io/copy in file))
+    (swap! !status update-in [:progress :downloaded-bytes] (fnil + 0) (.length file))
     file))
 
 (defn- fetch-blobs
@@ -318,7 +326,7 @@
                     answer (ok-body! (call! :post "/api/sync/upload"
                                        :json-body {:base base :rows batch :major desktop-version/desktop-major})
                              :upload)]
-                (swap! !status assoc :progress {:uploaded (+ (get-in @!status [:progress :uploaded] 0) (count batch))})
+                (swap! !status update-in [:progress :uploaded] (fnil + 0) (count batch))
                 (settle-upload! user-id batch answer)
                 (conj xids (get answer "xid"))))
       [] (batches rows))))
@@ -350,7 +358,8 @@
           (when (seq (:rejected r))
             (tel/log! {:level :warn :id ::download-rejected :data {:rejected (map #(dissoc % "r") (:rejected r))}}
               "Some downloaded rows did not apply"))
-          (swap! !status assoc :progress {:downloaded (+ (get-in @!status [:progress :downloaded] 0) (count rows))})
+          (swap! !status update-in [:progress :downloaded] (fnil + 0) (count rows))
+          (commands/bump-channels! user-id #{:desktop-mutations})
           (if cursor
             (recur cursor to touched false)
             {:to to :touched touched}))))))
@@ -379,9 +388,13 @@
    without a trace."
   []
   (let [user-id (local-user-id)
-        {:strs [to scm]} (ok-body! (call! :post "/api/sync/full/download"
-                                     :json-body {:major desktop-version/desktop-major})
-                           :full-download)]
+        {:strs [to scm rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
+                                                :json-body {:major desktop-version/desktop-major})
+                                      :full-download)]
+    ;; An older server reports no totals. Leave them out rather than nil.
+    (swap! !status assoc :progress (cond-> {}
+                                     (number? rows) (assoc :total-rows rows)
+                                     (number? bytes) (assoc :total-bytes bytes)))
     (apply/with-apply-tx db/ds
       (fn [tx]
         (doseq [table (reverse fmt/synced-tables)]

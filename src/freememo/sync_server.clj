@@ -367,13 +367,30 @@
         (commands/bump-channels! user-id (apply/channels-for fmt/synced-tables))
         (json-response 200 {:base base :scm scm})))))
 
+(def ^:private blob-size-columns
+  {:media "byte_size" :topic_files "file_size" :topic_videos "byte_size" :topic_epubs "byte_size"})
+
+(defn account-bytes
+  "The bytes of every file the account stores, as a full download moves them."
+  [conn user-id]
+  (reduce + (for [[table col] blob-size-columns
+                  :let [{:keys [where]} (sync-scope table)]]
+              (or (:n (jdbc/execute-one! conn
+                        (into [(format "SELECT sum(t.%s)::bigint AS n FROM %s t WHERE %s" col (name table) where)]
+                          (scope-params table user-id))
+                        opts))
+                  0))))
+
 (defn full-download-handler
   "Start a full download (Anki's download). The desktop clears its own data
-   and downloads from usn 0. This route only fixes the window and the epoch.
-   Post: {:to :scm}."
+   and downloads from usn 0. This route fixes the window and the epoch, and
+   says how much is coming, so the desktop can show progress.
+   Post: {:to :scm :rows :bytes}."
   [request]
   (with-access request :full-download
     (fn [{:keys [user-id]} _ _]
       (json-response 200 {:to (snapshot-xmin db/ds)
                           :scm (:scm (jdbc/execute-one! db/ds ["SELECT scm FROM desktop_accounts WHERE user_id = ?"
-                                                                user-id] opts))}))))
+                                                                user-id] opts))
+                          :rows (reduce + (vals (server-counts db/ds user-id {})))
+                          :bytes (account-bytes db/ds user-id)}))))
