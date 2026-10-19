@@ -26,6 +26,8 @@
    [freememo.occlusion-ordinals :as ord]
    [freememo.page-merge :as page-merge]
    [freememo.priority :as priority]
+   [freememo.desktop-version :as desktop-version]
+   [freememo.sync-schema :as sync-schema]
    [freememo.text :as text])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
@@ -2433,7 +2435,7 @@
   []
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS document_summaries (
-      root_topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      root_topic_id BIGINT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       total_items BIGINT NOT NULL DEFAULT 0,
       done_items BIGINT NOT NULL DEFAULT 0,
@@ -2449,8 +2451,8 @@
   ;; Resolve a topic to its current root. Deletes pass the nearest surviving
   ;; parent, so this function never needs deleted rows to reconstruct ancestry.
   (jdbc/execute! ds ["
-    CREATE OR REPLACE FUNCTION freememo_root_topic_id(p_topic_id INTEGER)
-    RETURNS INTEGER
+    CREATE OR REPLACE FUNCTION freememo_root_topic_id(p_topic_id BIGINT)
+    RETURNS BIGINT
     LANGUAGE SQL
     STABLE
     AS $$
@@ -2474,7 +2476,7 @@
   ;; correctness path. Statement triggers keep bulk imports at one refresh per
   ;; affected root rather than one refresh per inserted row.
   (jdbc/execute! ds [(str "
-    CREATE OR REPLACE FUNCTION freememo_refresh_document_summaries(p_root_ids INTEGER[])
+    CREATE OR REPLACE FUNCTION freememo_refresh_document_summaries(p_root_ids BIGINT[])
     RETURNS VOID
     LANGUAGE plpgsql
     AS $$
@@ -2553,7 +2555,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       SELECT array_agg(DISTINCT freememo_root_topic_id(inserted.id))
       INTO affected
@@ -2567,7 +2569,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       WITH RECURSIVE changed AS (
         SELECT old_rows.id, old_rows.parent_id
@@ -2619,7 +2621,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       SELECT array_agg(DISTINCT root_id)
       INTO affected
@@ -2642,7 +2644,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       IF TG_OP = 'INSERT' THEN
         SELECT array_agg(DISTINCT root_topic_id) INTO affected FROM inserted;
@@ -2706,6 +2708,15 @@
     REFERENCING OLD TABLE AS deleted
     FOR EACH STATEMENT
     EXECUTE FUNCTION freememo_refresh_summaries_after_card_write()"])
+
+  ;; The INTEGER signatures are gone for good: the BIGINT ones above replace
+  ;; them. A return type cannot change under CREATE OR REPLACE, so the old
+  ;; overloads are dropped by name and argument types. Nothing depends on them
+  ;; in the catalog: the trigger functions call them by name at run time, and
+  ;; they were just replaced to call the BIGINT versions. No CASCADE, so a
+  ;; dependency that does exist fails loudly instead of dropping a trigger.
+  (jdbc/execute! ds ["DROP FUNCTION IF EXISTS freememo_root_topic_id(integer)"])
+  (jdbc/execute! ds ["DROP FUNCTION IF EXISTS freememo_refresh_document_summaries(integer[])"])
 
   ;; Rebuild once at boot. This repairs an interrupted install and applies a
   ;; changed summary definition to rows that an older trigger maintained.
@@ -3081,6 +3092,150 @@
                    :data {:error (.getMessage e)}}
           "Could not install the flashcard uniqueness indexes — card dedupe is OFF")))))
 
+(defn- setup-schema-sync!
+  "Tables for desktop row sync, sign-in and licensing
+   (plans/electron-local-db-sync.md §1, §3, §5, §13), then the sync installer:
+   BIGINT ids, usn/mtime columns and the row triggers.
+
+   Every peer creates every table. A table one peer never writes stays empty
+   there, which keeps one schema for both and one disposition test.
+   Pre:  every other setup-schema step has run, because the installer converts
+         and triggers the tables they create."
+  []
+  ;; A topic version a concurrent sync edit replaced (1.7). Write-behind, like
+  ;; card_versions: it holds the losing rendition, never the current one.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_versions (
+      id BIGSERIAL PRIMARY KEY,
+      topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      title TEXT,
+      content TEXT,
+      superseded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_versions_topic
+                      ON topic_versions(topic_id, superseded_at DESC, id DESC)"])
+
+  ;; One row per deleted synced row (1.4). row_key is the row's primary key as
+  ;; a JSON object, so composite keys need no second table. user_id is the
+  ;; owner on the server and NULL on a desktop, whose one account is implied.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_graves (
+      table_name TEXT NOT NULL,
+      row_key JSONB NOT NULL,
+      user_id BIGINT,
+      usn BIGINT NOT NULL,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (table_name, row_key)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_sync_graves_user_usn
+                      ON sync_graves(user_id, usn)"])
+
+  ;; Rows a sync could not apply, kept whole for Restore (§5).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id BIGSERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      row_key JSONB NOT NULL,
+      row_data JSONB NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolution TEXT
+    )"])
+
+  ;; The desktop's one sync binding. checkpoint is the server xmin the last
+  ;; download reached (2.2); scm is the server's sync epoch (2.8).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_state (
+      singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+      user_id BIGINT,
+      server_origin TEXT,
+      checkpoint BIGINT NOT NULL DEFAULT 0,
+      scm TEXT,
+      full_sync_required BOOLEAN NOT NULL DEFAULT true,
+      last_sync_at TIMESTAMPTZ,
+      last_error TEXT,
+      license JSONB
+    )"])
+
+  ;; One token per desktop install (3.2). Only a SHA-256 of the token is kept.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_tokens (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      device_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_tokens_user
+                      ON desktop_tokens(user_id)"])
+
+  ;; PKCE authorization codes (3.1). Single use, 60 seconds.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_auth_codes (
+      code_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      code_challenge TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    )"])
+
+  ;; The server's ledger of id blocks (1.2). A block is [block_start,
+  ;; block_end), bound to the token it was given to.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS id_blocks (
+      block_start BIGINT PRIMARY KEY,
+      block_end BIGINT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_id BIGINT NOT NULL REFERENCES desktop_tokens(id) ON DELETE CASCADE,
+      allocated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_id_blocks_user ON id_blocks(user_id)"])
+  (jdbc/execute! ds ["CREATE SEQUENCE IF NOT EXISTS id_block_seq AS bigint MINVALUE 0 START 0"])
+
+  ;; The desktop's unspent id ranges; freememo_next_id() draws from them.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS local_id_blocks (
+      block_start BIGINT PRIMARY KEY,
+      block_end BIGINT NOT NULL,
+      next_id BIGINT NOT NULL
+    )"])
+
+  ;; Per account on the server: the sync epoch, which a full upload replaces
+  ;; (2.8), and the trial start, set at the first desktop sign-in (13.5).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_accounts (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      scm TEXT NOT NULL,
+      trial_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      grace_started_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_accounts ADD COLUMN IF NOT EXISTS grace_started_at TIMESTAMPTZ"])
+
+  ;; One row per license bought (13.1). order_reference_id is unique, so a
+  ;; replayed Wayl webhook cannot grant twice.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_licenses (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      major_from INTEGER NOT NULL,
+      major_to INTEGER NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('wayl', 'credits')),
+      order_reference_id TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_licenses_user
+                      ON desktop_licenses(user_id)"])
+  ;; A Wayl order buys credits or a desktop license (13.1.3).
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      kind TEXT NOT NULL DEFAULT 'credits'
+                      CHECK (kind IN ('credits', 'desktop_license'))"])
+
+  (sync-schema/install! ds))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -3111,6 +3266,8 @@
   (setup-schema-pin-numbering!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
+  ;; After every table exists: it converts ids and triggers all of them.
+  (setup-schema-sync!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -3156,8 +3313,9 @@
           FROM documents
           ON CONFLICT (id) DO NOTHING"]))
 
-    ;; Reset sequence past max document ID to avoid conflicts with auto-generated IDs
-    (jdbc/execute! tx ["SELECT setval('topics_id_seq', (SELECT COALESCE(MAX(id), 0) FROM topics))"])
+    ;; Reset sequence past max document ID to avoid conflicts with auto-generated IDs.
+    ;; Ids from 2^40 up belong to desktop clients, so they never move the server sequence.
+    (jdbc/execute! tx ["SELECT setval('topics_id_seq', (SELECT COALESCE(MAX(id), 0) FROM topics WHERE id < 1099511627776))"])
 
     ;; 2. Migrate document files → topic_files
     (let [file-count (:count (jdbc/execute-one! tx
@@ -3363,9 +3521,10 @@
         WHERE kind = 'page'
           AND parent_id IN (SELECT id FROM topics WHERE kind IN ('web', 'wikipedia'))"])
 
-    ;; 6. Reset sequence
+    ;; 6. Reset sequence (ids from 2^40 up belong to desktop clients, so they
+    ;;    never move the server sequence)
     (jdbc/execute! tx
-      ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics), 1))"])
+      ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics WHERE id < 1099511627776), 1))"])
 
     ;; 7. Rename old tables
     (tel/log! :info "Renaming old tables")
@@ -4174,13 +4333,13 @@
                                  chat-id]
                                 {:builder-fn rs/as-unqualified-maps}))
             _ (jdbc/execute! tx ["SELECT id FROM assistant_chats WHERE id = ANY(?) FOR UPDATE"
-                                 (int-array subtree)])
+                                 (long-array subtree)])
             stopped (mapv #(stop-active-run-in! tx user-id %) subtree)
             entry-id (insert-undo-entry-raw! tx user-id "delete-assistant-chat"
                        "assistant-chat" [chat-id] {:title (:title chat)
                                                    :count (count subtree)})]
         (jdbc/execute! tx ["UPDATE assistant_chats SET staged_delete_id = ? WHERE id = ANY(?)"
-                           entry-id (int-array subtree)])
+                           entry-id (long-array subtree)])
         (prune-undo-log! tx user-id)
         {:entry-id entry-id :title (:title chat)
          :stopped? (boolean (some :stopped stopped))
@@ -4417,13 +4576,32 @@
     new-bal))
 
 (defn insert-credit-order!
-  "Create a pending order. Returns the row."
-  [user-id reference-id amount-iqd]
-  (jdbc/execute-one! ds
-    (sql/format {:insert-into :credit_orders
-                 :values [{:user_id user-id :reference_id reference-id
-                           :amount_iqd amount-iqd :status "pending"}]
-                 :returning [:*]})))
+  "Create a pending order. `kind` is \"credits\" (the default) or
+   \"desktop_license\" (plans/electron-local-db-sync.md 13.1.3). Returns the row."
+  ([user-id reference-id amount-iqd]
+   (insert-credit-order! user-id reference-id amount-iqd "credits"))
+  ([user-id reference-id amount-iqd kind]
+   (jdbc/execute-one! ds
+     (sql/format {:insert-into :credit_orders
+                  :values [{:user_id user-id :reference_id reference-id
+                            :amount_iqd amount-iqd :status "pending" :kind kind}]
+                  :returning [:*]}))))
+
+(defn grant-desktop-license!
+  "Write the license a purchase buys (13.1, 13.2): the current desktop major
+   and the next one.
+   Pre:  `tx` is the purchase's own transaction, so the payment and the
+         license commit together (13.1.1, 13.1.2).
+   Post: one desktop_licenses row per order. A replayed order reference writes
+         nothing. Returns the new row's id, or nil on a replay."
+  [tx user-id source order-reference-id]
+  (:desktop_licenses/id
+   (jdbc/execute-one! tx ["INSERT INTO desktop_licenses
+                             (user_id, major_from, major_to, source, order_reference_id)
+                           VALUES (?, ?, ?, ?, ?)
+                           ON CONFLICT (order_reference_id) DO NOTHING RETURNING id"
+                          user-id desktop-version/desktop-major
+                          (inc desktop-version/desktop-major) source order-reference-id])))
 
 (defn set-order-wayl-fields!
   "Record Wayl's code/link-id on a pending order after link creation."
@@ -4442,8 +4620,10 @@
    the order row; a redelivered webhook (already complete) is a no-op.
    Pre:  reference-id from a verified webhook.
    Post: on first completion the order is 'complete' and balance += amount.
-   Returns {:credited true :amount n :user-id u} or {:credited false :reason
-            :already|:unknown}."
+         A desktop_license order writes its license instead of crediting
+         (plans/electron-local-db-sync.md 13.1.1).
+   Returns {:credited true :amount n :user-id u}, {:licensed true :user-id u}
+            or {:credited false :reason :already|:unknown}."
   [reference-id]
   (jdbc/with-transaction [tx ds]
     (let [order (jdbc/execute-one! tx
@@ -4452,6 +4632,15 @@
       (cond
         (nil? order) {:credited false :reason :unknown}
         (= "complete" (:status order)) {:credited false :reason :already}
+
+        (= "desktop_license" (:kind order))
+        (let [user-id (:user_id order)]
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET status = 'complete', completed_at = CURRENT_TIMESTAMP
+              WHERE reference_id = ?" reference-id])
+          (grant-desktop-license! tx user-id "wayl" reference-id)
+          {:credited false :licensed true :amount 0 :user-id user-id})
+
         :else
         (let [user-id (:user_id order)
               amount (:amount_iqd order)]
@@ -4521,11 +4710,11 @@
          none is given out again."
   ([tx] (retire-legacy-pin-labels! tx nil))
   ([tx map-ids]
-   (let [ids (when map-ids (into-array Integer (map int map-ids)))
+   (let [ids (when map-ids (long-array map-ids))
          seen (jdbc/execute-one! tx
                 ["UPDATE question_pins p SET tutor_seen_at = now()
                    WHERE p.tutor_seen_at IS NULL
-                     AND (?::int[] IS NULL OR p.map_id = ANY(?::int[]))
+                     AND (?::bigint[] IS NULL OR p.map_id = ANY(?::bigint[]))
                      AND EXISTS (SELECT 1 FROM question_roots r WHERE r.map_id = p.map_id)"
                  ids ids])
          retired (jdbc/execute-one! tx
@@ -4533,7 +4722,7 @@
                      SELECT m.id, n, NULL, '', NULL
                        FROM question_maps m
                        CROSS JOIN LATERAL generate_series(1, m.next_label - 1) AS n
-                      WHERE (?::int[] IS NULL OR m.id = ANY(?::int[]))
+                      WHERE (?::bigint[] IS NULL OR m.id = ANY(?::bigint[]))
                         AND NOT EXISTS (SELECT 1 FROM question_pins p
                                          WHERE p.map_id = m.id AND p.label = n)
                      ON CONFLICT (map_id, label) DO NOTHING"
@@ -5060,7 +5249,7 @@
     ["UPDATE users SET usage_bytes = GREATEST(0, usage_bytes + ?) WHERE id = ?"
      (long delta) user-id]))
 
-(defn- subtree-file-bytes
+(defn subtree-file-bytes
   "Sum of stored bytes across the topic subtree rooted at id (including id).
    Returns 0 when nothing is found.
 
@@ -5539,19 +5728,20 @@
    (content-toolbar-helpers/create-extract-topic-safe!), so that test would
    block the nested case it exists to serve.
 
-   The seed list binds as ONE int4[] parameter through `= ANY(?)`, not one
-   placeholder per id. `topics.id` is SERIAL (int4), so every real id fits. An
+   The seed list binds as ONE int8[] parameter through `= ANY(?)`, not one
+   placeholder per id. `topics.id` is BIGINT (int4 on a database the id
+   migration has not reached; `int4 = ANY(int8[])` still works). An
    IN-list would have put the whole card set under the 65 535 bound-parameter
    ceiling this file documents for bulk inserts.
 
    Pre:  topic-ids is a collection of topic ids. nils and duplicates are dropped.
-         Every remaining id fits in an int4 — a wider value is a caller bug and
-         throws here rather than silently missing.
+         Every remaining id is an integer that fits in a long. A value that does
+         not (a string, a double) throws here rather than silently missing.
    Post: {topic-id page-number}, holding ONLY the ids that resolve — an id with
          no PDF page ancestor is absent, never mapped to nil. Exactly one
          statement with exactly one parameter, whatever the collection size."
   [topic-ids]
-  (let [ids (into [] (comp (remove nil?) (distinct) (map int)) topic-ids)]
+  (let [ids (into [] (comp (remove nil?) (distinct) (map long)) topic-ids)]
     (if (empty? ids)
       {}
       (into {}
@@ -5569,7 +5759,7 @@
                AND a.page_number IS NOT NULL
                AND p.kind = 'pdf'
              ORDER BY a.seed, a.depth"
-           (int-array ids)]
+           (long-array ids)]
           {:builder-fn rs/as-unqualified-maps})))))
 
 (defn clone-source!
@@ -6471,7 +6661,7 @@
           (jdbc/execute-one! connectable
             (into [(str "UPDATE flashcards AS f SET local_current_digest = v.digest "
                      "FROM (VALUES "
-                     (str/join "," (repeat (count batch) "(?::int, ?::char(64))"))
+                     (str/join "," (repeat (count batch) "(?::bigint, ?::char(64))"))
                      ") AS v(id, digest) WHERE f.id = v.id")]
               (mapcat identity batch))))
         (count pairs)))))
@@ -6818,7 +7008,7 @@
 ;; an explicit `tx` so a whole collection commits or rolls back as one unit.
 
 (defn reserve-topic-ids!
-  "Draw `n` ids from the topics id sequence without inserting anything.
+  "Draw `n` ids the way an INSERT into topics would, without inserting anything.
 
    Exists so an importer can resolve references BETWEEN rows before writing any
    of them. A documentation build's pages link to each other, so rewriting one
@@ -6826,19 +7016,33 @@
    is inserting every row and then UPDATEing its content, which doubles the
    write for a 2000-page build.
 
-   Pre : `n` >= 0.
-   Post: a vector of `n` ids, in ascending order, none of them in use. Ids are
-         consumed whether or not the caller inserts — a failed import burns
-         them, which is what a sequence is for and why this needs no cleanup.
-   Invariant: reads through `pg_get_serial_sequence`, so the sequence's name is
-         not duplicated here. Runs outside any transaction on purpose: a
-         sequence does not roll back, so holding one open would buy nothing."
+   Pre : `n` >= 0. `topics.id` has a column default.
+   Post: a vector of `n` ids, in the order the default produced them, none of
+         them in use. Ids are consumed whether or not the caller inserts, so a
+         failed import burns them. That is what a sequence is for, and it needs
+         no cleanup.
+   Invariant: evaluates the column DEFAULT of `topics.id`, read from the
+         catalog on each call. On a server that default is `nextval` of the
+         topics sequence. On a desktop client it is a function that draws from
+         the client's own id block. So the ids come from the right range on
+         both, and no sequence name is written here. The expression comes from
+         `pg_get_expr`, never from a caller. Runs outside any transaction on
+         purpose: a sequence does not roll back, so holding one open would buy
+         nothing."
   [n]
   (if (pos? (long n))
-    (mapv (comp val first)
-      (jdbc/execute! ds
-        ["SELECT nextval(pg_get_serial_sequence('topics','id')) AS id
-          FROM generate_series(1, ?)" n]))
+    (let [default-expr (:expr (jdbc/execute-one! ds
+                                ["SELECT pg_get_expr(d.adbin, d.adrelid) AS expr
+                                    FROM pg_attrdef d
+                                    JOIN pg_attribute a
+                                      ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+                                   WHERE d.adrelid = 'topics'::regclass AND a.attname = 'id'"]
+                                {:builder-fn rs/as-unqualified-maps}))]
+      (when-not default-expr
+        (throw (ex-info "topics.id has no column default" {:table "topics"})))
+      (mapv (comp val first)
+        (jdbc/execute! ds
+          [(str "SELECT " default-expr " AS id FROM generate_series(1, ?)") n])))
     []))
 
 (defn insert-topic-rows!
@@ -8605,7 +8809,7 @@
          All mode returns the complete tree.
    Invariant: :has_children reports undisclosed children without fetching them."
   [user-id {:keys [mode ids]}]
-  (let [expanded-ids (int-array (map int ids))]
+  (let [expanded-ids (long-array ids)]
     (jdbc/execute! ds
       ["SELECT t.id, t.parent_id, t.title, t.kind, t.status, t.created_at,
                t.dismissed, t.page_number, t.last_review_at,
@@ -10540,7 +10744,7 @@
         [(str commit-subtree-cte "
           UPDATE topics t SET page_number = NULL
            WHERE t.id = ANY(?) AND t.user_id = ? AND t.id IN (SELECT id FROM sub)")
-         commit-id user-id (into-array Integer (map int ids)) user-id]))))
+         commit-id user-id (long-array ids) user-id]))))
 
 (defn move-repo-rows!
   "Re-place rows of `user-id`'s commit subtree after its selection widened
@@ -10561,12 +10765,12 @@
         [(str commit-subtree-cte "
           UPDATE topics t
              SET parent_id = m.parent_id, title = m.title, page_number = m.ordinal
-            FROM unnest(?::int[], ?::int[], ?::text[], ?::int[]) AS m(id, parent_id, title, ordinal)
+            FROM unnest(?::bigint[], ?::bigint[], ?::text[], ?::int[]) AS m(id, parent_id, title, ordinal)
            WHERE t.id = m.id AND t.user_id = ? AND t.id IN (SELECT id FROM sub)
              AND m.parent_id IN (SELECT id FROM sub)")
          commit-id user-id
-         (into-array Integer (map (comp int :id) moves))
-         (into-array Integer (map (comp int :parent-id) moves))
+         (long-array (map :id moves))
+         (long-array (map :parent-id moves))
          (into-array String (map :title moves))
          (into-array Integer (map (comp int :ordinal) moves))
          user-id]))))
@@ -11532,7 +11736,7 @@
   [user-id extraction-ids]
   (if (empty? extraction-ids)
     0
-    (let [ids (int-array extraction-ids)]
+    (let [ids (long-array extraction-ids)]
       (jdbc/with-transaction [tx ds]
         (let [marked (:next.jdbc/update-count
                       (jdbc/execute-one! tx
@@ -12627,10 +12831,17 @@
 ;; nothing — inside an Electric server thunk that kills the session.
 
 (defn- int-array-value
-  "HoneySQL value for an INTEGER[] column.
+  "HoneySQL value for an INTEGER[] column of small numbers (page numbers).
+   Not for ids: use `id-array-value`.
+   Post: an expression valid for both empty and non-empty `ns`."
+  [ns]
+  (if (seq ns) [:array (vec ns)] [:raw "'{}'::integer[]"]))
+
+(defn- id-array-value
+  "HoneySQL value for a BIGINT[] column holding row ids.
    Post: an expression valid for both empty and non-empty `ids`."
   [ids]
-  (if (seq ids) [:array (vec ids)] [:raw "'{}'::integer[]"]))
+  (if (seq ids) [:array (vec ids)] [:raw "'{}'::bigint[]"]))
 
 (defn- text-array-value
   "HoneySQL value for a TEXT[] column; elements are UTF-8 sanitised.
@@ -12828,7 +13039,7 @@
     (sql/format {:update :kg_answers
                  :set {:verdict verdict
                        :explanation (sanitize-utf8 explanation)
-                       :missed_fact_ids (int-array-value missed-fact-ids)
+                       :missed_fact_ids (id-array-value missed-fact-ids)
                        :matched_keywords (text-array-value matched-keywords)
                        :graded_at [:now]}
                  :where [:= :id answer-id]}))
@@ -13048,7 +13259,7 @@
                JOIN topics root ON root.id = f.root_topic_id
                WHERE root.user_id = ? AND f.id = ANY(?) AND " (card-quiz-where "f")
           " ORDER BY f.id")
-         user-id (into-array Integer (map int flashcard-ids))]
+         user-id (long-array flashcard-ids)]
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn- load-question-memory!
@@ -13193,7 +13404,7 @@
                          :user_answer (some-> (:user-answer record) sanitize-utf8)
                          :explanation (some-> (:explanation record) sanitize-utf8)
                          :duration_ms (clamp-duration-ms (:duration-ms record))
-                         :missed_fact_ids (int-array-value (:missed-fact-ids record))
+                         :missed_fact_ids (id-array-value (:missed-fact-ids record))
                          ;; The wording as asked. A cloze card stores its RAW text —
                          ;; with `ord` alongside, history can re-derive the exact
                          ;; prompt, and a later edit cannot rewrite the record.
@@ -14549,7 +14760,7 @@
                              rid map-id pin-label]))
         (let [learned-ids (vec (keep root-id learned))
               closed (if (seq learned-ids)
-                       (let [ids (into-array Integer (map int learned-ids))]
+                       (let [ids (long-array learned-ids)]
                          ;; `learned_at` keeps the time a root FIRST became
                          ;; learned; a reply that confirms it again moves nothing.
                          (jdbc/execute! tx ["UPDATE question_roots
@@ -14724,7 +14935,7 @@
           FROM known_marks k JOIN kg_entities e ON e.id = k.entity_id
          WHERE e.user_id = ? AND k.entity_id = ANY(?)
          ORDER BY e.label, k.source"
-       user-id (into-array Integer (map int entity-ids))]
+       user-id (long-array entity-ids)]
       {:builder-fn rs/as-unqualified-maps})))
 
 ;; ── Known ideas (plans/known-ideas.md) ─────────────────────────────
@@ -14733,7 +14944,7 @@
   (if a (vec (.getArray a)) []))
 
 (defn- entity-id-array [ids]
-  (into-array Integer (map int ids)))
+  (long-array ids))
 
 (defn known-ideas
   "The known ideas of `user-id` (known-ideas §1.5): each of their entities with
@@ -15294,7 +15505,7 @@
     (let [rows (jdbc/execute! tx
                  [(str "SELECT id, walkthrough_id, position FROM walkthrough_concepts
                          WHERE id = ANY(?) AND " owned-walkthrough-clause " FOR UPDATE")
-                  (into-array Integer [(int from-id) (int into-id)]) user-id]
+                  (long-array [from-id into-id]) user-id]
                  {:builder-fn rs/as-unqualified-maps})
           by-id (into {} (map (juxt :id identity)) rows)
           from (by-id from-id)

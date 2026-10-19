@@ -35,7 +35,8 @@
          no order state is mutated here (caller owns the credit_orders row).
          When `:currency-suffix?` is true, the returned :url has `currency=usd`
          appended for non-IQ checkout-page display."
-  [{:keys [reference-id amount-iqd webhook-url redirection-url currency-suffix?]}]
+  [{:keys [reference-id amount-iqd webhook-url redirection-url currency-suffix? label]
+    :or {label "FreeMemo credits"}}]
   (try
     (let [token (config/wayl-merchant-token)
           secret (config/wayl-webhook-secret)]
@@ -46,7 +47,7 @@
                   :total amount-iqd
                   :currency "IQD"
                   :customParameter ""
-                  :lineItem [{:label "FreeMemo credits" :amount amount-iqd :type "increase"}]
+                  :lineItem [{:label label :amount amount-iqd :type "increase"}]
                   :webhookUrl webhook-url
                   :webhookSecret secret
                   :redirectionUrl redirection-url}

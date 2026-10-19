@@ -24,6 +24,7 @@
    Failures are `ex-info` with `:type ::forge-failure` and a message written for
    the user. The import services catch that type and show the message as is."
   (:require [clj-http.client :as http]
+   [freememo.desktop-link :as link]
             [clojure.string :as str]
             [freememo.config :as config]
             [freememo.forge-kinds :as kinds]
@@ -167,32 +168,34 @@
    Throws ::forge-failure for a refused address, a network failure or too many
          redirects."
   [url {:keys [headers auth as]}]
-  (let [start (authority-of url)]
-    (loop [url url, hops 0]
-      (when-not (address-permitted? url)
-        (throw (failure (str "FreeMemo does not connect to " (or (authority-of url) url)
-                          ". The address is private or not valid.")
-                 {:reason :address})))
-      (let [resp (try
-                   (http/get url {:headers (merge headers (when (= start (authority-of url)) auth))
-                                  :as as
-                                  :connection-timeout connect-timeout-ms
-                                  :socket-timeout socket-timeout-ms
-                                  :redirect-strategy :none
-                                  :throw-exceptions false})
-                   (catch IOException e
-                     (throw (failure (str "Could not reach " (authority-of url) ": " (.getMessage e))
-                              {:reason :unreachable}))))]
-        (if (#{301 302 303 307 308} (:status resp))
-          (let [location (get-in resp [:headers "location"])]
-            (close-body! resp)
-            (cond
-              (str/blank? location) resp
-              (>= hops max-redirects)
-              (throw (failure (str (authority-of url) " redirected too many times.") {:reason :redirects}))
-              :else
-              (recur (str (.resolve (URI. url) (URI. ^String location))) (inc hops))))
-          resp)))))
+  (if-let [offline (link/offline-message "Git import")]
+    (throw (failure offline {:reason :offline}))
+    (let [start (authority-of url)]
+      (loop [url url, hops 0]
+        (when-not (address-permitted? url)
+          (throw (failure (str "FreeMemo does not connect to " (or (authority-of url) url)
+                            ". The address is private or not valid.")
+                   {:reason :address})))
+        (let [resp (try
+                     (http/get url {:headers (merge headers (when (= start (authority-of url)) auth))
+                                    :as as
+                                    :connection-timeout connect-timeout-ms
+                                    :socket-timeout socket-timeout-ms
+                                    :redirect-strategy :none
+                                    :throw-exceptions false})
+                     (catch IOException e
+                       (throw (failure (str "Could not reach " (authority-of url) ": " (.getMessage e))
+                                {:reason :unreachable}))))]
+          (if (#{301 302 303 307 308} (:status resp))
+            (let [location (get-in resp [:headers "location"])]
+              (close-body! resp)
+              (cond
+                (str/blank? location) resp
+                (>= hops max-redirects)
+                (throw (failure (str (authority-of url) " redirected too many times.") {:reason :redirects}))
+                :else
+                (recur (str (.resolve (URI. url) (URI. ^String location))) (inc hops))))
+            resp))))))
 
 (defn- check-status!
   "Post: `resp` when its status is 2xx.

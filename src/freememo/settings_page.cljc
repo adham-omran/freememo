@@ -18,6 +18,7 @@
    [freememo.commands :as commands]
    [freememo.modal-shell :as modal]
    [freememo.settings-tab :as settings-tab]
+   [freememo.desktop-section :as desktop-section]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])))
 
@@ -31,6 +32,7 @@
    {:id "settings-ai" :label "AI Features"}
    {:id "settings-appearance" :label "Appearance"}
    {:id "settings-anki" :label "Anki Sync"}
+   {:id "settings-desktop" :label "Desktop App"}
    {:id "settings-zotero" :label "Zotero"}
    {:id "settings-forges" :label "Git Forges"}
    {:id "settings-extension" :label "Browser Extension"}
@@ -637,6 +639,9 @@
           (SettingsTab active "settings-ai" (e/fn [] (AIFeaturesSection user-id enc-key)))
           (SettingsTab active "settings-appearance" (e/fn [] (AppearanceSection user-id)))
           (SettingsTab active "settings-anki" (e/fn [] (AnkiSyncSection user-id)))
+          ;; plans/electron-local-db-sync.md 3.2, 5.2, 13.7
+          (SettingsTab active "settings-desktop"
+            (e/fn [] (desktop-section/DesktopAppSection user-id base-url client-country)))
           (SettingsTab active "settings-zotero" (e/fn [] (ZoteroSection user-id)))
           ;; plans/git-forge-integration.md §4.2
           (SettingsTab active "settings-forges" (e/fn [] (ForgeTokensSection user-id)))

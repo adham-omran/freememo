@@ -12,6 +12,7 @@
    imports, so concurrent imports of the same host stay polite."
   (:require
    [clj-http.client :as http]
+   [freememo.desktop-link :as link]
    [clojure.string :as str]
    [freememo.db :as db]
    [freememo.url-validate :as url]
@@ -117,36 +118,38 @@
    present, and Content-Type is image/*. Bounded by per-host + global throttle,
    image-timeout-ms, and max-image-bytes (oversize fetch aborts -> nil)."
   [url]
-  (when (url/safe-url? url)
-    (let [host (try (.getHost (URI. url)) (catch Exception _ nil))]
-      (when (and host (not (str/blank? host)))
-        (with-throttle host
-          (fn []
-            (try
-              (let [resp (http/get url
-                           {:as :byte-array
-                            :throw-exceptions false
-                            :socket-timeout image-timeout-ms
-                            :connection-timeout image-timeout-ms
-                            :max-body max-image-bytes
-                            :redirect-strategy :none
-                            :headers {"User-Agent" user-agent}})
-                    ct (some-> (get-in resp [:headers "content-type"])
-                         (str/split #";") first str/trim)]
-                (when (and (= 200 (:status resp))
-                        (:body resp)
-                        (string? ct)
-                        (str/starts-with? ct "image/"))
-                  {:bytes (:body resp) :mime-type ct}))
-              (catch Exception e
-                (tel/log! {:level :warn :id ::fetch-image-failed
-                           :data {:url url :error (.getMessage e)}}
-                  "Image fetch failed — skipping")
-                nil))))))))
+  (if-let [offline (link/offline-message "Image download")]
+    nil
+    (when (url/safe-url? url)
+      (let [host (try (.getHost (URI. url)) (catch Exception _ nil))]
+        (when (and host (not (str/blank? host)))
+          (with-throttle host
+            (fn []
+              (try
+                (let [resp (http/get url
+                             {:as :byte-array
+                              :throw-exceptions false
+                              :socket-timeout image-timeout-ms
+                              :connection-timeout image-timeout-ms
+                              :max-body max-image-bytes
+                              :redirect-strategy :none
+                              :headers {"User-Agent" user-agent}})
+                      ct (some-> (get-in resp [:headers "content-type"])
+                           (str/split #";") first str/trim)]
+                  (when (and (= 200 (:status resp))
+                          (:body resp)
+                          (string? ct)
+                          (str/starts-with? ct "image/"))
+                    {:bytes (:body resp) :mime-type ct}))
+                (catch Exception e
+                  (tel/log! {:level :warn :id ::fetch-image-failed
+                             :data {:url url :error (.getMessage e)}}
+                    "Image fetch failed — skipping")
+                  nil)))))))))
 
-;; ---------------------------------------------------------------------------
-;; Per-image: fetch/decode, store, charge byte budget
-;; ---------------------------------------------------------------------------
+  ;; ---------------------------------------------------------------------------
+  ;; Per-image: fetch/decode, store, charge byte budget
+  ;; ---------------------------------------------------------------------------
 
 (defn- already-media-url?
   "True when src already points to /api/media/<id>."

@@ -40,7 +40,7 @@
         (testing "another user reads nil"
           (is (nil? (db/get-topic-title-for-user stranger topic-id))))
         (testing "a missing id reads nil"
-          (is (nil? (db/get-topic-title-for-user owner Integer/MAX_VALUE))))
+          (is (nil? (db/get-topic-title-for-user owner Long/MAX_VALUE))))
         (testing "a topic staged for deletion reads nil"
           (is (some? (db/stage-topic-for-deletion! owner topic-id)))
           (is (nil? (db/get-topic-title-for-user owner topic-id)))))
@@ -57,7 +57,7 @@
         (testing "another user reads nil"
           (is (nil? (curriculum/curriculum-title stranger curriculum-id))))
         (testing "a missing id reads nil"
-          (is (nil? (curriculum/curriculum-title owner Integer/MAX_VALUE))))
+          (is (nil? (curriculum/curriculum-title owner Long/MAX_VALUE))))
         (testing "a curriculum staged for deletion reads nil"
           (curriculum/stage-curriculum-for-deletion! owner curriculum-id)
           (is (nil? (curriculum/curriculum-title owner curriculum-id)))))

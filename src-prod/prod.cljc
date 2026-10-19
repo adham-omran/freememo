@@ -29,7 +29,9 @@
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.activity-reporter :as activity-reporter])
-   #?(:clj [freememo.curriculum-exam :as curriculum-exam])))
+   #?(:clj [freememo.curriculum-exam :as curriculum-exam])
+   #?(:clj [freememo.desktop :as desktop])
+   #?(:clj [freememo.peer :as peer])))
 
 ;; Prod default card model — a freememo.card-models registry :id, used as the
 ;; default when a user has no allowed saved selection (overridable per-user
@@ -162,6 +164,9 @@
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
      (logging/init!)
+     ;; Desktop (plans/electron-local-db-sync.md 3.4): Electron writes the launch
+     ;; configuration on stdin, before anything else can read it.
+     (when (peer/desktop?) (desktop/read-launch-config!))
      ;; B2: refuse to boot on dev-fallback secrets.
      (require-env! "ENC_KEY_SECRET")
      (require-env! "DB_PASSWORD")
@@ -173,7 +178,8 @@
            ;; The client's version is injected in the compiled .js file.
            (merge
              (comptime-resource "electric-manifest.edn")
-             {:host "0.0.0.0", :port (Integer/parseInt (or (System/getenv "PORT") "8080")),
+             ;; A desktop serves only its own window (4.1, 4.8).
+             {:host (if (peer/desktop?) "127.0.0.1" "0.0.0.0"), :port (Integer/parseInt (or (System/getenv "PORT") "8080")),
               :resources-path "public"
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
               :manifest-path "public/freememo/js/manifest.edn"})]
@@ -190,8 +196,10 @@
        (install-exam-generation-shutdown-hook!)
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.
-       (seed-admin-user!)
-       (check-auth-mode-coherence!)
+       (if (peer/desktop?)
+         (desktop/start!)
+         (do (seed-admin-user!)
+             (check-auth-mode-coherence!)))
 
        (ring/run-jetty
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
@@ -207,6 +215,7 @@
            (wrap-multipart-params)
            (wrap-route-body-size) ; reject chunked + cap Content-Length
            (wrap-params)
+           (cond-> (peer/desktop?) (desktop/wrap-launch-gate))
            (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
                                                                       hash (-> (java.security.MessageDigest/getInstance "SHA-256")
                                                                              (.digest (.getBytes secret "UTF-8")))]

@@ -111,12 +111,16 @@
 ;; error the UI could recover from.
 
 (def ^:private int-array-value @#'db/int-array-value)
+(def ^:private id-array-value @#'db/id-array-value)
 (def ^:private text-array-value @#'db/text-array-value)
 
 (deftest empty-arrays-carry-an-explicit-type-cast
   (testing "empty int array is cast, never bare ARRAY[]"
     (is (= [:raw "'{}'::integer[]"] (int-array-value [])))
     (is (= [:raw "'{}'::integer[]"] (int-array-value nil))))
+  (testing "empty id array is a bigint array"
+    (is (= [:raw "'{}'::bigint[]"] (id-array-value [])))
+    (is (= [:raw "'{}'::bigint[]"] (id-array-value nil))))
   (testing "empty text array is cast"
     (is (= [:raw "'{}'::text[]"] (text-array-value [])))
     (is (= [:raw "'{}'::text[]"] (text-array-value nil)))))
@@ -124,4 +128,5 @@
 (deftest non-empty-arrays-use-the-array-constructor
   (is (= [:array [1 2 3]] (int-array-value [1 2 3])))
   (is (= [:array [7]] (int-array-value '(7))))
+  (is (= [:array [1099511627777]] (id-array-value [1099511627777])))
   (is (= [:array ["a" "b"]] (text-array-value ["a" "b"]))))
