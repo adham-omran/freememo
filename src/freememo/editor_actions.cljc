@@ -685,7 +685,7 @@
      drop that reaches it can move anything.
 
    The move is ONE `updateContents`, the delete+insert shape
-   `install-clip-menu!` uses, so text-change fires once and autosave persists
+   `toggle-clip-loop!` uses, so text-change fires once and autosave persists
    it. The drop index comes from `caretRangeFromPoint` through the two
    `quill.selection` methods Quill's own file drop uses. They are not public
    API; Quill is pinned at 2.0.3.

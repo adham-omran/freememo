@@ -8922,7 +8922,7 @@
   "One-time: move inline data: URIs out of card fields into media rows.
 
    A few production cards predate the editor's upload-and-rewrite paths
-   (the quill-field paste matcher and editor-image-menu, which both produce
+   (the quill-field paste matcher and image-actions, which both produce
    /api/media/<id>) and carry base64 inline. Left there, every version of such
    a card would duplicate the whole payload — measured at 8.86 MB for three
    cards, 2.6x the entire fleet's text history (plans/card-edit-history.md §3).
