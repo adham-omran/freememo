@@ -13,6 +13,12 @@
    #?(:clj [ring.middleware.session :refer [wrap-session]])
    #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])
+   ;; Electric's compiler. `e/boot-server` evals a macro at each WebSocket
+   ;; open, and that macro calls into lang3. From source, expanding the app's
+   ;; e/defns loads lang3 first. The AOT-compiled desktop jar expands nothing at
+   ;; runtime, so without this require every session fails with "Attempting
+   ;; to call unbound fn: #'hyperfiddle.electric.impl.lang3/normalize-env".
+   #?(:clj hyperfiddle.electric.impl.lang3)
    #?(:cljs [hyperfiddle.electric-client3 :as electric-client])
    #?(:cljs [freememo.client-boot :as client-boot])
 

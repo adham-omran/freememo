@@ -43,8 +43,8 @@ application classpath to be available"
 (def class-dir "target/classes")
 
 (defn uberjar
-  [{:keys [optimize debug verbose ::jar-name, ::skip-client, version, aliases, shadow-build]
-    :or {optimize true, debug false, verbose false, skip-client false, version electric-user-version, aliases [:prod], shadow-build :prod}
+  [{:keys [optimize debug verbose ::jar-name, ::skip-client, ::aot, version, aliases, shadow-build]
+    :or {optimize true, debug false, verbose false, skip-client false, aot false, version electric-user-version, aliases [:prod], shadow-build :prod}
     :as args}]
   ; careful, shell quote escaping combines poorly with clj -X arg parsing, strings read as symbols
   (log/info 'uberjar (pr-str args))
@@ -55,8 +55,21 @@ application classpath to be available"
 
   (b/copy-dir {:target-dir class-dir :src-dirs ["src" "src-prod" "resources"]})
   (let [jar-name (or (some-> jar-name str) ; override for Dockerfile builds to avoid needing to reconstruct the name
-                   (format "freememo-%s.jar" version))]
+                   (format "freememo-%s.jar" version))
+        basis (b/create-basis {:project "deps.edn" :aliases aliases})]
+    ;; The desktop jar starts on the user's computer at every launch, so it
+    ;; is AOT compiled: from source, `prod` and its dependencies compile for
+    ;; about 70 s before the port opens. The server deploy keeps source
+    ;; loading. Compile after copy-dir, so each class is newer than its
+    ;; source and Clojure loads the class.
+    (when aot
+      (log/info "aot: compiling prod")
+      (b/compile-clj {:basis basis
+                      :src-dirs ["src" "src-prod"]
+                      :class-dir class-dir
+                      :ns-compile '[prod]
+                      :java-opts ["-Xss4m"]}))
     (b/uber {:class-dir class-dir
              :uber-file (str "target/" jar-name)
-             :basis     (b/create-basis {:project "deps.edn" :aliases aliases})})
+             :basis     basis})
     (log/info jar-name)))
