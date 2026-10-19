@@ -223,6 +223,12 @@
   []
   (:fx-iqd-per-usd (credits-config)))
 
+(defn desktop-license-usd
+  "The desktop license price in USD. nil when unconfigured, and then no
+   license is for sale."
+  []
+  (:desktop-license-usd (credits-config)))
+
 (defn ocr-model-allowlist
   "OCR-model :ids (from freememo.ocr-models/registry) a credits-mode user may
    pick — each carries its own OpenRouter cost (decision 4.2.1: allow-list, the

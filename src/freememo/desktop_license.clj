@@ -9,7 +9,8 @@
    | State       | When                                  | Sync          | AI  |
    |-------------|---------------------------------------|---------------|-----|
    | :licensed   | a license covers the client's major   | full          | yes |
-   | :trial      | within 60 days of the first sign-in   | full          | yes |
+   | :trial      | the trial is open, or within 60 days  | full          | yes |
+   |             | of the first sign-in                  |               |     |
    | :grace      | a license, none covering, < 30 days   | download only | no  |
    | :expired    | a license, none covering, ≥ 30 days   | none          | no  |
    | :unlicensed | no license, trial over                | none (O12)    | no  |
@@ -24,15 +25,21 @@
             [freememo.wayl :as wayl])
   (:import [java.time Duration Instant]))
 
+(def trial-open?
+  "While true, the trial has no end date: every account that no license covers
+   is in :trial, and the Settings page offers no purchase. Set it to false to
+   start the 60-day trial (P4) and sales."
+  true)
 (def trial-days "P4" 60)
 (def grace-days "O15" 30)
-(def price-usd "O14. Purchases are final, like REAPER's." 40)
 
 (defn price-iqd
   "The license price in IQD, the currency Wayl charges in, or nil while the
-   exchange rate is unconfigured."
+   price or the exchange rate is unconfigured. The USD price is
+   `:desktop-license-usd` in config.edn, which public history excludes (O14)."
   []
-  (some-> (config/fx-iqd-per-usd) (* price-usd) Math/ceil long))
+  (when-let [usd (config/desktop-license-usd)]
+    (some-> (config/fx-iqd-per-usd) (* usd) Math/ceil long)))
 
 (def ^:private operations
   {:full #{:meta :graves :upload :download :blob :finish :full-upload :full-download :ai}
@@ -77,6 +84,9 @@
      (cond
        covering
        (assoc base :state :licensed :sync :full :ai? true)
+
+       trial-open?
+       (assoc base :state :trial :sync :full :ai? true :trial-open? true :trial-ends nil)
 
        (and trial-ends (.isBefore now trial-ends))
        (assoc base :state :trial :sync :full :ai? true

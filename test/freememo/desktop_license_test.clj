@@ -29,15 +29,30 @@
 
 (deftest a-license-covers-its-major-and-the-next
   (when (db-up?)
-    (let [now (Instant/now)
+    (with-redefs [license/trial-open? false]
+     (let [now (Instant/now)
           u (user! :trial-started (days-ago now 400))]
       (license! u 1 2)
       (is (= :licensed (:state (license/access db/ds u 2 now))) "13.2: major_from 1 passes major 2")
-      (is (not= :licensed (:state (license/access db/ds u 3 now))) "13.2: and fails major 3"))))
+      (is (not= :licensed (:state (license/access db/ds u 3 now))) "13.2: and fails major 3")))))
+
+(deftest an-open-trial-has-no-end
+  (when (db-up?)
+    (let [now (Instant/now)]
+      (with-redefs [license/trial-open? true]
+        (let [u (user! :trial-started (days-ago now 400))
+              a (license/access db/ds u 1 now)]
+          (is (= {:state :trial :sync :full :ai? true :trial-open? true}
+                 (select-keys a [:state :sync :ai? :trial-open?])) "a trial 400 days old still syncs")
+          (is (nil? (:trial-ends a)) "the Settings page shows no end date"))
+        (let [u (user! :trial-started (days-ago now 400))]
+          (license! u 1 2)
+          (is (= :trial (:state (license/access db/ds u 3 now))) "an uncovered major is not in grace"))))))
 
 (deftest access-moves-with-the-clock
   (when (db-up?)
-    (let [now (Instant/now)]
+    (with-redefs [license/trial-open? false]
+     (let [now (Instant/now)]
       (testing "covered"
         (let [u (user! :trial-started (days-ago now 400))]
           (license! u 1 2)
@@ -68,7 +83,7 @@
         (let [u (user! :trial-started (days-ago now 61))
               a (license/access db/ds u 1 now)]
           (is (= :unlicensed (:state a)))
-          (is (not (license/allows? a :download))))))))
+          (is (not (license/allows? a :download)))))))))
 
 (deftest buying-with-credits-is-one-transaction
   (when (db-up?)

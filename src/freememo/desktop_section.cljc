@@ -73,9 +73,12 @@
 (defn license-summary* [_refresh user-id]
   #?(:clj (license/access db/ds user-id desktop-version/desktop-major) :cljs nil))
 
-(defn price-label* [_refresh]
-  #?(:clj (str "$" license/price-usd
-            (when-let [iqd (license/price-iqd)] (str " (" iqd " credits)")))
+(defn price-label*
+  "The license price in credits, or nil while no license is for sale: the
+   trial is open, or the price is unconfigured."
+  [_refresh]
+  #?(:clj (when-not license/trial-open?
+            (some-> (license/price-iqd) (str " credits")))
      :cljs nil))
 
 (defn devices* [_refresh user-id]
@@ -107,11 +110,13 @@
 
 (defn license-text
   "13.7 — one line per license state."
-  [{:strs [state trial-days-left trial-ends grace-ends covered-majors]}]
+  [{:strs [state trial-open? trial-days-left trial-ends grace-ends covered-majors]}]
   (case state
     "licensed" (str "Licensed for desktop versions "
                  (clojure.string/join ", " (map (fn [[a b]] (str a " and " b)) covered-majors)) ".")
-    "trial" (str "Trial: " trial-days-left " days left (ends " (subs (str trial-ends) 0 10) ").")
+    "trial" (if trial-open?
+              "Trial. Sync and AI are on, with no end date for now."
+              (str "Trial: " trial-days-left " days left (ends " (subs (str trial-ends) 0 10) ")."))
     "grace" (str "Your license does not cover this version. Downloads only, until "
               (subs (str grace-ends) 0 10) ".")
     "expired" "Your license does not cover this version. Sync is off. Local use continues."
@@ -227,24 +232,25 @@
         (group/GroupHeading "License")
         (dom/p (dom/props {:class "hint"})
           (dom/text (license-text (into {} (map (fn [[k v]] [(name k) (if (keyword? v) (name v) v)])) summary))))
-        (dom/p (dom/props {:class "hint"})
-          (dom/text (str "A license costs " price ". It covers the desktop version it is bought for and the next one, on all your computers. Purchases are final.")))
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-secondary" :style {:margin-right "8px"}})
-          (dom/text "Buy with credits")
-          (let [[t _] (e/Token (dom/On "click" identity nil))]
-            (when t
-              (let [r (e/server (e/Offload #(buy-with-credits!* user-id)))]
-                (case r (if (:ok r) (t) (do (reset! !error (:error r)) (t (:error r)))))))))
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-secondary"})
-          (dom/text "Buy by card")
-          (let [[t _] (e/Token (dom/On "click" identity nil))]
-            (when t
-              (let [r (e/server (e/Offload #(start-license-checkout!* user-id base-url client-country)))]
-                (case r (if (:ok r)
-                          (do (navigate-external! (:url r)) (t))
-                          (do (reset! !error (:error r)) (t (:error r)))))))))
+        (when price
+          (dom/p (dom/props {:class "hint"})
+            (dom/text (str "A license costs " price ". It covers the desktop version it is bought for and the next one, on all your computers. Purchases are final.")))
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-secondary" :style {:margin-right "8px"}})
+            (dom/text "Buy with credits")
+            (let [[t _] (e/Token (dom/On "click" identity nil))]
+              (when t
+                (let [r (e/server (e/Offload #(buy-with-credits!* user-id)))]
+                  (case r (if (:ok r) (t) (do (reset! !error (:error r)) (t (:error r)))))))))
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-secondary"})
+            (dom/text "Buy by card")
+            (let [[t _] (e/Token (dom/On "click" identity nil))]
+              (when t
+                (let [r (e/server (e/Offload #(start-license-checkout!* user-id base-url client-country)))]
+                  (case r (if (:ok r)
+                            (do (navigate-external! (:url r)) (t))
+                            (do (reset! !error (:error r)) (t (:error r))))))))))
         (when error
           (dom/p (dom/props {:style {:color "var(--color-danger-text)"}}) (dom/text error))))
       (dom/section
