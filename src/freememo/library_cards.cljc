@@ -411,7 +411,7 @@
                      (read-region/timed-read :library-cards-rows
                        #(db/get-user-flashcards user-id))))
              ;; Read only when the facet is on, so the ordinary view costs no
-             ;; extra query — same rule `overlay-ids-for` follows on the client.
+             ;; extra query — same rule `OverlayIds` follows on the client.
              conflict-ids (when (contains? origins "conflict")
                             (set (db/list-anki-conflicts user-id)))
              filtered (-> all
@@ -1581,14 +1581,26 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; to one JVM method against a 64 KB cap; plain defns get their own methods and
 ;; cost the reactive method nothing. Both operate on values that are already
 ;; client-side, so siting is unchanged.
-(defn- overlay-ids-for
+(def ^:private no-overlay-ids {:anki-changed #{} :marked #{} :suspended #{} :remarked #{}})
+
+(defn- overlay-facet? [origins flags]
+  (boolean (or (contains? origins "anki-changed") (seq flags))))
+
+;; An e/defn, not a plain defn, because the guarantee below is reactive. A plain
+;; fn call runs again whenever ANY argument changes, so it re-ran on every
+;; overlay change and returned an equal map. That map still emitted, the query
+;; opts emitted, and the cards query ran again with the same filters. The `if`
+;; reads `anki-overlay` only in its true branch, so with no Anki facet on, an
+;; overlay change reaches nothing here.
+(e/defn OverlayIds
   "Overlay id-sets enter the query opts ONLY while a facet that needs them is
    active — otherwise the query stays a pure function of the DB filters and
    overlay changes trigger no re-query."
   [origins flags anki-overlay]
-  (if (or (contains? origins "anki-changed") (seq flags))
-    (review/overlay->filter-ids anki-overlay)
-    {:anki-changed #{} :marked #{} :suspended #{} :remarked #{}}))
+  (e/client
+    (if (overlay-facet? origins flags)
+      (review/overlay->filter-ids anki-overlay)
+      no-overlay-ids)))
 
 (defn- build-query-opts [text kinds origins flags overlay-ids sort-col sort-dir]
   {:text text :kinds kinds :origins origins :flags flags
@@ -1631,7 +1643,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (review-overlay/AnkiOverlay
                          user-id manifest !ov-status !ov-payload !check-tick)
-          overlay-ids (overlay-ids-for origins flags anki-overlay)
+          overlay-ids (OverlayIds origins flags anki-overlay)
           opts (build-query-opts text-debounced kinds origins flags overlay-ids sort-col sort-dir)
           ;; URL sync — a side effect during binding evaluation, referenced by
           ;; the (when url-synced nil) below or Electric elides it. Driven by
@@ -1686,7 +1698,12 @@ bytecode cap in the :prod build, which dev compilation never emits.
       ;; arrive — Electric v3 mount bug, triggered by the documents→cards
       ;; branch switch. e/Offload latches the previous result across
       ;; re-queries, so the gate only blanks on first mount, not on
-      ;; filter changes.
+      ;; filter changes. That holds only while every input of the query
+      ;; has a value. An EMPTY input (an e/Offload before its first result)
+      ;; empties `result`, and the gate unmounts the whole view. The
+      ;; overlay did that once per mount — see AnkiOverlay. An input that
+      ;; emits again with an EQUAL value re-runs the query, and that
+      ;; re-mounted the view too — see OverlayIds.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status (:text initial) !text !text-debounced !text-timer
           !kinds !origins !flags !check-tick)

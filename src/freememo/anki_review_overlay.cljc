@@ -81,11 +81,21 @@
           action-refresh (e/watch (cs/get-atom :anki-overlay-refresh))]
       (when (seq manifest)
         (start-fetch! manifest [sync-rev check-tick action-refresh] !status !payload))
-      (let [response (when (some? payload)
-                       (let [present (:present payload)
-                             absent (:absent payload)
-                             overlay-rev (+ sync-rev card-rev)]
-                         (e/server
-                           (e/Offload #(sync-server/apply-anki-overlay!
-                                        overlay-rev user-id present absent)))))]
-        (or (:per-card response) {})))))
+      ;; `e/as-vec` is load-bearing, and it must be on the CLIENT. When the
+      ;; payload arrives, the `when` mounts a new server form, and the client
+      ;; has no value for it until the apply call returns and its answer
+      ;; crosses: an e/Offload is EMPTY before its first result, and a new
+      ;; server form is empty for its round trip. `or` over an empty value is
+      ;; empty too, and so was every value derived from the overlay. In
+      ;; `library_cards` that is the query opts, then the query result, then
+      ;; the one-batch gate: the whole view unmounted and mounted again.
+      ;; `as-vec` is [] while nothing has arrived, so the overlay stays {}.
+      (let [answers (e/as-vec
+                      (when (some? payload)
+                        (let [present (:present payload)
+                              absent (:absent payload)
+                              overlay-rev (+ sync-rev card-rev)]
+                          (e/server
+                            (:per-card (e/Offload #(sync-server/apply-anki-overlay!
+                                                     overlay-rev user-id present absent)))))))]
+        (or (peek answers) {})))))
