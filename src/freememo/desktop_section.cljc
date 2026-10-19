@@ -17,6 +17,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
+   [freememo.typeahead :as typeahead]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-license :as license])
@@ -197,17 +198,13 @@
           (dom/text (if (zero? (count conflicts))
                       "Nothing was left out of a sync."
                       "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
-        (dom/label
-          (dom/props {:class "hint"})
-          (dom/text "Restore into ")
-          (dom/select
-            (dom/props {:class "input"})
-            (dom/option (dom/props {:value ""}) (dom/text "Top level"))
-            (e/for [{:keys [id title]} (e/diff-by :id roots)]
-              (dom/option (dom/props {:value (str id)}) (dom/text title)))
-            (let [picked (dom/On "change" #(-> % .-target .-value) nil)]
-              (when (some? picked)
-                (reset! !parent (parse-long picked))))))
+        (dom/div
+          (dom/props {:class "field"})
+          (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
+          ;; An empty field is no selection, which restores at the top level.
+          (typeahead/Typeahead !parent
+            (mapv (fn [{:keys [id title]}] {:id id :label title}) roots)
+            "Top level. Type to choose a document." nil false))
         (dom/table
           (dom/props {:style {:width "100%" :font-size "13px"}})
           (dom/tbody
