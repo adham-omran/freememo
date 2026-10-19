@@ -24,11 +24,11 @@
 
 ;; --- server wrappers: keep #?(:clj …) out of every reactive body -------------
 
-(defn scan-targets* [user-id]
-  #?(:clj (recon/scan-targets user-id) :cljs nil))
+(defn scan-targets* [user-id root-id]
+  #?(:clj (recon/scan-targets user-id root-id) :cljs nil))
 
-(defn plan* [user-id digests absent]
-  #?(:clj (recon/plan user-id digests absent) :cljs nil))
+(defn plan* [user-id digests absent root-id]
+  #?(:clj (recon/plan user-id digests absent root-id) :cljs nil))
 
 (defn write-bundles* [user-id card-ids]
   #?(:clj (sync/anki-write-bundles user-id card-ids) :cljs nil))
@@ -43,13 +43,18 @@
 ;; --- phases -----------------------------------------------------------------
 
 (e/defn ReconcileScan
-  "Phase 1 — ask the server what to look at, then read all of it from Anki."
+  "Phase 1 — ask the server what to look at, then read all of it from Anki.
+
+   `root-id` is deref'd, not watched: `start!` sets it once before the phase
+   moves, and the value is a plain number (or nil) by the time it is closed
+   over, so the server thunk holds no atom."
   [user-id recon]
   (e/client
     (when (= :scanning (e/watch (:!phase recon)))
       (let [[t _] (e/Token :reconcile-scan)]
         (when t
-          (let [targets (e/server (e/Offload #(scan-targets* user-id)))]
+          (let [root-id @(:!root-id recon)
+                targets (e/server (e/Offload #(scan-targets* user-id root-id)))]
             (case (rc/run-scan! targets recon) (t))))))))
 
 (e/defn ReconcilePlan
@@ -62,9 +67,10 @@
   (e/client
     (when (= :planning (e/watch (:!phase recon)))
       (let [scan (e/watch (:!scan recon))
+            root-id @(:!root-id recon)
             [t _] (e/Token :reconcile-plan)]
         (when t
-          (let [p (e/server (e/Offload #(plan* user-id (:digests scan) (:absent scan))))]
+          (let [p (e/server (e/Offload #(plan* user-id (:digests scan) (:absent scan) root-id)))]
             (if (:aborted? p)
               (case (e/server
                       (toast!* user-id :error
@@ -120,6 +126,7 @@
             scan (e/watch (:!scan recon))
             readback (e/watch (:!readback recon))
             finished (e/watch (:!finished-note-ids recon))
+            root-id @(:!root-id recon)
             [t _] (e/Token :reconcile-record)]
         (when t
           (let [outcome {:writes readback
@@ -128,7 +135,8 @@
                          :digests (:digests scan)
                          :backfill (:backfill p)
                          :conflict-card-ids (:conflict-card-ids p)
-                         :finished-note-ids finished}
+                         :finished-note-ids finished
+                         :root-id root-id}
                 result (e/server (e/Offload #(finish-run!* user-id outcome)))]
             (case (reset! (:!result recon) result)
               (case (reset! (:!phase recon) :done)
@@ -152,7 +160,10 @@
           result (e/watch (:!result recon))
           plan (e/watch (:!plan recon))
           writes (e/watch (:!writes recon))
-          err (e/watch (:!error recon))]
+          err (e/watch (:!error recon))
+          ;; Watched, not deref'd: this component is mounted for the whole
+          ;; session, so a deref would freeze the value of the first run.
+          branch? (some? (e/watch (:!root-id recon)))]
       (when (= :done phase)
         (let [[t _] (e/Token :reconcile-done)]
           (when t
@@ -161,7 +172,8 @@
                   conflicts (get-in result [:counts :conflicts] 0)
                   msg (if dry?
                         (str "Dry run — nothing applied. " (:report plan))
-                        (str (rec/outcome-text (:counts result))
+                        (str (when branch? "This branch: ")
+                          (rec/outcome-text (:counts result))
                           (when (pos? conflicts)
                             (str " — " conflicts
                               (if (= 1 conflicts) " card needs" " cards need")
@@ -248,7 +260,11 @@
    :!finished-note-ids (atom nil)
    :!result (atom nil)
    :!error (atom nil)
-   :!dry-run? (atom false)})
+   :!dry-run? (atom false)
+   ;; The topic a branch run is scoped to, or nil for the whole collection.
+   ;; Set by `start!` BEFORE `!running?` goes true, so the Activity mirror
+   ;; never opens a row for a branch run with no subject.
+   :!root-id (atom nil)})
 
 (defn start!
   "Begin a run, or report that one is already going.
@@ -256,16 +272,24 @@
    pre : `recon` is a `fresh-state` map. `dry-run?` true stops after planning.
    post: phase `:scanning`, or unchanged and `:busy`.
 
+   The 4-arity takes `root-id`, a topic id: the run then covers that topic and
+   its descendants only, and settles no tombstones (see
+   `anki-reconcile-server/scan-targets`). The shorter arities leave it nil, the
+   whole collection. `:!root-id` is rewritten on every start, so a branch run
+   never leaks its scope into the next full one.
+
    A dry run reads Anki and classifies, then reports and stops. It exists
    because the numbers a first run should produce are knowable in advance — on
    the account this was built against, 26 creates, 0 pushes, 0 pulls and 0
    conflicts — so the plan can be checked before anything is written."
-  ([recon !running?] (start! recon !running? false))
-  ([recon !running? dry-run?]
+  ([recon !running?] (start! recon !running? false nil))
+  ([recon !running? dry-run?] (start! recon !running? dry-run? nil))
+  ([recon !running? dry-run? root-id]
    #?(:cljs
       (if @!running?
         :busy
-        (do (reset! !running? true)
+        (do (reset! (:!root-id recon) root-id)
+          (reset! !running? true)
           (reset! (:!dry-run? recon) (boolean dry-run?))
           (reset! (:!error recon) nil)
           (reset! (:!result recon) nil)

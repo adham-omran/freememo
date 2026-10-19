@@ -78,7 +78,7 @@
    (8.3.1, 8.5.4). With no cards yet, say so in a centered card."
   [root-id]
   (if root-id
-    (do (bus/dispatch! :open-topic {:topic-id root-id})
+    (do (bus/dispatch! :open-topic {:kind :topic :subjects [{:topic-id root-id}]})
         (spotlight/show! {:anchors [:anki-sync]
                           :route-key (spotlight/route-key :viewer root-id)
                           :title "Send cards to Anki"

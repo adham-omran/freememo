@@ -5,6 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
@@ -749,12 +750,23 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                                                 :answer answer :cloze cloze
                                                 :anki-flags anki-flags
                                                 :anki-note-id note-id
-                                                :topic-id topic-id :root-topic-id root-topic-id})))]
+                                                :topic-id topic-id :root-topic-id root-topic-id})))
+          ;; Context menu (plans/custom-context-menu.md 4.3.1). With this row in
+          ;; a selection of several, the target is every selected row, and only
+          ;; the rows that take many cards (Delete) apply.
+          target {:kind :card
+                  :subjects (if (and (contains? selected row-key) (> (count selected) 1))
+                              (mapv (fn [[_ mids]] {:member-ids (vec mids)}) selected)
+                              [{:member-ids (vec member-ids)
+                                :topic-id topic-id
+                                :history-scope (when-not group-row? [:card id])}])
+                  :surface {:origin :library :edit-card! edit-card!}}]
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")
                              (review/row-class anki-flags))
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
+        (menu-surface/RowMenu target)
         (dom/On "click" edit-card! nil)
         (RowSelectCell row-key member-ids !selected selected)
         (RowDiffCell (member-directions member-ids member-states anki-overlay)

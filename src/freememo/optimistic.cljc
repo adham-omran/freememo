@@ -172,13 +172,27 @@
   (swap! (cs/get-atom :pending-cards) dissoc tempid)
   :done)
 
+(defonce ^:private !outcome-handlers (atom {})) ; command type → (fn [command result])
+
+(defn register-outcome-handler!
+  "Run `f` with the command and its result when a command of `type` acks, for
+   the follow-up only the browser can do — removing an Anki note through
+   AnkiConnect, dropping a cached PDF. Last registration wins.
+   Pre : `f` is side-effect-only and does not touch the queue. Returns nil."
+  [type f]
+  (swap! !outcome-handlers assoc type f)
+  nil)
+
 (defn ack-command!
   "Apply a completed command's `result` ({:ok? :real-ids :error}) to this
    session's overlay (if it has an entry for the command) and drop the command
    from the queue. Runs on the client, driven by the dispatcher on effect
-   completion. Idempotent on a missing overlay entry (fire-and-forget commands)."
+   completion. Idempotent on a missing overlay entry (fire-and-forget commands).
+   A registered outcome handler for the command's type runs first."
   [command result]
   (let [id (:id command)]
+    (when-let [f (get @!outcome-handlers (:type command))]
+      (f command result))
     (when (= :delete-card (:type command))
       (if (:ok? result)
         (do

@@ -40,6 +40,7 @@
 (declare run-once!)
 (declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
+(declare owns-topic?)
 (declare record-anki-tombstones!)
 (declare start-purge-scheduler!)
 (declare unsynced-sql)
@@ -5019,22 +5020,31 @@
        :pages (mapv first changed)})))
 
 (defn rename-topic!
-  "Rename a topic. Sanitizes and length-checks the new title.
+  "Rename a topic `user-id` owns. Sanitizes and length-checks the new title.
    Throws ::blank-title when input is blank.
    Bumps updated_at on flashcards whose root_topic_id matches so Anki push
-   detects the title change. For non-root ids the bump is a no-op."
-  [id new-title]
+   detects the title change. For non-root ids the bump is a no-op.
+
+   Pre : `user-id` is server-authoritative (the session's).
+   Post: :renamed, or :denied when `user-id` does not own `id` — then nothing
+         is written. The owner check is here, not at the callers, because the
+         context menu makes every topic row a rename target."
+  [user-id id new-title]
   (when (or (nil? new-title) (str/blank? new-title))
     (throw (ex-info "title must not be blank"
              {:type ::blank-title :id id})))
-  (let [clean-title (input/sanitize-title new-title)]
-    (input/check-length! :title clean-title input/title-max)
-    (jdbc/execute-one! ds
-      (sql/format {:update :topics
-                   :set {:title clean-title}
-                   :where [:= :id id]}))
-    (jdbc/execute-one! ds
-      ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id])))
+  (if-not (owns-topic? user-id id)
+    :denied
+    (let [clean-title (input/sanitize-title new-title)]
+      (input/check-length! :title clean-title input/title-max)
+      (jdbc/with-transaction [tx ds]
+        (jdbc/execute-one! tx
+          (sql/format {:update :topics
+                       :set {:title clean-title}
+                       :where [:= :id id]}))
+        (jdbc/execute-one! tx
+          ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id]))
+      :renamed)))
 
 (defn get-root-topic-id
   "Traverse parent_id upward to find the root topic (parent_id IS NULL).
@@ -6992,19 +7002,52 @@
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
+(defn- card-in-subtree-pred
+  "HoneySQL predicate: the card belongs to `root-id` or a descendant of it.
+
+   pre : `topic-col` and `root-col` are the keywords for the card's `topic_id`
+         and `root_topic_id` (aliased, or bare inside an UPDATE). `root-id` is
+         NOT nil. A nil renders `id IS NULL` and matches nothing, so callers
+         guard: a subtree run must never silently become an empty one.
+   post: a predicate over `COALESCE(topic_id, root_topic_id)`, the same key
+         `snapshot-scope-predicate` uses for `[:topics …]`.
+
+   Why `topic_id` and not `root_topic_id`: `root_topic_id` is the TOP of the
+   tree (the `parent_id IS NULL` ancestor that carries `user_id`), so it is the
+   same for every card in a document. A branch rooted at a mid-tree extract or
+   page would match no card by it. `topic_id` is the topic the card sits under,
+   and it moves down the tree with the card. `root_topic_id` stays the
+   ownership key, as everywhere else in reconcile. The COALESCE covers a card
+   with a NULL `topic_id` (the column is nullable)."
+  [topic-col root-col root-id]
+  [:in [:coalesce topic-col root-col]
+   {:with-recursive [[[:subtree {:columns [:id]}]
+                      {:union-all [{:select [:id] :from [:topics]
+                                    :where [:= :id root-id]}
+                                   {:select [:c.id] :from [[:topics :c]]
+                                    :join [[:subtree :s] [:= :c.parent_id :s.id]]}]}]]
+    :select [:id] :from [:subtree]}])
+
 (defn get-pushed-card-manifest
   "Card-id/note-id pairs for every pushed card the user owns (anki_note_id NOT
    NULL). Filter-independent — this is the Anki overlay's fetch set, so it must
-   not narrow with the /library/cards filters. Empty → []."
-  [user-id]
-  (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
-    (jdbc/execute! ds
-      (sql/format {:select [:f.id :f.anki_note_id]
-                   :from [[:flashcards :f]]
-                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
-                   :where [:and
-                           [:= :root.user_id user-id]
-                           [:not= :f.anki_note_id nil]]}))))
+   not narrow with the /library/cards filters. Empty → [].
+
+   The 2-arity narrows to cards under topic `root-id` and its descendants
+   (`card-in-subtree-pred`). A nil `root-id` is the whole collection, as the
+   1-arity."
+  ([user-id] (get-pushed-card-manifest user-id nil))
+  ([user-id root-id]
+   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
+     (jdbc/execute! ds
+       (sql/format {:select [:f.id :f.anki_note_id]
+                    :from [[:flashcards :f]]
+                    :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                    :where (cond-> [:and
+                                    [:= :root.user_id user-id]
+                                    [:not= :f.anki_note_id nil]]
+                             (some? root-id)
+                             (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))})))))
 
 (defn get-flashcards-by-ids
   "Flashcards owned by user-id (via root topic) with ids in card-ids.
@@ -7090,9 +7133,14 @@
    The content columns come from `digest-columns`, so a column the digest starts
    covering cannot be forgotten here. That mattered the moment the digest gained
    `anki_header_text` — a hand-listed select would have digested it as \"\" and
-   quietly stopped detecting header changes, with nothing failing."
-  ([user-id] (get-cards-for-reconcile user-id nil))
-  ([user-id card-ids]
+   quietly stopped detecting header changes, with nothing failing.
+
+   The 3-arity adds `root-id`: only cards under that topic and its descendants
+   (`card-in-subtree-pred`). A nil `card-ids` and a nil `root-id` each mean no
+   narrowing on that axis; both together narrow by both."
+  ([user-id] (get-cards-for-reconcile user-id nil nil))
+  ([user-id card-ids] (get-cards-for-reconcile user-id card-ids nil))
+  ([user-id card-ids root-id]
    (if (and (some? card-ids) (empty? card-ids))
      []
      (mapv parse-digest-jsonb
@@ -7104,33 +7152,63 @@
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
-                               (seq card-ids) (conj [:in :f.id (vec card-ids)]))}))))))
+                               (seq card-ids) (conj [:in :f.id (vec card-ids)])
+                               (some? root-id)
+                               (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
+
+(defn card-ids-in-subtree
+  "The subset of `card-ids` that `user-id` owns and that sit under topic
+   `root-id` or a descendant. Returns a vector; empty `card-ids` → [].
+
+   The server-side gate for a subtree reconcile: the ids in a run's outcome come
+   back from the client, so `finish-run!` narrows them here rather than trust
+   that the plan was the only thing that ever produced them."
+  [user-id root-id card-ids]
+  (if (empty? card-ids)
+    []
+    (mapv :flashcards/id
+      (jdbc/execute! ds
+        (sql/format {:select [:f.id]
+                     :from [[:flashcards :f]]
+                     :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                     :where [:and
+                             [:= :root.user_id user-id]
+                             [:in :f.id (vec card-ids)]
+                             (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)]})))))
 
 (defn set-anki-conflicts!
   "Make `user-id`'s stored conflict set exactly `card-ids`.
 
-   pre : `card-ids` came from one run over the whole collection.
+   pre : `card-ids` came from one run over the whole collection, or, with
+         `root-id`, over the cards under that topic and its descendants.
    post: those cards carry `anki_conflict_at`; every other card of this user
          carries NULL. Clearing the rest is the point — a card that stopped
-         being a conflict must stop reading as one without a second action."
-  [user-id card-ids]
-  (jdbc/with-transaction [tx ds]
-    (let [owned {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
-      (jdbc/execute! tx
-        (sql/format {:update :flashcards
-                     :set {:anki_conflict_at nil}
-                     :where (cond-> [:and
-                                     [:in :root_topic_id owned]
-                                     [:not= :anki_conflict_at nil]]
-                              (seq card-ids) (conj [:not-in :id (vec card-ids)]))}))
-      (when (seq card-ids)
-        (jdbc/execute! tx
-          (sql/format {:update :flashcards
-                       :set {:anki_conflict_at [:now]}
-                       :where [:and
-                               [:in :root_topic_id owned]
-                               [:in :id (vec card-ids)]
-                               [:= :anki_conflict_at nil]]}))))))
+         being a conflict must stop reading as one without a second action.
+
+         With `root-id` the clearing stops at the subtree. A branch run never
+         looked at the other cards, so it knows nothing about their conflicts
+         and must not forget them."
+  ([user-id card-ids] (set-anki-conflicts! user-id card-ids nil))
+  ([user-id card-ids root-id]
+   (jdbc/with-transaction [tx ds]
+     (let [owned {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
+       (jdbc/execute! tx
+         (sql/format {:update :flashcards
+                      :set {:anki_conflict_at nil}
+                      :where (cond-> [:and
+                                      [:in :root_topic_id owned]
+                                      [:not= :anki_conflict_at nil]]
+                               (seq card-ids) (conj [:not-in :id (vec card-ids)])
+                               (some? root-id)
+                               (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))}))
+       (when (seq card-ids)
+         (jdbc/execute! tx
+           (sql/format {:update :flashcards
+                        :set {:anki_conflict_at [:now]}
+                        :where [:and
+                                [:in :root_topic_id owned]
+                                [:in :id (vec card-ids)]
+                                [:= :anki_conflict_at nil]]})))))))
 
 (defn clear-anki-conflicts!
   "Drop the conflict flag from `card-ids` only, leaving every other card's alone.

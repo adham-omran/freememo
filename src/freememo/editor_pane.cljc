@@ -10,24 +10,18 @@
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.navigation :as nav]
-   [freememo.occlusion-modal :refer [OcclusionModal]]
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.merged-page-bridge :refer [MergedPageBridge]]
    [freememo.reading-anchor :as reading-anchor]
    [freememo.reading-position-view :refer [ReadingPosition]]
-   #?(:cljs [freememo.editor-image-menu :as image-menu])
+   [freememo.context-menu-surface :as menu-surface]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.image-rehost :as image-rehost])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.web-import :as web-import])))
-
-;; ---------------------------------------------------------------------------
-;; Image contextmenu helper — wraps CLJS-only install-contextmenu! so the
-;; reader conditional lives in a plain defn body, not in the Electric graph.
-;; ---------------------------------------------------------------------------
 
 ;; ---------------------------------------------------------------------------
 ;; The editor's link channel — server half
@@ -103,22 +97,6 @@
                                      :message (:message data)})
               :announced)
      :cljs :announced))
-
-(defn install-image-contextmenu!
-  "Attach the image contextmenu to container-el. Returns a cleanup fn.
-   CLJS-only; returns nil on CLJ."
-  [container-el get-topic-id get-pin-count on-pin! on-occlude! on-error!]
-  #?(:cljs (image-menu/install-contextmenu!
-             container-el get-topic-id get-pin-count on-pin! on-occlude! on-error!)
-     :clj nil))
-
-(defn push-image-menu-toast!
-  "Surface an image-menu failure to the user. Server-only; the menu itself
-   runs outside Electric's frame and cannot reach `toasts/push!`.
-   Pre : `message` is a user-presentable string. Post: returns the toast id."
-  [user-id message]
-  #?(:clj (toasts/push! user-id {:level :error :message message})
-     :cljs nil))
 
 (defn count-pins-for-topic*
   "Server-side pin count. Takes _pin-rev as first arg so the value is part of
@@ -337,68 +315,14 @@
                   (e/client
                     (js/setTimeout (fn [] (reset! !show false)) 2000)))))))
 
-        ;; -----------------------------------------------------------------------
-        ;; Pin-request atom — CLJS contextmenu callback fires into this atom;
-        ;; e/Token picks it up and runs the server-side set-pin! call.
-        ;; Shape: {:media-id <int> :placement "front"|"back" :topic-id <int>}
-        ;; or nil (no pending request).
-        ;; -----------------------------------------------------------------------
-        (let [!pin-request (atom nil)
-              pin-request (e/watch !pin-request)
-              ;; Occlusion-request atom — the context menu's Image Occlusion
-              ;; item fires into this; OcclusionModal (mounted below) opens
-              ;; while it is non-nil. Shape: see freememo.occlusion-modal.
-              !occlusion-request (atom nil)
-              ;; Menu-error atom — the context menu's copy/save actions run in
-              ;; raw promise callbacks, outside Electric's frame, so they can't
-              ;; call e/server to push a toast. Same client→server bridge as
-              ;; !pin-request. Carries an :id because two consecutive identical
-              ;; messages must still be two distinct e/Token emissions.
-              ;; Shape: {:id uuid :message "..."} or nil.
-              !menu-error (atom nil)
-              menu-error (e/watch !menu-error)
-              ;; Reactive pin count — used for K1 cap check in the context menu
-              ;; Watch :pin-mutations so the menu's K1 cap check refreshes
-              ;; after the side panel adds/removes a pin.
-              ;; CRITICAL: pin-rev must be PASSED INTO the server fn (not
-              ;; ignored via `_` binding), otherwise Electric optimizes the
-              ;; subscription away — see pin_side_panel.cljc/get-pins-for-topic*
-              ;; for the working precedent.
-              pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
+        ;; The pin count the context menu's pin rows check (the K1 cap of 2).
+        ;; Watch :pin-mutations so the count refreshes after the side panel or a
+        ;; pin row adds or removes a pin. CRITICAL: pin-rev must be PASSED INTO
+        ;; the server fn (not ignored via `_` binding), otherwise Electric
+        ;; optimizes the subscription away — see
+        ;; pin_side_panel.cljc/get-pins-for-topic* for the working precedent.
+        (let [pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
               pin-count (e/server (count-pins-for-topic* pin-rev topic-id))]
-
-          ;; e/Token: handle one pin-request at a time
-          (let [[t _] (e/Token pin-request)]
-            (when t
-              (e/on-unmount #(reset! !pin-request nil))
-              (let [{:keys [media-id placement topic-id]} pin-request
-                    result (e/server
-                             (e/Offload
-                               #(try
-                                  (db/set-pin! {:topic-id topic-id
-                                                :media-id media-id
-                                                :placement placement})
-                                  (log/audit! {:id ::add-pin :user-id user-id :action :create
-                                               :entity :pin :entity-id media-id})
-                                  {:success true}
-                                  (catch clojure.lang.ExceptionInfo ex
-                                    (let [data (ex-data ex)]
-                                      {:success false :reason (:reason data)}))
-                                  (catch Exception ex
-                                    {:success false :error (.getMessage ex)}))))]
-                (case result
-                  (if (:success result)
-                    (case (e/server (commands/bump! user-id :add-pin))
-                      (t))
-                    (do (log/log-debug (str "EditorPane set-pin! failed: " result))
-                      (t)))))))
-
-          ;; e/Token: surface one image-menu failure at a time as a toast.
-          (let [[et _] (e/Token menu-error)]
-            (when et
-              (e/on-unmount #(reset! !menu-error nil))
-              (case (e/server (push-image-menu-toast! user-id (:message menu-error)))
-                (et))))
 
           ;; -----------------------------------------------------------------------
           ;; Editor area
@@ -444,38 +368,13 @@
                             :data-role "editor-host"})
                 (binding [dctx/initial-html static-content]
                   (RichTextEditorComponent))
-                ;; Install contextmenu listener on this container after mount.
-                ;; The accessor closures MUST be created here (inside the Electric
-                ;; reactive let), not inside js/setTimeout — closures created in
-                ;; plain CLJS callbacks snapshot values once; closures created in
-                ;; the reactive body capture signal references and re-read the
-                ;; latest value at invocation (CLAUDE.md "fn closures capture
-                ;; signal references"). Without this, the K1 cap check is stale
-                ;; until full page refresh.
-                (let [host dom/node
-                      !cleanup-fn (atom nil)
-                      get-topic-id (fn [] topic-id)
-                      get-pin-count (fn [] pin-count)
-                      on-pin-fn (fn [req] (reset! !pin-request req))
-                      on-occlude-fn (fn [{:keys [media-id topic-id]}]
-                                      (reset! !occlusion-request
-                                        {:mode :create
-                                         :image-media-id media-id
-                                         :topic-id topic-id
-                                         :root-topic-id root-topic-id}))
-                      on-error-fn (fn [message]
-                                    (reset! !menu-error {:id (random-uuid)
-                                                         :message message}))]
-                  (js/setTimeout
-                    (fn []
-                      (reset! !cleanup-fn
-                        (install-image-contextmenu! host get-topic-id get-pin-count
-                          on-pin-fn on-occlude-fn on-error-fn)))
-                    0)
-                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f))))))))
-
-            ;; Image-occlusion authoring modal (context-menu entry point).
-            (OcclusionModal !occlusion-request user-id))
+                ;; Lend the topic to the context menu's image rows (pin, image
+                ;; occlusion). The editor is plain JS and knows no topic; the
+                ;; Quill installer reads these facts at right-click time
+                ;; (plans/custom-context-menu.md 4.1.1). Re-run on every change,
+                ;; so the pin cap check never reads a stale count.
+                (menu-surface/provide-facts! dom/node
+                  {:topic-id topic-id :root-topic-id root-topic-id :pin-count pin-count})))))
 
           ;; The reader's place in the notes (plans/reading-position-memory.md
           ;; §4 3.5.4). A nil topic mounts no tracker, so a PDF-backed or media

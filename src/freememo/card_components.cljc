@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [freememo.a11y :as a11y]
    [clojure.string :as str]
    [freememo.logging :as log]
@@ -335,13 +336,23 @@
                                          :anki-note-id anki-note-id
                                          :topic-id topic-id :root-topic-id root-topic-id})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
-                             (reset! !editing-card data)))]
+                             (reset! !editing-card data)))
+              ;; Context menu (plans/custom-context-menu.md 4.3.2). A score
+              ;; card keeps no edit history.
+              target {:kind :card
+                      :subjects [{:member-ids (vec member-ids)
+                                  :topic-id topic-id
+                                  :history-scope (cond occ? [:occlusion-group group-id]
+                                                   score? nil
+                                                   :else [:card id])}]
+                      :surface {:origin :viewer :edit-card! edit-card!}}]
         (dom/tr
           (dom/props {:class (str (review/row-class anki-flags)
                                (when review-target? " card-review-target"))
                       :data-row-key (pr-str (:row-key view))
                       :data-enter (when fresh? "1")
                       :style {:--order order :cursor "pointer"}})
+          (menu-surface/RowMenu target)
           (dom/On "click" edit-card! nil)
           ;; Sync indicator
           (dom/td

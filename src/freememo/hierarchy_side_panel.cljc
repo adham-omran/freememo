@@ -13,6 +13,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
@@ -303,6 +304,19 @@
           done? (= topic-status "done")
           expanded? expanded-display?
           badge (side-panel-badge kind)
+          ;; Context menu (plans/custom-context-menu.md 4.2.1). Nothing here is
+          ;; deletable: the panel lists the open topic's own ancestors, and
+          ;; deleting one would delete the topic on screen.
+          target (menu-surface/topic-row-target
+                   {:topic-id id :title title :topic-kind kind
+                    :root? (nil? (:topics/parent_id topic))
+                    :has-children? (boolean has-children)
+                    :dismissed? (boolean (:topics/dismissed topic))
+                    :status topic-status
+                    :priority (:topics/priority topic)
+                    :deletable? false
+                    :neoreader-syncable? false}
+                   nil)
           open-topic! (fn [_]
                         (when-not current?
                           (cond
@@ -321,6 +335,7 @@
                                  (util/restore-scroll-after-render! sn st))))]
       (dom/tr
         (dom/props {:style {:--order i}})
+        (menu-surface/RowMenu target)
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                               ;; Base 20 reserves the fixed left gutter for the
