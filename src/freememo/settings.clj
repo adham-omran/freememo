@@ -622,8 +622,8 @@
 (defn get-last-document [user-id]
   (try
     (when-let [v (db/get-setting user-id LAST_DOCUMENT)]
-      (let [n (Integer/parseInt v)]
-        (when (pos? n) n)))
+      (let [n (parse-long v)]
+        (when (and n (pos? n)) n)))
     (catch Exception _ nil)))
 
 (defn save-last-document [user-id doc-id]

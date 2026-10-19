@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-49-in-a-fixed-order
-  (is (= 50 (count fmt/entity-tables)))
-  (is (= 50 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-51-in-a-fixed-order
+  (is (= 51 (count fmt/entity-tables)))
+  (is (= 51 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -87,6 +87,7 @@
              [:flashcards :score_groups]
              [:card_schedules :flashcards]
              [:card_versions :topics]
+             [:topic_versions :topics]
              [:topic_repetitions :topics]
              [:study_schedules :topics]
              [:curriculum_blocks :curricula]
@@ -166,6 +167,20 @@
     (is (empty? (set/difference accounted created))
       (str "a table is listed but no longer exists: "
         (pr-str (set/difference accounted created))))))
+
+(deftest sync-classes-cover-every-table
+  (let [created (tables-created-by-schema-setup)
+        classed (set (keys fmt/sync-classes))]
+    (is (empty? (set/difference created classed))
+      (str "a table has no sync class: " (pr-str (set/difference created classed))
+        " — add it to fmt/sync-classes (plans/electron-local-db-sync.md §1.6)"))
+    (is (empty? (set/difference classed created))
+      (str "a sync class names a table that does not exist: "
+        (pr-str (set/difference classed created))))
+    (doseq [table fmt/entity-tables]
+      (is (<= 1 (fmt/sync-classes table) 5)
+        (str (name table) " is exported, so it must sync with a class from 1 to 5")))
+    (is (every? #{1 2 3 4 5 6 7} (vals fmt/sync-classes)))))
 
 (deftest exported-and-excluded-are-disjoint
   (is (empty? (set/intersection (set fmt/entity-tables) (set (keys fmt/excluded-tables))))))

@@ -54,7 +54,7 @@
     :queue-mutations :pin-mutations :assistant-mutations :assistant-stream
     :undo-mutations :kg-mutations
     :schedule-mutations :curriculum-mutations :activity-mutations
-    :question-mutations :walkthrough-mutations})
+    :question-mutations :walkthrough-mutations :desktop-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
