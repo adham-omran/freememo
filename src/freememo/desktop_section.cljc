@@ -119,9 +119,14 @@
 
 (defn sync-text
   "The sync line. `status` comes from `sync-client/status`."
-  [{:keys [state error last-sync-at]}]
+  [{:keys [state error last-sync-at progress]}]
   (case state
-    :syncing "Syncing now."
+    :syncing (let [{:keys [downloaded downloaded-bytes total-rows total-bytes]} progress
+                   mb #(str (quot (or % 0) 1048576) " MB")]
+               (if total-rows
+                 (str "Downloading your library: " (or downloaded 0) " of " total-rows " items, "
+                   (mb downloaded-bytes) " of " (mb total-bytes) ".")
+                 "Syncing now."))
     :offline "Offline. FreeMemo syncs when the connection returns."
     :update-required "This version can no longer sync. Download the new version from freememo.net."
     :license-refused "Sync is off for this account."
