@@ -100,3 +100,13 @@
          (.registerShortcut h (name id) (commands/effective-bind id bind)))
        (gevents/listen h "shortcut" on-shortcut)
        h)))
+
+#?(:cljs
+   (defn ^:export run-menu-command
+     "Run the registry command named `id` (a string) from the desktop app's
+      menu bar. Electron calls it with executeJavaScript, so it is exported
+      and keeps its name under :advanced. A Mac app takes ⌘, and ⌘F through
+      its menu, and the web app binds neither, because a browser owns both.
+      Returns the dispatch! result as a string."
+     [id]
+     (name (bus/dispatch! (keyword id) nil :menu-bar))))
