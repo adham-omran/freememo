@@ -13,6 +13,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
    [freememo.home-page :refer [get-api-key-status*]]
+   [freememo.desktop-section :as desktop-section]
    [freememo.ocr-models :as ocr-models]
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
@@ -78,7 +79,7 @@
    the parent — the rest of the section's fields are gated on this value via
    `when`, so the atom can't move into this field alone (mirrors how
    DocumentToolbars passes `!show-bib` into DocumentOptionsModal)."
-  [user-id credits-enabled? !llm-enabled llm-enabled]
+  [user-id credits-enabled? desktop? !llm-enabled llm-enabled]
   (e/client
     (dom/div
       (dom/props {:class "field setting-row setting-row--switch"})
@@ -88,8 +89,12 @@
         (dom/label (dom/props {:class "label" :for "ai-enabled"}) (dom/text "Use AI features"))
         (dom/div
           (dom/props {:class "hint"})
-          (dom/text (if credits-enabled?
+          (dom/text (cond
+                      desktop?
+                      "Scanning, card generation, the assistant, quiz grading and the knowledge graph run on freememo.net and spend credits from your account there, so they need an internet connection. Reading and Anki sync are always free and work offline."
+                      credits-enabled?
                       "Scanning, card generation, the assistant, quiz grading and the knowledge graph spend credits. Reading and Anki sync are always free. Your balance is in the Usage tab."
+                      :else
                       "Scanning, card generation, the assistant, quiz grading and the knowledge graph call OpenRouter, which needs an API key. Reading and Anki sync work without one."))))
       (dom/div
         (dom/props {:class "setting-row__control"})
@@ -823,6 +828,10 @@
           api-key-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
           api-key-configured? (:configured? api-key-status)
           credits-enabled? (e/server (config/credits-enabled?))
+          ;; A desktop is not in credits mode, but its AI calls spend credits
+          ;; on freememo.net (plans/electron-local-db-sync.md 4.10).
+          desktop? (e/server (desktop-section/desktop?* settings-refresh))
+          spends-credits? (or credits-enabled? desktop?)
           card-model-ids (e/server (settings/card-model-ids))
           card-label-of (into {} (map (juxt :id :label)) card-models/registry)
           tiers (e/server (views/get-ai-tiers* settings-refresh user-id))
@@ -831,13 +840,13 @@
 
       (dom/div
         (dom/props {:class "ai-features-section"})
-        (LlmToggleField user-id credits-enabled? !llm-enabled llm-enabled)
+        (LlmToggleField user-id credits-enabled? desktop? !llm-enabled llm-enabled)
 
         (when llm-enabled
           ;; Self-host only. The credits panel moved to the Usage tab: storage
           ;; rent debits credits with LLM features off, so gating the balance on
           ;; this toggle would hide it from a user who is still being charged.
-          (when-not credits-enabled?
+          (when-not spends-credits?
             (ProviderKeyStatusField api-key-configured?))
 
           (views/ViewPicker !view view)
@@ -847,4 +856,4 @@
           (case view
             "simple" (views/SimpleView user-id tiers !view)
             "by-task" (views/ByTaskView user-id tiers)
-            (AdvancedView user-id tiers credits-enabled? card-model-ids card-label-of)))))))
+            (AdvancedView user-id tiers spends-credits? card-model-ids card-label-of)))))))

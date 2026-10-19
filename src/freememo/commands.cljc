@@ -41,6 +41,7 @@
       no other reactivity mechanism."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [freememo.command-targets :as targets]
             [freememo.util :as util]
             #?(:clj [freememo.user-state :as us])))
 
@@ -54,7 +55,7 @@
     :queue-mutations :pin-mutations :assistant-mutations :assistant-stream
     :undo-mutations :kg-mutations
     :schedule-mutations :curriculum-mutations :activity-mutations
-    :question-mutations :walkthrough-mutations})
+    :question-mutations :walkthrough-mutations :desktop-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -456,12 +457,14 @@
      :restore        {:label "Restore (un-done)" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics}
                       :views #{:refresh :meta-refresh :schedule-mutations}}
-     ;; Dismiss/Undismiss — recursive queue-visibility toggle, bumped directly
-     ;; by RowActionsMenu (library) and DocumentOptionsModal (viewer); no palette
-     ;; entry or invoker, so no :exec.
-     :dismiss        {:label "Dismiss" :class :mutation :palette-hidden true
+     ;; Dismiss/Undismiss — recursive queue-visibility toggle. A topic target
+     ;; runs it through the queue (freememo.target-commands); DocumentOptionsModal
+     ;; writes it itself and bump!s the same :views.
+     :dismiss        {:label "Dismiss document" :menu-label "Dismiss" :class :mutation
+                      :target :topic :target-if #{:root :not-dismissed} :menu [3 5]
                       :table #{:topics} :views #{:refresh :meta-refresh :tree-mutations}}
-     :undismiss      {:label "Undismiss" :class :mutation :palette-hidden true
+     :undismiss      {:label "Undismiss document" :menu-label "Undismiss" :class :mutation
+                      :target :topic :target-if #{:root :dismissed} :menu [3 5]
                       :table #{:topics} :views #{:refresh :meta-refresh :tree-mutations}}
      :advance-topic  {:label "Next topic" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topic_repetitions} :views #{:queue-mutations}}
@@ -578,17 +581,131 @@
                        :table #{:topics}
                        :views #{}}} ; /api/create-live-doc bumps :import-document
 
+    ;; — Target commands (plans/custom-context-menu.md) —
+    ;; Each acts on the target a right-click or a focused row hands it:
+    ;; freememo.command-targets owns the keys. :client handlers live in
+    ;; freememo.target-handlers and :queue effects in freememo.target-commands.
+    ;; The palette lists one only while a focused surface publishes a target it
+    ;; applies to.
+    {:open-topic-in-new-tab {:label "Open topic in new tab" :menu-label "Open in new tab"
+                             :class :nav :target :topic :menu [1 2]}
+     :move-topic-to-top-level {:label "Move topic to top level" :menu-label "Move to top level"
+                               :class :mutation :target :topic :target-if #{:not-root}
+                               :menu [2 2]
+                               ;; topic-move/move-topic! bumps :move-topic itself
+                               :table #{:topics :undo_log} :views #{}}
+     :set-topic-priority {:label "Set topic priority…" :menu-label "Set priority…"
+                          :class :mutation :target :topic :menu [3 1]
+                          :menu-input {:type :number :value-key :priority
+                                       :label "Priority (0 to 100)" :min 0 :max 100}
+                          :table #{:topics} :views #{:refresh :queue-mutations}}
+     :mark-topic-done   {:label "Mark topic done" :menu-label "Mark done"
+                         :class :mutation :target :topic :target-if #{:not-done}
+                         :menu [3 2]
+                         :table #{:topics}
+                         :views #{:refresh :meta-refresh :schedule-mutations :tree-mutations}}
+     :review-topic      {:label "Review topic and its extracts" :menu-label "Review"
+                         :class :nav :target :topic :target-if #{:has-children}
+                         :menu [3 3]}
+     :generate-cards-for-topic {:label "Generate cards for topic" :menu-label "Generate cards"
+                                :class :mutation :target :topic :target-if #{:not-pdf-root}
+                                :menu [3 4]
+                                ;; card-gen's own save bumps :card-mutations
+                                :table #{:flashcards} :views #{}}
+     :sync-topic-with-anki {:label "Sync topic with Anki" :menu-label "Sync with Anki"
+                            :class :mutation :exec :client :target :topic :menu [4 1]
+                            :table #{:flashcards} :views #{}}
+     :sync-topic-with-neoreader {:label "Sync with NeoReader" :class :mutation :exec :client
+                                 :target :topic :target-if #{:root :neoreader-syncable}
+                                 :menu [4 2]
+                                 :table #{:topics :settings} :views #{}}
+     :open-document-options {:label "Document options…" :class :nav
+                             :target :topic :target-if #{:root} :menu [5 1]}
+     :delete-topic      {:label "Delete topic…" :menu-label "Delete…" :class :mutation
+                         :target :topic :arity :many :target-if #{:deletable}
+                         :menu [9 1] :danger? true
+                         :menu-input {:type :confirm :confirm-label "Delete"
+                                      :prompt "Delete this topic and its cards? You can undo for 12 hours."}
+                         ;; staged-delete/stage-deletion! bumps by what it removed
+                         :table #{:topics :flashcards :undo_log :card_versions} :views #{}}
+
+     :open-card-editor  {:label "Edit card" :class :nav :target :card :menu [1 1]}
+     :open-card-source-topic {:label "Open the card's source topic" :menu-label "Open source topic"
+                              :class :nav :target :card :target-if #{:has-topic} :menu [1 3]}
+     ;; Hides each row at once and queues one :delete-card per row, the path a
+     ;; row's × button takes (optimistic/enqueue-delete-card!).
+     :delete-cards      {:label "Delete cards" :menu-label "Delete" :class :mutation :exec :client
+                         :target :card :arity :many :menu [9 1] :danger? true
+                         :table #{:flashcards} :views #{}}
+
+     :copy-image        {:label "Copy image" :class :query :target :image :menu [1 1]}
+     :save-image        {:label "Save image" :class :query :target :image :menu [1 2]}
+     :copy-image-address {:label "Copy image address" :class :query
+                          :target :image :target-if #{:cross-origin-src} :menu [1 3]}
+     :pin-image-front   {:label "Pin image to the front of its topic" :menu-label "Pin to front of topic"
+                         :class :mutation :exec :client
+                         :target :image :target-if #{:has-topic} :enable-if #{:pin-room}
+                         :menu [2 1] :table #{:topic_pins} :views #{}}
+     :pin-image-back    {:label "Pin image to the back of its topic" :menu-label "Pin to back of topic"
+                         :class :mutation :exec :client
+                         :target :image :target-if #{:has-topic} :enable-if #{:pin-room}
+                         :menu [2 2] :table #{:topic_pins} :views #{}}
+     :open-image-occlusion {:label "Image Occlusion…" :class :nav
+                            :target :image :target-if #{:has-topic} :menu [2 3]}
+
+     :loop-audio-clip   {:label "Loop this clip" :class :mutation :exec :client
+                         :target :audio-clip :target-if #{:not-looping} :menu [1 1] :views #{}}
+     :stop-audio-clip-loop {:label "Stop looping this clip" :menu-label "Stop looping"
+                            :class :mutation :exec :client
+                            :target :audio-clip :target-if #{:looping} :menu [1 1] :views #{}}
+
+     ;; Caret edits are Quill edits: the editor's own save persists them.
+     ;; Cut and Copy act on the selection the right-click kept. There is no
+     ;; Paste: reading the clipboard needs a permission prompt (plan 0.2).
+     :cut-editor-selection  {:label "Cut selected text" :menu-label "Cut"
+                             :class :mutation :exec :client
+                             :target :caret :target-if #{:has-text-selection}
+                             :menu [0 1] :views #{}}
+     :copy-editor-selection {:label "Copy selected text" :menu-label "Copy"
+                             :class :query :exec :client
+                             :target :caret :target-if #{:has-text-selection}
+                             :menu [0 2] :views #{}}
+     :insert-formula    {:label "Insert formula" :class :mutation :exec :client
+                         :target :caret :target-if #{:math-ready} :menu [1 1] :views #{}}
+     :insert-table      {:label "Insert table" :class :mutation :exec :client
+                         :target :caret :menu [1 2] :views #{}}
+     :insert-image      {:label "Insert image…" :class :mutation :exec :client
+                         :target :caret :menu [1 3] :views #{}}
+     :insert-code-block {:label "Insert code block" :class :mutation :exec :client
+                         :target :caret :menu [1 4] :views #{}}
+     :insert-divider    {:label "Insert divider" :class :mutation :exec :client
+                         :target :caret :menu [1 5] :views #{}}
+
+     :copy-pdf-selection {:label "Copy selected PDF text" :menu-label "Copy" :class :query
+                          :target :pdf-page :target-if #{:has-selection} :menu [0 1]}
+     :scan-pdf-page     {:label "Scan this PDF page" :menu-label "Scan page" :class :mutation
+                         :target :pdf-page :menu [1 1]
+                         ;; start-ocr-scan! bumps :scan when the page text lands
+                         :table #{:topics} :views #{}}
+     ;; A client-side failure in a target handler (a clipboard write, an
+     ;; upload) queues this, because the toast stack is server state.
+     :show-error-toast {:label "Show an error" :class :mutation :palette-hidden true
+                        :data {:message :payload} :views #{}}
+     :generate-cards-for-page {:label "Generate cards for this PDF page"
+                               :menu-label "Generate cards" :class :mutation
+                               :target :pdf-page :menu [1 2]
+                               :table #{:flashcards} :views #{}}}
+
     ;; — Boundary-declared mutations (bump! called at their server boundary;
     ;;   not directly invocable, so hidden from the palette) —
     {:edit-card       {:label "Edit card" :class :mutation :palette-hidden true
                        :table #{:flashcards :card_versions} :views #{:card-mutations}}
-     ;; Read-only history viewer: a client-local modal toggle, so :exec :client
-     ;; (NOT :ui-button — that shape obliges the button to publish an invoke
-     ;; handle via command-bus/publish-invoker!, and this one cannot, because it
-     ;; needs the card context that only the open edit modal has).
-     ;; Palette-hidden for the same reason; :views #{} because it writes nothing.
+     ;; Read-only history viewer: a client-local modal toggle, so :exec :client.
+     ;; A card target names the history's scope (a card or an occlusion group);
+     ;; freememo.target-modals hosts the modal. :views #{} because it writes
+     ;; nothing.
      :card-history    {:label "Card edit history" :class :query :exec :client
-                       :palette-hidden true :views #{}}
+                       :target :card :target-if #{:has-history} :menu [1 2] :views #{}}
      ;; Both delete whole card-table ROWS, so an occlusion or score group goes
      ;; with its last member and is snapshotted for undo (cards/delete-cards-with-undo!).
      :delete-card     {:label "Delete card" :class :mutation :palette-hidden true
@@ -597,7 +714,10 @@
      :bulk-delete-cards {:label "Delete cards" :class :mutation :palette-hidden true
                          :table #{:flashcards :occlusion_groups :score_groups :undo_log}
                          :views #{:card-mutations}}
-     :rename-topic    {:label "Rename topic" :class :mutation :palette-hidden true
+     :rename-topic    {:label "Rename topic…" :menu-label "Rename…" :class :mutation
+                       :target :topic :menu [2 1]
+                       :menu-input {:type :text :value-key :title :label "Title"
+                                    :max-length 500}
                        :table #{:topics} :views #{:refresh :tree-mutations}}
      :move-topic      {:label "Move topic" :class :mutation :palette-hidden true
                        :table #{:topics :undo_log} :views #{:tree-mutations}}
@@ -605,7 +725,9 @@
                        :table #{:topic_pins :undo_log} :views #{:pin-mutations}}
      :toggle-pin-placement {:label "Toggle pin placement" :class :mutation :palette-hidden true
                             :table #{:topic_pins} :views #{:pin-mutations}}
+     ;; Queued by the two pin-image commands once the image has a media id.
      :add-pin         {:label "Pin image" :class :mutation :palette-hidden true
+                       :data {:topic-id :payload :media-id :payload :placement :payload}
                        :table #{:topic_pins} :views #{:pin-mutations}}
      :set-setting     {:label "Change setting" :class :mutation :palette-hidden true
                        :data {:key :payload :value :payload}
@@ -707,7 +829,7 @@
      :go-graph      {:label "Go to Graph"    :class :nav :nav-tab :graph}
      :go-help       {:label "Go to Help"     :class :nav :nav-tab :help}
      :open-topic   {:label "Open topic"     :class :nav :nav-tab :viewer
-                     :data {:topic-id :payload} :palette-hidden true}
+                     :target :topic :menu-label "Open" :menu [1 1]}
      :start-learn-session {:label "Start learn session" :class :nav :nav-tab :viewer}
      :open-subset-review  {:label "Review subset" :class :nav :nav-tab :viewer
                            :data {:root-id :payload :root-name :payload}
@@ -893,4 +1015,5 @@
                       :when (> (count ids) 1)]
                   [bind (map second ids)])]
       (for [[bind ids] dupes]
-        (str "duplicate :bind " bind " on " (vec ids))))))
+        (str "duplicate :bind " bind " on " (vec ids))))
+    (mapcat (fn [[id entry]] (targets/validate-entry id entry)) registry)))

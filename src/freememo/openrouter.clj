@@ -15,12 +15,32 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [taoensso.telemere :as tel]
-   [freememo.logging :as log])
+   [freememo.desktop-link :as link]
+   [freememo.desktop-version :as desktop-version]
+   [freememo.logging :as log]
+   [freememo.peer :as peer])
   (:import
    [java.io BufferedReader InputStreamReader]
    [java.nio.charset StandardCharsets]))
 
 (def ^:private base-url "https://openrouter.ai/api/v1")
+
+(defn- endpoint
+  "Where one OpenRouter call goes, and with which credentials
+   (plans/electron-local-db-sync.md 4.10.1). This is the only seam: every
+   model call in the app reaches OpenRouter through the four requests below.
+   Server: openrouter.ai with `api-key` (nil sends no Authorization).
+   Desktop: the freememo.net proxy with the desktop token, which bills credits
+   and enforces the model allowlist there (4.10.2). Offline, it throws the
+   message the user sees (4.6, O5)."
+  [api-key path]
+  (if (peer/desktop?)
+    (do (link/require-online! "AI")
+        [(str (link/origin) "/api/desktop/ai" path)
+         {"Authorization" (str "Bearer " (link/token))
+          "X-FreeMemo-Major" (str desktop-version/desktop-major)}])
+    [(str base-url path)
+     (if api-key {"Authorization" (str "Bearer " api-key)} {})]))
 
 (defn- path->feature
   "Coarse feature tag from an OpenRouter `path`, used when the caller supplies no
@@ -140,8 +160,9 @@
          feature (or (:feature ctx) (path->feature path))
          ms      #(long (/ (- (System/nanoTime) t-start) 1000000))]
      (try
-       (let [resp (http/post (str base-url path)
-                    {:headers {"Authorization" (str "Bearer " api-key)}
+       (let [[url auth] (endpoint api-key path)
+             resp (http/post url
+                    {:headers auth
                      :content-type :json :as :json :throw-exceptions false
                      :body (json/generate-string body)})
              failed? (>= (int (:status resp)) 400)
@@ -231,8 +252,9 @@
    Post: the catalog's :data vector, each entry as OpenRouter returns it. A
          non-200 throws `api-error`."
   []
-  (let [response (http/get (str base-url "/models")
-                   {:as :json :throw-exceptions false
+  (let [[url auth] (endpoint nil "/models")
+        response (http/get url
+                   {:headers auth :as :json :throw-exceptions false
                     :connection-timeout 10000 :socket-timeout 20000})]
     (when-not (= 200 (:status response))
       (throw (api-error response)))
@@ -340,9 +362,9 @@
         first-token-ns (volatile! nil)
         elapsed-ms #(long (/ (- (System/nanoTime) started-ns) 1000000))]
     (try
-      (let [response (http/post (str base-url "/chat/completions")
-                       {:headers {"Authorization" (str "Bearer " api-key)
-                                  "X-OpenRouter-Metadata" "enabled"}
+      (let [[url auth] (endpoint api-key "/chat/completions")
+            response (http/post url
+                       {:headers (assoc auth "X-OpenRouter-Metadata" "enabled")
                         :content-type :json
                         :as :stream
                         :throw-exceptions false
@@ -420,8 +442,9 @@
   "Get finalized OpenRouter metadata for generation-id.
    Post: normalized provider facts. Non-200 responses throw api-error."
   [api-key generation-id ctx]
-  (let [response (http/get (str base-url "/generation")
-                   {:headers {"Authorization" (str "Bearer " api-key)}
+  (let [[url auth] (endpoint api-key "/generation")
+        response (http/get url
+                   {:headers auth
                     :query-params {:id generation-id}
                     :as :json :throw-exceptions false})]
     (when-not (= 200 (:status response))

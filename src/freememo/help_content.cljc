@@ -622,7 +622,41 @@
              :commands #{:move-topic :show-hierarchy :show-pins}}
             {:label "Review a subset"
              :detail "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."
-             :commands #{:open-subset-review}}]}
+             :commands #{:open-subset-review :review-topic}}]}
+   {:slug "right-click-menu"
+    :title "Right-click menu"
+    :intro "Right-click a row, an image, a PDF page or a place in the text to see what you can do there."
+    :steps [{:label "Open the menu"
+             :detail "Right-click, or press Shift+F10 or the Menu key on a focused row or in the editor. Use the arrow keys to move and Enter to choose. Press Escape to close it. Shift+right-click shows the browser's own menu."
+             :commands #{}}
+            {:label "Cut or copy a selection"
+             :detail "Select text in a document or a card field and right-click it to cut or copy it. To paste, press Ctrl+V or Cmd+V, or Shift+right-click for the browser's menu."
+             :commands #{:cut-editor-selection :copy-editor-selection}}
+            {:label "Insert in the editor"
+             :detail "Right-click in a document or a card field to insert a formula, a table, an image, a code block or a divider at the cursor."
+             :commands #{:insert-formula :insert-table :insert-image :insert-code-block :insert-divider}}
+            {:label "Act on an image"
+             :detail "Right-click an image to copy it, save it, pin it to the front or back of its topic, or make image occlusion cards from it. A topic holds at most 2 pins."
+             :commands #{:copy-image :save-image :copy-image-address :pin-image-front
+                         :pin-image-back :open-image-occlusion}}
+            {:label "Loop an audio clip"
+             :detail "Right-click an audio clip to make it loop, or to stop it looping."
+             :commands #{:loop-audio-clip :stop-audio-clip-loop}}
+            {:label "Act on a topic"
+             :detail "Right-click a document in the Library, the Hierarchy panel, the Learn queue or the Search results. The ⋯ button on a Library row opens the same menu. Sync with Anki syncs only that topic and the topics under it."
+             :commands #{:open-topic :open-topic-in-new-tab :rename-topic :move-topic-to-top-level
+                         :set-topic-priority :mark-topic-done :generate-cards-for-topic
+                         :sync-topic-with-anki :sync-topic-with-neoreader :open-document-options
+                         :dismiss :undismiss :delete-topic}}
+            {:label "Act on a card"
+             :detail "Right-click a card in Library → Cards or in a document's card table to edit it, see its history, open its topic or delete it. With several cards selected, Delete removes them all."
+             :commands #{:open-card-editor :card-history :open-card-source-topic :delete-cards}}
+            {:label "Act on a PDF page"
+             :detail "Right-click a PDF page to copy the selected text, scan the page, or generate cards from it."
+             :commands #{:copy-pdf-selection :scan-pdf-page :generate-cards-for-page}}
+            {:label "Use the command palette"
+             :detail "With a row or the editor focused, open {toggle-palette}. It lists the same commands for that row or for the cursor."
+             :commands #{}}]}
    {:slug "keyboard"
     :title "Control FreeMemo with the keyboard"
     :intro "Use focus keys, the command palette, and contextual controls to operate FreeMemo without a pointer."
@@ -724,7 +758,7 @@
    entries, and the cap only goes down (plans/searchable-help.md 6.4)."
   {:credits-granted           "Bookkeeping after a payment. No user action runs it."
    :debit-credits             "Bookkeeping after a charge. No user action runs it."
-   :open-topic                "Opens a topic from a link. It is not a step a user takes."
+   :show-error-toast          "Shows an error a menu row met in the browser. No user action runs it."
    :save-video-position       "Saved on pause and on leaving. No user action runs it."
    :save-reading-position     "Saved on a scroll pause and on leaving. No user action runs it."
    :mark-assistant-chat-opened "Saved when a chat opens. No user action runs it."
@@ -733,12 +767,10 @@
    :apply-code-language       :pending
    :bulk-delete-cards         :pending
    :bulk-reject-facts         :pending
-   :card-history              :pending
    :compare-ocr               :pending
    :copy-all                  :pending
    :copy-card                 :pending
    :delete-document           :pending
-   :dismiss                   :pending
    :find-next-marked-card     :pending
    :find-next-remarked-card   :pending
    :find-next-suspended-card  :pending
@@ -750,7 +782,6 @@
    :push-biblio               :pending
    :refetch-biblio            :pending
    :remove-pin                :pending
-   :rename-topic              :pending
    :reset-dedup-thresholds    :pending
    :restore                   :pending
    :save-biblio               :pending
@@ -764,7 +795,6 @@
    :toggle-focus-reader       :pending
    :toggle-left-pane          :pending
    :toggle-pin-placement      :pending
-   :undismiss                 :pending
    :undo-entry                :pending
    :update-occlusion          :pending})
 

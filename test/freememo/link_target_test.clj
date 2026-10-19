@@ -71,16 +71,20 @@
           (lt/resolve-href "/viewer/topic/309#cite_note-2" nil))))
   (testing "a look-alike that is not a topic link"
     (is (= :external (kind "/viewer/topic/12/extra" exrx))))
-  (testing "an id too large for the topics.id column is not a topic link"
+  (testing "an id above the JS safe integer is not a topic link"
     ;; `\\d+` is unbounded. Parsing it would overflow Long/parseLong on the JVM
     ;; and silently return 1e20 in the browser — two peers, two behaviours, on
     ;; the one function written to be portable.
     (is (= :external (kind "/viewer/topic/99999999999999999999" exrx)))
     (is (= :no-base (kind "/viewer/topic/99999999999999999999" nil)))
-    (is (= :external (kind "/viewer/topic/2147483648" exrx))
-      "one past the integer column's maximum")
-    (is (= :in-app (kind "/viewer/topic/2147483647" exrx))
-      "the maximum itself is still a topic")))
+    (is (= :external (kind "/viewer/topic/9007199254740992" exrx))
+      "one past the largest exactly representable id")
+    (is (= :in-app (kind "/viewer/topic/9007199254740991" exrx))
+      "the maximum itself is still a topic")
+    (is (= :in-app (kind "/viewer/topic/2147483648" exrx))
+      "past the old integer column's maximum is a topic")
+    (is (= :in-app (kind "/viewer/topic/1099511627777" exrx))
+      "a desktop-client id (>= 2^40) is a topic")))
 
 ;; ── Out on the web ─────────────────────────────────────────────────
 

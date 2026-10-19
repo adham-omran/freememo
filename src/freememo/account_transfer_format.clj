@@ -81,7 +81,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 49 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 51 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -108,6 +108,7 @@
    :flashcards
    :card_schedules
    :card_versions
+   :topic_versions
    :topic_repetitions
    :study_schedules
    :curricula
@@ -187,7 +188,70 @@
                 same reason `upload_sessions` is excluded. An in-flight row
                 carries a `work_key` naming work no process on the target is
                 doing, so it would import already stale and read as an
-                operation the user never ran"})
+                operation the user never ran"
+   :sync_graves "row-sync deletion records of ONE peer (plans/electron-local-db-sync.md
+                 §1.4). Their usn values are that database's transaction ids"
+   :sync_conflicts "rows this desktop could not sync, kept for the user to
+                    restore. Peer-local by design (§5.1)"
+   :sync_state "this desktop's sync checkpoint and account binding"
+   :id_blocks "the server's ledger of id blocks given to desktop installs"
+   :local_id_blocks "this desktop's unused id range"
+   :desktop_tokens "desktop sign-in tokens of the source deployment"
+   :desktop_auth_codes "single-use sign-in codes that live 60 seconds"
+   :desktop_accounts "the source deployment's sync epoch and trial start"
+   :desktop_licenses "billing of the source deployment"})
+
+;; ── Sync classes ───────────────────────────────────────────────────
+
+(def sync-classes
+  "plans/electron-local-db-sync.md §1.6 — how row sync treats each table.
+
+   1 append-only: union, an existing key is never overwritten.
+   2 mutable content: per column, the newer write wins. A concurrent loser
+     goes to history (`card_versions`, `topic_versions`).
+   3 schedule: the later review wins. A class 2 table can also hold schedule
+     columns; `freememo.sync-schema/schedule-groups` names them.
+   4 natural key: a second row with the same natural key merges into the
+     first, and references to the losing id are rewritten.
+   5 watermark: as class 2, but the counter column takes the maximum.
+   6 derived: never sent. Each peer recomputes it.
+   7 peer-local or server-only: never sent.
+
+   Class 8 (Anki link) is a set of flashcards columns, which class 2 covers.
+
+   Invariant: every table that `db.clj` creates has exactly one class, and
+   every exported table has a class from 1 to 5.
+   `sync_classes_cover_every_table` asserts both."
+  {:sources 2 :media 4 :topics 2 :poem_packages 2 :topic_files 2
+   :topic_videos 2 :topic_epubs 2 :topic_code 2 :repo_selections 2
+   :video_transcripts 2 :video_segments 2 :topic_pins 2 :reading_positions 2
+   :neoreader_highlights 1 :occlusion_groups 5 :score_groups 2 :flashcards 2
+   :card_schedules 3 :card_versions 1 :topic_versions 1 :topic_repetitions 1
+   :study_schedules 2 :curricula 2 :curriculum_blocks 2 :curriculum_materials 2
+   :curriculum_exam_forms 2 :curriculum_exam_sittings 2
+   :curriculum_grade_revisions 1 :curriculum_unlock_overrides 2
+   :walkthroughs 2 :walkthrough_concepts 2 :walkthrough_hunks 2
+   :assistant_chats 2 :assistant_messages 2 :assistant_runs 2
+   :assistant_checkpoints 2 :assistant_evidence 1 :kg_entities 2
+   :kg_predicates 4 :kg_facts 2 :kg_page_extractions 2 :kg_questions 2
+   :kg_question_facts 2 :kg_reviews 1 :question_maps 2 :question_roots 2
+   :question_pins 2 :question_pin_tombstones 1 :known_marks 2
+   :flashcard_entities 2 :settings 2
+   ;; derived
+   :document_summaries 6 :kg_graph_layout 6
+   ;; peer-local or server-only
+   :users 7 :app_migrations 7 :user_events 7 :credit_orders 7
+   :credit_transactions 7 :undo_log 7 :upload_sessions 7 :kg_staged_triples 7
+   :anki_card_states 7 :anki_deck_configs 7 :kg_sessions 7 :kg_answers 7
+   :account_imports 7 :account_import_ids 7 :anki_note_tombstones 7
+   :activities 7 :sync_graves 7 :sync_conflicts 7 :sync_state 7 :id_blocks 7
+   :local_id_blocks 7 :desktop_tokens 7 :desktop_auth_codes 7
+   :desktop_accounts 7 :desktop_licenses 7})
+
+(def synced-tables
+  "The tables row sync sends, in `entity-tables` order, which an apply must
+   follow because of foreign keys."
+  (filterv #(<= 1 (sync-classes %) 5) entity-tables))
 
 ;; ── Export scope ───────────────────────────────────────────────────
 ;;
@@ -349,6 +413,9 @@
    :card_schedules {:where (str "t.flashcard_id IN (" owned-flashcards ")")
                     :params 1 :order "t.flashcard_id, t.ord"}
 
+   :topic_versions {:where (str "t.topic_id IN (" owned-topics ")")
+                    :params 1
+                    :order "t.id"}
    :card_versions {:where (str "t.root_topic_id IN (" owned-topics ")")
                    :params 1 :order "t.id"}
 

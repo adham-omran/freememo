@@ -13,6 +13,7 @@
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [freememo.peer :as peer]
    [taoensso.telemere :as tel]))
 
 ;; Defined further down (defonce config); forward-declared so the env-fallback
@@ -41,11 +42,15 @@
 
 (defn credits-enabled?
   "True in official deployment (credits on, platform key). False = self-host.
-   Accepts boolean true or string \"true\" (case-insensitive) from either source."
+   Accepts boolean true or string \"true\" (case-insensitive) from either source.
+   A desktop is never in credits mode: freememo.net bills its AI calls at the
+   proxy (plans/electron-local-db-sync.md 4.10.2), and its local balance is
+   not a balance at all."
   []
-  (let [v (env-or-config "CREDITS_ENABLED" [:deployment :credits-enabled?])]
-    (or (true? v)
-        (= "true" (some-> v str str/lower-case str/trim)))))
+  (and (not (peer/desktop?))
+       (let [v (env-or-config "CREDITS_ENABLED" [:deployment :credits-enabled?])]
+         (or (true? v)
+             (= "true" (some-> v str str/lower-case str/trim))))))
 
 (defn wayl-host
   "Which Wayl API host to call: \"live\" → api.thewayl.com, \"test\" →
@@ -117,11 +122,20 @@
 ;; this namespace is what lets that implementation be excluded from public
 ;; history without leaving its vocabulary behind.
 
+(def desktop-proxy-key
+  "What a desktop reports as its OpenRouter key. It is never sent anywhere:
+   `freememo.openrouter/endpoint` authenticates a desktop with its desktop
+   token instead. It exists so the callers that refuse a nil key proceed."
+  "freememo-desktop-proxy")
+
 (defn platform-openrouter-api-key
   "OpenRouter key for the OCR model picker (topology A1: all OCR lanes route
-   through one OpenRouter key). nil when unconfigured."
+   through one OpenRouter key). nil when unconfigured. On a desktop,
+   `desktop-proxy-key` (plans/electron-local-db-sync.md 4.10)."
   []
-  (env-or-config "PLATFORM_OPENROUTER_API_KEY" [:secrets :platform-openrouter-api-key]))
+  (if (peer/desktop?)
+    desktop-proxy-key
+    (env-or-config "PLATFORM_OPENROUTER_API_KEY" [:secrets :platform-openrouter-api-key])))
 
 (defn wayl-merchant-token []
   (env-or-config "WAYL_MERCHANT_TOKEN" [:secrets :wayl-merchant-token]))
@@ -208,6 +222,12 @@
   "IQD per 1 USD. nil when unconfigured."
   []
   (:fx-iqd-per-usd (credits-config)))
+
+(defn desktop-license-usd
+  "The desktop license price in USD. nil when unconfigured, and then no
+   license is for sale."
+  []
+  (:desktop-license-usd (credits-config)))
 
 (defn ocr-model-allowlist
   "OCR-model :ids (from freememo.ocr-models/registry) a credits-mode user may

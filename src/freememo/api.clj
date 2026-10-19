@@ -33,6 +33,9 @@
    [freememo.config :as config]
    [freememo.client-failure-http :as client-failure-http]
    [freememo.account-export :as account-export]
+   [freememo.ai-proxy :as ai-proxy]
+   [freememo.desktop-auth :as desktop-auth]
+   [freememo.sync-server :as sync-server]
    [freememo.archive-http :as archive-http]
    [freememo.epub-http :as epub-http]
    [freememo.upload-http :as upload-http]
@@ -791,7 +794,7 @@
      :headers {"Location" "/"}
      :body ""}))
 
-(defn google-auth-handler [_request]
+(defn google-auth-handler [request]
   (if-not (google-oauth/configured?)
     {:status 503
      :headers {"Content-Type" "text/plain"}
@@ -799,7 +802,7 @@
     (let [state (str (random-uuid))]
       {:status 302
        :headers {"Location" (google-oauth/auth-url state)}
-       :session {:oauth-state state}})))
+       :session (desktop-auth/carry-return (:session request) {:oauth-state state})})))
 
 (defn- google-sign-in-callback
   "The sign-in branch of `google-callback-handler`.
@@ -837,7 +840,11 @@
           ;; `landing` is bound once and used twice on purpose: the hook may only
           ;; act on a request for the path we send the browser to, so the two must
           ;; be the same value, not two literals that agree today.
-          (let [landing "/"]
+          ;; A pending desktop sign-in lands back on its authorize page. The
+          ;; conversion flag then names that path, which the shell never
+          ;; serves, so a signup that starts in the desktop app reports no
+          ;; conversion.
+          (let [landing (desktop-auth/return-path (:session request))]
             {:status 302
              :headers {"Location" landing}
              :session (hook/on-signup {:user-id user-id} new? landing)}))
@@ -1030,20 +1037,22 @@
 
 (defn- authenticate->session-response
   "Shared username/password auth → 302 redirect carrying the session.
-   Post: success → :session {:user-id N}; blank/failure → :session {:auth-error …}."
-  [username password]
+   Post: success → :session {:user-id N}; blank/failure → :session {:auth-error …}.
+         A pending desktop sign-in survives the session replacement, and a
+         success lands back on its authorize page (desktop-auth/return-path)."
+  [old-session username password]
   (if (or (str/blank? username) (str/blank? password))
     {:status 302
      :headers {"Location" "/"}
-     :session {:auth-error "Missing user or password"}}
+     :session (desktop-auth/carry-return old-session {:auth-error "Missing user or password"})}
     (let [result (auth/authenticate username password)]
       (if (:success result)
         {:status 302
-         :headers {"Location" "/"}
+         :headers {"Location" (desktop-auth/return-path old-session)}
          :session {:user-id (:user-id result)}}
         {:status 302
          :headers {"Location" "/"}
-         :session {:auth-error (:error result)}}))))
+         :session (desktop-auth/carry-return old-session {:auth-error (:error result)})}))))
 
 (defn login-handler
   "GET /login?user=X&password=Y — dev-only username/password login.
@@ -1054,7 +1063,7 @@
    build. Acceptable only for local Playwright-driven testing."
   [request]
   (let [params (:params request)]
-    (authenticate->session-response (get params "user") (get params "password"))))
+    (authenticate->session-response (:session request) (get params "user") (get params "password"))))
 
 (defn login-post-handler
   "POST /login — production username/password login. Reads the urlencoded form
@@ -1063,7 +1072,7 @@
    302 → / with :session {:auth-error ...}."
   [request]
   (let [params (:params request)]
-    (authenticate->session-response (get params "user") (get params "password"))))
+    (authenticate->session-response (:session request) (get params "user") (get params "password"))))
 
 (defn save-page-text-handler [request]
   (if-let [user-id (require-auth request)]
@@ -1155,6 +1164,11 @@
 
             (#{"Complete" "Delivered"} status)
             (let [r (db/complete-credit-order! reference-id)]
+              (when (:licensed r)
+                (commands/bump! (:user-id r) :credits-granted)
+                (tel/log! {:level :info :id ::wayl-licensed
+                           :data {:reference-id reference-id :user-id (:user-id r)}}
+                  "Wayl payment granted a desktop license"))
               (when (:credited r)
                 (commands/bump! (:user-id r) :credits-granted)
                 (tel/log! {:level :info :id ::wayl-credited
@@ -1242,7 +1256,27 @@
    {:method :get  :path "/auth/google/drive"          :handler #'drive-authorize-handler}
    {:method :get  :path "/api/neoreader/picker-token" :handler #'drive-picker-token-handler}
    {:method :post :path "/api/neoreader/bind"         :handler #'neoreader-bind-handler   :body :small}
-   {:method :post :path "/api/neoreader/sync"         :handler #'neoreader-sync-handler   :body :small}])
+   {:method :post :path "/api/neoreader/sync"         :handler #'neoreader-sync-handler   :body :small}
+   ;; Desktop app (plans/electron-local-db-sync.md). Sign-in is browser-facing
+   ;; and sits outside /api; everything else takes the desktop token.
+   {:method :get  :path "/desktop/authorize"    :handler #'desktop-auth/authorize-handler}
+   {:method :post :path "/desktop/authorize"    :handler #'desktop-auth/authorize-post-handler :body :small}
+   {:method :post :path "/desktop/token"        :handler #'desktop-auth/token-handler   :body :small}
+   {:method :post :path "/api/desktop/id-block" :handler #'desktop-auth/id-block-handler :body :small}
+   {:method :post :path "/api/sync/meta"        :handler #'sync-server/meta-handler     :body :small}
+   {:method :post :path "/api/sync/graves"      :handler #'sync-server/graves-handler   :body :small}
+   {:method :post :path "/api/sync/upload"      :handler #'sync-server/upload-handler   :body :small}
+   {:method :post :path "/api/sync/download"    :handler #'sync-server/download-handler :body :small}
+   {:method :post :path "/api/sync/finish"      :handler #'sync-server/finish-handler   :body :small}
+   {:method :post :path "/api/sync/full/upload" :handler #'sync-server/full-upload-handler :body :small}
+   {:method :post :path "/api/sync/full/download" :handler #'sync-server/full-download-handler :body :small}
+   ;; A blob PUT is not a POST, so `wrap-route-body-size` does not cap it; the
+   ;; handler refuses one larger than the account's free storage instead.
+   {:method :put  :pattern #"/api/sync/blob/[0-9a-f]{64}" :handler #'sync-server/blob-put-handler}
+   {:method :get  :path "/api/sync/blob"        :handler #'sync-server/blob-get-handler}
+   {:method :post :pattern #"/api/desktop/ai/(chat/completions|audio/transcriptions)"
+    :handler #'ai-proxy/post-handler :body :small}
+   {:method :get  :pattern #"/api/desktop/ai/(models|generation)" :handler #'ai-proxy/get-handler}])
 
 (defn- match-route
   "First route whose method and path/pattern match, else nil.

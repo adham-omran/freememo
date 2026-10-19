@@ -4,6 +4,7 @@
    client; per-call timeout default 5s. All failures return tagged values —
    resolvers never throw."
   (:require [cheshire.core :as json]
+   [freememo.desktop-link :as link]
             [clj-http.client :as http]
             [clojure.string :as str]
             [taoensso.telemere :as tel]
@@ -26,30 +27,32 @@
    {:status :timeout} on socket timeout; {:status :exception :reason ...}
    on anything else. Never throws."
   [url & [{:keys [timeout-ms accept]}]]
-  (let [t (or timeout-ms default-timeout-ms)]
-    (try
-      (let [resp (http/get url
-                   {:headers (cond-> {"User-Agent" user-agent}
-                               accept (assoc "Accept" accept))
-                    :cookie-policy :none
-                    :throw-exceptions false
-                    :socket-timeout t
-                    :connection-timeout t
-                    :max-body 5242880})
-            status (:status resp)]
-        (cond
-          (= 200 status) {:status 200 :body (:body resp)}
-          (= 404 status) {:status :not-found}
-          :else          {:status :http-error :code status}))
-      (catch java.net.SocketTimeoutException _
-        (tel/log! {:level :warn :id ::http-get :url url} "socket timeout")
-        {:status :timeout})
-      (catch java.net.ConnectException _
-        (tel/log! {:level :warn :id ::http-get :url url} "connection refused")
-        {:status :exception :reason :connect})
-      (catch Exception e
-        (tel/log! {:level :warn :id ::http-get :url url} (.getMessage e))
-        {:status :exception :reason (.getMessage e)}))))
+  (if-let [offline (link/offline-message "Citation lookup")]
+    {:status :exception :reason offline}
+    (let [t (or timeout-ms default-timeout-ms)]
+      (try
+        (let [resp (http/get url
+                     {:headers (cond-> {"User-Agent" user-agent}
+                                 accept (assoc "Accept" accept))
+                      :cookie-policy :none
+                      :throw-exceptions false
+                      :socket-timeout t
+                      :connection-timeout t
+                      :max-body 5242880})
+              status (:status resp)]
+          (cond
+            (= 200 status) {:status 200 :body (:body resp)}
+            (= 404 status) {:status :not-found}
+            :else          {:status :http-error :code status}))
+        (catch java.net.SocketTimeoutException _
+          (tel/log! {:level :warn :id ::http-get :url url} "socket timeout")
+          {:status :timeout})
+        (catch java.net.ConnectException _
+          (tel/log! {:level :warn :id ::http-get :url url} "connection refused")
+          {:status :exception :reason :connect})
+        (catch Exception e
+          (tel/log! {:level :warn :id ::http-get :url url} (.getMessage e))
+          {:status :exception :reason (.getMessage e)})))))
 
 (defn- get-json! [url & opts]
   (let [r (apply get-string! url opts)]
