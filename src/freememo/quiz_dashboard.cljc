@@ -158,8 +158,11 @@
                           :border-radius "var(--radius-md)"
                           :background "var(--color-bg-card)"}})
       (tooltip/Tooltip! hint)
+      ;; While the stats read is pending, `value` is an empty e/amb and this div
+      ;; stays empty; `.quiz-tile-value:empty` paints the skeleton (index.css).
       (dom/div
-        (dom/props {:style {:font-size "22px" :font-weight "700" :line-height "1.1"
+        (dom/props {:class "quiz-tile-value"
+                    :style {:font-size "22px" :font-weight "700" :line-height "1.1"
                             :color (or accent "var(--color-text-primary)")}})
         (dom/text (str value)))
       (dom/div
@@ -550,7 +553,11 @@
                 (dom/button
                   (dom/props {:class "btn btn-primary btn-sm"})
                   (dom/props {:data-tour "quiz-start"})
-                  (dom/text (if (pos? due) (str "Start Review (" due " due)") "Start Review"))
+                  ;; Two text nodes: the label must not wait on the due count. One
+                  ;; node built from `due` left an empty blue button while the
+                  ;; stats read was pending.
+                  (dom/text "Start Review")
+                  (when (pos? due) (dom/text (str " (" due " due)")))
                   (dom/On "click" (fn [_] (start-review!)) nil))))
             (DashboardTiles stats)
             (dom/div

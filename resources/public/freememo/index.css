@@ -523,6 +523,26 @@ html:has(> body > .app-shell) > body {
     padding: 10px 0;
 }
 
+/* Quiz dashboard tile number (quiz_dashboard.cljc StatTile). The div is empty
+   while the stats read is pending, so it had no height and the tile shrank to
+   its label. The bar holds the number's line and fades in after 150ms. */
+.quiz-tile-value:empty::before {
+    content: "";
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    vertical-align: middle;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
+    background-size: 200% 100%;
+    animation: fade-in 0.2s ease 150ms both, skeleton-pulse 1.5s ease-in-out 150ms infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .quiz-tile-value:empty::before {
+        animation: fade-in 0.2s ease 150ms both;
+    }
+}
+
 /* ── Quiz dashboard footer (freememo.quiz-heatmap) ────────────────
    A year of review activity plus four numbers. FULL-BLEED past the dashboard's
    760px column: 53 weeks at a legible cell size is about 800px, and shrinking the
@@ -2235,6 +2255,43 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     font-size: 13px;
     color: var(--color-text-secondary);
     pointer-events: none;
+}
+/* Loading rows for every TapeTable. The row count and each row are separate
+   server reads, so the body holds no row twice over: before the count arrives,
+   and after it while the first row reads are in flight. Both showed a blank box.
+   This draws one text bar per row slot until a row or the empty message mounts.
+   Before the count arrives it is a normal-flow ::before: the box has no height
+   of its own then, and the bars are what give it some. After, it overlays. Fallback height
+   is 6 rows; once --count is known the bars match the rows that will fill the
+   box, up to its 10-row cap. 41px is tape-table/row-height. The 150ms delay
+   keeps a fast load free of a flash. */
+.tape-table-scroll:not(:has(.tape-table-body tr, .tape-table-empty))::before {
+    content: "";
+    display: block;
+    box-sizing: border-box;
+    height: calc(min(var(--count, 6), 10) * 41px);
+    padding-inline: 10px;
+    background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%) content-box;
+    background-size: 200% 100%;
+    -webkit-mask: repeating-linear-gradient(to bottom, transparent 0 14px, #000 14px 27px, transparent 27px 41px);
+    mask: repeating-linear-gradient(to bottom, transparent 0 14px, #000 14px 27px, transparent 27px 41px);
+    animation: fade-in 0.2s ease 150ms both, skeleton-pulse 1.5s ease-in-out 150ms infinite;
+}
+/* Once --count is set inline, the table reserves the rows' height itself. In
+   normal flow the bars would sit above that space and add their own height to
+   it, so from then on they overlay the table instead. The inline property is the
+   signal because Electric sets each prop on its own: `.tape-scroll`, from the
+   same map, is present before the count arrives (measured). */
+.tape-table-scroll[style*="--count"]:not(:has(.tape-table-body tr, .tape-table-empty))::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+    .tape-table-scroll::before {
+        animation: fade-in 0.2s ease 150ms both;
+    }
 }
 
 /* Sticky header for a table inside its scroll box (.tx-head), used by
