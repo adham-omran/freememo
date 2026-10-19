@@ -209,8 +209,9 @@
    buttons, dropdown rows, the undo-history list — and is the default because a
    control that reaches dispatch! without saying otherwise IS one. The keyboard
    handler and the palette name themselves, so the trail can answer whether a
-   bound chord is ever pressed."
-  #{:button :keyboard :palette})
+   bound chord is ever pressed. :menu is the desktop app's menu bar, which
+   calls freememo.keyboard/run-menu-command."
+  #{:button :keyboard :palette :menu})
 
 (defn dispatch!
   "Invoke a command. With no `payload`, resolves one via the registered
