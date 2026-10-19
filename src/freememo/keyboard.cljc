@@ -109,4 +109,4 @@
       its menu, and the web app binds neither, because a browser owns both.
       Returns the dispatch! result as a string."
      [id]
-     (name (bus/dispatch! (keyword id) nil :menu))))
+     (name (bus/dispatch! (keyword id) nil :menu-bar))))
