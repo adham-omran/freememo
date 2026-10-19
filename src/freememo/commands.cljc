@@ -660,6 +660,16 @@
                             :target :audio-clip :target-if #{:looping} :menu [1 1] :views #{}}
 
      ;; Caret edits are Quill edits: the editor's own save persists them.
+     ;; Cut and Copy act on the selection the right-click kept. There is no
+     ;; Paste: reading the clipboard needs a permission prompt (plan 0.2).
+     :cut-editor-selection  {:label "Cut selected text" :menu-label "Cut"
+                             :class :mutation :exec :client
+                             :target :caret :target-if #{:has-text-selection}
+                             :menu [0 1] :views #{}}
+     :copy-editor-selection {:label "Copy selected text" :menu-label "Copy"
+                             :class :query :exec :client
+                             :target :caret :target-if #{:has-text-selection}
+                             :menu [0 2] :views #{}}
      :insert-formula    {:label "Insert formula" :class :mutation :exec :client
                          :target :caret :target-if #{:math-ready} :menu [1 1] :views #{}}
      :insert-table      {:label "Insert table" :class :mutation :exec :client

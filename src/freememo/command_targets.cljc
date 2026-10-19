@@ -65,7 +65,8 @@
    :looping            (fn [s] (true? (:looping? s)))
    :not-looping        (fn [s] (false? (:looping? s)))
    :math-ready         (fn [s] (true? (:math-ready? s)))
-   :has-selection      (fn [s] (not (str/blank? (:selection-text s))))})
+   :has-selection      (fn [s] (not (str/blank? (:selection-text s))))
+   :has-text-selection (fn [s] (pos? (or (:selection-length s) 0)))})
 
 (def enable-reasons
   "Why an item shows disabled, for each test an `:enable-if` may name."

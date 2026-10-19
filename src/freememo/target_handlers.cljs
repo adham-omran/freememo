@@ -163,6 +163,58 @@
 ;; Caret — Quill edits, source "user", so the editor's own save persists them
 ;; ---------------------------------------------------------------------------
 
+(defn- clipboard-blocked
+  "Nil when the async clipboard API can write, else a message naming why not.
+   The API exists only in a secure context (https or localhost)."
+  []
+  (cond
+    (not (.-isSecureContext js/window))
+    "Copying needs a secure connection. Open the app over https or on localhost."
+    (nil? (.-clipboard js/navigator))
+    "This browser cannot copy from a menu. Use Ctrl+C or Cmd+C."
+    :else nil))
+
+(defn- write-selection!
+  "Write the subject's selection in `ed` to the clipboard, as the HTML and the
+   text Quill's own copy writes (`getSemanticHTML`, `getText`).
+   Pre : the subject has a :selection-length above 0.
+   Post: a promise that resolves once the clipboard holds the selection and
+         rejects when it could not be written. Without ClipboardItem only the
+         text is written."
+  [^js ed {:keys [selection-index selection-length]}]
+  (let [text (.getText ed selection-index selection-length)]
+    (if (exists? js/ClipboardItem)
+      (let [html (.getSemanticHTML ed selection-index selection-length)]
+        (.write js/navigator.clipboard
+          #js [(js/ClipboardItem.
+                 #js {"text/html" (js/Blob. #js [html] #js {:type "text/html"})
+                      "text/plain" (js/Blob. #js [text] #js {:type "text/plain"})})]))
+      (.writeText js/navigator.clipboard text))))
+
+(defn- copy-selection!
+  "Copy, then run `after!` with the editor and the subject once the write
+   succeeded. A failure toasts and runs nothing, so Cut never deletes text the
+   clipboard did not take."
+  [target after!]
+  (let [^js ed (-> target :surface :quill)
+        s (subject target)]
+    (if-let [blocked (clipboard-blocked)]
+      (report! blocked)
+      (-> (write-selection! ed s)
+        (.then (fn [_] (after! ed s)))
+        (.catch (fn [_] (report! "Couldn't copy the selected text.")))))))
+
+(bus/register-handler! :copy-editor-selection
+  (fn [_ctx target] (copy-selection! target (fn [_ _] nil))))
+
+(bus/register-handler! :cut-editor-selection
+  (fn [_ctx target]
+    (copy-selection! target
+      (fn [^js ed {:keys [selection-index selection-length]}]
+        (.deleteText ed selection-index selection-length "user")
+        (.focus ed)
+        (.setSelection ed selection-index 0 "user")))))
+
 (defn- at-caret!
   "Focus the target's editor with the caret at the subject's index, then call
    `f` with the editor and that index (clamped to the live document).

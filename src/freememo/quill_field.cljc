@@ -438,12 +438,18 @@
           :right (+ (.-left c) (.-right b)) :bottom (+ (.-top c) (.-bottom b))}))))
 
 #?(:cljs
-   (defn- caret-target [^js ed]
+   (defn- caret-target
+     "The caret target of `ed`: where an insert lands, and the selection a Cut
+      or Copy row acts on (index and length, 0 when nothing is selected)."
+     [^js ed]
      (when (.isEnabled ed)
-       {:kind :caret
-        :subjects [{:index (caret-index ed)
-                    :math-ready? (formula-ui/installed? ed)}]
-        :surface {:quill ed :anchor-el (.-root ed)}})))
+       (let [^js r (.getSelection ed)]
+         {:kind :caret
+          :subjects [{:index (caret-index ed)
+                      :selection-index (if r (.-index r) 0)
+                      :selection-length (if r (.-length r) 0)
+                      :math-ready? (formula-ui/installed? ed)}]
+          :surface {:quill ed :anchor-el (.-root ed)}}))))
 
 #?(:cljs
    (defn- target-at
