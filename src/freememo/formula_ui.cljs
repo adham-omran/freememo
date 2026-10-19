@@ -49,6 +49,24 @@
         ;; Defensive: throwOnError:false covers parse errors, not every failure.
         (set! (.-textContent node) tex)))))
 
+(defonce ^:private openers
+  ;; editor → its popover's open! fn, so the context menu's Insert formula can
+  ;; open the popover this editor installed.
+  (js/WeakMap.))
+
+(defn installed?
+  "True when `editor` has the formula popover — that is, KaTeX was ready."
+  [editor]
+  (.has openers editor))
+
+(defn open-formula!
+  "Open `editor`'s formula popover on the rendered formula `el`.
+   Pre : (installed? editor); `el` is a connected span.ql-formula in `editor`.
+   Post: the popover is open on `el`, as a click on it opens it."
+  [editor el]
+  (when-let [open! (.get openers editor)]
+    (open! el)))
+
 (defn install!
   "Wire the formula popover and the typed-source converter for `editor`.
    Returns a teardown fn removing both.
@@ -109,10 +127,15 @@
                     (when-let [a @!anchor]
                       (editor-actions/replace-formula! editor a ""))
                     (close!))
+        ;; A formula with no TeX renders as nothing. Cancelling on one — which
+        ;; is what Escape does straight after the context menu's Insert
+        ;; formula — removes it, so no invisible embed stays behind.
         cancel!   (fn []
                     (when-let [a @!anchor]
-                      (when-let [i (editor-actions/formula-caret-index editor a)]
-                        (.setSelection editor i 0 "user")))
+                      (if (= "" (.trim (or (.getAttribute a "data-value") "")))
+                        (editor-actions/replace-formula! editor a "")
+                        (when-let [i (editor-actions/formula-caret-index editor a)]
+                          (.setSelection editor i 0 "user"))))
                     (close!))
         open!     (fn [^js a]
                     (reset! !anchor a)
@@ -171,7 +194,9 @@
     (.addEventListener js/window "resize" reposition)
     (.addEventListener js/document "mousedown" on-doc-down true)
     (.addEventListener js/document "keydown" on-doc-key)
+    (.set openers editor open!)
     (fn teardown []
+      (.delete openers editor)
       (stop-conversion)
       (.removeEventListener input "input" on-input)
       (.removeEventListener input "keydown" on-input-key)

@@ -40,15 +40,25 @@
          is the conservative choice for a note we only want to delete.
 
    Deliberately small: ids and kind strings, roughly 20 bytes a note against the
-   635 the notes themselves cost. The full notes never reach the server."
-  [user-id]
-  (let [manifest (db/get-pushed-card-manifest user-id)
-        kinds (into {} (map (juxt :flashcards/anki_note_id :flashcards/kind))
-                (db/get-cards-for-reconcile user-id))
-        tombstone-ids (mapv :anki_note_tombstones/anki_note_id
-                        (db/list-anki-tombstones user-id))]
-    {:note-ids (vec (distinct (concat (map :note-id manifest) tombstone-ids)))
-     :kind-by-note (select-keys kinds (map :note-id manifest))}))
+   635 the notes themselves cost. The full notes never reach the server.
+
+   The 2-arity scopes the run to topic `root-id` and its descendants (a branch
+   run). Then the scan covers only the notes of cards under the root, and NO
+   tombstones. A tombstone is a card that no longer exists, so no topic can be
+   named for it: it cannot be shown to lie under the root, and a branch run that
+   deleted its Anki note could delete a note outside the root. The full run
+   settles tombstones. With a nil `root-id` this is the 1-arity."
+  ([user-id] (scan-targets user-id nil))
+  ([user-id root-id]
+   (let [manifest (db/get-pushed-card-manifest user-id root-id)
+         kinds (into {} (map (juxt :flashcards/anki_note_id :flashcards/kind))
+                 (db/get-cards-for-reconcile user-id nil root-id))
+         tombstone-ids (if (some? root-id)
+                         []
+                         (mapv :anki_note_tombstones/anki_note_id
+                           (db/list-anki-tombstones user-id)))]
+     {:note-ids (vec (distinct (concat (map :note-id manifest) tombstone-ids)))
+      :kind-by-note (select-keys kinds (map :note-id manifest))})))
 
 (defn plan
   "Classify every card and tombstone `user-id` owns.
@@ -69,27 +79,37 @@
            :note-ids-to-drop   tombstones already satisfied
 
    `:aborted?` true means the reply did not describe this collection. The caller
-   MUST apply nothing; a partial run would still delete what it reached."
-  [user-id anki-digest-by-note absent-notes]
-  (let [manifest {:cards (db/get-cards-for-reconcile user-id)
-                  :tombstones (db/list-anki-tombstones user-id)}
-        {:keys [cards tombstones counts aborted?]}
-        (rec/plan-run manifest anki-digest-by-note (set absent-notes))
-        by-outcome (group-by :outcome cards)
-        tomb-by    (group-by :outcome tombstones)
-        writes     (concat (get by-outcome :create) (get by-outcome :push))]
-    {:aborted?           aborted?
-     :counts             counts
-     :report             (rec/report-line counts)
-     :write-card-ids     (mapv :card-id writes)
-     :kind-by-card       (into {} (map (juxt :card-id :kind)) writes)
-     :pull-card-ids      (mapv :card-id (get by-outcome :pull))
-     :pull-note-ids      (mapv :note-id (get by-outcome :pull))
-     :backfill           (mapv #(select-keys % [:card-id :note-id])
-                           (get by-outcome :needs-baseline))
-     :conflict-card-ids  (mapv :card-id (get by-outcome :conflict))
-     :note-ids-to-delete (mapv :note-id (get tomb-by :delete-anki))
-     :note-ids-to-drop   (mapv :note-id (get tomb-by :drop-tombstone))}))
+   MUST apply nothing; a partial run would still delete what it reached.
+
+   The 4-arity takes `root-id` and plans a branch run: only the cards under that
+   topic and its descendants, and no tombstones (see `scan-targets`). So
+   `:note-ids-to-delete` and `:note-ids-to-drop` are empty, and no note outside
+   the root can be named for deletion. `:aborted?` is then judged over the
+   branch's synced cards alone; a small branch gives `bulk-absence?` a small
+   sample, and its floor of three absent notes stands. With a nil `root-id` this
+   is the 3-arity."
+  ([user-id anki-digest-by-note absent-notes]
+   (plan user-id anki-digest-by-note absent-notes nil))
+  ([user-id anki-digest-by-note absent-notes root-id]
+   (let [manifest {:cards (db/get-cards-for-reconcile user-id nil root-id)
+                   :tombstones (if (some? root-id) [] (db/list-anki-tombstones user-id))}
+         {:keys [cards tombstones counts aborted?]}
+         (rec/plan-run manifest anki-digest-by-note (set absent-notes))
+         by-outcome (group-by :outcome cards)
+         tomb-by    (group-by :outcome tombstones)
+         writes     (concat (get by-outcome :create) (get by-outcome :push))]
+     {:aborted?           aborted?
+      :counts             counts
+      :report             (rec/report-line counts)
+      :write-card-ids     (mapv :card-id writes)
+      :kind-by-card       (into {} (map (juxt :card-id :kind)) writes)
+      :pull-card-ids      (mapv :card-id (get by-outcome :pull))
+      :pull-note-ids      (mapv :note-id (get by-outcome :pull))
+      :backfill           (mapv #(select-keys % [:card-id :note-id])
+                            (get by-outcome :needs-baseline))
+      :conflict-card-ids  (mapv :card-id (get by-outcome :conflict))
+      :note-ids-to-delete (mapv :note-id (get tomb-by :delete-anki))
+      :note-ids-to-drop   (mapv :note-id (get tomb-by :drop-tombstone))})))
 
 ;; ---------------------------------------------------------------------------
 ;; Writes
@@ -226,17 +246,21 @@
 
    pre : the ids come from ONE run's plan, over the user's whole collection —
          this clears the flag on every card not named, so a partial list would
-         silently forget conflicts the run did not look at.
-   post: those cards carry `anki_conflict_at`, no others do.
+         silently forget conflicts the run did not look at. A branch run passes
+         its `root-id` for exactly that reason: the list is complete only for
+         the subtree, and the clearing stops there.
+   post: those cards carry `anki_conflict_at`, no others do (no others under
+         `root-id`, when given).
          Returns {:success true :count n}."
-  [user-id conflict-card-ids]
-  (try
-    (db/set-anki-conflicts! user-id conflict-card-ids)
-    (commands/bump! user-id :anki-sync)
-    {:success true :count (count conflict-card-ids)}
-    (catch Exception e
-      (tel/error! {:id ::set-conflicts!} e)
-      {:success false :error (.getMessage e)})))
+  ([user-id conflict-card-ids] (set-conflicts! user-id conflict-card-ids nil))
+  ([user-id conflict-card-ids root-id]
+   (try
+     (db/set-anki-conflicts! user-id conflict-card-ids root-id)
+     (commands/bump! user-id :anki-sync)
+     {:success true :count (count conflict-card-ids)}
+     (catch Exception e
+       (tel/error! {:id ::set-conflicts!} e)
+       {:success false :error (.getMessage e)}))))
 
 (defn finish-tombstones!
   "Forget tombstones whose notes are gone from Anki.
@@ -321,6 +345,32 @@
       (tel/error! {:id ::resolve-conflicts!} e)
       {:success false :error (.getMessage e)})))
 
+(defn- confine-outcome
+  "Narrow a branch run's outcome to the cards under `root-id`.
+
+   pre : `outcome` is `finish-run!`'s argument. `root-id` is nil for a full run.
+   post: for a full run, `outcome` unchanged. For a branch run, every card id
+         list holds only cards `user-id` owns under `root-id`, and
+         `:finished-note-ids` is empty.
+
+   The ids come back from the client. The plan already scoped them, but this is
+   the write path: a stale tab, a plan from before a re-parent or a hand-built
+   call would otherwise stamp a baseline on a card outside the branch, and a
+   baseline is the one thing that hides a change. The tombstone list is emptied
+   because a branch run plans none (see `scan-targets`)."
+  [user-id root-id {:keys [writes pull-card-ids backfill conflict-card-ids] :as outcome}]
+  (if (nil? root-id)
+    outcome
+    (let [inside (set (db/card-ids-in-subtree user-id root-id
+                        (concat (map :card-id writes) pull-card-ids
+                          (map :card-id backfill) conflict-card-ids)))]
+      (assoc outcome
+        :writes            (filterv (comp inside :card-id) writes)
+        :pull-card-ids     (filterv inside pull-card-ids)
+        :backfill          (filterv (comp inside :card-id) backfill)
+        :conflict-card-ids (filterv inside conflict-card-ids)
+        :finished-note-ids []))))
+
 (defn finish-run!
   "Every server write a run makes, in one call and one order.
 
@@ -331,9 +381,13 @@
             :digests           {note-id hex}
             :backfill          [{:card-id :note-id} …]
             :conflict-card-ids [n …]
-            :finished-note-ids [n …]}
+            :finished-note-ids [n …]
+            :root-id           n?}
          The caller has already done the Anki-side work and re-read what it
          wrote — see the namespace invariant on where a baseline comes from.
+         A `:root-id` marks a branch run: the outcome is confined to cards under
+         that topic and its tombstone list is dropped (`confine-outcome`), and
+         conflicts are replaced only inside the branch.
    post: {:success bool :report str :counts {…}}.
 
    The order is load-bearing. Conflicts are stored LAST, because a card this run
@@ -345,21 +399,24 @@
    Best-effort by design (plan item 6.7): each step reports its own failure and
    the rest still run. A failure in one phase must not strand the baselines of
    another, or the next run would re-do work it cannot see was done."
-  [user-id {:keys [writes pull-card-ids pull-notes digests backfill
-                   conflict-card-ids finished-note-ids]}]
-  (let [steps [[:writes      #(record-anki-writes! user-id writes)]
+  [user-id {:keys [root-id] :as outcome}]
+  (let [{:keys [writes pull-card-ids pull-notes digests backfill
+                conflict-card-ids finished-note-ids]}
+        (confine-outcome user-id root-id outcome)
+        steps [[:writes      #(record-anki-writes! user-id writes)]
                [:pulls       #(apply-pulls! user-id pull-card-ids pull-notes digests)]
                [:backfilled  #(backfill-baselines! user-id
                                 (mapv (fn [{:keys [card-id note-id]}]
                                         {:card-id card-id
                                          :anki-digest (get digests note-id)})
                                   backfill))]
-               [:conflicts   #(set-conflicts! user-id conflict-card-ids)]
+               [:conflicts   #(set-conflicts! user-id conflict-card-ids root-id)]
                [:tombstones  #(finish-tombstones! user-id finished-note-ids)]]
         results (reduce (fn [acc [k f]] (assoc acc k (f))) {} steps)
         failures (into {} (remove (comp :success val)) results)]
     (tel/log! {:level :info :id ::finish-run!
                :data {:user-id user-id
+                      :root-id root-id
                       :counts (update-vals results :count)
                       :failures (update-vals failures :error)}}
       "reconcile run recorded")

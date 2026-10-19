@@ -251,7 +251,10 @@
             idx (e/watch !idx)
             rows (palette-rows active-tab (e/watch bus/!ctx) query)]
         (dom/div
+          ;; data-keeps-focus-target: opening the palette must not clear the
+          ;; target of the row it was opened over (context-menu-surface).
           (dom/props {:class "modal-backdrop"
+                      :data-keeps-focus-target "true"
                       :role "dialog" :aria-modal "true" :aria-label "Command palette"
                       :style {:align-items "flex-start" :padding-top "12vh"}})
           (modal-shell/FocusReturn)

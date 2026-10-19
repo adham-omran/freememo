@@ -4477,27 +4477,30 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
-/* Image context menu — right-click on an <img> in the document editor.
-   Owns Copy/Save image plus the pin and occlusion actions
-   (freememo.editor-image-menu). */
-/* The clip menu (editor-actions/install-clip-menu!) shares this chrome. It is a
-   separate menu because it needs the Quill instance and both editors, not the
-   container plus app callbacks the image menu takes. */
-.image-context-menu,
-.clip-context-menu {
+/* The context menu (freememo.context-menu, plans/custom-context-menu.md).
+   One menu on <body>, in the top layer through popover="manual". The UA
+   [popover] rule centres the element with `inset: 0; margin: auto`, so this
+   rule resets both: the script sets `left` and `top`. The z-index matters only
+   where the Popover API is missing. */
+.context-menu {
     position: fixed;
-    z-index: 9999;
+    inset: auto;
+    margin: 0;
+    z-index: 10001;
     background: var(--color-bg-card, #fff);
+    color: var(--color-text-primary, #111827);
     border: 1px solid var(--color-border, #d1d5db);
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
     padding: 4px 0;
     min-width: 200px;
+    max-width: min(360px, calc(100vw - 16px));
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
     font-size: 13px;
     animation: fade-in 0.1s ease;
 }
-.image-context-menu button,
-.clip-context-menu button {
+.context-menu__item {
     display: block;
     width: 100%;
     text-align: left;
@@ -4505,33 +4508,68 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border: none;
     padding: 8px 14px;
     cursor: pointer;
-    color: var(--color-text-primary, #111827);
-    font-size: 13px;
+    color: inherit;
+    font: inherit;
     line-height: 1.4;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.image-context-menu button:hover:not(:disabled),
-.clip-context-menu button:hover:not(:disabled) {
+.context-menu__item:hover:not([aria-disabled="true"]),
+.context-menu__item:focus-visible {
     background: var(--color-bg-hover, #f3f4f6);
+    outline: none;
 }
-.image-context-menu button:disabled,
-.clip-context-menu button:disabled {
+.context-menu__item:focus-visible {
+    box-shadow: inset 2px 0 0 var(--color-primary);
+}
+.context-menu__item[aria-disabled="true"] {
     color: var(--color-text-hint, #9ca3af);
     cursor: not-allowed;
 }
-/* Separates the clipboard/download group from the app actions below it. */
-.image-context-menu__divider {
+.context-menu__item--danger {
+    color: var(--color-danger-text);
+}
+.context-menu__divider {
     height: 1px;
     margin: 4px 0;
     background: var(--color-border, #d1d5db);
 }
-/* Last button is "Cancel" — visually separated */
-.image-context-menu button:last-child,
-.clip-context-menu button:last-child {
-    border-top: 1px solid var(--color-border, #d1d5db);
-    margin-top: 2px;
-    padding-top: 8px;
-    color: var(--color-text-secondary, #6b7280);
+/* The input step (§3.10): one field, or one question, in the same element. */
+.context-menu__form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 8px 12px;
+    min-width: 240px;
+}
+.context-menu__label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-weight: 500;
+}
+.context-menu__input {
+    font: inherit;
+    padding: 5px 8px;
+    border: 1px solid var(--color-border, #d1d5db);
+    border-radius: 4px;
+    background: var(--color-bg-card, #fff);
+    color: inherit;
+}
+.context-menu__input[aria-invalid="true"] {
+    border-color: var(--color-danger);
+}
+.context-menu__prompt {
+    margin: 0;
+    max-width: 300px;
+    white-space: normal;
+    line-height: 1.4;
+}
+.context-menu__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 /* The grip that moves an audio clip, and the line that shows where a drop will

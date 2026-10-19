@@ -7,7 +7,24 @@
    [freememo.logging :as log]
    [freememo.navigation :as nav]
    [freememo.pdf-viewer :as viewer]
+   [freememo.context-menu-surface :as menu-surface]
    #?(:clj [freememo.settings :as settings])))
+
+(defn pdf-page-target
+  "The context-menu target for a right-click at `e` in the PDF `pdf-root-id`,
+   or nil outside a page (plans/custom-context-menu.md 4.4.1).
+
+   The page is the PDF.js page element under the pointer: PDF.js 3.11 marks
+   each one `div.page[data-page-number]`, 1-based. The selection is read now,
+   because the menu takes focus before a row runs."
+  [e pdf-root-id]
+  #?(:cljs (when-let [^js page (some-> (.-target e) (.closest ".page[data-page-number]"))]
+             {:kind :pdf-page
+              :subjects [{:pdf-root-id pdf-root-id
+                          :page-number (js/parseInt (.getAttribute page "data-page-number") 10)
+                          :selection-text (str (.getSelection js/window))}]
+              :surface {:anchor-el page}})
+     :clj nil))
 
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
@@ -91,6 +108,10 @@
                                 :overflow "auto"
                                 :background "var(--color-pdf-bg)"}})
             (reset! !container dom/node)
+            ;; Right-click a page: Copy, Scan page, Generate cards (4.4.1).
+            (dom/On "contextmenu"
+              (fn [e] (menu-surface/open-menu! e (pdf-page-target e document-id)))
+              nil)
             (e/on-unmount
               (fn []
                 (log/log-debug "PDF-COMP unmount")

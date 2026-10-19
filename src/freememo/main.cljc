@@ -33,6 +33,12 @@
             [freememo.client-errors :refer [ClientErrorForwarder]]
             [freememo.interaction-trail :as trail :refer [InteractionForwarder]]
             [freememo.undo-history-modal :refer [UndoHistoryModal]]
+            [freememo.target-modals :refer [TargetModals]]
+            ;; The context menu and its command handlers register at load
+            ;; (plans/custom-context-menu.md): nothing else names them.
+            #?(:cljs [freememo.context-menu])
+            #?(:cljs [freememo.target-handlers])
+            #?(:clj [freememo.target-commands])
             [freememo.activity-panel :refer [ActivityPanel]]
             [freememo.nav-rail :as nav-rail :refer [NavRail]]
             [freememo.spotlight :as spotlight :refer [Spotlight]]
@@ -478,6 +484,10 @@
 
                 ;; Actions history modal (undo-newest is a :queue command now)
                 (UndoHistoryModal user-id !undo-modal-open?)
+
+                ;; The modals a context-menu row opens from any route: image
+                ;; occlusion and Document options.
+                (TargetModals user-id)
 
                 ;; Help for this page: the routed tab's Help section, over the page
                 (PageHelpModal !page-help-slug navigate!)

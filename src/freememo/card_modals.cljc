@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.modal-shell :as modal]
    [clojure.string :as str]
@@ -653,6 +654,10 @@
           (dom/On "pointerdown"
             (fn [e] (modal/drag-modal-by-title! e))
             nil)
+          ;; The card's topic, for the field menus' pin and occlusion rows
+          ;; (plans/custom-context-menu.md 4.1.1).
+          (menu-surface/provide-facts! dom/node
+            {:topic-id (:topic-id editing-card) :root-topic-id (:root-topic-id editing-card)})
           (let [cleanup (attach-modal-tab-nav! dom/node)]
             (e/on-unmount (fn [] (when cleanup (cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
@@ -989,6 +994,8 @@
           (dom/On "pointerdown"
             (fn [e] (modal/drag-modal-by-title! e))
             nil)
+          ;; The card's topic, for the field menus' pin and occlusion rows.
+          (menu-surface/provide-facts! dom/node {:topic-id topic-id :root-topic-id root-topic-id})
           (let [inner dom/node
                 tab-cleanup (attach-modal-tab-nav! inner)
                 flush-cleanup (attach-submit-flush! inner flush!)]

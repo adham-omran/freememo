@@ -633,14 +633,8 @@
                nil)))))
      :clj nil))
 
-(defn install-clip-menu!
-  "Right-click an audio clip to toggle whether it loops. Returns a teardown fn.
-
-   Lives here rather than in `freememo.editor-image-menu` for two reasons. That
-   menu takes a container element plus app callbacks and is installed on the
-   document editor alone, through `editor-pane`. A clip needs the QUILL
-   INSTANCE, because the toggle is a document edit, and card fields hold clips
-   too — every per-editor installer in this ns already has that shape.
+(defn toggle-clip-loop!
+  "Flip whether the audio clip rendered at `node` loops.
 
    The toggle REPLACES the embed instead of setting the attribute on its node.
    A DOM write Quill did not make is invisible to the Delta: the document would
@@ -649,83 +643,28 @@
    text-change fires once and the field's on-change persists it — the shape
    `rehost-embed-at!` above uses to swap an image's src.
 
-   Pre  : `ed` is a live Quill instance.
-   Post : a contextmenu on an `<audio>` inside this editor opens one menu, and
-          the toggle rewrites that clip with `loop` flipped, source \"user\".
-          A contextmenu anywhere else is left to the browser.
-   Inv  : at most one clip menu exists at a time, and teardown leaves behind no
-          menu and no listener."
-  [ed]
+   It takes the QUILL INSTANCE because the toggle is a document edit, and card
+   fields hold clips too. The context menu's clip rows call it
+   (plans/custom-context-menu.md 2.5.1).
+
+   Pre  : `ed` is a live Quill instance; `node` is an <audio> inside it.
+   Post : that clip is rewritten with `loop` flipped, source \"user\". No-op when
+          `node` is no longer a live blot."
+  [ed node]
   #?(:cljs
      (let [^js ed ed
-           !menu (atom nil)
-           !dismiss (atom nil)
-           close! (fn []
-                    (when-let [^js m @!menu] (.remove m))
-                    (reset! !menu nil)
-                    (when-let [f @!dismiss] (f))
-                    (reset! !dismiss nil))
-           toggle-loop!
-           (fn [^js node]
-             (when-let [^js blot (.find (.-Quill js/window) node)]
-               (let [Quill (.-Quill js/window)
-                     Delta (.import Quill "delta")
-                     at (.getIndex ed blot)]
-                 (.updateContents ed
-                   (-> (new Delta)
-                     (.retain at)
-                     (.delete 1)
-                     (.insert (clj->js {:audio-clip {:src (.getAttribute node "src")
-                                                     :loop (not (.hasAttribute node "loop"))}})))
-                   "user"))))
-           button (fn [label on-click]
-                    (let [b (js/document.createElement "button")]
-                      (set! (.-textContent b) label)
-                      (.addEventListener b "click"
-                        (fn [_] (close!) (when on-click (on-click))))
-                      b))
-           handler
-           (fn [e]
-             (let [^js target (.-target e)]
-               (when (and target
-                       (= "AUDIO" (.-tagName target))
-                       (.closest target ".ql-editor"))
-                 (.preventDefault e)
-                 (.stopPropagation e)
-                 (close!)
-                 (let [menu (js/document.createElement "div")
-                       looping? (.hasAttribute target "loop")]
-                   (.setAttribute menu "class" "clip-context-menu")
-                   (set! (.-style.left menu) (str (.-pageX e) "px"))
-                   (set! (.-style.top menu) (str (.-pageY e) "px"))
-                   (.appendChild menu
-                     (button (if looping? "Stop looping" "Loop this clip")
-                       #(toggle-loop! target)))
-                   (.appendChild menu (button "Cancel" nil))
-                   (.appendChild js/document.body menu)
-                   (reset! !menu menu)
-                   ;; Dismissal, as the image menu does it: Escape, or a click
-                   ;; outside. The outside listener is registered a tick later,
-                   ;; so the contextmenu that opened this does not close it.
-                   (let [on-key (fn [ev] (when (= "Escape" (.-key ev))
-                                           (.stopPropagation ev)
-                                           (close!)))
-                         on-doc-click (fn [ev] (when-not (.contains menu (.-target ev))
-                                                 (close!)))
-                         timer (js/setTimeout
-                                 #(.addEventListener js/document "click" on-doc-click)
-                                 0)]
-                     (.addEventListener js/document "keydown" on-key)
-                     (reset! !dismiss
-                       (fn []
-                         (js/clearTimeout timer)
-                         (.removeEventListener js/document "keydown" on-key)
-                         (.removeEventListener js/document "click" on-doc-click))))))))
-           container (.-container ed)]
-       (.addEventListener container "contextmenu" handler)
-       (fn []
-         (.removeEventListener container "contextmenu" handler)
-         (close!)))
+           ^js node node]
+       (when-let [^js blot (.find (.-Quill js/window) node)]
+         (let [Quill (.-Quill js/window)
+               Delta (.import Quill "delta")
+               at (.getIndex ed blot)]
+           (.updateContents ed
+             (-> (new Delta)
+               (.retain at)
+               (.delete 1)
+               (.insert (clj->js {:audio-clip {:src (.getAttribute node "src")
+                                               :loop (not (.hasAttribute node "loop"))}})))
+             "user"))))
      :clj nil))
 
 (defn install-clip-drag!
@@ -746,7 +685,7 @@
      drop that reaches it can move anything.
 
    The move is ONE `updateContents`, the delete+insert shape
-   `install-clip-menu!` uses, so text-change fires once and autosave persists
+   `toggle-clip-loop!` uses, so text-change fires once and autosave persists
    it. The drop index comes from `caretRangeFromPoint` through the two
    `quill.selection` methods Quill's own file drop uses. They are not public
    API; Quill is pinned at 2.0.3.

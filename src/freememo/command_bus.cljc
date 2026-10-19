@@ -37,6 +37,7 @@
    part: it owns the :queue lane's reactive lifecycle via e/diff-by +
    e/Token, same as any other Electric service."
   (:require [hyperfiddle.electric3 :as e]
+            [freememo.command-targets :as targets]
             [freememo.commands :as commands]
             [freememo.interaction-trail :as trail]
             [freememo.navigation :as nav]
@@ -56,6 +57,49 @@
   "Remove `ks` from the command context. Call from e/on-unmount. Returns nil."
   [ks]
   (swap! !ctx #(apply dissoc % ks))
+  nil)
+
+;; ── Focus target ───────────────────────────────────────────────────────────
+;; The target the palette and the keyboard act on: what the focused surface
+;; (a tree row, an editor) would hand the context menu. One at a time, and the
+;; owner key keeps a late retract from clearing a newer publisher's target.
+
+(defn publish-focus-target!
+  "Make `target` the focus target. `owner` is any value unique to the
+   publisher, conventionally its DOM node.
+   Pre : `target` satisfies freememo.command-targets' target shape.
+   Post: (:focus-target @!ctx) is `target`. Returns nil."
+  [owner target]
+  (swap! !ctx assoc :focus-target target :focus-target-owner owner)
+  nil)
+
+(defn retract-focus-target!
+  "Clear the focus target if `owner` still holds it. Returns nil.
+   Post: a newer publisher's target is never cleared."
+  [owner]
+  (swap! !ctx (fn [ctx]
+                (if (identical? owner (:focus-target-owner ctx))
+                  (dissoc ctx :focus-target :focus-target-owner)
+                  ctx)))
+  nil)
+
+(defn- context-target
+  "The focus target, when `entry` applies to it; else nil."
+  [entry ctx]
+  (let [target (:focus-target ctx)]
+    (when (targets/applicable? entry target) target)))
+
+;; ── Input requests ─────────────────────────────────────────────────────────
+;; A command with :menu-input needs a value before it can run. freememo.context-
+;; menu registers how to ask for one; dispatch! calls it when the payload has
+;; no :input yet.
+
+(defonce !input-requester (atom nil)) ; (fn [command-id target]) | nil
+
+(defn register-input-requester!
+  "Install the fn dispatch! calls to collect a :menu-input value. Returns nil."
+  [f]
+  (reset! !input-requester f)
   nil)
 
 ;; ── Client handlers and preparers ──────────────────────────────────────────
@@ -161,7 +205,9 @@
   [{:keys [nav-tab] :as entry} ctx payload]
   (when-let [navigate! (:navigate! ctx)]
     (case (:id entry)
-      :open-topic          (navigate! nav-tab (nav/nav-topic (:topic-id payload) (:origin payload)))
+      ;; A topic target: the first subject, from the surface it was opened on.
+      :open-topic          (navigate! nav-tab (nav/nav-topic (-> payload :subjects first :topic-id)
+                                                (-> payload :surface :origin)))
       :start-learn-session (navigate! nav-tab (nav/nav-learn-session))
       :open-subset-review  (navigate! nav-tab (nav/nav-subset-review (:root-id payload) (:root-name payload)))
       :go-known-ideas      (navigate! nav-tab {:type :knowledge-known})
@@ -198,25 +244,33 @@
      (boolean
        (and entry
             (applies-here? command-id ctx)
-            (if (= :ui-button (commands/exec-mode entry))
-              (contains? @!invokers command-id)
-              (if-let [prepare (get @!preparers command-id)]
-                (some? (prepare ctx))
-                true)))))))
+            (cond
+              (:target entry) (some? (context-target entry ctx))
+              (= :ui-button (commands/exec-mode entry)) (contains? @!invokers command-id)
+              :else (if-let [prepare (get @!preparers command-id)]
+                      (some? (prepare ctx))
+                      true)))))))
 
 (def invocation-sources
   "Which frontend invoked a command. :button is every in-page control — toolbar
    buttons, dropdown rows, the undo-history list — and is the default because a
    control that reaches dispatch! without saying otherwise IS one. The keyboard
    handler and the palette name themselves, so the trail can answer whether a
-   bound chord is ever pressed."
-  #{:button :keyboard :palette})
+   bound chord is ever pressed. :menu is a context-menu row."
+  #{:button :keyboard :palette :menu})
 
 (defn dispatch!
   "Invoke a command. With no `payload`, resolves one via the registered
    preparer (buttons that already hold their data pass it explicitly).
    `source` ∈ invocation-sources, default :button — see that var.
-   Returns :dispatched | :unavailable | :unknown-command.
+   Returns :dispatched | :awaiting-input | :unavailable | :unknown-command.
+
+   A target entry (:target in the registry) checks its target HERE, at the
+   boundary, because a non-nil payload skips available?: a payload the entry
+   does not apply to is :unavailable whoever sent it. With no payload the
+   target comes from the focus target. An entry with :menu-input and no
+   :input yet hands the target to the input requester and returns
+   :awaiting-input — the requester dispatches again once it has the value.
    Post: :dispatched ⇒ the effect ran (client) or exactly one invocation was
    queued (queue/electric); exactly one :command trail entry is recorded on
    EVERY path, including the two refusals — an :unavailable a user keeps
@@ -227,10 +281,19 @@
   ([command-id payload source]
    (let [entry (some-> (commands/command command-id) (assoc :id command-id))
          ctx @!ctx
+         target? (some? (:target entry))
+         payload (if (and target? (nil? payload)) (context-target entry ctx) payload)
          result
          (cond
            (nil? entry) :unknown-command
-           (and (nil? payload) (not (available? command-id ctx))) :unavailable
+           (and target? (not (targets/applicable? entry payload))) :unavailable
+           (and (not target?) (nil? payload) (not (available? command-id ctx))) :unavailable
+
+           (and (:menu-input entry) (not (contains? payload :input)))
+           (if-let [request! @!input-requester]
+             (do (request! command-id payload) :awaiting-input)
+             :unavailable)
+
            :else
            (let [payload (or payload
                              (when-let [prepare (get @!preparers command-id)]
@@ -249,10 +312,14 @@
                  (do (invoke) :dispatched)
                  :unavailable)
 
+               ;; :surface holds client-only handles, so a queued target
+               ;; carries only its subjects and input across the wire.
                (:queue :electric)
                (do (swap! !invocations conj {:invocation-id (random-uuid)
                                              :command-id command-id
-                                             :payload payload})
+                                             :payload (if target?
+                                                        (targets/wire-payload payload)
+                                                        payload)})
                    :dispatched))))]
      ;; Payload is deliberately NOT recorded — it carries user content (a search
      ;; string, a pasted card body). Command id, source, exec mode and outcome

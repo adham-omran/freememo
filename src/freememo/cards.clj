@@ -830,13 +830,26 @@
             (str/blank? (:cloze updated-fields)))
       (throw (ex-info "Cloze text cannot be empty" {})))
 
-    ;; Versioned: logs the superseded rendition in the same transaction.
-    ;; NOT db/update-flashcard! — that one is shared with the Anki pull path,
-    ;; which must not version (plans/card-edit-history.md §2.7).
-    (db/update-flashcard-versioned! user-id card-id updated-fields)
-    (log/audit! {:id ::update-card :user-id user-id :action :update
-                 :entity :card :entity-id card-id})
-    {:success true}
+    ;; Re-host pasted images BEFORE the write, as save-cards does. An edit can
+    ;; carry a data: <img> too: the context menu inserts images into a card
+    ;; field, and a Save that races the client's upload arrives with the bytes
+    ;; still inline. Reject with the real reason rather than persist base64 or
+    ;; drop the image. Fields the edit does not carry are left alone.
+    (let [{:keys [row remaining error]} (rehost-row-data-uris! user-id updated-fields)]
+      (if (pos? remaining)
+        (do (tel/log! {:level :warn :id ::update-card-image-unstored
+                       :data {:user-id user-id :card-id card-id
+                              :unstored remaining :reason error}}
+              "update-card rejected — pasted image could not be stored")
+            {:success false :error (str "Image could not be stored: " error)})
+        (do
+          ;; Versioned: logs the superseded rendition in the same transaction.
+          ;; NOT db/update-flashcard! — that one is shared with the Anki pull
+          ;; path, which must not version (plans/card-edit-history.md §2.7).
+          (db/update-flashcard-versioned! user-id card-id row)
+          (log/audit! {:id ::update-card :user-id user-id :action :update
+                       :entity :card :entity-id card-id})
+          {:success true})))
 
     (catch Exception e
       (tel/error! {:id ::update-card} e)

@@ -252,7 +252,12 @@
           nothing was lost.)
    Inv  : never throws."
   [{:keys [html user-id]}]
-  (if (str/blank? html)
+  (if (or (str/blank? html)
+        ;; No data: src, so there is nothing to rewrite. Return the caller's
+        ;; bytes untouched: a Jsoup round trip re-serializes the markup, and
+        ;; the card edit path would then see (and version, and re-digest) a
+        ;; change the user never made.
+        (not (re-find #"(?i)src\s*=\s*[\"']?\s*data:" html)))
     {:html html :uploaded 0 :remaining 0 :error nil}
     (try
       (let [doc (Jsoup/parse html)

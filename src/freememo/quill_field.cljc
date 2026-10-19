@@ -20,6 +20,7 @@
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
    #?(:cljs [freememo.formula-ui :as formula-ui])
+   [freememo.context-menu-surface :as menu-surface]
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -351,8 +352,11 @@
 
 (defn- release-resize-selection!
   "Drop the resize module's hold on the blot it has selected, if it holds one.
-   Private: the installer below is the only sanctioned caller, because a release
-   that is not tied to focus leaving is the per-opener discipline this replaced.
+   Private: the two installers below are the only sanctioned callers. Both tie
+   the release to focus leaving the editor — the per-opener discipline this
+   replaced did not. The context menu is the second: a right-click on an image
+   has already blurred the editor root (the module's `setSelection(null)`), so
+   the focus-out guard never sees the menu take focus.
 
    `hide()` removes the overlay, clears `activeEle`, and calls `onDestroy` on the
    module's sub-modules — which is what unregisters the document keydown listener
@@ -407,6 +411,94 @@
                          (release-resize-selection! ed))))]
        (.addEventListener container "focusout" handler)
        (fn [] (.removeEventListener container "focusout" handler)))
+     :clj nil))
+
+;; ---------------------------------------------------------------------------
+;; Context menu — shared by both editors (plans/custom-context-menu.md 4.1.1)
+;; ---------------------------------------------------------------------------
+
+#?(:cljs
+   (defn- caret-index
+     "Where a caret command acts: the end of the selection, else the document
+      end. A right-click on macOS selects the word under it, and inserting after
+      that word keeps it."
+     [^js ed]
+     (if-let [^js r (.getSelection ed)]
+       (+ (.-index r) (.-length r))
+       (max 0 (dec (.getLength ed))))))
+
+#?(:cljs
+   (defn- caret-rect
+     "The caret's box in client coordinates, for a keyboard-opened menu."
+     [^js ed]
+     (let [b (.getBounds ed (caret-index ed))
+           c (.getBoundingClientRect (.-container ed))]
+       (when b
+         {:left (+ (.-left c) (.-left b)) :top (+ (.-top c) (.-top b))
+          :right (+ (.-left c) (.-right b)) :bottom (+ (.-top c) (.-bottom b))}))))
+
+#?(:cljs
+   (defn- caret-target [^js ed]
+     (when (.isEnabled ed)
+       {:kind :caret
+        :subjects [{:index (caret-index ed)
+                    :math-ready? (formula-ui/installed? ed)}]
+        :surface {:quill ed :anchor-el (.-root ed)}})))
+
+#?(:cljs
+   (defn- target-at
+     "The target under `node` inside `ed`: an image, an audio clip, else the
+      caret. `facts` are what the editor's surface lends (topic, pin count)."
+     [^js ed ^js node facts]
+     (case (.-tagName node)
+       "IMG" {:kind :image
+              :subjects [(merge (select-keys facts [:topic-id :root-topic-id :pin-count])
+                           {:src (.getAttribute node "src")})]
+              :surface {:quill ed :anchor-el node}}
+       "AUDIO" {:kind :audio-clip
+                :subjects [{:looping? (.hasAttribute node "loop")}]
+                :surface {:quill ed :node node :anchor-el node}}
+       (caret-target ed))))
+
+(defn install-context-menu!
+  "Right-click inside `ed` opens the context menu for what is under the
+   pointer: an image, an audio clip, else the caret. Focus inside `ed`
+   publishes the caret as the focus target, so the palette's Insert commands
+   act here. Returns a teardown fn.
+
+   Pre  : `ed` is a Quill instance whose container is mounted. An ancestor lends
+          {:topic-id :root-topic-id :pin-count} through
+          context-menu-surface/provide-facts! where image pins apply; without
+          one the pin and occlusion rows are hidden.
+   Post : a contextmenu inside `.ql-editor` opens the shared menu, unless it was
+          a Shift+right-click. Opening it on an image first releases the resize
+          module, whose capture-phase keydown would take the menu's arrow keys.
+   Inv  : teardown leaves no listener and no focus target owned by `ed`."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js container (.-container ed)
+           on-menu (fn [^js e]
+                     (let [^js node (.-target e)]
+                       (when (.closest node ".ql-editor")
+                         (when (= "IMG" (.-tagName node))
+                           (release-resize-selection! ed))
+                         (menu-surface/open-menu! e
+                           (target-at ed node (menu-surface/facts-for container))
+                           #(caret-rect ed)))))
+           on-selection (fn [range _old _source]
+                          (when range
+                            (when-let [t (caret-target ed)]
+                              (menu-surface/publish-focus-target! ed t))))
+           on-focusout (fn [e] (menu-surface/focus-left! ed container e))]
+       (.addEventListener container "contextmenu" on-menu)
+       (.on ed "selection-change" on-selection)
+       (.addEventListener container "focusout" on-focusout)
+       (fn []
+         (.removeEventListener container "contextmenu" on-menu)
+         (.off ed "selection-change" on-selection)
+         (.removeEventListener container "focusout" on-focusout)
+         (menu-surface/retract-focus-target! ed)))
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
@@ -517,11 +609,8 @@
                                                   :audio? true
                                                   :cloze? (boolean cloze?)})
                         (code-lang-picker/install! ed)
-                        ;; Right-click an audio clip to toggle its loop setting.
-                        ;; The image context menu is installed by editor-pane on
-                        ;; the document editor alone; a card field holds clips
-                        ;; too, so this one is installed per editor.
-                        (editor-actions/install-clip-menu! ed)
+                        ;; The shared context menu: image, clip and caret rows.
+                        (install-context-menu! ed)
                         ;; Drag a clip by its grip to another line.
                         (editor-actions/install-clip-drag! ed)
                         ;; Release the resize module when focus leaves the editor.

@@ -19,6 +19,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-reconcile-panels :as recon]
    [freememo.activity-client :as ac]
+   [freememo.anki-subtree-request :as subtree]
    [freememo.command-bus :as bus]
    #?(:clj [freememo.toasts :as toasts])))
 
@@ -54,20 +55,26 @@
    Cancellability and the leave warning both track the PHASE, because both are
    momentary: a run is stoppable while it is scanning or planning and not while
    it is recording baselines, and it strands Anki-side state only once it starts
-   writing notes."
+   writing notes.
+
+   A branch run (`anki-subtree-request`) gets its own work key and names its root
+   topic as the row's subject, so the panel's Open button leads to it. The
+   whole-collection run keeps \"collection\" and no subject. Both values come from
+   the run's `:!root-id`, which `start!` sets before `!running?` goes true."
   [user-id recon !running?]
   (e/client
     (let [running? (e/watch !running?)
           phase (e/watch (:!phase recon))
-          err (e/watch (:!error recon))]
-      (ac/ActivityMirror user-id "anki-reconcile" "collection"
+          err (e/watch (:!error recon))
+          root-id (e/watch (:!root-id recon))]
+      (ac/ActivityMirror user-id "anki-reconcile" (subtree/work-key root-id)
         running?
         (some-> phase name)
         nil nil
         (when (contains? recon/cancellable-phases phase)
           (fn [] (recon/cancel! recon !running?)))
         (contains? recon/unrecoverable-phases phase)
-        nil
+        root-id
         ;; `start!` clears `:!error`, so a non-nil error here belongs to THIS run.
         (if err "failure" "success")
         err))))
@@ -77,26 +84,36 @@
    palette). Invoking starts a background reconcile over the whole collection.
 
    Mounted once at the app root, so the run outlives any route. It takes only
-   `user-id`: a reconcile has no scope to narrow, and its whole point is that a
-   card deleted in a document nobody has open still gets its Anki note removed."
+   `user-id`. The chord and the palette run the whole collection, because their
+   point is that a card deleted in a document nobody has open still gets its
+   Anki note removed.
+
+   It is also the driver for a BRANCH run: `anki-subtree-request/
+   request-subtree-sync!` queues a topic id, and this component collects it and
+   starts a run scoped to that topic and its descendants. That run settles no
+   tombstones, so a deleted card's note stays until the next full run. Both
+   kinds share one `!running?`: a second request while a run is going gets the
+   \"Sync already in progress\" toast."
   [user-id]
   (e/client
     (let [state (recon/fresh-state)
           !trigger (atom 0)
           !running? (atom false)
-          !busy-bump (atom 0)]
+          !busy-bump (atom 0)
+          start-run! (fn [root-id]
+                       (if (= :busy (recon/start! state !running? false root-id))
+                         (swap! !busy-bump inc)
+                         (swap! !trigger inc)))]
       (dom/button
         (dom/props {:style {:display "none"} :aria-hidden "true" :tabindex "-1"
                     :data-quick-sync "1"})
-        (let [node dom/node]
+        (let [node dom/node
+              unwatch! (subtree/watch! start-run!)]
           (bus/publish-invoker! :quick-sync (fn [] (.click node)))
-          (e/on-unmount (fn [] (bus/retract-invoker! :quick-sync))))
-        (dom/On "click"
-          (fn [_]
-            (if (= :busy (recon/start! state !running?))
-              (swap! !busy-bump inc)
-              (swap! !trigger inc)))
-          nil))
+          (e/on-unmount (fn []
+                          (bus/retract-invoker! :quick-sync)
+                          (unwatch!))))
+        (dom/On "click" (fn [_] (start-run! nil)) nil))
       (QuickSyncStartToasts user-id !trigger !busy-bump)
       (recon/ReconcileExecutor user-id state !running?)
       (ReconcileActivity user-id state !running?))))

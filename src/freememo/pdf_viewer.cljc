@@ -103,10 +103,8 @@
              (when (copy-pdf-selection!)
                (.preventDefault e))))
          true)
-       ;; Right-click: pre-write to clipboard when context menu opens
-       (.addEventListener js/document "contextmenu"
-         (fn [_] (copy-pdf-selection!))
-         true)
+       ;; A right-click no longer writes the clipboard on its own: the context
+       ;; menu's Copy row does (plans/custom-context-menu.md 4.4.2).
        true)))
 
 #?(:cljs

@@ -13,6 +13,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [freememo.a11y :as a11y]
    [freememo.quiz-item-stats :as stats]
    [freememo.tape-table :refer [TapeTable]]
@@ -442,6 +443,12 @@
           extracted-any? (pos? pages-attempted)]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
+        ;; Context menu (plans/custom-context-menu.md 4.2.2). This list knows a
+        ;; document's facts, not its place in the tree, so only the rows that
+        ;; test no tree fact appear.
+        (menu-surface/RowMenu
+          (menu-surface/topic-row-target {:topic-id id :title (or title "") :topic-kind kind}
+            :knowledge))
         (dom/td
           (dom/span (dom/props {:class "tape-cell-text"}) (dom/text title))
           (dom/span (dom/props {:class "tape-cell-tag"}) (dom/text kind)))

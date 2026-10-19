@@ -51,6 +51,7 @@
    reporting."
   (:require
    [clojure.string :as str]
+   [freememo.anki-subtree-request :as subtree]
    [freememo.user-state :as us]))
 
 ;; ---------------------------------------------------------------------------
@@ -305,10 +306,12 @@
    :anki-reconcile
    {:label "Syncing with Anki"
     :tier :pushed
-    ;; A reconcile spans the whole collection — quick-sync's docstring is
-    ;; explicit that it has no scope to narrow — so there is one at a time per
-    ;; user and nowhere to navigate.
-    :subject :none :work-key (constantly "collection")}
+    ;; A reconcile covers the whole collection unless it was started on one
+    ;; branch (`anki-subtree-request`). The whole-collection run has no subject
+    ;; and nowhere to navigate, as before. A branch run holds its root topic as
+    ;; the subject, so the row names it and the panel's Open button goes there.
+    ;; The work key tells the two apart: "collection" or "branch-<id>".
+    :subject :topic :work-key subtree/work-key}
 
    ;; ── Account transfer. SERVER tier, not pushed. ─────────────────────────
    ;; An export streams on a Jetty request thread and an import runs in an
