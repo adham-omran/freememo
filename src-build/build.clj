@@ -1,5 +1,7 @@
 (ns build
-  (:require [clojure.tools.build.api :as b]
+  (:require [clojure.java.io :as io]
+            [clojure.java.shell :as shell]
+            [clojure.tools.build.api :as b]
             [clojure.tools.logging :as log]
             [shadow.cljs.devtools.api :as shadow-api]
             [shadow.cljs.devtools.server :as shadow-server]))
@@ -42,6 +44,43 @@ application classpath to be available"
 
 (def class-dir "target/classes")
 
+(defn- case-sensitive?
+  "Whether the filesystem holding `dir` tells `a` from `A`."
+  [dir]
+  (let [probe (io/file dir "case-probe")]
+    (io/make-parents probe)
+    (spit probe "")
+    (try (not (.exists (io/file dir "CASE-PROBE")))
+         (finally (.delete probe)))))
+
+(defn- sh! [& args]
+  (let [{:keys [exit err]} (apply shell/sh args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str (first args) " failed: " err) {:args args})))))
+
+(defn- with-class-dir
+  "Run `(f dir)` with a class directory on a case-sensitive filesystem.
+
+   AOT compiling Electric writes classes whose names differ only in case,
+   such as `electric3$Apply` and `electric3$apply`. On a case-insensitive
+   disk, the default on macOS, the second file overwrites the first, and the
+   jar fails at launch with NoClassDefFoundError (wrong name). A jar entry
+   keeps its case, so only the class directory needs a case-sensitive disk.
+   On macOS that is a sparse disk image, attached for this build only.
+   Post: the image is detached, even when `f` throws."
+  [f]
+  (if (case-sensitive? "target")
+    (f class-dir)
+    (let [image (.getAbsolutePath (io/file "target/classes.sparseimage"))
+          mount (.getAbsolutePath (io/file "target/classes-cs"))]
+      (log/info "aot: this disk ignores case; compiling on a case-sensitive image")
+      (sh! "hdiutil" "create" "-size" "8g" "-type" "SPARSE" "-fs" "Case-sensitive APFS"
+        "-volname" "freememo-classes" image)
+      (.mkdirs (io/file mount))
+      (sh! "hdiutil" "attach" "-nobrowse" "-mountpoint" mount image)
+      (try (f mount)
+           (finally (sh! "hdiutil" "detach" "-force" mount))))))
+
 (defn uberjar
   [{:keys [optimize debug verbose ::jar-name, ::skip-client, ::aot, version, aliases, shadow-build]
     :or {optimize true, debug false, verbose false, skip-client false, aot false, version electric-user-version, aliases [:prod], shadow-build :prod}
@@ -53,23 +92,25 @@ application classpath to be available"
   (when-not skip-client
     (build-client (select-keys args [:optimize :debug :verbose :version :shadow-build :git-commit])))
 
-  (b/copy-dir {:target-dir class-dir :src-dirs ["src" "src-prod" "resources"]})
-  (let [jar-name (or (some-> jar-name str) ; override for Dockerfile builds to avoid needing to reconstruct the name
-                   (format "freememo-%s.jar" version))
-        basis (b/create-basis {:project "deps.edn" :aliases aliases})]
-    ;; The desktop jar starts on the user's computer at every launch, so it
-    ;; is AOT compiled: from source, `prod` and its dependencies compile for
-    ;; about 70 s before the port opens. The server deploy keeps source
-    ;; loading. Compile after copy-dir, so each class is newer than its
-    ;; source and Clojure loads the class.
-    (when aot
-      (log/info "aot: compiling prod")
-      (b/compile-clj {:basis basis
-                      :src-dirs ["src" "src-prod"]
-                      :class-dir class-dir
-                      :ns-compile '[prod]
-                      :java-opts ["-Xss4m"]}))
-    (b/uber {:class-dir class-dir
-             :uber-file (str "target/" jar-name)
-             :basis     basis})
-    (log/info jar-name)))
+  ((if aot with-class-dir #(% class-dir))
+   (fn [class-dir]
+     (b/copy-dir {:target-dir class-dir :src-dirs ["src" "src-prod" "resources"]})
+     (let [jar-name (or (some-> jar-name str) ; override for Dockerfile builds to avoid needing to reconstruct the name
+                      (format "freememo-%s.jar" version))
+           basis (b/create-basis {:project "deps.edn" :aliases aliases})]
+       ;; The desktop jar starts on the user's computer at every launch, so it
+       ;; is AOT compiled: from source, `prod` and its dependencies compile for
+       ;; about 70 s before the port opens. The server deploy keeps source
+       ;; loading. Compile after copy-dir, so each class is newer than its
+       ;; source and Clojure loads the class.
+       (when aot
+         (log/info "aot: compiling prod")
+         (b/compile-clj {:basis basis
+                         :src-dirs ["src" "src-prod"]
+                         :class-dir class-dir
+                         :ns-compile '[prod]
+                         :java-opts ["-Xss4m"]}))
+       (b/uber {:class-dir class-dir
+                :uber-file (str "target/" jar-name)
+                :basis     basis})
+       (log/info jar-name)))))
