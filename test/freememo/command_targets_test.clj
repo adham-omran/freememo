@@ -41,7 +41,8 @@
                :looping            [{:looping? true} {:looping? false}]
                :not-looping        [{:looping? false} {:looping? true}]
                :math-ready         [{:math-ready? true} {:math-ready? false}]
-               :has-selection      [{:selection-text "a"} {:selection-text " "}]}]
+               :has-selection      [{:selection-text "a"} {:selection-text " "}]
+               :has-text-selection [{:selection-length 3} {:selection-length 0}]}]
     (is (= (set (keys targets/subject-tests)) (set (keys cases)))
       "every subject test has a case here")
     (doseq [[k [pass fail]] cases]

@@ -227,6 +227,10 @@
   [anchor build!]
   (let [opener js/document.activeElement]
     (close! false)
+    ;; Hide the editor's other popovers — the format menu a selection opens,
+    ;; the code-language picker, the link card — so none sits under this menu.
+    ;; After close!, so this menu's own registry entry reads closed.
+    (editor-popovers/close-open!)
     (let [menu (el "div" "context-menu")]
       (build! menu)
       (show! menu)

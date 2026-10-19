@@ -629,6 +629,9 @@
     :steps [{:label "Open the menu"
              :detail "Right-click, or press Shift+F10 or the Menu key on a focused row or in the editor. Use the arrow keys to move and Enter to choose. Press Escape to close it. Shift+right-click shows the browser's own menu."
              :commands #{}}
+            {:label "Cut or copy a selection"
+             :detail "Select text in a document or a card field and right-click it to cut or copy it. To paste, press Ctrl+V or Cmd+V, or Shift+right-click for the browser's menu."
+             :commands #{:cut-editor-selection :copy-editor-selection}}
             {:label "Insert in the editor"
              :detail "Right-click in a document or a card field to insert a formula, a table, an image, a code block or a divider at the cursor."
              :commands #{:insert-formula :insert-table :insert-image :insert-code-block :insert-divider}}
