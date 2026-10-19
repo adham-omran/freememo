@@ -277,15 +277,26 @@
    sound, only the server could not take it now."
   #(or (= "storage-quota" %) (str/starts-with? % "invalid:")))
 
+(defn- parent-missing-keys
+  "The rows an apply refused only because their parent had not arrived."
+  [result]
+  (into #{} (keep #(when (= "parent-deleted" (get % "reason")) [(get % "t") (get % "k")]))
+    (:rejected result)))
+
 (defn- settle-upload!
   "Take back what the server decided about one uploaded batch.
    Pre:  the server committed the batch as `xid`.
    Post: rows the server applied are no longer pending, unless they changed
          again meanwhile (their mtime moved). Rejected rows are in the conflict
          report, and gone locally unless `kept-local` (D8). Merged ids point at
-         the server's row (2.9.1). Corrections replace the local copies."
-  [user-id sent {:strs [xid rejected remaps corrections]}]
-  (let [rejected-keys (set (map (juxt #(get % "t") #(get % "k")) rejected))
+         the server's row (2.9.1). Corrections replace the local copies.
+         With `wait-for-parents?`, a row refused only for a missing parent
+         stays pending instead, because its parent may be in a later batch.
+         Returns the keys of those waiting rows."
+  [user-id sent {:strs [xid rejected remaps corrections]} wait-for-parents?]
+  (let [waiting (if wait-for-parents? (parent-missing-keys {:rejected rejected}) #{})
+        rejected-keys (set (map (juxt #(get % "t") #(get % "k")) rejected))
+        rejected (remove #(waiting [(get % "t") (get % "k")]) rejected)
         files (fetch-blobs corrections)]
     (try
       (apply/with-apply-tx db/ds
@@ -315,33 +326,60 @@
             (apply/rewrite-local-references! tx (apply/synced-table t) (parse-long from) to))
           (apply/apply-rows! tx {:peer :desktop :user-id user-id :blob-file (blob-lookup files)}
             corrections)))
+      waiting
       (finally (delete-files! files)))))
 
+(defn- upload-round!
+  "Upload `rows` in batches. Returns {:xids :waiting}, where `waiting` holds
+   the keys of rows refused only for a missing parent, left pending when
+   `wait-for-parents?`."
+  [user-id base rows wait-for-parents?]
+  (reduce (fn [acc batch]
+            (let [batch (upload-blobs! batch)
+                  answer (ok-body! (call! :post "/api/sync/upload"
+                                     :json-body {:base base :rows batch :major desktop-version/desktop-major})
+                           :upload)
+                  waiting (settle-upload! user-id batch answer wait-for-parents?)]
+              (swap! !status update-in [:progress :uploaded] (fnil + 0) (count batch))
+              (-> acc (update :xids conj (get answer "xid")) (update :waiting into waiting))))
+    {:xids [] :waiting #{}}
+    (batches rows)))
+
 (defn- upload-step!
-  "Upload every pending row in FK order. Returns this sync's upload xids."
+  "Upload every pending row in FK order. Returns this sync's upload xids.
+   A child whose parent is in a later batch is refused the first time, since
+   the server applies one batch per transaction. It waits, pending, and goes
+   again in the next round, when its parent is there. A round that applies
+   none of the waiting rows is the last: what it still refuses goes to the
+   conflict report."
   [user-id base]
-  (let [rows (into [] (mapcat #(pending-rows db/ds %)) fmt/synced-tables)]
-    (reduce (fn [xids batch]
-              (let [batch (upload-blobs! batch)
-                    answer (ok-body! (call! :post "/api/sync/upload"
-                                       :json-body {:base base :rows batch :major desktop-version/desktop-major})
-                             :upload)]
-                (swap! !status update-in [:progress :uploaded] (fnil + 0) (count batch))
-                (settle-upload! user-id batch answer)
-                (conj xids (get answer "xid"))))
-      [] (batches rows))))
+  (loop [rows (into [] (mapcat #(pending-rows db/ds %)) fmt/synced-tables)
+         xids []]
+    (let [{round-xids :xids waiting :waiting} (upload-round! user-id base rows true)
+          xids (into xids round-xids)
+          again (into [] (keep (fn [[t k]] (apply/read-row db/ds (apply/synced-table t) k))) waiting)]
+      (cond
+        (empty? again) xids
+        (< (count again) (count rows)) (recur again xids)
+        :else (into xids (:xids (upload-round! user-id base again false)))))))
 
 ;; ── 4, 5. Download ─────────────────────────────────────────────────
 
+(defn- blob-keys [rows]
+  (for [row rows [col _] (get row "b")] [(get row "t") (get row "k") col]))
+
 (defn- download-step!
   "Download and apply every row in [from, to) except this sync's uploads.
+   A row whose parent sits in a later page, such as a forked chat whose fork
+   message downloads after every chat, waits with its files and applies with
+   that later page. Only a parent that never arrives makes it a refusal.
    Post: one transaction holds the whole download, so an interrupted one
          leaves nothing applied and the checkpoint unmoved. Returns {:to
          :touched}."
   [user-id from {:keys [to exclude graves-from]}]
   (apply/with-apply-tx db/ds
     (fn [tx]
-      (loop [cursor nil to to touched #{} first? true]
+      (loop [cursor nil to to touched #{} first? true waiting [] waiting-files {}]
         (let [{:strs [rows graves cursor] :as page}
               (ok-body! (call! :post "/api/sync/download"
                           :json-body (cond-> {:from from :exclude (or exclude []) :cursor cursor
@@ -350,18 +388,25 @@
                                        graves-from (assoc :graves_from graves-from)))
                 :download)
               to (get page "to")
-              files (fetch-blobs rows)
+              files (merge waiting-files (fetch-blobs rows))
+              batch (into waiting rows)
               g (when first? (apply/apply-graves! tx {:peer :desktop :user-id user-id} (or graves [])))
-              r (try (apply/apply-rows! tx {:peer :desktop :user-id user-id :blob-file (blob-lookup files)} rows)
-                     (finally (delete-files! files)))
+              r (apply/apply-rows! tx {:peer :desktop :user-id user-id :blob-file (blob-lookup files)} batch)
+              missing (parent-missing-keys r)
+              still-waiting (if cursor (filterv #(missing [(get % "t") (get % "k")]) batch) [])
+              kept-files (select-keys files (blob-keys still-waiting))
+              refused (if cursor
+                        (remove #(missing [(get % "t") (get % "k")]) (:rejected r))
+                        (:rejected r))
               touched (into touched (concat (:touched g) (:touched r)))]
-          (when (seq (:rejected r))
-            (tel/log! {:level :warn :id ::download-rejected :data {:rejected (map #(dissoc % "r") (:rejected r))}}
+          (delete-files! (apply dissoc files (keys kept-files)))
+          (when (seq refused)
+            (tel/log! {:level :warn :id ::download-rejected :data {:rejected (map #(dissoc % "r") refused)}}
               "Some downloaded rows did not apply"))
           (swap! !status update-in [:progress :downloaded] (fnil + 0) (count rows))
           (commands/bump-channels! user-id #{:desktop-mutations})
           (if cursor
-            (recur cursor to touched false)
+            (recur cursor to touched false still-waiting kept-files)
             {:to to :touched touched}))))))
 
 ;; ── 6. Sanity (2.6) ────────────────────────────────────────────────
@@ -489,16 +534,18 @@
     (try
       (set-state! :syncing :progress {})
       (locking !lock (run-sync!))
+      ;; The error is written before the state moves: moving the state is
+      ;; what refreshes Settings, and it must find the error already there.
       (catch clojure.lang.ExceptionInfo e
         (let [kind (:type (ex-data e))]
-          (set-state! (case kind ::offline :offline ::unauthorized :signed-out :error))
           (when-not (= kind ::offline)
             (record! {:last_error (.getMessage e)})
-            (tel/log! {:level :warn :id ::sync-failed :data (dissoc (ex-data e) :body)} (.getMessage e)))))
+            (tel/log! {:level :warn :id ::sync-failed :data (dissoc (ex-data e) :body)} (.getMessage e)))
+          (set-state! (case kind ::offline :offline ::unauthorized :signed-out :error))))
       (catch Exception e
-        (set-state! :error)
-        (record! {:last_error (.getMessage e)})
-        (tel/error! {:id ::sync-failed} e))
+        (record! {:last_error (or (.getMessage e) (str (class e)))})
+        (tel/error! {:id ::sync-failed} e)
+        (set-state! :error))
       (finally (reset! !running false))))
   (status))
 
@@ -512,9 +559,9 @@
         (case direction :download (full-download!) :upload (full-upload!)))
       (set-state! :idle)
       (catch Exception e
-        (set-state! :error)
-        (record! {:last_error (.getMessage e)})
-        (tel/error! {:id ::full-sync-failed} e))
+        (record! {:last_error (or (.getMessage e) (str (class e)))})
+        (tel/error! {:id ::full-sync-failed} e)
+        (set-state! :error))
       (finally (reset! !running false))))
   (status))
 
