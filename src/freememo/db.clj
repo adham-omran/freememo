@@ -4627,13 +4627,14 @@
 (defn get-mail-addressees
   "Rows needed to address outgoing mail to specific users.
    Pre:  user-ids is a non-empty collection of ints.
-   Post: vector of {:users/id :users/email :users/display_name}, one per
-         existing id, in ascending id order; ids with no row are absent, so
-         callers MUST compare the count against what they asked for."
+   Post: vector of {:users/id :users/email :users/display_name
+         :users/created_at}, one per existing id, in ascending id order; ids
+         with no row are absent, so callers MUST compare the count against
+         what they asked for."
   [user-ids]
   (when (seq user-ids)
     (jdbc/execute! ds
-      (sql/format {:select [:id :email :display_name]
+      (sql/format {:select [:id :email :display_name :created_at]
                    :from [:users]
                    :where [:in :id (vec user-ids)]
                    :order-by [[:id :asc]]}))))
