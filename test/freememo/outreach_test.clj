@@ -54,9 +54,26 @@
     (is (= "September" (outreach/month-name t)))
     (is (= "September" (outreach/month-name (java.sql.Timestamp/valueOf t))))))
 
-(deftest a-campaign-with-open-items-sends-nothing
+(deftest october-bodies-name-no-settings-preference
+  ;; No Settings preference controls outreach mail, so no footer may claim one.
   (doseq [id october-campaign-ids]
-    (let [r (outreach/send-campaign! id)]
+    (let [text ((get-in outreach/campaigns [id :body]) addressee)]
+      (is (not (str/includes? text "Settings")))
+      (is (str/ends-with? text
+            "\n\n---\nYou're receiving this because you signed up for FreeMemo.")))))
+
+(deftest october-campaigns-have-no-open-items
+  (doseq [id october-campaign-ids]
+    (is (empty? (get-in outreach/campaigns [id :open-items])))))
+
+(deftest a-campaign-with-open-items-sends-nothing
+  ;; A synthetic campaign: the real ones may be sendable, and this test must
+  ;; never reach SMTP or the database.
+  (with-redefs [outreach/campaigns
+                {:held {:recipient-ids [1] :event-type "outreach_test_held"
+                        :subject "s" :body (constantly "b")
+                        :open-items ["undecided"]}}]
+    (let [r (outreach/send-campaign! :held)]
       (is (= :open-items (:reason r)))
       (is (zero? (:sent r))))))
 
