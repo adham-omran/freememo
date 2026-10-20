@@ -2,8 +2,8 @@
   "The desktop app's declared versions (plans/electron-local-db-sync.md 13.3).
 
    `desktop-major` is what a license covers (13.2). The maintainer bumps it by
-   hand, and `electron/package.json`'s major must equal it, because the
-   installer users download carries that number.
+   hand. It is independent of the installer's release version, YYYY.M.N
+   (electron/scripts/version.mjs).
 
    `sync-protocol` is what `meta` compares (2.3). It changes only together with
    `desktop-major` (13.3.1). Inside one major, schema changes stay additive,

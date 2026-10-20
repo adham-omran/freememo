@@ -105,7 +105,12 @@
 ;; ImageMagick CLI is `magick` on v7 (Homebrew) and `convert` on v6 (Debian/
 ;; Ubuntu `apt install imagemagick`). Same argument order on both, so we just
 ;; try the binaries in order and use whichever is present.
-(def ^:private imagemagick-bins ["magick" "convert"])
+;; Windows has no v6 fallback: there `convert` finds System32\convert.exe, a
+;; tool that converts a disk to NTFS. The desktop app bundles magick.exe.
+(def ^:private imagemagick-bins
+  (if (.startsWith (System/getProperty "os.name") "Windows")
+    ["magick"]
+    ["magick" "convert"]))
 
 (def ^:private imagemagick-timeout-ms
   "Bound on ImageMagick subprocess wall time. A hung/malicious input must not
