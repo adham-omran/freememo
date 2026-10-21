@@ -234,6 +234,37 @@
       (is (= "invalid:table" (get (first (:rejected (upload! u (xmin) [{"t" "users" "k" {"id" 1} "r" {"id" 1}}])))
                                "reason"))))))
 
+;; ── Reading rows ───────────────────────────────────────────────────
+
+(deftest a-row-reads-without-encoding-its-blob
+  ;; to_jsonb renders bytea as hex, two characters per byte, and a jsonb string
+  ;; holds at most 268435455 bytes. 135 MB of file_data is over that limit.
+  (when (db-up?)
+    (let [{u :user} (account!)
+          t (topic! u)
+          f (:id (one db/ds "INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+                             SELECT ?, decode(repeat('ab', 135000000), 'hex'), 135000000, 'application/pdf'
+                             RETURNING id" t))]
+      (try
+        (let [row (wire :topic_files {"id" f})]
+          (is (= {"file_data" {}} (get row "b")) "the blob is flagged, not sent")
+          (is (not (contains? (get row "r") "file_data")))
+          (is (= "application/pdf" (get-in row ["r" "mime_type"])))
+          (testing "an upload that matches the stored row reads it too"
+            (upload! u (+ (xmin) 1000000)
+              [(-> row (assoc-in ["r" "mime_type"] "application/x-pdf")
+                 (assoc "b" {"file_data" {"sha256" (sha64)}}))])
+            (is (= "application/x-pdf" (:mime_type (one db/ds "SELECT mime_type FROM topic_files WHERE id = ?" f))))))
+        (finally (jdbc/execute! db/ds ["DELETE FROM topic_files WHERE id = ?" f]))))))
+
+(deftest a-wire-row-holds-every-sent-column-and-no-other
+  (when (db-up?)
+    (let [{u :user} (account!)
+          t (topic! u :content "<p>c</p>")
+          row (wire :topics {"id" t})]
+      (is (= (:sent (apply/table-meta db/ds :topics)) (set (keys (get row "r")))))
+      (is (= "<p>c</p>" (get-in row ["r" "content"]))))))
+
 ;; ── Desktop side (D8, 6.8) ─────────────────────────────────────────
 
 (def ^:private desktop-ds

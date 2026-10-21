@@ -78,6 +78,7 @@
                   :key key-cols
                   :types (into {} (map (juxt :name :type)) cols)
                   :sent (set sent)
+                  :sent-cols sent
                   :excluded excluded
                   :blob blob
                   :schedule (when group {:clock (:clock group) :columns schedule-cols})
@@ -85,8 +86,16 @@
         (swap! !table-meta assoc table meta)
         meta)))
 
-(defn- pg-text-array [xs]
-  (str "'{" (str/join "," (sort xs)) "}'::text[]"))
+(defn- row-json
+  "SQL for the `:sent` columns of the row aliased `t`, as one jsonb object.
+   It names the columns it keeps. `to_jsonb(t) - excluded` would build the
+   whole row first, and `to_jsonb` renders a `bytea` as a hex string of two
+   characters per byte. A jsonb string holds at most 268435455 bytes, so one
+   PDF over 128 MiB in `topic_files.file_data` failed every read of its page,
+   although the column was never sent."
+  [sent-cols]
+  (format "(SELECT to_jsonb(s) FROM (SELECT %s) s)"
+    (str/join ", " (map #(str "t.\"" % "\"") sent-cols))))
 
 (defn- ->json ^PGobject [v]
   (doto (PGobject.) (.setType "jsonb") (.setValue (json/generate-string v))))
@@ -107,10 +116,10 @@
    Post: each row's `r` holds only `:sent` columns; `b` maps each blob column
          that holds a value to {}."
   [conn table where params]
-  (let [{:keys [name key excluded blob]} (table-meta conn table)
+  (let [{:keys [name key sent-cols blob]} (table-meta conn table)
         flags (for [[c _] blob] (format ", (t.%s IS NOT NULL) AS has_%s" c c))
-        sql (format "SELECT (to_jsonb(t) - %s)::text AS r%s FROM %s t WHERE %s"
-              (pg-text-array excluded) (apply str flags) name where)]
+        sql (format "SELECT %s::text AS r%s FROM %s t WHERE %s"
+              (row-json sent-cols) (apply str flags) name where)]
     (mapv (fn [rec]
             (let [r (json/parse-string (:r rec))]
               {"t" name
@@ -302,18 +311,18 @@
    whether the payload is newer. nil when no row holds the key."
   [tx ctx meta key-map r]
   (let [{:keys [peer]} ctx
-        {:keys [name excluded blob]} meta
+        {:keys [name sent-cols blob]} meta
         lo-col (some (fn [[c kind]] (when (= kind :large-object) c)) blob)
         size-col (get {:topic_files "file_size" :topic_videos "byte_size" :topic_epubs "byte_size"}
                    (:table meta))
         server? (= peer :server)
         sql (format "SELECT %s AS owner, %s AS concurrent,
                             (?::timestamptz > t.mtime) AS incoming_newer,
-                            (to_jsonb(t) - %s)::text AS r%s%s
+                            %s::text AS r%s%s
                      FROM %s t WHERE %s FOR UPDATE"
               (if server? (format "freememo_sync_owner('%s', ?::jsonb)" name) "NULL::bigint")
               (if server? (format "(t.usn >= %d)" (long (:base-usn ctx))) "(t.usn = -1)")
-              (pg-text-array excluded)
+              (row-json sent-cols)
               (if lo-col (str ", t." lo-col " AS old_oid") "")
               (if size-col (str ", t." size-col " AS old_size") "")
               name (key-match meta))
