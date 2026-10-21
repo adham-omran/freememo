@@ -320,7 +320,7 @@
    Each entry is {:where SQL :order SQL :params N :drop-keys [column …]}.
    `:params` is how many times the user id appears in `:where`, because every
    placeholder in every clause binds that one value. `:drop-keys` names columns
-   removed from the row JSON — the blob columns, whose bytes travel as their own
+   left out of the row JSON — the blob columns, whose bytes travel as their own
    archive entries, and DERIVED columns, which the target recomputes from a
    column the archive does carry.
 
@@ -577,7 +577,7 @@
    table, so an import streams row by row instead of holding a table in heap.
 
    JSON rather than EDN because PostgreSQL owns the encoding at both ends:
-   export selects `to_jsonb(t)` and writes the result verbatim, and import feeds
+   export selects `to_jsonb` of each row and writes the result verbatim, and import feeds
    a row back through `jsonb_populate_record`, which reads the TARGET's own
    column types. No JVM type map sits in between, so none can drift. A
    `timestamptz` keeps its offset and an `integer[]` stays an array without this
