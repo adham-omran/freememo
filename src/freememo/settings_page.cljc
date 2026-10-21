@@ -13,6 +13,7 @@
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
    [freememo.forge-settings-section :refer [ForgeTokensSection]]
+   [freememo.google-accounts-section :refer [GoogleAccountsSection]]
    [freememo.settings-group :as group]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
@@ -35,6 +36,7 @@
    {:id "settings-desktop" :label "Desktop App"}
    {:id "settings-zotero" :label "Zotero"}
    {:id "settings-forges" :label "Git Forges"}
+   {:id "settings-google" :label "Google Accounts"}
    {:id "settings-extension" :label "Browser Extension"}
    {:id "settings-keyboard" :label "Keyboard Shortcuts"}])
 
@@ -645,5 +647,7 @@
           (SettingsTab active "settings-zotero" (e/fn [] (ZoteroSection user-id)))
           ;; plans/git-forge-integration.md §4.2
           (SettingsTab active "settings-forges" (e/fn [] (ForgeTokensSection user-id)))
+          ;; plans/google-docs-pull.md row 2.5
+          (SettingsTab active "settings-google" (e/fn [] (GoogleAccountsSection user-id)))
           (SettingsTab active "settings-extension" (e/fn [] (BrowserExtensionSection user-id)))
           (SettingsTab active "settings-keyboard" (e/fn [] (KeyboardShortcutsSection))))))))

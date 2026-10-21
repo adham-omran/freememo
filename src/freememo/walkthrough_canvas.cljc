@@ -76,7 +76,7 @@
           error (e/server (:error c))
           plain? (e/server (and (some? c) (nil? (:error c)) (not (:attributed? c))))
           [node _] (dom/div
-                     (dom/props {:class "wt-canvas code-pane-rendered" :tabindex "0" :dir "ltr"
+                     (dom/props {:class "wt-canvas code-pane-rendered passage-surface" :tabindex "0" :dir "ltr"
                                  :data-testid "walkthrough-canvas"})
                      (let [node dom/node]
                        (dom/On "click" (fn [e] (toggle-fold! e)) nil)

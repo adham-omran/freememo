@@ -577,6 +577,7 @@
      :new-topic      {:label "New topic…" :class :nav}
      :import-zotero  {:label "Import from Zotero…" :class :nav}
      :import-poem    {:label "Import poem…" :class :nav}
+     :import-google-doc {:label "Import Google Doc…" :class :nav}
      :create-live-doc {:label "New live document" :class :mutation :exec :client
                        :table #{:topics}
                        :views #{}}} ; /api/create-live-doc bumps :import-document
@@ -771,6 +772,13 @@
                             :data {:repo-id :ctx :selection :payload}
                             :table #{:topics :topic_code :repo_selections}
                             :views document-views}
+     ;; Pulling an imported Google Doc (plans/google-docs-pull.md). The Pull
+     ;; button on the Doc's home publishes it, so the palette lists it only
+     ;; there. A Pull that finds a change adds a snapshot topic.
+     :pull-google-doc {:label "Pull Google Doc" :class :mutation :exec :ui-button
+                       :when #{:viewer}
+                       :table #{:topics :media}
+                       :views document-views}
      ;; A SuperMemo collection lands a whole tree at once — topics, their
      ;; cards, their bibliography and an archived repetition log — so it
      ;; declares more tables than :import-document and adds :card-mutations.

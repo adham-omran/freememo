@@ -17,7 +17,9 @@
    [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.code-pane :refer [CodePane]]
    [freememo.commit-card :refer [CommitCard]]
-   [freememo.forge-kinds :as forge-kinds]
+   [freememo.gdoc-home :refer [GdocHome]]
+   [freememo.gdoc-snapshot-pane :refer [GdocSnapshotPane]]
+   [freememo.topic-kinds :as topic-kinds]
    [freememo.repo-home :refer [RepoHome]]
    [freememo.walkthrough-screen :refer [WalkthroughScreen]]
    [freememo.walkthrough-state :as walkthrough-state]
@@ -184,8 +186,9 @@
           effective-content dctx/effective-content navigate! dctx/navigate!
           ;; Forge structure holds no notes: a repository shows its home or
           ;; an open walkthrough, a commit its card, a directory nothing
-          ;; (plans/repository-home.md §4.1.2).
-          structure? (forge-kinds/structure-kind? kind)
+          ;; (plans/repository-home.md §4.1.2). A Google Doc root shows its
+          ;; home (plans/google-docs-pull.md).
+          structure? (topic-kinds/home-kind? kind)
           walkthrough-id (when (= kind "repo")
                            (walkthrough-state/open-on (e/watch walkthrough-state/!route)
                              page-topic-id))]
@@ -202,6 +205,8 @@
           (WalkthroughScreen walkthrough-id))
         (when (= kind "commit")
           (CommitCard))
+        (when (= kind "gdoc")
+          (GdocHome))
         (when-not structure?
           (dom/div
             ;; The focus-reader class is the ONLY scope for the centered-column
@@ -248,7 +253,12 @@
               ;; text-change, so mounting it for a poem would make the poem
               ;; editable and let one keystroke overwrite the rendered fallback
               ;; the importer stored. A poem page has no .ql-editor.
-              (if dctx/is-poem? (PoemPane) (EditorPane)))))))))
+              ;; A Google Doc snapshot is read-only for the same reason
+              ;; (plans/google-docs-pull.md).
+              (cond
+                dctx/is-poem? (PoemPane)
+                (= kind "gdoc-snapshot") (GdocSnapshotPane)
+                :else (EditorPane)))))))))
 
 (e/defn DocumentColumns
   "Resizable top region of a document view: left panel, content, and optional
@@ -335,7 +345,7 @@
         ;; already bound at the root.
         ;; Forge structure holds no notes and no cards, so it has no toolbar
         ;; (plans/repository-home.md §4.1.2).
-        (when-not (forge-kinds/structure-kind? kind)
+        (when-not (topic-kinds/home-kind? kind)
           (binding [dctx/topic-id page-topic-id
                     dctx/audio? (= kind "audio")
                     dctx/root-topic-id toolbar-root-id

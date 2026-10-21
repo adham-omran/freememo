@@ -207,6 +207,24 @@
             {:label "What you get"
              :detail "The PDF opens in the Viewer, and its Zotero citation becomes the document's bibliography. Only PDFs import. Zotero 7 to 10 are supported."
              :commands #{}}]}
+   {:slug "import-google-doc"
+    :title "Import a Google Doc"
+    :intro "Study a Google Doc from any of your Google accounts, and pull its changes later. FreeMemo only reads the Doc."
+    :steps [{:label "Connect an account"
+             :detail "Settings → Google Accounts → Connect a Google account. Google asks which account to use, so you can pick a work account while you are signed in to FreeMemo with a personal one. FreeMemo can read only the Docs you pick."
+             :commands #{}}
+            {:label "Pick a Doc"
+             :detail "Import → More sources → Google Doc. Click Choose a Doc beside the account, then pick the Doc in Google's file picker."
+             :commands #{:import-google-doc}}
+            {:label "What you get"
+             :detail "A Google Doc topic, and under it one snapshot topic, named by the time it was pulled. A snapshot is read-only. Select text in it to Extract or to generate cards."
+             :commands #{}}
+            {:label "Pull changes"
+             :detail "On the Google Doc topic, press Pull. When the Doc changed, a new snapshot is added. The earlier snapshot is marked done, so it leaves the Learn queue, and its extracts and cards stay where they are. When nothing changed, no snapshot is added."
+             :commands #{:pull-google-doc}}
+            {:label "When access ends"
+             :detail "If the account is disconnected, or the Doc is deleted or no longer shared, Pull says why. Every snapshot you already have stays."
+             :commands #{}}]}
    {:slug "learning-a-codebase"
     :title "Import code"
     :intro "Study a code repository as a topic tree. Import it from GitHub, GitLab or Forgejo, or upload a .zip."
@@ -750,7 +768,9 @@
    "code"           "learning-a-codebase"
    "repo"           "learning-a-codebase"
    "commit"         "learning-a-codebase"
-   "dir"            "learning-a-codebase"})
+   "dir"            "learning-a-codebase"
+   "gdoc"           "import-google-doc"
+   "gdoc-snapshot"  "import-google-doc"})
 
 (def undocumented
   "Registry ids no step documents, each with its reason. `:pending` means Help

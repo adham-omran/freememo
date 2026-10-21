@@ -68,6 +68,8 @@
     "commit" ["Commit" "var(--color-badge-occlusion)"]
     "dir" ["Folder" "var(--color-badge-occlusion)"]
     "code" ["Code" "var(--color-badge-web)"]
+    "gdoc" ["Google Doc" "var(--color-badge-occlusion)"]
+    "gdoc-snapshot" ["Snapshot" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 (defn encode-query [q]

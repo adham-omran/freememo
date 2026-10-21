@@ -2,14 +2,7 @@
   "Browser half of the NeoReader sync: pick a Drive file, then ask the server to
    sync against it.
 
-   Google's Picker is the SECOND third-party script this app loads, and the only
-   one outside `deployment-hook-impl`. It cannot be vendored: the Picker is a
-   Google-hosted widget that talks to Google, exactly like `gtag.js`. Two things
-   keep it inside the spirit of the no-CDN rule —
-   it carries NO `<script>` tag in either HTML shell, and it loads only when a
-   user clicks Sync. A page nobody syncs from makes no request to Google, and a
-   self-hosted deployment that never uses this feature never contacts Google at
-   all.
+   The Picker itself, and why it loads from Google, is `freememo.google-picker`.
 
    The Picker needs an OAuth token, and the SERVER vends it from the stored
    refresh token. The browser therefore runs no OAuth flow of its own, so there
@@ -20,41 +13,8 @@
    `drive.file`, so this picks a FILE. The user navigates to
    `onyx/<DEVICE>/Read/` themselves, and the view is filtered to HTML so the
    folder shows only exports."
-  (:require [clojure.string :as str]))
-
-(def ^:private picker-api-src "https://apis.google.com/js/api.js")
-
-(defonce ^:private !loaded (atom nil))
-
-(defn- load-picker-api!
-  "Load Google's Picker API once.
-
-   Pre : none.
-   Post: a promise resolving when `google.picker` is defined, rejecting on a
-         load or timeout failure. One shared promise per page — repeated clicks
-         reuse it rather than injecting a second script."
-  []
-  (or @!loaded
-    (reset! !loaded
-      (js/Promise.
-        (fn [resolve reject]
-          (let [done (fn []
-                       (if (and (exists? js/gapi) (.-load js/gapi))
-                         (.load js/gapi "picker"
-                           #js {:callback (fn []
-                                            (if (and (exists? js/google) (.-picker js/google))
-                                              (resolve true)
-                                              (reject (js/Error. "Picker API loaded but google.picker is missing"))))
-                                :onerror (fn [] (reject (js/Error. "Could not load the Google Picker")))})
-                         (reject (js/Error. "Google API script loaded but gapi is missing"))))]
-            (if (and (exists? js/gapi) (.-load js/gapi))
-              (done)
-              (let [el (.createElement js/document "script")]
-                (set! (.-src el) picker-api-src)
-                (set! (.-async el) true)
-                (set! (.-onload el) done)
-                (set! (.-onerror el) (fn [] (reject (js/Error. "Could not reach Google to load the Picker"))))
-                (.appendChild (.-head js/document) el)))))))))
+  (:require [clojure.string :as str]
+            [freememo.google-picker :as picker]))
 
 (defn- form-body
   "Pre : `m` is a map of string keys to values.
@@ -92,50 +52,6 @@
   (set! (.-href js/location)
     (str "/auth/google/drive?return_to=" (js/encodeURIComponent return-to))))
 
-(defn- open-picker!
-  "Show the Picker and resolve with the chosen file id, or nil if cancelled.
-
-   Pre : the Picker API is loaded, `token` is a live `drive.file` token, and
-         `app-id` is the Cloud PROJECT NUMBER.
-   Post: a promise of a file-id string, or nil when the user cancelled. The
-         picked file is granted to this app, which is what makes the later
-         server-side read possible.
-   Inv : `setAppId` is REQUIRED under `drive.file`. Without it the pick succeeds,
-         the file id looks fine, and every server read of it answers 404 — the
-         error names the file and never the missing app id. Do not remove it.
-   Note: no `setSelectFolderEnabled` — a folder pick grants nothing about its
-         contents, so offering it would hand the user a choice that cannot work."
-  [token app-id]
-  (js/Promise.
-    (fn [resolve _reject]
-      (let [picker-ns (.-picker js/google)
-            View (.-DocsView picker-ns)
-            view (doto (new View (.. picker-ns -ViewId -DOCS))
-                   (.setMimeTypes "text/html")
-                   (.setIncludeFolders true)
-                   (.setSelectFolderEnabled false))
-            Builder (.-PickerBuilder picker-ns)
-            Action (.-Action picker-ns)
-            builder (doto (new Builder)
-                      (.setTitle "Choose your NeoReader export (onyx / DEVICE / Read)")
-                      (.setAppId app-id)
-                      (.setOAuthToken token)
-                      (.addView view)
-                      (.setCallback
-                        (fn [data]
-                          (let [action (aget data (.. picker-ns -Response -ACTION))]
-                            (cond
-                              (= action (.-PICKED Action))
-                              (let [docs (aget data (.. picker-ns -Response -DOCUMENTS))
-                                    doc (aget docs 0)]
-                                (resolve (aget doc (.. picker-ns -Document -ID))))
-
-                              (= action (.-CANCEL Action))
-                              (resolve nil)
-
-                              :else nil)))))]
-        (.setVisible (.build builder) true)))))
-
 (defn- pick-then-sync!
   "Open the Picker, bind what the user chose, and sync.
 
@@ -144,8 +60,10 @@
          the bind failed. A cancelled Picker binds nothing and syncs nothing."
   [topic-id token app-id on-status]
   (on-status {:phase :picking})
-  (-> (load-picker-api!)
-    (.then (fn [_] (open-picker! token app-id)))
+  (-> (picker/load!)
+    (.then (fn [_] (picker/pick-file!
+                     {:token token :app-id app-id :mime-types "text/html"
+                      :title "Choose your NeoReader export (onyx / DEVICE / Read)"})))
     (.then (fn [file-id]
              (if (nil? file-id)
                (do (on-status {:phase :cancelled}) nil)

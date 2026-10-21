@@ -8,7 +8,7 @@
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.bottom-panel :refer [BottomPanel]]
    [freememo.command-bus :as bus]
-   [freememo.forge-kinds :as forge-kinds]
+   [freememo.topic-kinds :as topic-kinds]
    [freememo.util :as util]))
 
 (e/defn DocumentSplitDivider []
@@ -37,9 +37,9 @@
 
 (e/defn DocumentMainColumn [assistant-inside?]
   (e/client
-    (let [;; Forge structure has no cards, so no card table and no toggle
-          ;; for one (plans/repository-home.md §4.1.2).
-          structure? (forge-kinds/structure-kind? dctx/kind)
+    (let [;; Forge structure and a Google Doc root have no cards, so no card
+          ;; table and no toggle for one (plans/repository-home.md §4.1.2).
+          structure? (topic-kinds/home-kind? dctx/kind)
           card-table-open? (and dctx/card-table-open? (not structure?))
           toggle-card-table! (when-not structure? dctx/toggle-card-table!)
           ;; Published only on a document with a source pane, so the palette

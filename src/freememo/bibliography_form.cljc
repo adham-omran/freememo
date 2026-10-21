@@ -145,6 +145,8 @@
     (= kind "repo")                  ["Repo"      "var(--color-badge-occlusion)"]
     (= kind "commit")                ["Commit"    "var(--color-badge-occlusion)"]
     (= kind "dir")                   ["Folder"    "var(--color-badge-occlusion)"]
+    (= kind "gdoc")                  ["Google Doc" "var(--color-badge-occlusion)"]
+    (= kind "gdoc-snapshot")         ["Snapshot"  "var(--color-badge-web)"]
     (= kind "supermemo")             ["SuperMemo" "var(--color-badge-supermemo)"]
     (= kind "poem")                  ["Poem"      "var(--color-badge-epub)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))

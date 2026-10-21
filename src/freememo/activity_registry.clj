@@ -236,6 +236,18 @@
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :video-process-errors) (key->id work-key)))}
 
+   ;; A Google Doc Pull (freememo.google-docs, plans/google-docs-pull.md).
+   ;; SERVER tier: it runs on an e/Offload thread no browser owns. The member
+   ;; is the `gdoc` root, so one Doc has one row at a time. The export cannot be
+   ;; interrupted (clj-http), and nothing is worth cancelling in a fetch this
+   ;; short, so no canceller is declared.
+   :gdoc-pull
+   {:label "Pulling Google Doc"
+    :tier :server :subject :topic :work-key id->key
+    :state-key :pulling-gdocs :phase "pulling"
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :gdoc-pull-errors) (key->id work-key)))}
+
    :distill-doc
    {:label "Distilling facts"
     :tier :server :subject :topic :work-key id->key

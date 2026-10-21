@@ -9,6 +9,8 @@
    [freememo.auth :as auth]
    [freememo.google-oauth :as google-oauth]
    [freememo.google-drive :as drive]
+   [freememo.google-accounts :as gaccounts]
+   [freememo.google-docs :as gdocs]
    [freememo.neoreader-sync :as neoreader]
    [freememo.neoreader-kinds :as nrkinds]
    [freememo.toasts :as toasts]
@@ -895,17 +897,125 @@
           (tel/error! {:id ::google-drive-callback} e)
           (back (assoc session :drive-error "Connecting Google Drive failed")))))))
 
+(defn- app-relative-path
+  "Post: `path` when it is an app-relative path, else `fallback`. An absolute
+   URL in an OAuth state would otherwise make a callback an open redirect."
+  [path fallback]
+  (if (and path (str/starts-with? path "/") (not (str/starts-with? path "//")))
+    path
+    fallback))
+
+(defn- google-account-callback
+  "The connected-account branch of `google-callback-handler`
+   (plans/google-docs-pull.md, row 2.1).
+   Pre:  `gaccounts/authorization-state?` is true for this request's `state`.
+   Post: 302 to the `return_to` the state carries. On success the account is
+         stored and a toast names it. On failure a toast says why, and nothing
+         is stored. The user stays signed in either way."
+  [request]
+  (let [state (get-in request [:params "state"])
+        code (get-in request [:params "code"])
+        expected (get-in request [:session :google-account-oauth-state])
+        user-id (require-auth request)
+        landing (app-relative-path (:return-to (gaccounts/parse-state state)) "/settings")
+        back {:status 302 :headers {"Location" landing}
+              :session (dissoc (:session request) :google-account-oauth-state)}
+        fail! (fn [msg] (when user-id (toasts/push! user-id {:level :error :message msg})) back)]
+    (cond
+      (nil? user-id) back
+      (not= state expected) (fail! "Connecting the Google account failed: the request did not match. Try again.")
+      (str/blank? code) (fail! "Connecting the Google account was cancelled.")
+      :else
+      (try
+        (let [r (gaccounts/connect! user-id code)]
+          (if (:ok r)
+            (do (toasts/push! user-id {:level :success
+                                       :message (str "Connected " (:email r) ".")})
+                (commands/bump! user-id :set-setting)
+                back)
+            (fail! (:error r))))
+        (catch Exception e
+          (tel/error! {:id ::google-account-callback} e)
+          (fail! "Connecting the Google account failed. Try again."))))))
+
 (defn google-callback-handler
   "GET /auth/google/callback — the ONE registered Google redirect URI.
-   Pre:  Google sent a `state` this app built, either a sign-in nonce or a Drive
-         authorization state.
-   Post: dispatches to the branch that state belongs to. Drive shares this URI so
-         a deployment registers exactly one redirect URI in Cloud Console, now
-         and for every environment it ever adds."
+   Pre:  Google sent a `state` this app built: a sign-in nonce, a Drive
+         authorization state, or a connected-account state.
+   Post: dispatches to the branch that state belongs to. Every flow shares this
+         URI so a deployment registers exactly one redirect URI in Cloud
+         Console, now and for every environment it ever adds."
   [request]
-  (if (drive/authorization-state? (get-in request [:params "state"]))
-    (google-drive-callback request)
-    (google-sign-in-callback request)))
+  (let [state (get-in request [:params "state"])]
+    (cond
+      (drive/authorization-state? state) (google-drive-callback request)
+      (gaccounts/authorization-state? state) (google-account-callback request)
+      :else (google-sign-in-callback request))))
+
+(defn google-account-authorize-handler
+  "GET /auth/google/account — start connecting a Google account
+   (plans/google-docs-pull.md, row 2.1).
+   Pre:  authenticated; Google OAuth is configured.
+   Post: 302 to Google's account chooser, with the flow's state in the session.
+         The state carries `return_to`, so the callback returns the user to the
+         page they clicked from."
+  [request]
+  (if-not (require-auth request)
+    {:status 302 :headers {"Location" "/"} :body ""}
+    (if-not (google-oauth/configured?)
+      (json-response 503 {:success false :error "Google is not configured"})
+      (let [return-to (app-relative-path (get-in request [:params "return_to"]) "/settings")
+            state (gaccounts/authorization-state (str (random-uuid)) return-to)]
+        {:status 302
+         :headers {"Location" (gaccounts/authorize-url state)}
+         :session (assoc (:session request) :google-account-oauth-state state)}))))
+
+(defn gdoc-picker-token-handler
+  "GET /api/gdoc/picker-token?account=<sub> — what the Picker needs to browse
+   one connected account's Drive.
+   Pre:  authenticated; `account` is a connected account's sub.
+   Post: {:success true :token s :app_id s}, or {:success false :error s} with
+         :reconnect true when the account must be connected again. The Picker
+         shows the Drive of the account whose token it holds, which is what
+         lets a browser signed in to a personal account browse a work Drive."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (let [sub (get-in request [:params "account"])]
+      (cond
+        (str/blank? sub) (json-response 400 {:success false :error "Missing account"})
+        (nil? (drive/app-id))
+        (json-response 200 {:success false
+                            :error "Google client id carries no project number. The Picker cannot run."})
+        :else
+        (let [r (gaccounts/access-token user-id sub)]
+          (json-response 200 (if (:ok r)
+                               {:success true :token (:token r) :app_id (drive/app-id)}
+                               (cond-> {:success false :error (:error r)}
+                                 (:reconnect? r) (assoc :reconnect true)))))))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn gdoc-import-handler
+  "POST /api/gdoc/import — import a Doc the user just picked.
+   Pre:  authenticated; params `account` (a connected sub) and `file_id`, which
+         the user picked in the Picker with that account's token.
+   Post: {:success true :topic_id n}, or {:success false :error s}. A Doc
+         already imported answers its existing root as :topic_id. The status is
+         200 for a reported failure, as the NeoReader sync's is."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (let [sub (get-in request [:params "account"])
+          file-id (get-in request [:params "file_id"])]
+      (if (or (str/blank? sub) (str/blank? file-id))
+        (json-response 400 {:success false :error "Missing account or file_id"})
+        (try
+          (let [r (gdocs/import! user-id sub file-id)]
+            (json-response 200 (cond-> {:success (boolean (:ok r))}
+                                 (:topic-id r) (assoc :topic_id (:topic-id r))
+                                 (:error r) (assoc :error (:error r)))))
+          (catch Exception e
+            (tel/error! {:id ::gdoc-import-handler} e)
+            (json-response 500 {:success false :error "The import failed. Try again."})))))
+    (json-response 401 {:success false :error "Not authenticated"})))
 
 ;; ── NeoReader sync (plans/boox-neoreader-google-drive-sync.md) ─────────────
 ;;
@@ -1262,6 +1372,11 @@
    {:method :get  :path "/api/neoreader/picker-token" :handler #'drive-picker-token-handler}
    {:method :post :path "/api/neoreader/bind"         :handler #'neoreader-bind-handler   :body :small}
    {:method :post :path "/api/neoreader/sync"         :handler #'neoreader-sync-handler   :body :small}
+   ;; Google Doc import from a connected account (plans/google-docs-pull.md).
+   ;; Its consent flow also returns to `/auth/google/callback`.
+   {:method :get  :path "/auth/google/account"        :handler #'google-account-authorize-handler}
+   {:method :get  :path "/api/gdoc/picker-token"      :handler #'gdoc-picker-token-handler}
+   {:method :post :path "/api/gdoc/import"            :handler #'gdoc-import-handler      :body :small}
    ;; Desktop app (plans/electron-local-db-sync.md). Sign-in is browser-facing
    ;; and sits outside /api; everything else takes the desktop token.
    {:method :get  :path "/desktop/authorize"    :handler #'desktop-auth/authorize-handler}

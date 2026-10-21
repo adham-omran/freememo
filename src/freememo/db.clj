@@ -28,7 +28,8 @@
    [freememo.priority :as priority]
    [freememo.desktop-version :as desktop-version]
    [freememo.sync-schema :as sync-schema]
-   [freememo.text :as text])
+   [freememo.text :as text]
+   [freememo.topic-kinds :as topic-kinds])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
 
@@ -323,6 +324,18 @@
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_path TEXT"])
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS commit_sha TEXT"])
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_url TEXT"])
+
+  ;; Google Doc pull provenance (plans/google-docs-pull.md).
+  ;;
+  ;; drive_file_id and google_account_sub live on the 'gdoc' root: the Drive
+  ;; file a Pull exports, and the connected account it exports through
+  ;; (freememo.google-accounts). The sub is Google's account id, not a FreeMemo
+  ;; id, so account transfer needs no fk-columns entry for it.
+  ;; snapshot_hash lives on each 'gdoc-snapshot': the digest a Pull compares to
+  ;; decide that nothing changed. All three are NULL for every other kind.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS drive_file_id TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS google_account_sub TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS snapshot_hash TEXT"])
 
   ;; Live Document flag — a kind='pdf' root that the user keeps appending
   ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
@@ -5092,11 +5105,16 @@
 (defn update-topic-content!
   "Update the content of a topic. Filter: `stored-content`.
 
-   Pre : callers do not call this for a kind `poem` topic. A poem is read-only
-         material (`plans/poem-reader-spec.md` row 3.2) and mounts no editor,
-         so every caller named in §6 of that spec addresses another kind.
+   Pre : callers do not call this for a kind in
+         `topic-kinds/read-only-content-kinds`. A poem is read-only material
+         (`plans/poem-reader-spec.md` row 3.2), and so is a Google Doc snapshot
+         (plans/google-docs-pull.md). Neither mounts an editor.
    Post: the row's `content` and `content_text` hold the filtered HTML — EXCEPT
-         for a poem, where nothing is written and nil is returned.
+         for a read-only kind, where nothing is written and nil is returned.
+
+   A snapshot's `content` is the Doc as one Pull exported it. A write would make
+   it disagree with the Doc at that time, and the snapshot is the only record
+   of that version.
 
    The poem guard sits here rather than at the four call sites because this is
    the one function every content writer that can reach a poem goes through, and
@@ -5109,11 +5127,13 @@
    a call that arrives is a defect to report, not a failure the caller has a
    branch for. The `:warn` names the topic so the defect is findable."
   [id content]
-  (if (= "poem" (:topics/kind (jdbc/execute-one! ds
-                                (sql/format {:select [:kind] :from :topics
-                                             :where [:= :id id]}))))
-    (do (tel/log! {:level :warn :id ::poem-content-write-refused :data {:topic-id id}}
-          "Refused a content write to a poem topic")
+  (if-let [kind (topic-kinds/read-only-content-kinds
+                  (:topics/kind (jdbc/execute-one! ds
+                                  (sql/format {:select [:kind] :from :topics
+                                               :where [:= :id id]}))))]
+    (do (tel/log! {:level :warn :id ::read-only-content-write-refused
+                   :data {:topic-id id :kind kind}}
+          "Refused a content write to a read-only topic")
         nil)
     (let [sanitized (stored-content content)]
       (jdbc/execute-one! ds
@@ -8492,8 +8512,10 @@
 ;; ---------------------------------------------------------------------------
 
 ;; Kinds that scaffold a document tree rather than holding something a user
-;; studies: a PDF page stub, plus the repository, commit and folder nodes a git
-;; forge import creates (plans/git-forge-integration.md §4.1).
+;; studies: a PDF page stub, the repository, commit and folder nodes a git
+;; forge import creates (plans/git-forge-integration.md §4.1), and the root of a
+;; pulled Google Doc, whose snapshots are what a user studies
+;; (plans/google-docs-pull.md).
 ;;
 ;; Two readers, and both properties are load-bearing:
 ;;   - every review-queue query below excludes them, so a folder never enters
@@ -8504,10 +8526,10 @@
 ;;
 ;; Invariant: `structural-kinds-sql` is derived from this set and never written
 ;; by hand, so a kind added here reaches all nine readers at once.
-(def ^:private structural-kinds #{"page" "repo" "commit" "dir"})
+(def ^:private structural-kinds #{"page" "repo" "commit" "dir" "gdoc"})
 
 (def ^:private structural-kinds-sql
-  "`structural-kinds` as a SQL IN list: \"('commit', 'dir', 'page', 'repo')\".
+  "`structural-kinds` as a SQL IN list: \"('commit', 'dir', 'gdoc', 'page', 'repo')\".
    Sorted, so the rendered SQL is stable across JVM runs."
   (str "(" (str/join ", " (map #(str "'" % "'") (sort structural-kinds))) ")"))
 
@@ -10724,6 +10746,135 @@
        ORDER BY c.created_at DESC, c.id DESC"
      repo-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
+
+;; ---------------------------------------------------------------------------
+;; Google Doc pulls (plans/google-docs-pull.md)
+;; ---------------------------------------------------------------------------
+;;
+;; A `gdoc` root names a Drive file and the connected account it is read
+;; through. Each Pull that finds a change adds one `gdoc-snapshot` child. The
+;; newest snapshot is the one under review, and every earlier one is `done`
+;; (decision F2): it keeps its extracts and cards, and leaves the Learn queue.
+
+(defn find-gdoc-root
+  "Post: the id of `user-id`'s live `gdoc` root for `drive-file-id`, or nil."
+  [user-id drive-file-id]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM topics
+           WHERE user_id = ? AND kind = 'gdoc' AND drive_file_id = ? AND staged_delete_id IS NULL
+           ORDER BY id LIMIT 1" user-id drive-file-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn gdoc-root
+  "Post: {:id :title :drive_file_id :google_account_sub} for `user-id`'s live
+   `gdoc` root `root-id`, or nil when it is not one."
+  [user-id root-id]
+  (jdbc/execute-one! ds
+    ["SELECT id, title, drive_file_id, google_account_sub FROM topics
+      WHERE id = ? AND user_id = ? AND kind = 'gdoc' AND staged_delete_id IS NULL"
+     root-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn gdoc-snapshots
+  "Post: [{:id :title :status :created_at}] for the live snapshots under
+   `user-id`'s `gdoc` root `root-id`, newest first."
+  [user-id root-id]
+  (jdbc/execute! ds
+    ["SELECT c.id, c.title, c.status, c.created_at
+        FROM topics c JOIN topics r ON r.id = c.parent_id
+       WHERE r.id = ? AND r.user_id = ? AND r.kind = 'gdoc' AND r.staged_delete_id IS NULL
+         AND c.kind = 'gdoc-snapshot' AND c.staged_delete_id IS NULL
+       ORDER BY c.created_at DESC, c.id DESC"
+     root-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn latest-gdoc-snapshot-hash
+  "Post: the `snapshot_hash` of the newest live snapshot under `root-id`, or nil
+   when it has none. A read outside any transaction: a Pull uses it to skip the
+   image downloads of an unchanged Doc, and `add-gdoc-snapshot!` checks again
+   under the lock."
+  [root-id]
+  (:snapshot_hash (jdbc/execute-one! ds
+                    ["SELECT snapshot_hash FROM topics
+                      WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND staged_delete_id IS NULL
+                      ORDER BY created_at DESC, id DESC LIMIT 1" root-id]
+                    {:builder-fn rs/as-unqualified-maps})))
+
+(defn- insert-gdoc-snapshot!
+  "Add one snapshot under `root-id`, inside the caller's transaction `tx`.
+
+   Pre : `tx` holds a lock on the root row, so no other Pull of this root runs
+         between the hash read and the insert. `content` is stored HTML.
+   Post: {:unchanged? true} when the newest live snapshot already has `hash`,
+         and nothing is written. Otherwise {:topic-id id}: a new active snapshot,
+         and every earlier active snapshot is `done` (F2). Both writes are in
+         `tx`, so a reader never sees two active snapshots or none."
+  [tx {:keys [user-id root-id title content hash]}]
+  (let [newest (jdbc/execute-one! tx
+                 ["SELECT snapshot_hash FROM topics
+                   WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND staged_delete_id IS NULL
+                   ORDER BY created_at DESC, id DESC LIMIT 1" root-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (if (and newest (= hash (:snapshot_hash newest)))
+      {:unchanged? true}
+      (let [clean-title (input/prettify-title (input/sanitize-title title))
+            sanitized (sanitize-utf8 content)
+            id (:topics/id (jdbc/execute-one! tx
+                             (sql/format {:insert-into :topics
+                                          :values [{:user_id user-id :parent_id root-id
+                                                    :kind "gdoc-snapshot" :title clean-title
+                                                    :content sanitized
+                                                    :content_text (text/strip-html sanitized)
+                                                    :snapshot_hash hash :status "active"
+                                                    :priority priority/priority-default}]
+                                          :returning [:id]})))]
+        (jdbc/execute! tx
+          ["UPDATE topics SET status = 'done'
+            WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND id <> ? AND status = 'active'"
+           root-id id])
+        (audit-doc-created! user-id id)
+        {:topic-id id}))))
+
+(defn create-gdoc-document!
+  "Create a `gdoc` root and its first snapshot in one transaction.
+
+   Pre : `drive-file-id` was picked by `user-id` through `account-sub`.
+         `content` is stored HTML. No live root for this file exists — the
+         caller checked `find-gdoc-root` (a race leaves two roots, which is
+         harmless: each pulls on its own).
+   Post: {:root-id id :topic-id snapshot-id}."
+  [{:keys [user-id title drive-file-id account-sub snapshot-title content hash]}]
+  (jdbc/with-transaction [tx ds]
+    (let [root-title (available-import-title tx user-id title)
+          root-id (:topics/id (jdbc/execute-one! tx
+                                (sql/format {:insert-into :topics
+                                             :values [{:user_id user-id :kind "gdoc" :title root-title
+                                                       :drive_file_id drive-file-id
+                                                       :google_account_sub account-sub
+                                                       :status "active"
+                                                       :priority priority/priority-default}]
+                                             :returning [:id]})))
+          {:keys [topic-id]} (insert-gdoc-snapshot! tx {:user-id user-id :root-id root-id
+                                                        :title snapshot-title :content content
+                                                        :hash hash})]
+      (audit-doc-created! user-id root-id)
+      {:root-id root-id :topic-id topic-id})))
+
+(defn add-gdoc-snapshot!
+  "Add a snapshot under `user-id`'s live `gdoc` root `root-id`, unless the
+   newest one already has `hash`.
+
+   Pre : `content` is stored HTML.
+   Post: {:topic-id id}, {:unchanged? true}, or nil when `root-id` is not this
+         user's live root. The root row is locked for the transaction, so two
+         concurrent Pulls of one root cannot both insert."
+  [{:keys [user-id root-id] :as snapshot}]
+  (jdbc/with-transaction [tx ds]
+    (when (jdbc/execute-one! tx
+            ["SELECT id FROM topics
+              WHERE id = ? AND user_id = ? AND kind = 'gdoc' AND staged_delete_id IS NULL
+              FOR UPDATE" root-id user-id])
+      (insert-gdoc-snapshot! tx snapshot))))
 
 (defn commit-node
   "`user-id`'s live commit snapshot `topic-id`, with its repository.
