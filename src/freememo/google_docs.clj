@@ -6,10 +6,18 @@
    under `drive.file`, so only a Doc the user picked in the Picker is
    readable. The id of that pick is all a later Pull needs.
 
-   One fetch is: `files.get` for the name and the kind, `files.export` as
-   `text/html`, then `gdoc-html/export->html` → `doc-html/rewrite-for-quill!`
-   → `clean-html`. The digest of that result decides whether a Pull changes
-   anything. Images are re-hosted only for a snapshot that will be stored.
+   One fetch is: `files.get` for the name and the kind, then `files.export` as
+   `text/markdown`, rendered by `repo-markdown/render-document` — the renderer
+   the repository Markdown pane uses. The digest of that result decides
+   whether a Pull changes anything. Images are re-hosted only for a snapshot
+   that will be stored.
+
+   Markdown, not HTML, because Google's HTML export writes a code block as one
+   paragraph per line with its font as a style, which no sanitizer keeps. The
+   Markdown export carries structure instead: headings, emphasis, links
+   without Google's redirect wrapper, nested lists, tables, and images as
+   `data:` URIs (confirmed on a test Doc, 2026-10-21). Underline, colour and
+   alignment have no Markdown form and are lost.
 
    A Pull publishes the root id in `:pulling-gdocs` while it runs, which is
    both the Activity monitor's membership and the guard that keeps a second
@@ -21,11 +29,9 @@
     [taoensso.telemere :as tel]
     [freememo.commands :as commands]
     [freememo.db :as db]
-    [freememo.doc-html :as doc-html]
-    [freememo.gdoc-html :as gdoc-html]
     [freememo.google-accounts :as accounts]
-    [freememo.html-cleaner :as cleaner]
     [freememo.image-rehost :as rehost]
+    [freememo.repo-markdown :as repo-md]
     [freememo.user-state :as us]
     [freememo.util :as util]))
 
@@ -78,13 +84,13 @@
        :trashed? (boolean (:trashed body))}
       (drive-failure status body email))))
 
-(defn- export-html
+(defn- export-markdown
   "Pre : as `file-meta`, and the file is a Google Doc.
-   Post: {:ok true :html s}, or a `drive-failure`."
+   Post: {:ok true :markdown s}, or a `drive-failure`."
   [token file-id email]
   (let [{:keys [status body]} (http/get (str "https://www.googleapis.com/drive/v3/files/"
                                           (url-encode file-id) "/export")
-                                {:query-params {:mimeType "text/html"}
+                                {:query-params {:mimeType "text/markdown"}
                                  :headers {"Authorization" (str "Bearer " token)}
                                  :as :byte-array
                                  :throw-exceptions false})]
@@ -92,7 +98,7 @@
       (not= 200 status) (drive-failure status (some-> ^bytes body (String. "UTF-8")) email)
       (> (alength ^bytes body) max-export-bytes)
       {:ok false :error "This Doc is larger than the 10 MB Google allows for an export."}
-      :else {:ok true :html (String. ^bytes body "UTF-8")})))
+      :else {:ok true :markdown (String. ^bytes body "UTF-8")})))
 
 (defn doc-url
   "Post: the address that opens Doc `file-id` in Google Docs."
@@ -100,14 +106,26 @@
   (str "https://docs.google.com/document/d/" (url-encode file-id) "/edit"))
 
 (defn stored-html
-  "A Drive HTML export, as the sanitized HTML a snapshot stores before its
+  "A Drive Markdown export, as the sanitized HTML a snapshot stores before its
    images are re-hosted.
-   Post: nil iff `export` is nil."
+   Post: nil iff `export` is blank."
   [export]
-  (some-> export
-    gdoc-html/export->html
-    doc-html/doc-html->quill-html
-    cleaner/clean-html))
+  (repo-md/render-document export))
+
+(defn content-hash
+  "The digest a Pull compares to decide that the Doc did not change.
+
+   Pre : `html` is `stored-html` output, BEFORE image re-hosting.
+   Post: a hex SHA-256 of `html` with every `<img src>` blanked.
+   Why : whether an export encodes an unchanged image to the same bytes every
+         time is unknown. With the src in the digest, a re-encoding would make
+         every Pull of an unchanged Doc a new snapshot. The cost is that a
+         change that only swaps one image for another makes none."
+  [html]
+  (let [masked (str/replace (or html "") #"(<img\b[^>]*?\bsrc=\")[^\"]*(\")" "$1$2")
+        md (java.security.MessageDigest/getInstance "SHA-256")]
+    (apply str (map #(format "%02x" (bit-and % 0xff))
+                 (.digest md (.getBytes ^String masked "UTF-8"))))))
 
 (defn- fetch-doc
   "Read the Doc `file-id` through connected account `sub`.
@@ -124,20 +142,22 @@
           {:ok false :error "Only a Google Doc can be imported. This file is another kind."}
           (:trashed? meta) {:ok false :error "This Doc is in the Google Drive trash."}
           :else
-          (let [export (export-html (:token token) file-id email)]
+          (let [export (export-markdown (:token token) file-id email)]
             (if-not (:ok export)
               export
-              (let [html (or (stored-html (:html export)) "")]
+              (let [html (or (stored-html (:markdown export)) "")]
                 {:ok true :name (:name meta)
-                 :html html :hash (gdoc-html/content-hash html)}))))))))
+                 :html html :hash (content-hash html)}))))))))
 
 (defn- rehosted
-  "Post: `html` with every image downloaded into this user's media. An image
-   that cannot be downloaded stays a link to Google, which is what
+  "Post: `html` with every image stored in this user's media. The export
+   inlines images as `data:` URIs. Any image left as a link is downloaded, and
+   one that cannot be downloaded stays a link, which is what
    `rehost-html-images!` does for every import."
   [user-id html]
-  (:html (rehost/rehost-html-images! {:html html :base-url "https://docs.google.com/"
-                                      :user-id user-id})))
+  (let [inline (:html (rehost/rehost-data-uris! {:html html :user-id user-id}))]
+    (:html (rehost/rehost-html-images! {:html inline :base-url "https://docs.google.com/"
+                                        :user-id user-id}))))
 
 (defn- pull-time
   "Post: now, in the form the repository home shows an import time."

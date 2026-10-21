@@ -192,6 +192,18 @@
   (doto (Jsoup/parseBodyFragment html)
     (-> .outputSettings (.prettyPrint false))))
 
+(defn- rendered-body
+  "Post: nil for a blank `source`. Otherwise the body of one Jsoup tree of its
+   rendering, with heading ids, fences as `pre[data-language]`, anchorable
+   footnotes and task markers, not yet sanitized."
+  ^Element [source]
+  (when-let [html (md/render-with-lifted-math source flexmark-html)]
+    (let [body (.body (parse-body html))]
+      (fences->data-language! body)
+      (footnotes->anchorable! body)
+      (tasks->markers! body)
+      body)))
+
 (defn render
   "Sanitized HTML for Markdown `source`, the file at `file-path`.
 
@@ -202,15 +214,21 @@
          with heading ids, fences as `pre[data-language]`, anchorable footnotes,
          no image, and every link resolved."
   [source file-path resolve-paths origin]
-  (when-let [html (md/render-with-lifted-math source flexmark-html)]
-    (let [doc (parse-body html)
-          body (.body doc)]
-      (fences->data-language! body)
-      (footnotes->anchorable! body)
-      (tasks->markers! body)
-      (drop-images! body)
-      (rewrite-links! body file-path (resolve-paths (repo-link-paths file-path body)) origin)
-      (cleaner/clean-html (.html body)))))
+  (when-let [body (rendered-body source)]
+    (drop-images! body)
+    (rewrite-links! body file-path (resolve-paths (repo-link-paths file-path body)) origin)
+    (cleaner/clean-html (.html body))))
+
+(defn render-document
+  "Sanitized HTML for Markdown that is not a repository file: a Google Doc's
+   Markdown export (plans/google-docs-pull.md).
+
+   Post: nil for a blank source. Otherwise as `render`, except that images are
+         KEPT and no link is rewritten. A Doc's links are absolute, and its
+         images are the Doc's own, exported as `data:` URIs that the caller
+         re-hosts."
+  [source]
+  (some-> (rendered-body source) .html cleaner/clean-html))
 
 ;; ── Source lines ───────────────────────────────────────────────────
 

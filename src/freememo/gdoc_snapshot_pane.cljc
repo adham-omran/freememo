@@ -7,6 +7,11 @@
    the auto-save that writes `topics.content`. The server half of that guard is
    `db/update-topic-content!`, which refuses a write to a read-only kind.
 
+   A snapshot is the Doc's Markdown export, rendered by
+   `repo-markdown/render-document`, so the body reads like the repository's
+   rendered Markdown pane: the same `.code-pane-rendered` styles and the same
+   fence highlighting.
+
    The body carries `code-pane/passage-surface-class`, so `selected-passage`
    takes a selection from it as it does from the rendered Markdown pane, and
    Extract and the Generate actions work on the selected text. With nothing
@@ -28,9 +33,18 @@
             (if (= "gdoc-snapshot" (:topics/kind t)) (or (:topics/content t) "") ""))
      :cljs nil))
 
+(defn show-snapshot!
+  "Write `html` into `node`, typeset its math, and highlight its fences.
+   CLJ no-op. Returns nil."
+  [node html]
+  (math/set-html! node html)
+  (code-pane/highlight-fences! node)
+  nil)
+
 (e/defn GdocSnapshotPane
   "Pre : dctx/page-topic-id names a `gdoc-snapshot` topic.
-   Post: its HTML, rendered read-only with math typeset."
+   Post: its HTML, rendered read-only with math typeset and fences
+         highlighted."
   []
   (e/client
     (let [user-id dctx/user-id
@@ -39,6 +53,6 @@
       (dom/div
         (dom/props {:class "gdoc-snapshot" :data-testid "gdoc-snapshot"})
         (dom/div
-          (dom/props {:class (str "gdoc-snapshot__body fm-rich " code-pane/passage-surface-class)
+          (dom/props {:class (str "gdoc-snapshot__body code-pane-rendered " code-pane/passage-surface-class)
                       :tabindex "0"})
-          (math/set-html! dom/node html))))))
+          (show-snapshot! dom/node html))))))

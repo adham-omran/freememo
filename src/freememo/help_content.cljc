@@ -217,7 +217,7 @@
              :detail "Import → More sources → Google Doc. Click Choose a Doc beside the account, then pick the Doc in Google's file picker."
              :commands #{:import-google-doc}}
             {:label "What you get"
-             :detail "A Google Doc topic, and under it one snapshot topic, named by the time it was pulled. A snapshot is read-only. Select text in it to Extract or to generate cards."
+             :detail "A Google Doc topic, and under it one snapshot topic, named by the time it was pulled. A snapshot is read-only. It keeps the Doc's headings, lists, tables, links, code blocks and images, but not underline or text colour. Select text in it to Extract or to generate cards."
              :commands #{}}
             {:label "Pull changes"
              :detail "On the Google Doc topic, press Pull. When the Doc changed, a new snapshot is added. The earlier snapshot is marked done, so it leaves the Learn queue, and its extracts and cards stay where they are. When nothing changed, no snapshot is added."

@@ -176,9 +176,10 @@
   ;; opens at the reader's saved place instead of jumping to the fragment again.
   (atom nil))
 
-(defn- highlight-fences!
+(defn highlight-fences!
   "Highlight each `pre[data-language]` under `root` that highlight.js carries,
-   within `highlight-max-chars` per block, as `render-source!` does for a file."
+   within `highlight-max-chars` per block, as `render-source!` does for a file.
+   Also used by a Google Doc snapshot (`freememo.gdoc-snapshot-pane`)."
   [root]
   #?(:cljs
      (when-let [hljs (gobj/get js/window "hljs")]
