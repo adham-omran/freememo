@@ -586,6 +586,20 @@
                     (set-state! :idle))))
         (throw (ex-info (str "Sync meta failed: HTTP " status) {:type ::step-failed :status status}))))))
 
+(defn- fail!
+  "Show the failed `state`, with `message` as the last error when it is
+   non-nil. The error is written before the state moves: moving the state is
+   what refreshes Settings, and it must find the error already there.
+   Post: `status` answers `state`, even when the local database cannot
+         record the error."
+  [state message]
+  (try (when message (record! {:last_error message}))
+    (catch Throwable e (tel/error! {:id ::record-failed} e)))
+  (try (set-state! state)
+    (catch Throwable e
+      (swap! !status assoc :state state)
+      (tel/error! {:id ::state-failed} e))))
+
 (defonce ^:private !lock (Object.))
 (defonce ^:private !running (atom false))
 
@@ -598,18 +612,18 @@
     (try
       (set-state! :syncing :progress {})
       (locking !lock (run-sync!))
-      ;; The error is written before the state moves: moving the state is
-      ;; what refreshes Settings, and it must find the error already there.
       (catch clojure.lang.ExceptionInfo e
         (let [kind (:type (ex-data e))]
           (when-not (= kind ::offline)
-            (record! {:last_error (.getMessage e)})
             (tel/log! {:level :warn :id ::sync-failed :data (dissoc (ex-data e) :body)} (.getMessage e)))
-          (set-state! (case kind ::offline :offline ::unauthorized :signed-out :error))))
-      (catch Exception e
-        (record! {:last_error (or (.getMessage e) (str (class e)))})
+          (fail! (case kind ::offline :offline ::unauthorized :signed-out :error)
+            (when-not (= kind ::offline) (.getMessage e)))))
+      ;; Throwable, not Exception: a StackOverflowError that escaped here left
+      ;; the state at :syncing, so the download window froze on its last
+      ;; progress with no message.
+      (catch Throwable e
         (tel/error! {:id ::sync-failed} e)
-        (set-state! :error))
+        (fail! :error (or (.getMessage e) (str (class e)))))
       (finally (reset! !running false))))
   (status))
 
@@ -622,10 +636,9 @@
       (locking !lock
         (case direction :download (full-download!) :upload (full-upload!)))
       (set-state! :idle)
-      (catch Exception e
-        (record! {:last_error (or (.getMessage e) (str (class e)))})
+      (catch Throwable e
         (tel/error! {:id ::full-sync-failed} e)
-        (set-state! :error))
+        (fail! :error (or (.getMessage e) (str (class e)))))
       (finally (reset! !running false))))
   (status))
 
@@ -642,8 +655,11 @@
                                          (reify ThreadFactory
                                            (newThread [_ r] (doto (Thread. r "freememo-sync") (.setDaemon true)))))]
       (reset! !scheduler ex)
-      (.scheduleWithFixedDelay ex ^Runnable sync-now! 2 (* 60 interval-minutes) TimeUnit/SECONDS)
-      (link/on-online! #(.execute ex ^Runnable sync-now!)))))
+      ;; A task that throws is never run again by scheduleWithFixedDelay, so
+      ;; the timer would stop for the life of the process.
+      (let [run (fn [] (try (sync-now!) (catch Throwable e (tel/error! {:id ::scheduled-sync-failed} e))))]
+        (.scheduleWithFixedDelay ex ^Runnable run 2 (* 60 interval-minutes) TimeUnit/SECONDS)
+        (link/on-online! #(.execute ex ^Runnable run))))))
 
 ;; ── Conflict report (§5) ───────────────────────────────────────────
 
