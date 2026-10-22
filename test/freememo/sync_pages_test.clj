@@ -11,6 +11,7 @@
    SYNC_E2E_ORIGIN over SERVER_DB_NAME, and this JVM as a desktop
    (FREEMEMO_PEER=desktop) on a fresh DB_NAME."
   (:require [clojure.test :refer [deftest is testing]]
+            [cheshire.core :as json]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [freememo.db :as db]
@@ -85,3 +86,54 @@
         (is (= 601 (n db/ds "SELECT count(*) AS n FROM topics")) "none was removed locally")
         (is (zero? (n db/ds "SELECT count(*) AS n FROM sync_conflicts")) "none went to the conflict report")
         (is (zero? (n db/ds "SELECT count(*) AS n FROM topics WHERE usn = -1")) "nothing left pending")))))
+
+(defn- stop-at-download
+  "`f` with the client's `n`th download page request throwing, as a crash,
+   a quit or a lost connection there would. Returns the requests made."
+  [n f]
+  (let [real @#'client/call!
+        calls (atom 0)]
+    (with-redefs [client/call! (fn [method path & more]
+                                 (when (= path "/api/sync/download")
+                                   (when (= n (swap! calls inc))
+                                     (throw (ex-info "stopped" {:type ::stopped}))))
+                                 (apply real method path more))]
+      (f))
+    @calls))
+
+(defn- stored-download []
+  (some-> (one db/ds "SELECT full_download::text AS j FROM sync_state") :j json/parse-string))
+
+(deftest a-stopped-full-download-resumes-from-its-last-page
+  (when (and origin (peer/desktop?))
+    (let [s @server-ds
+          u (bind-desktop!)
+          root (:id (one s "INSERT INTO topics (user_id, title) VALUES (?, 'root') RETURNING id" u))
+          _ (jdbc/execute! s ["INSERT INTO topics (user_id, parent_id, title, content)
+                               SELECT ?, ?, 'topic ' || g, '<p>' || g || '</p>' FROM generate_series(1, 1600) g"
+                              u root])
+          server-topics (n s "SELECT count(*) AS n FROM topics WHERE user_id = ?" u)]
+      (testing "a stop at the third page keeps the two pages before it"
+        (stop-at-download 3 client/sync-now!)
+        (is (= 1000 (n db/ds "SELECT count(*) AS n FROM topics")) "two pages of 500 committed")
+        (is (= 1000 (get (stored-download) "downloaded")))
+        (is (some? (get (stored-download) "cursor")))
+        (is (zero? (n db/ds "SELECT checkpoint AS n FROM sync_state")) "the library is not ready"))
+      (testing "the next sync resumes there"
+        (let [calls (stop-at-download 0 client/sync-now!)]
+          (is (= 2 calls) "pages three and four only")
+          (is (= :idle (:state (client/status))) (str (:error (client/status))))
+          (is (= server-topics (n db/ds "SELECT count(*) AS n FROM topics")))
+          (is (= server-topics (n db/ds "SELECT count(DISTINCT id) AS n FROM topics")) "each row once")
+          (is (nil? (stored-download)) "nothing left to resume")
+          (is (pos? (n db/ds "SELECT checkpoint AS n FROM sync_state")) "the library is ready")
+          (is (= server-topics (n db/ds "SELECT total_items AS n FROM document_summaries WHERE root_topic_id = ?" root))
+            "2.8.2: the root's summary counts every topic")))
+      (testing "a stopped download of an old epoch starts again"
+        (stop-at-download 3 #(client/choose-full-sync! :download))
+        (is (= 1000 (get (stored-download) "downloaded")))
+        (one s "UPDATE desktop_accounts SET scm = md5(random()::text) WHERE user_id = ? RETURNING user_id" u)
+        (let [calls (stop-at-download 0 client/sync-now!)]
+          (is (= 4 calls) "every page again")
+          (is (= server-topics (n db/ds "SELECT count(*) AS n FROM topics")))
+          (is (nil? (stored-download))))))))

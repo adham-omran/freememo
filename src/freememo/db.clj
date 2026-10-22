@@ -3202,6 +3202,9 @@
       last_error TEXT,
       license JSONB
     )"])
+  ;; A full download in progress: its window, epoch, totals and the cursor of
+  ;; its last committed page. NULL when none runs (2.8.1).
+  (jdbc/execute! ds ["ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS full_download JSONB"])
 
   ;; One token per desktop install (3.2). Only a SHA-256 of the token is kept.
   (jdbc/execute! ds ["

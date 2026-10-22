@@ -82,10 +82,12 @@
   (when-let [user-id (local-user-id)]
     (commands/bump-channels! user-id #{:desktop-mutations})))
 
+(def ^:private jsonb-columns #{:license :full_download})
+
 (defn- record!
   "Write columns of the one sync_state row."
   [cols]
-  (let [sets (str/join ", " (map #(str (name %) (if (= :license %) " = ?::jsonb" " = ?")) (keys cols)))]
+  (let [sets (str/join ", " (map #(str (name %) (if (jsonb-columns %) " = ?::jsonb" " = ?")) (keys cols)))]
     (jdbc/execute! db/ds (into [(str "UPDATE sync_state SET " sets)] (vals cols)))))
 
 ;; ── HTTP ───────────────────────────────────────────────────────────
@@ -375,39 +377,56 @@
    that later page. Only a parent that never arrives makes it a refusal.
    Post: one transaction holds the whole download, so an interrupted one
          leaves nothing applied and the checkpoint unmoved. Returns {:to
-         :touched}."
-  [user-id from {:keys [to exclude graves-from]}]
-  (apply/with-apply-tx db/ds
-    (fn [tx]
-      (loop [cursor nil to to touched #{} first? true waiting [] waiting-files {}]
-        (let [{:strs [rows graves cursor] :as page}
-              (ok-body! (call! :post "/api/sync/download"
-                          :json-body (cond-> {:from from :exclude (or exclude []) :cursor cursor
-                                              :major desktop-version/desktop-major}
-                                       to (assoc :to to)
-                                       graves-from (assoc :graves_from graves-from)))
-                :download)
-              to (get page "to")
-              files (merge waiting-files (fetch-blobs rows))
-              batch (into waiting rows)
-              g (when first? (apply/apply-graves! tx {:peer :desktop :user-id user-id} (or graves [])))
-              r (apply/apply-rows! tx {:peer :desktop :user-id user-id :blob-file (blob-lookup files)} batch)
-              missing (parent-missing-keys r)
-              still-waiting (if cursor (filterv #(missing [(get % "t") (get % "k")]) batch) [])
-              kept-files (select-keys files (blob-keys still-waiting))
-              refused (if cursor
-                        (remove #(missing [(get % "t") (get % "k")]) (:rejected r))
-                        (:rejected r))
-              touched (into touched (concat (:touched g) (:touched r)))]
-          (delete-files! (apply dissoc files (keys kept-files)))
-          (when (seq refused)
-            (tel/log! {:level :warn :id ::download-rejected :data {:rejected (map #(dissoc % "r") refused)}}
-              "Some downloaded rows did not apply"))
-          (swap! !status update-in [:progress :downloaded] (fnil + 0) (count rows))
-          (commands/bump-channels! user-id #{:desktop-mutations})
-          (if cursor
-            (recur cursor to touched false still-waiting kept-files)
-            {:to to :touched touched}))))))
+         :touched}.
+   With `on-commit`, a page that leaves no row waiting also ends its
+   transaction. `(on-commit tx {:cursor c})` runs in that transaction first,
+   so whatever it records commits with exactly the rows before `c`, and a
+   download stopped later resumes from `c`. `cursor` starts the download
+   there."
+  [user-id from {:keys [to exclude graves-from cursor on-commit]}]
+  (loop [cursor cursor to to touched #{}]
+    (let [first? (when-not cursor true)
+          segment
+          (apply/with-apply-tx db/ds
+            (fn [tx]
+              (loop [cursor cursor to to touched touched first? first? waiting [] waiting-files {}]
+                (let [page (ok-body! (call! :post "/api/sync/download"
+                                       :json-body (cond-> {:from from :exclude (or exclude []) :cursor cursor
+                                                           :major desktop-version/desktop-major}
+                                                    to (assoc :to to)
+                                                    graves-from (assoc :graves_from graves-from)))
+                             :download)
+                      {:strs [rows graves]} page
+                      next-cursor (get page "cursor")
+                      to (get page "to")
+                      files (merge waiting-files (fetch-blobs rows))
+                      batch (into waiting rows)
+                      g (when first? (apply/apply-graves! tx {:peer :desktop :user-id user-id} (or graves [])))
+                      r (apply/apply-rows! tx {:peer :desktop :user-id user-id :blob-file (blob-lookup files)} batch)
+                      missing (parent-missing-keys r)
+                      still-waiting (if next-cursor (filterv #(missing [(get % "t") (get % "k")]) batch) [])
+                      kept-files (select-keys files (blob-keys still-waiting))
+                      refused (if next-cursor
+                                (remove #(missing [(get % "t") (get % "k")]) (:rejected r))
+                                (:rejected r))
+                      touched (into touched (concat (:touched g) (:touched r)))]
+                  (delete-files! (apply dissoc files (keys kept-files)))
+                  (when (seq refused)
+                    (tel/log! {:level :warn :id ::download-rejected :data {:rejected (map #(dissoc % "r") refused)}}
+                      "Some downloaded rows did not apply"))
+                  (swap! !status update-in [:progress :downloaded] (fnil + 0) (count rows))
+                  (commands/bump-channels! user-id #{:desktop-mutations})
+                  (cond
+                    (nil? next-cursor) {:to to :touched touched}
+
+                    (and on-commit (empty? still-waiting))
+                    (do (on-commit tx {:cursor next-cursor})
+                        {:to to :touched touched :cursor next-cursor})
+
+                    :else (recur next-cursor to touched false still-waiting kept-files))))))]
+      (if-let [next-cursor (:cursor segment)]
+        (recur next-cursor (:to segment) (:touched segment))
+        segment))))
 
 ;; ── 6. Sanity (2.6) ────────────────────────────────────────────────
 
@@ -427,28 +446,65 @@
             (nil? (jdbc/execute-one! db/ds [(str "SELECT 1 FROM " (name table) " LIMIT 1")])))
     fmt/synced-tables))
 
+(defn- stored-full-download
+  "The full download a stopped sync left, or nil (2.8.1)."
+  [state]
+  (some-> (:full_download state) str json/parse-string))
+
 (defn full-download!
   "Replace this desktop's data with the account's (Anki's download). Pending
    local rows go to the conflict report on the way out, so nothing is lost
-   without a trace."
-  []
-  (let [user-id (local-user-id)
-        {:strs [to scm rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
-                                                :json-body {:major desktop-version/desktop-major})
-                                      :full-download)]
-    ;; An older server reports no totals. Leave them out rather than nil.
-    (swap! !status assoc :progress (cond-> {}
-                                     (number? rows) (assoc :total-rows rows)
-                                     (number? bytes) (assoc :total-bytes bytes)))
-    (apply/with-apply-tx db/ds
-      (fn [tx]
-        (doseq [table (reverse fmt/synced-tables)]
-          (jdbc/execute! tx [(str "DELETE FROM " (name table))]))
-        (jdbc/execute! tx ["DELETE FROM sync_graves"])))
-    (let [{:keys [to touched]} (download-step! user-id 0 {:to to})]
-      (record! {:checkpoint to :scm scm :full_sync_required false :last_error nil
-                :last_sync_at (java.sql.Timestamp/from (java.time.Instant/now))})
-      (commands/bump-channels! user-id (apply/channels-for (into touched fmt/synced-tables))))))
+   without a trace.
+   The download commits page by page. Each commit stores its cursor in
+   `sync_state.full_download`, so a download stopped by a crash, a quit or a
+   lost connection resumes there (2.8.1). It does not restart from zero:
+   an account of 200000 rows takes long enough that a laptop sleeps in it.
+   `resume` is a stored download to continue, whose epoch the caller checked
+   against the server's. nil starts afresh.
+   Post: the checkpoint is the download's `to` and nothing is stored to
+         resume. While the download runs, the checkpoint is 0, so the
+         library is not ready (`status`)."
+  ([] (full-download! nil))
+  ([resume]
+   (let [user-id (local-user-id)
+         job (or resume
+               (let [{:strs [to scm rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
+                                                             :json-body {:major desktop-version/desktop-major})
+                                                   :full-download)
+                     job {"to" to "scm" scm "rows" rows "bytes" bytes
+                          "cursor" nil "downloaded" 0 "downloaded_bytes" 0}]
+                 (apply/with-apply-tx db/ds
+                   (fn [tx]
+                     (doseq [table (reverse fmt/synced-tables)]
+                       (jdbc/execute! tx [(str "DELETE FROM " (name table))]))
+                     (jdbc/execute! tx ["DELETE FROM sync_graves"])
+                     (jdbc/execute! tx ["UPDATE sync_state SET checkpoint = 0, full_download = ?::jsonb"
+                                        (json/generate-string job)])))
+                 job))
+         {:strs [to scm rows bytes]} job]
+     ;; An older server reports no totals. Leave them out rather than nil.
+     (swap! !status assoc :progress (cond-> {:downloaded (get job "downloaded" 0)
+                                             :downloaded-bytes (get job "downloaded_bytes" 0)}
+                                      (number? rows) (assoc :total-rows rows)
+                                      (number? bytes) (assoc :total-bytes bytes)))
+     (when resume
+       (tel/log! {:level :info :id ::full-download-resumed
+                  :data {:downloaded (get job "downloaded") :cursor (get job "cursor")}}
+         "Resuming a stopped full download"))
+     (let [{:keys [to touched]}
+           (download-step! user-id 0
+             {:to to
+              :cursor (get job "cursor")
+              :on-commit (fn [tx {:keys [cursor]}]
+                           (let [{:keys [downloaded downloaded-bytes]} (:progress @!status)]
+                             (jdbc/execute! tx ["UPDATE sync_state SET full_download = ?::jsonb"
+                                                (json/generate-string
+                                                  (assoc job "cursor" cursor
+                                                    "downloaded" (or downloaded 0)
+                                                    "downloaded_bytes" (or downloaded-bytes 0)))])))})]
+       (record! {:checkpoint to :scm scm :full_sync_required false :last_error nil :full_download nil
+                 :last_sync_at (java.sql.Timestamp/from (java.time.Instant/now))})
+       (commands/bump-channels! user-id (apply/channels-for (into touched fmt/synced-tables)))))))
 
 (defn full-upload!
   "Replace the account's data on freememo.net with this desktop's (Anki's
@@ -508,6 +564,14 @@
               (cond
                 (= "none" (get body "sync"))
                 (set-state! :license-refused)
+
+                ;; 2.8.1 — a stopped full download continues. Its rows are
+                ;; only a prefix of the account, so when the epoch moved, it
+                ;; starts again instead of asking which copy to keep.
+                (stored-full-download state)
+                (let [job (stored-full-download state)]
+                  (full-download! (when (= (get job "scm") (get body "scm")) job))
+                  (set-state! :idle))
 
                 (or (:full_sync_required state) (not= (:scm state) (get body "scm")))
                 (cond
