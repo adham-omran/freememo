@@ -347,6 +347,13 @@
       (is (one d "SELECT root_topic_id FROM document_summaries WHERE root_topic_id = ?" id)
         "1.5.2: document_summaries still updates under the bypass"))))
 
+(defn- desktop-id-block!
+  "One unused id block on the desktop, as `ensure-id-blocks!` leaves a sync."
+  [d]
+  (let [start (+ schema/client-id-floor 8000000000 (* 1000 (rand-int 1000000)))]
+    (jdbc/execute! d ["INSERT INTO local_id_blocks (block_start, block_end, next_id)
+                       VALUES (?, ?, ?) ON CONFLICT DO NOTHING" start (+ start 1000) start])))
+
 (deftest a-newer-pending-local-edit-stays-pending
   (when (desktop-up?)
     (let [d @desktop-ds
@@ -354,6 +361,8 @@
           id (+ schema/client-id-floor 6000000000 (rand-int 1000000))
           row (fn [title mtime] {"t" "topics" "k" {"id" id}
                                  "r" {"id" id "user_id" u "title" title "kind" "basic" "usn" 40 "mtime" mtime}})]
+      ;; The loser's history row takes a local id.
+      (desktop-id-block! d)
       (apply/with-apply-tx d #(apply/apply-rows! % {:peer :desktop :user-id u :blob-file (constantly nil)}
                                 [(row "server v1" "2026-01-01T00:00:00Z")]))
       ;; A local edit, after the server's version.
@@ -362,4 +371,30 @@
       (apply/with-apply-tx d #(apply/apply-rows! % {:peer :desktop :user-id u :blob-file (constantly nil)}
                                 [(row "server v2" "2026-01-02T00:00:00Z")]))
       (is (= {:title "local edit" :usn -1} (one d "SELECT title, usn FROM topics WHERE id = ?" id))
-        "the local edit keeps its columns and stays pending, so the next sync uploads it"))))
+        "the local edit keeps its columns and stays pending, so the next sync uploads it")
+      (is (= ["server v2"] (mapv :title (jdbc/execute! d ["SELECT title FROM topic_versions WHERE topic_id = ?" id] opts)))
+        "D4: the older server version is the history row"))))
+
+(deftest a-failed-history-write-is-reported-as-itself
+  ;; The history row is written inside the row's savepoint. A failure there
+  ;; once rolled back to the released savepoint, and the driver's
+  ;; "Cannot reference a savepoint after it has been released" hid it.
+  (when (desktop-up?)
+    (let [d @desktop-ds
+          u (:id (one d "INSERT INTO users (username) VALUES (?) RETURNING id" (str "desk-" (System/nanoTime))))
+          id (+ schema/client-id-floor 6000000000 (rand-int 1000000))
+          row (fn [title mtime] {"t" "topics" "k" {"id" id}
+                                 "r" {"id" id "user_id" u "title" title "kind" "basic" "usn" 40 "mtime" mtime}})
+          apply! #(apply/with-apply-tx d (fn [tx] (apply/apply-rows! tx {:peer :desktop :user-id u
+                                                                          :blob-file (constantly nil)} [%])))]
+      (apply! (row "server v1" "2026-01-01T00:00:00Z"))
+      (jdbc/execute! d ["UPDATE topics SET title = 'local edit' WHERE id = ?" id])
+      (let [result (with-redefs [apply/save-loser!
+                                 (fn [& _] (throw (org.postgresql.util.PSQLException.
+                                                    "history write failed" org.postgresql.util.PSQLState/UNKNOWN_STATE)))]
+                     (apply! (row "server v2" "2026-01-02T00:00:00Z")))]
+        (is (zero? (:applied result)))
+        (is (re-find #"history write failed" (get (first (:rejected result)) "reason" ""))
+          "the rejection names the real error")
+        (is (= {:title "local edit" :usn -1} (one d "SELECT title, usn FROM topics WHERE id = ?" id))
+          "the row's write rolled back with its history")))))
