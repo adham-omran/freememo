@@ -182,6 +182,42 @@
       (is (= 2 (:mask_ordinal (one db/ds "SELECT mask_ordinal FROM flashcards WHERE id = ?" card))))
       (is (contains? (:corrections result) [:flashcards {"id" card}])))))
 
+;; ── Document summaries ─────────────────────────────────────────────
+
+(deftest an-apply-keeps-document-summaries-right
+  ;; Under the bypass the summary triggers only record their roots, and
+  ;; with-apply-tx refreshes each root once before the commit.
+  (when (db-up?)
+    (let [{u :user start :block-start} (account!)
+          root-a (+ start 10)
+          root-b (+ start 11)
+          kids (mapv #(+ start 100 %) (range 300))
+          topic (fn [id parent]
+                  {"t" "topics" "k" {"id" id}
+                   "r" (cond-> {"id" id "user_id" u "title" (str id) "kind" "basic" "mtime" (at 0) "usn" -1}
+                         parent (assoc "parent_id" parent))})
+          card (fn [id t]
+                 {"t" "flashcards" "k" {"id" id}
+                  "r" {"id" id "topic_id" t "root_topic_id" root-a "question" (str "q" id) "answer" "a"
+                       "kind" "basic" "mtime" (at 0) "usn" -1}})
+          summary (fn [root] (one db/ds "SELECT total_items, total_cards FROM document_summaries
+                                         WHERE root_topic_id = ?" root))]
+      (upload! u (xmin) (concat [(topic root-a nil) (topic root-b nil)]
+                          (map #(topic % root-a) kids)
+                          (map-indexed (fn [i t] (card (+ start 1000 i) t)) (take 20 (rest kids)))))
+      (is (= {:total_items 301 :total_cards 20} (summary root-a)) "the root and its 300 topics")
+      (is (= {:total_items 1 :total_cards 0} (summary root-b)))
+      (testing "a move refreshes the old root and the new one"
+        (upload! u (+ (xmin) 1000000)
+          [(-> (wire :topics {"id" (first kids)})
+             (assoc-in ["r" "parent_id"] root-b)
+             (assoc-in ["r" "mtime"] (at 60000)))])
+        (is (= 300 (:total_items (summary root-a))))
+        (is (= 2 (:total_items (summary root-b)))))
+      (testing "a write outside a sync apply still refreshes at once"
+        (jdbc/execute! db/ds ["INSERT INTO topics (user_id, parent_id, title) VALUES (?, ?, 'web')" u root-b])
+        (is (= 3 (:total_items (summary root-b))))))))
+
 ;; ── Refusals ───────────────────────────────────────────────────────
 
 (deftest an-edit-uploaded-after-a-delete-is-refused

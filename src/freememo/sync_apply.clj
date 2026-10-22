@@ -140,11 +140,15 @@
   "Run `(f tx)` in one transaction with the sync bypass on (1.5).
    Post: every write `f` makes keeps the payload's usn and mtime on a desktop,
          and its mtime on the server. Nothing outside `f` sees the bypass,
-         because the setting is transaction-local."
+         because the setting is transaction-local. Every document summary
+         that `f`'s writes affect is refreshed once, before the commit
+         (`freememo_summaries_affected` in `freememo.db`)."
   [ds f]
   (jdbc/with-transaction [tx ds]
     (jdbc/execute! tx ["SELECT set_config('freememo.sync_apply', 'on', true)"])
-    (f tx)))
+    (let [result (f tx)]
+      (jdbc/execute! tx ["SELECT freememo_flush_deferred_summaries()"])
+      result)))
 
 ;; ── Ownership (2.10) ───────────────────────────────────────────────
 

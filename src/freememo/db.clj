@@ -2551,6 +2551,50 @@
     END
     $$")])
 
+  ;; A sync apply writes one row per statement, so a refresh per statement
+  ;; walks a root's whole subtree once per row: quadratic in the root's size.
+  ;; A full download of 60838 topics took hours on a laptop. While
+  ;; `freememo.sync_apply` is on, the triggers only record the affected roots
+  ;; in a temporary table, and `sync-apply/with-apply-tx` refreshes each one
+  ;; once before it commits. A savepoint that rolls back a row's write rolls
+  ;; back its record too. Outside a sync apply, nothing changes.
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_summaries_affected(p_root_ids BIGINT[])
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF p_root_ids IS NULL OR cardinality(p_root_ids) = 0 THEN
+        RETURN;
+      END IF;
+      IF coalesce(current_setting('freememo.sync_apply', true), '') <> 'on' THEN
+        PERFORM freememo_refresh_document_summaries(p_root_ids);
+        RETURN;
+      END IF;
+      IF to_regclass('pg_temp.freememo_deferred_summary_roots') IS NULL THEN
+        CREATE TEMP TABLE freememo_deferred_summary_roots (root_id BIGINT PRIMARY KEY)
+          ON COMMIT DELETE ROWS;
+      END IF;
+      INSERT INTO freememo_deferred_summary_roots (root_id)
+      SELECT DISTINCT r FROM unnest(p_root_ids) r WHERE r IS NOT NULL
+      ON CONFLICT DO NOTHING;
+    END
+    $$"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_flush_deferred_summaries()
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE roots BIGINT[];
+    BEGIN
+      IF to_regclass('pg_temp.freememo_deferred_summary_roots') IS NULL THEN
+        RETURN;
+      END IF;
+      SELECT array_agg(root_id) INTO roots FROM freememo_deferred_summary_roots;
+      DELETE FROM freememo_deferred_summary_roots;
+      PERFORM freememo_refresh_document_summaries(roots);
+    END
+    $$"])
   (jdbc/execute! ds ["
     CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_insert()
     RETURNS TRIGGER
@@ -2561,7 +2605,7 @@
       SELECT array_agg(DISTINCT freememo_root_topic_id(inserted.id))
       INTO affected
       FROM inserted;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2613,7 +2657,7 @@
         SELECT root_id FROM old_roots
       ) roots
       WHERE root_id IS NOT NULL;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2636,7 +2680,7 @@
         WHERE deleted.parent_id IS NULL
       ) roots
       WHERE root_id IS NOT NULL;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2660,7 +2704,7 @@
           SELECT root_topic_id FROM deleted
         ) roots;
       END IF;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
