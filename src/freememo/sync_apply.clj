@@ -140,11 +140,15 @@
   "Run `(f tx)` in one transaction with the sync bypass on (1.5).
    Post: every write `f` makes keeps the payload's usn and mtime on a desktop,
          and its mtime on the server. Nothing outside `f` sees the bypass,
-         because the setting is transaction-local."
+         because the setting is transaction-local. Every document summary
+         that `f`'s writes affect is refreshed once, before the commit
+         (`freememo_summaries_affected` in `freememo.db`)."
   [ds f]
   (jdbc/with-transaction [tx ds]
     (jdbc/execute! tx ["SELECT set_config('freememo.sync_apply', 'on', true)"])
-    (f tx)))
+    (let [result (f tx)]
+      (jdbc/execute! tx ["SELECT freememo_flush_deferred_summaries()"])
+      result)))
 
 ;; ── Ownership (2.10) ───────────────────────────────────────────────
 
@@ -491,8 +495,14 @@
                       (when (and (:old_oid existing) (not= (:old_oid existing) final-oid))
                         (lo/unlink! tx (:old_oid existing)))
                       (doseq [oid new-oids :when (not= oid final-oid)] (lo/unlink! tx oid))
-                      (.releaseSavepoint tx sp)
+                      ;; The loser's history row is written inside the
+                      ;; savepoint, so the row and its history commit together
+                      ;; or not at all. Released first, a failure here rolled
+                      ;; back to a released savepoint, and the driver's
+                      ;; "Cannot reference a savepoint after it has been
+                      ;; released" replaced the real error.
                       (let [loser (when (:concurrent existing) (save-loser! tx table existing r))]
+                        (.releaseSavepoint tx sp)
                         (cond-> (-> state (update :applied inc) (update :touched conj table))
                           (= table :flashcards) (update :restamp conj (get r "id"))
                           loser (update :corrections conj loser)
