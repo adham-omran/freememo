@@ -2407,7 +2407,7 @@
                               {:id (:topics/id topic)
                                :title (or (:topics/title topic) "Untitled")}))
                        (filter #(str/includes? (str/lower-case (:title %)) needle)))
-                     (db/get-root-topics user-id))]
+                     (db/get-root-topic-titles user-id))]
      (if (str/blank? needle)
        documents
        (into documents

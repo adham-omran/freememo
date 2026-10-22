@@ -97,7 +97,7 @@
 
 (defn- picker [query]
   (let [!file-calls (atom [])]
-    (with-redefs [db/get-root-topics
+    (with-redefs [db/get-root-topic-titles
                   (fn [_]
                     [{:topics/id 9 :topics/kind "pdf" :topics/title "Open document"}
                      {:topics/id 1 :topics/kind "repo" :topics/title "adham/grid"}

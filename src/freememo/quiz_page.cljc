@@ -58,7 +58,7 @@
                        n (get per-doc id 0)]
                    (when (pos? n)
                      {:id id :title (:topics/title t) :questions n}))))
-         (db/get-root-topics user-id)))))
+         (db/get-root-topic-titles user-id)))))
 
 #?(:clj
    (defn active-session*

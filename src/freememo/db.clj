@@ -5058,13 +5058,19 @@
   "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
    Includes file_size (summed across a topic's file rows) or content length,
    plus bibliography fields joined from `sources` (NULL when topic has no
-   source_id)."
+   source_id).
+
+   PostgreSQL measures the content length. This fn read `content` for every
+   root to count its bytes on the JVM, and for a large library that put the
+   text of every document in the heap at once. A title picker wants
+   `get-root-topic-titles` instead."
   [user-id]
   (let [topics (jdbc/execute! ds
                  (sql/format {:select [:t/id :t/title :t/kind
                                        :s/url :s/title :s/csl_type :s/container_title
-                                       :t/status :t/priority :t/created_at :t/content
-                                       [:tf/file_size :file_size]]
+                                       :t/status :t/priority :t/created_at
+                                       [[:coalesce :tf/file_size [:octet_length :t/content]]
+                                        :file_size]]
                               :from [[:topics :t]]
                               :left-join [[topic-file-sizes :tf] [:= :t/id :tf/topic_id]
                                           [:sources :s] [:= :t/source_id :s/id]]
@@ -5072,13 +5078,23 @@
                                       [:is :t/staged_delete_id nil]]
                               :order-by [[:t/created_at :desc]]}))]
     (mapv (fn [t]
-            (let [size (or (:file_size t)
-                         (when-let [c (:topics/content t)]
-                           (count (.getBytes c "UTF-8"))))]
-              (-> t
-                (assoc :topics/file_size size)
-                (dissoc :topics/content :file_size))))
+            (-> t
+              (assoc :topics/file_size (:file_size t))
+              (dissoc :file_size)))
       topics)))
+
+(defn get-root-topic-titles
+  "The user's root topics as three columns, newest first, for a title picker.
+
+   Pre:  `user-id` is a user id.
+   Post: [{:topics/id :topics/title :topics/kind}], staged deletes excluded,
+         in the order `get-root-topics` returns."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT id, title, kind FROM topics
+      WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
+      ORDER BY created_at DESC"
+     user-id]))
 
 (defn get-children
   "Get direct children of a topic, ordered by page_number then created_at."
@@ -11277,8 +11293,9 @@
   "§14.3 3.1 — the user's playlists, newest first, for the import modal's picker.
 
    Deliberately NOT `get-root-topics`, which would answer the same question: it
-   also selects `content` and a summed file size per root, and a title picker
-   reads neither. Two columns is the whole contract.
+   also computes a content length, a summed file size and bibliography fields
+   per root, and a title picker reads none of them. Two columns is the whole
+   contract.
 
    Staged-deleted playlists are excluded — offering one as an upload target
    would hang new videos under a subtree already on its way out.
@@ -12146,8 +12163,9 @@
 
 (defn kg-documents-with-facts
   "Root topic ids holding at least one approved fact — the scope of the
-   all-documents duplicate sweep. Not get-root-topics: that returns whole rows
-   including :content, and a document with no facts has nothing to sweep.
+   all-documents duplicate sweep. Not get-root-topics: that returns every root
+   with its sizes and bibliography, and a document with no facts has nothing to
+   sweep.
    Post: vector of graph_topic_ids, ascending."
   [user-id]
   (mapv :graph_topic_id

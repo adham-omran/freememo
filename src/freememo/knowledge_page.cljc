@@ -86,7 +86,7 @@
                            :pages-done (:done p 0)
                            :pages-at-cap (:at-cap p 0)
                            :pages-total (:total p 0)}))
-                  (db/get-root-topics user-id))]
+                  (db/get-root-topic-titles user-id))]
        (if q
          (filterv #(str/includes? (str/lower-case (:title %)) q) docs)
          docs))))
@@ -167,7 +167,7 @@
      "Lean [{:id :title}] of root documents — options for the source filters."
      [_kg-bump user-id]
      (mapv (fn [t] {:id (:topics/id t) :title (:topics/title t)})
-       (db/get-root-topics user-id))))
+       (db/get-root-topic-titles user-id))))
 
 #?(:clj
    (defn list-entity-options*
