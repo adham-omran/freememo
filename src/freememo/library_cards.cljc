@@ -6,7 +6,6 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -23,6 +22,8 @@
             score-row-html try-delete-anki-notes!]]
    [freememo.card-rows :as rows]
    [freememo.optimistic :as opt]
+   [freememo.client-state :as cs]
+   [freememo.row-motion :as row-motion]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
    [freememo.quiz-item-stats :as stats]
@@ -764,6 +765,8 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")
                              (review/row-class anki-flags))
+                    ;; The key freememo.row-motion follows when rows move.
+                    :data-row-key (pr-str row-key)
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
         (menu-surface/RowMenu target)
@@ -1417,14 +1420,24 @@ bytecode cap in the :prod build, which dev compilation never emits.
             (dom/th (dom/text ""))      ; stats
             (dom/th (dom/text ""))))))))  ; delete
 
+(defn window-cards
+  "The cards that the scroll window shows.
+   Pre:  `visible` holds indexes into `cards`, in display order.
+   Post: one card per display order in [offset, offset + limit), each with
+         its display order as :pos."
+  [cards visible offset limit]
+  (let [end (min (count visible) (+ offset limit))]
+    (mapv (fn [pos] (assoc (nth cards (nth visible pos)) :pos pos))
+      (range (min offset end) end))))
+
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
 ;; positioned sibling overlay rather than a branch that swaps the table out.
 ;; Mirrors SearchPage's SearchResultsTable: there, unmounting the table (and
 ;; with it Scroll-window + Tape + the per-row server flows) raced the cancelled
 ;; query's e/Offload teardown and crashed the WS with :diff-corruption.
-;; At card-count 0 the Tape still emits its window; every nth returns nil and
-;; the rows render nothing, so the differential stays mounted and empty.
+;; At card-count 0 the window is empty, so the differential stays mounted and
+;; empty.
 ;; position:relative is inline, not on the shared .tape-scroll class — this is
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
 (e/defn CardsTableBody [cards-vec query-revision row-height font-sz filters-active? scroll-reset-key
@@ -1446,8 +1459,14 @@ bytecode cap in the :prod build, which dev compilation never emits.
                           :max-height (str (* 10 row-height) "px")
                           :scrollbar-gutter "stable" :position "relative"}})
       (let [row-member-ids (e/server (mapv :member-ids cards-vec))
-            visible-indexes (opt/VisibleCardIndexes row-member-ids query-revision)
-            row-count (count visible-indexes)
+            ;; The optimistic deletions cross to the server, and the visible
+            ;; rows are computed there, beside the window that reads them.
+            ;; Each view checks its own query revision, so a filtered view
+            ;; cannot clear another view's deletion.
+            deletions (e/watch (cs/get-atom :pending-deletions))
+            visible-indexes (e/server (opt/visible-card-indexes row-member-ids deletions
+                                        query-revision))
+            row-count (e/server (count visible-indexes))
             [offset limit] (Scroll-window row-height row-count dom/node
                              {:overquery-factor 1.5 :reset-key scroll-reset-key})]
         (dom/props {:class "tape-scroll table-frame-body"
@@ -1459,13 +1478,18 @@ bytecode cap in the :prod build, which dev compilation never emits.
           (dom/props {:class "cards-table-body"
                       ;; display:block + column template live in index.css (C1c).
                       :style {:width "100%" :font-size (str font-sz "px")}})
-          (e/for [i (Tape offset limit)]
-            (let [source-index (nth visible-indexes i nil)
-                  card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
-                  card (second card-result)]
-              (when (and card (= source-index (first card-result)))
-                (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                  selected user-id i anki-overlay !stats)))))
+          ;; Rows slide by key, whichever node paints them.
+          (e/on-unmount (row-motion/install! dom/node))
+          ;; The window is diffed by row key on the server, so a row's card
+          ;; and its position cross together. A slot loop read each card by a
+          ;; client index, and a delete moved every slot below it to another
+          ;; card, so each of those rows went empty for the round trip.
+          (let [window (e/server
+                         (e/diff-by :row-key
+                           (window-cards cards-vec visible-indexes offset limit)))]
+            (e/for [card window]
+              (LibraryCardRow card navigate! !editing-card !diff-card !selected
+                selected user-id (:pos card) anki-overlay !stats))))
         ;; Sibling overlay — never a branch that unmounts the table above.
         (when (zero? row-count)
           (dom/div

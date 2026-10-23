@@ -20,7 +20,24 @@
 
    Reading once per frame, not per mutation, is load-bearing. A card that
    lands applies the pending row's removal and the new row as separate DOM
-   writes, and a reader in between would see every row move up and back.")
+   writes, and a reader in between would see every row move up and back.
+
+   A table that uses this diffs its window by row key on the server, so a
+   row's key, content and order cross in one diff. A slot loop that reads
+   each row by a client index empties every slot whose index moved for the
+   round trip of its read, and an empty row has no key to follow.")
+
+(defn arrivals!
+  "The row keys in `row-keys` that the previous call for `scope` did not hold.
+   The first call for a scope answers #{}, so opening a table animates no row.
+   A caller puts in `scope` everything that changes the rows without adding
+   any: a topic, a filter, a scroll offset.
+   Post: !seen holds `row-keys` for `scope` alone."
+  [!seen scope row-keys]
+  (let [[old _] (swap-vals! !seen (constantly {scope row-keys}))]
+    (if-some [prev (get old scope)]
+      (into #{} (remove prev) row-keys)
+      #{})))
 
 #?(:cljs
    (defn- row-height [^js table]

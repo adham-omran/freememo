@@ -3,7 +3,6 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -11,6 +10,7 @@
    [freememo.loading :as loading]
    [freememo.read-region :as read-region]
    [freememo.route-timing :as route-timing]
+   [freememo.row-motion :as row-motion]
    [freememo.a11y :as a11y]
    [freememo.bibliography-form :as bibform]
    [freememo.viewport :as viewport]
@@ -204,6 +204,22 @@
        :priority (:topics/priority topic)
        :formatted-date (:formatted_date topic)})))
 
+(defn tree-window
+  "The DTOs of the flattened rows at display orders [offset, offset + limit).
+   Post: each DTO carries its display order as :pos, and :fresh? when its
+         topic id is in `arrived`."
+  [flat-rows offset limit arrived]
+  (let [end (min (count flat-rows) (+ offset limit))]
+    (mapv (fn [i]
+            (let [dto (tree-row-dto (nth flat-rows i))]
+              (assoc dto :pos i :fresh? (contains? arrived (:id dto)))))
+      (range (min offset end) end))))
+
+(defn tree-row-ids
+  "The topic ids of the flattened rows, as a set."
+  [flat-rows]
+  (into #{} (map (comp :topics/id :topic)) flat-rows))
+
 (defn tree-row-subject
   "The context-menu subject for one Library row (plans/custom-context-menu.md
    4.2). Every fact the row's commands test is stated, never left absent.
@@ -240,7 +256,7 @@
     ;; one row payload cross instead of one reactive transfer per field.
     (let [{:keys [depth has-children is-root expanded? id title kind
                   source-container status dismissed? total-items done-items
-                  total-cards synced-cards formatted-date]} row-dto
+                  total-cards synced-cards formatted-date fresh?]} row-dto
           title (or title "(empty)")
           kind (or kind "basic")
           is-page (= kind "page")
@@ -266,6 +282,10 @@
         ;; card filled its whole slot and hid the next card's top edge.
         (dom/props {:class (str "library-document-row" (when (even? i) " row-alt"))
                     :role "row"
+                    ;; freememo.row-motion follows the key when rows move, and
+                    ;; slides in a row that an expand or an import just added.
+                    :data-row-key (str id)
+                    :data-enter (when fresh? "1")
                     :style {:opacity (if (or dismissed? (= topic-status "done")) "0.6" "1")
                             ;; 0-based absolute index → per-row translateY (C1c)
                             :--order i}})
@@ -374,79 +394,92 @@
   [request-key user-id navigate! row-height grid-cols
    !expansion !scroll-node !drag-src drag-src forbidden !drop-cmd]
   (e/client
-    (loading/WithLatestServerRegion request-key
-      ;; Electric let bindings run concurrently. The tree shape and maintained
-      ;; progress summary therefore start as separate database reads.
-      (e/fn []
-        (e/server
-          (let [[requested-revision _user-id filter-text kind-filter status-filter
-                 sort-col sort-dir expansion]
-                request-key
-                _rev (+ (e/watch (us/get-atom _user-id :refresh))
-                       (e/watch (us/get-atom _user-id :tree-mutations)))
-                result-key [_rev _user-id filter-text kind-filter status-filter
-                            sort-col sort-dir expansion]
-                items-result (e/Offload #(assoc
-                                          (get-tree-items-result* _rev _user-id expansion)
-                                          :source-key [_rev _user-id expansion]))
-                stats-result (e/Offload #(assoc
-                                          (get-root-stats-result* _rev _user-id)
-                                          :source-key [_rev _user-id]))]
-            (cond
-              (or (not= requested-revision _rev)
-                  (not= [_rev _user-id expansion] (:source-key items-result))
-                  (not= [_rev _user-id] (:source-key stats-result)))
-              {:pending? true}
+    ;; Row ids of the last window, server-side, for row-motion/arrivals!.
+    ;; Outside the region, so a refresh that remounts it keeps them.
+    (let [!seen (e/server (atom {}))
+          ;; Filter and sort. A change to them is navigation, not an arrival.
+          view-key (subvec (vec request-key) 2 7)]
+      (loading/WithLatestServerRegion request-key
+        ;; Electric let bindings run concurrently. The tree shape and maintained
+        ;; progress summary therefore start as separate database reads.
+        (e/fn []
+          (e/server
+            (let [[requested-revision _user-id filter-text kind-filter status-filter
+                   sort-col sort-dir expansion]
+                  request-key
+                  _rev (+ (e/watch (us/get-atom _user-id :refresh))
+                         (e/watch (us/get-atom _user-id :tree-mutations)))
+                  result-key [_rev _user-id filter-text kind-filter status-filter
+                              sort-col sort-dir expansion]
+                  items-result (e/Offload #(assoc
+                                            (get-tree-items-result* _rev _user-id expansion)
+                                            :source-key [_rev _user-id expansion]))
+                  stats-result (e/Offload #(assoc
+                                            (get-root-stats-result* _rev _user-id)
+                                            :source-key [_rev _user-id]))]
+              (cond
+                (or (not= requested-revision _rev)
+                    (not= [_rev _user-id expansion] (:source-key items-result))
+                    (not= [_rev _user-id] (:source-key stats-result)))
+                {:pending? true}
 
-              (and (:ok? items-result) (:ok? stats-result))
-              (loading/region-success result-key
-                (build-tree-rows (:value items-result) (:value stats-result)
-                  filter-text kind-filter status-filter sort-col sort-dir expansion))
+                (and (:ok? items-result) (:ok? stats-result))
+                (loading/region-success result-key
+                  (build-tree-rows (:value items-result) (:value stats-result)
+                    filter-text kind-filter status-filter sort-col sort-dir expansion))
 
-              :else
-              (loading/region-failure result-key
-                (or (:error items-result) (:error stats-result) "Unknown error"))))))
-      (e/fn [flat-rows phase error]
-        (let [row-count (e/server (count flat-rows))]
-          (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
-            (dom/div
-              (dom/props {:role "rowgroup"
-                          :class (str "library-document-scroll"
-                                   (when (= phase :refreshing)
-                                     " progressive-region-refreshing"))
-                          :style {:flex "1 1 auto" :overflow-y "auto"
-                                  :min-height (if (zero? row-count) "72px" "0")
-                                  :max-height (str (* 10 row-height) "px")
-                                  :position "relative" :scrollbar-gutter "stable"}})
-              (reset! !scroll-node dom/node)
-              (let [[offset limit] (Scroll-window row-height row-count dom/node
-                                     {:overquery-factor 1.5
-                                      :reset-key (subvec (vec request-key) 2 7)})]
-                (dom/props {:class "tape-scroll"
-                            :style {:--count row-count
-                                    :--row-height (str row-height "px")
-                                    :--grid-cols grid-cols}})
-                (dom/table
-                  (dom/props {:class "library-table library-table-body"
-                              :role "presentation"
-                              :style {:width "100%" :font-size "13px"}})
-                  (e/for [i (Tape offset limit)]
-                    (when-let [row-dto (e/server
-                                         (tree-row-dto (nth flat-rows i nil)))]
-                      (DocumentRow user-id navigate! row-dto i row-height
-                        !expansion !drag-src drag-src forbidden !drop-cmd)))))
-              (when (zero? row-count)
-                (dom/div
-                  (dom/props {:class "library-document-empty" :role "status"})
-                  (dom/text "No content yet. Import content from the Import tab.")))
-              (loading/RegionNotice phase error)))))
-      (e/fn [_phase]
-        (dom/div (dom/props {:class "library-document-loading" :role "rowgroup"})
-          (loading/SkeletonRows (if (> row-height 40) 3 6) (str row-height "px"))))
-      (e/fn [error]
-        (dom/div
-          (dom/props {:class "library-document-failed" :role "status"})
-          (dom/text (str "The document list could not load. " error)))))))
+                :else
+                (loading/region-failure result-key
+                  (or (:error items-result) (:error stats-result) "Unknown error"))))))
+        (e/fn [flat-rows phase error]
+          (let [row-count (e/server (count flat-rows))]
+            (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
+              (dom/div
+                (dom/props {:role "rowgroup"
+                            :class (str "library-document-scroll"
+                                     (when (= phase :refreshing)
+                                       " progressive-region-refreshing"))
+                            :style {:flex "1 1 auto" :overflow-y "auto"
+                                    :min-height (if (zero? row-count) "72px" "0")
+                                    :max-height (str (* 10 row-height) "px")
+                                    :position "relative" :scrollbar-gutter "stable"}})
+                (reset! !scroll-node dom/node)
+                (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                       {:overquery-factor 1.5
+                                        :reset-key view-key})]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--count row-count
+                                      :--row-height (str row-height "px")
+                                      :--grid-cols grid-cols}})
+                  (dom/table
+                    (dom/props {:class "library-table library-table-body"
+                                :role "presentation"
+                                :style {:width "100%" :font-size "13px"}})
+                    ;; Rows slide by key, whichever node paints them.
+                    (e/on-unmount (row-motion/install! dom/node))
+                    ;; The window is diffed by topic id on the server, so a
+                    ;; row's content and its position cross together. Rows new
+                    ;; since the last window slide in. The scroll offset is in
+                    ;; the scope, so a row that scrolls into view is not new.
+                    (let [arrived (e/server (row-motion/arrivals! !seen [view-key offset]
+                                              (tree-row-ids flat-rows)))
+                          window (e/server
+                                   (e/diff-by :id (tree-window flat-rows offset limit arrived)))]
+                      (e/for [row-dto window]
+                        (DocumentRow user-id navigate! row-dto (:pos row-dto) row-height
+                          !expansion !drag-src drag-src forbidden !drop-cmd)))))
+                (when (zero? row-count)
+                  (dom/div
+                    (dom/props {:class "library-document-empty" :role "status"})
+                    (dom/text "No content yet. Import content from the Import tab.")))
+                (loading/RegionNotice phase error)))))
+        (e/fn [_phase]
+          (dom/div (dom/props {:class "library-document-loading" :role "rowgroup"})
+            (loading/SkeletonRows (if (> row-height 40) 3 6) (str row-height "px"))))
+        (e/fn [error]
+          (dom/div
+            (dom/props {:class "library-document-failed" :role "status"})
+            (dom/text (str "The document list could not load. " error))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
