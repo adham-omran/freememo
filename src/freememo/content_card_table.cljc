@@ -147,16 +147,6 @@
               {:success false :error (.getMessage e)}))
      :cljs nil))
 
-(defn arrivals!
-  "The row keys in `row-keys` that the previous call for `scope` did not hold.
-   The first call for a scope answers #{}, so opening a topic animates no row.
-   Post: !seen holds `row-keys` for `scope` alone."
-  [!seen scope row-keys]
-  (let [[old _] (swap-vals! !seen (constantly {scope row-keys}))]
-    (if-some [prev (get old scope)]
-      (into #{} (remove prev) row-keys)
-      #{})))
-
 (defn window-views
   "The card-views of the saved rows that the scroll window shows.
    Pre:  `visible` holds indexes into `rows`, in display order. `pending`
@@ -206,7 +196,7 @@
           !review-cursors (atom {})
           !review-target (atom nil)
           !review-message (atom nil)
-          ;; Row keys of the last card query, server-side, for arrivals!.
+          ;; Row keys of the last card query, server-side, for row-motion/arrivals!.
           !seen (e/server (atom {}))
           ;; Card ids whose pending row has landed (land-pending!).
           !landed (atom #{})
@@ -262,7 +252,7 @@
               row-count (e/server (count visible-indexes))
               ;; Rows new since the last query, which slide in when they mount.
               ;; From `all-rows`, so a filter change makes no arrivals.
-              arrived (e/server (arrivals! !seen topic-id (into #{} (map :row-key) all-rows)))
+              arrived (e/server (row-motion/arrivals! !seen topic-id (into #{} (map :row-key) all-rows)))
               card-count (e/server (rows/card-count cards-vec))
               manifest (e/server (review/pushed-manifest all-rows))
               anki-overlay (review-overlay/AnkiOverlay

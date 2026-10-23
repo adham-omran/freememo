@@ -76,12 +76,6 @@
                   (vals deletions))]
      (into [] (keep-indexed (fn [i ids] (when-not (some hidden ids) i))) row-member-ids))))
 
-(e/defn VisibleCardIndexes [row-member-ids query-revision]
-  (e/client
-    ;; Keep confirmed entries for this session. Each view checks its own query revision.
-    ;; A filtered view cannot clear another view's deletion. A newer query can show an Undo result.
-    (visible-card-indexes row-member-ids (e/watch (cs/get-atom :pending-deletions)) query-revision)))
-
 (defn delete-anki-notes! [note-ids]
   #?(:cljs (when (seq note-ids)
              ((anki-call! "deleteNotes" {:notes (vec note-ids)})
