@@ -8,6 +8,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.motion :as motion]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow PendingCardRow card-view rtl-text? unsynced?]]
@@ -132,7 +133,8 @@
 (defn get-cards-for-topic* [_refresh topic-id user-id]
   #?(:clj (try
             (if-not topic-id
-              {:success true :cards [] :card-revision @(us/get-atom user-id :card-mutations)}
+              {:success true :cards [] :card-revision @(us/get-atom user-id :card-mutations)
+               :topic-id topic-id}
               (let [card-revision @(us/get-atom user-id :card-mutations)
                     topic (db/get-topic topic-id)
                     is-root? (nil? (:topics/parent_id topic))
@@ -141,7 +143,8 @@
                             (db/get-flashcards-for-subtree topic-id))]
                 ;; One row per authoring group, matching /library/cards — an
                 ;; occlusion group is ONE row here too (freememo.card-rows).
-                {:success true :cards (rows/collapse-groups cards) :card-revision card-revision}))
+                {:success true :cards (rows/collapse-groups cards) :card-revision card-revision
+                 :topic-id topic-id}))
             (catch Exception e
               (tel/error! {:id ::get-cards-for-topic :data {:topic-id topic-id}} e)
               {:success false :error (.getMessage e)}))
@@ -251,8 +254,13 @@
               visible-member-ids (e/server (mapv #(nth row-member-ids %) visible-indexes))
               row-count (e/server (count visible-indexes))
               ;; Rows new since the last query, which slide in when they mount.
-              ;; From `all-rows`, so a filter change makes no arrivals.
-              arrived (e/server (row-motion/arrivals! !seen topic-id (into #{} (map :row-key) all-rows)))
+              ;; From `all-rows`, so a filter change makes no arrivals. The
+              ;; scope is the topic the result was READ for: the Offload keeps
+              ;; the old topic's cards while the new query runs, and the
+              ;; current topic-id paired with them made every card of the next
+              ;; topic read as new.
+              arrived (e/server (row-motion/arrivals! !seen (:topic-id cards-result)
+                                  (into #{} (map :row-key) all-rows)))
               card-count (e/server (rows/card-count cards-vec))
               manifest (e/server (review/pushed-manifest all-rows))
               anki-overlay (review-overlay/AnkiOverlay
@@ -318,7 +326,10 @@
               (when review-message
                 (dom/span
                   (dom/props {:class "card-review-message"})
-                  (dom/text ", " review-message))))
+                  (dom/text ", " review-message)))
+              ;; The unsynced count flashes when this tab's push or edit
+              ;; changed it. Last form: an effect gates no frame.
+              (motion/flash-own-change! dom/node (e/server (:topic-id cards-result)) unsynced-count))
             ;; Its own element: a keyed loop never shares a parent's child
             ;; slots (CLAUDE.md, "An e/for Gets an Element of Its Own").
             (dom/div

@@ -52,6 +52,7 @@
                                (when-let [{:keys [html surface] :as passage} (selected-passage/current)]
                                  (log/log-debug (str "[EXTRACT-CLICK " click-id "] " surface " selection len=" (count html)))
                                  (selected-passage/mark! passage)
+                                 (selected-passage/flash! passage)
                                  (reset! !error nil)
                                  {:html html :code-pane? (not= :editor surface)})))
                            nil)

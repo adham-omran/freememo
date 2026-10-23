@@ -424,6 +424,9 @@
              sorted (sort-user-cards filtered sort-col sort-dir)
              states (into [] (mapcat :member-states) sorted)]
          {:success true :card-revision card-revision
+          ;; The filters and sort this result was read with, for the
+          ;; row-motion/arrivals! scope.
+          :view-key [text kinds origins flags sort-col sort-dir]
           ;; Only the trimmed summary crosses the wire; counts/ids/manifest
           ;; below still derive from the full `sorted`/`all` rows.
           :cards (mapv card-list-summary sorted)
@@ -765,8 +768,10 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")
                              (review/row-class anki-flags))
-                    ;; The key freememo.row-motion follows when rows move.
+                    ;; The key freememo.row-motion follows when rows move. A
+                    ;; card that comes back, from an undo, slides in.
                     :data-row-key (pr-str row-key)
+                    :data-enter (when (:fresh? card) "1")
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
         (menu-surface/RowMenu target)
@@ -1424,11 +1429,19 @@ bytecode cap in the :prod build, which dev compilation never emits.
   "The cards that the scroll window shows.
    Pre:  `visible` holds indexes into `cards`, in display order.
    Post: one card per display order in [offset, offset + limit), each with
-         its display order as :pos."
-  [cards visible offset limit]
+         its display order as :pos, and :fresh? when its row key is in
+         `arrived`."
+  [cards visible offset limit arrived]
   (let [end (min (count visible) (+ offset limit))]
-    (mapv (fn [pos] (assoc (nth cards (nth visible pos)) :pos pos))
+    (mapv (fn [pos]
+            (let [card (nth cards (nth visible pos))]
+              (assoc card :pos pos :fresh? (contains? arrived (:row-key card)))))
       (range (min offset end) end))))
+
+(defn visible-row-keys
+  "The row keys of the visible cards, as a set."
+  [cards visible]
+  (into #{} (map #(:row-key (nth cards %))) visible))
 
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
@@ -1440,7 +1453,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; empty.
 ;; position:relative is inline, not on the shared .tape-scroll class — this is
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
-(e/defn CardsTableBody [cards-vec query-revision row-height font-sz filters-active? scroll-reset-key
+(e/defn CardsTableBody [cards-vec query-revision rows-view-key row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
                         user-id anki-overlay !stats]
   (e/client
@@ -1468,7 +1481,12 @@ bytecode cap in the :prod build, which dev compilation never emits.
                                         query-revision))
             row-count (e/server (count visible-indexes))
             [offset limit] (Scroll-window row-height row-count dom/node
-                             {:overquery-factor 1.5 :reset-key scroll-reset-key})]
+                             {:overquery-factor 1.5 :reset-key scroll-reset-key})
+            ;; Row keys of the last window, for row-motion/arrivals!. Filters,
+            ;; sort and the offset are in the scope, so they add no row. The
+            ;; filters are the ones the rows were READ with, not the current
+            ;; ones: the query keeps the old rows while it runs again.
+            !seen (e/server (atom {}))]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                     ;; --count → table height (scroll range), --grid-cols → the row grid.
@@ -1484,9 +1502,11 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; and its position cross together. A slot loop read each card by a
           ;; client index, and a delete moved every slot below it to another
           ;; card, so each of those rows went empty for the round trip.
-          (let [window (e/server
+          (let [arrived (e/server (row-motion/arrivals! !seen [rows-view-key offset]
+                                    (visible-row-keys cards-vec visible-indexes)))
+                window (e/server
                          (e/diff-by :row-key
-                           (window-cards cards-vec visible-indexes offset limit)))]
+                           (window-cards cards-vec visible-indexes offset limit arrived)))]
             (e/for [card window]
               (LibraryCardRow card navigate! !editing-card !diff-card !selected
                 selected user-id (:pos card) anki-overlay !stats))))
@@ -1539,7 +1559,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTableHeader result filtered-count all-filtered-selected? !selected !sort-col !sort-dir)
 
-      (CardsTableBody cards-vec (e/server (:card-revision result)) row-height font-sz filters-active? scroll-reset-key
+      (CardsTableBody cards-vec (e/server (:card-revision result)) (e/server (:view-key result))
+        row-height font-sz filters-active? scroll-reset-key
         navigate! !editing-card !diff-card !selected selected
         user-id anki-overlay !stats))))
 

@@ -14,7 +14,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [freememo.row-motion :as row-motion]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
@@ -52,6 +53,24 @@
              (build-rows (slim-topic scope-root) page-topic-id
                children-map (set expanded-set) items)))))
      :cljs nil))
+
+;; The scroll window, diffed by topic id on the server, so a row's content and
+;; its place cross together (freememo.row-motion).
+(defn panel-window
+  "The rows at display orders [offset, offset + limit).
+   Post: each row carries its display order as :pos, and :fresh? when its
+         topic id is in `arrived`."
+  [rows offset limit arrived]
+  (let [end (min (count rows) (+ offset limit))]
+    (mapv (fn [i]
+            (let [row (nth rows i)]
+              (assoc row :pos i :fresh? (contains? arrived (:topics/id (:topic row))))))
+      (range (min offset end) end))))
+
+(defn panel-row-ids
+  "The topic ids of the rows, as a set."
+  [rows]
+  (into #{} (map (comp :topics/id :topic)) rows))
 
 (defn side-panel-badge
   "Returns [text color] or nil to skip rendering. Page rows skip the badge
@@ -296,7 +315,7 @@
    !drag-src drag-src forbidden !drop-cmd
    !expanded-set !scroll-node]
   (e/client
-    (let [{:keys [depth topic has-children current? expanded-display?]} row
+    (let [{:keys [depth topic has-children current? expanded-display? fresh?]} row
           id (:topics/id topic)
           title (or (:topics/title topic) "(empty)")
           kind (or (:topics/kind topic) "basic")
@@ -336,7 +355,11 @@
                                    (fn [s] (if (contains? s id) (disj s id) (conj s id))))
                                  (util/restore-scroll-after-render! sn st))))]
       (dom/tr
-        (dom/props {:style {:--order i}})
+        ;; freememo.row-motion follows the key when rows move, and slides in
+        ;; a row that an extract or an expand just added.
+        (dom/props {:data-row-key (str id)
+                    :data-enter (when fresh? "1")
+                    :style {:--order i}})
         (menu-surface/RowMenu target)
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
@@ -409,8 +432,13 @@
           expanded-set (e/watch !expanded-set)
           ;; Server-form binding (sited-by-use): the subtree rows stay
           ;; server-side; only row-count and the window rows cross.
-          rows (e/server (e/Offload #(build-hierarchy-rows* tree-rev user-id
-                                       page-topic-id expanded-set)))]
+          ;; The page travels with its rows: the Offload keeps the old rows
+          ;; while it runs again, and row-motion/arrivals! must not pair them
+          ;; with the new page.
+          built (e/server (e/Offload #(when-some [rows (build-hierarchy-rows* tree-rev user-id
+                                                           page-topic-id expanded-set)]
+                                        {:rows rows :page-topic-id page-topic-id})))
+          rows (e/server (:rows built))]
       (when (e/server (some? rows))
         (let [row-count (e/server (count rows))
               row-height 36
@@ -441,20 +469,28 @@
                         :style {:flex "1" :overflow-y "auto" :min-height "0"
                                 :scrollbar-gutter "stable"}})
             (reset! !scroll-node dom/node)
-            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
+            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
+                  ;; Row ids of the last window, for row-motion/arrivals!. The
+                  ;; open page and the offset are in the scope: a page turn or
+                  ;; a scroll shows rows, it does not add them.
+                  !seen (e/server (atom {}))]
               (dom/props {:style {:--count row-count
                                   :--grid-cols "1fr"
                                   :--row-height (str row-height "px")}})
               (dom/table
                 (dom/props {:style {:width "100%"
                                     :font-size "13px"}})
+                (e/on-unmount (row-motion/install! dom/node))
                 (if (pos? row-count)
-                  (e/for [i (Tape offset limit)]
-                    (let [row (e/server (nth rows i nil))]
-                      (when row
-                        (HierarchyRow i row navigate! !nav-target
-                          !drag-src drag-src forbidden !drop-cmd
-                          !expanded-set !scroll-node))))
+                  (let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
+                                            (panel-row-ids rows)))
+                        window (e/server
+                                 (e/diff-by (comp :topics/id :topic)
+                                   (panel-window rows offset limit arrived)))]
+                    (e/for [row window]
+                      (HierarchyRow (:pos row) row navigate! !nav-target
+                        !drag-src drag-src forbidden !drop-cmd
+                        !expanded-set !scroll-node)))
                   (dom/tr
                     (dom/props {:style {:--order 1 :height "auto"}})
                     (dom/td

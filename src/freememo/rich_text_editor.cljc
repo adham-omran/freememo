@@ -9,6 +9,7 @@
    [freememo.quill-markdown :as quill-markdown]
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
+   [freememo.motion :as motion]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.command-bus :as bus])
    #?(:cljs [freememo.editor-links :as editor-links])
@@ -645,6 +646,24 @@
             :text (.getText ed index length)
             :index index
             :length length})))))
+
+(defn flash-range!
+  "Flash a range of the Quill editor once, over the text.
+   Pre:  index and length name a range of the open editor.
+   Post: the document is not changed. The flash is an overlay on
+         document.body, so Quill and auto-save see nothing. Returns nil."
+  [index length]
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [^js bounds (.getBounds ^js editor index length)
+             ^js container (.getBoundingClientRect (.-container ^js editor))]
+         (when (and bounds (pos? (.-width bounds)))
+           (motion/flash-box! {:left (+ (.-left container) (.-left bounds))
+                               :top (+ (.-top container) (.-top bounds))
+                               :width (.-width bounds)
+                               :height (.-height bounds)}))
+         nil))))
 
 (defn highlight-range!
   "Apply highlight formatting to a range in the Quill editor.

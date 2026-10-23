@@ -22,6 +22,7 @@
    [clojure.string :as str]
    [freememo.math :as math]
    [freememo.modal-shell :as modal-shell]
+   [freememo.motion :as motion]
    [freememo.quiz-feedback :as fb]
    [freememo.turn-timing :as timing]
    #?(:clj [freememo.db :as db])
@@ -241,6 +242,9 @@
           ;; is handled by CardTurn's container above and takes Good, the primary.
           (dom/props {:tabindex "-1"})
           (e/snapshot (modal-shell/focus-on-mount! dom/node))
+          ;; The answer opens down from the prompt. The rating keys stay
+          ;; instant: the motion does not delay focus or the buttons.
+          (e/snapshot (motion/open-down! dom/node))
           (dom/On "keydown" rating-key-press! nil)
           (dom/div (dom/props {:style label-style}) (dom/text "Answer"))
           (CardHtml answer "15px")
@@ -261,6 +265,8 @@
       (if (nil? feedback)
         (AnswerForm user-id card-id ord !draft draft !grading? grading? !feedback started-at)
         (dom/div
+          ;; The verdict rises in as the result of the answer.
+          (e/snapshot (motion/rise-in! dom/node))
           (CardFeedback (:result feedback) (:answer feedback))
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})

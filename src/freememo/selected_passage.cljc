@@ -49,3 +49,15 @@
      :cljs (when (= :editor (:surface passage))
              (apply editor/highlight-range! (:index passage) (:length passage) opts)))
   nil)
+
+(defn flash!
+  "Flash `passage` once where it was taken from, so the reader sees it become
+   an item.
+   Pre : `passage` came from `current`, or is nil.
+   Post: an :editor passage flashes, and its document is not changed. Any
+         other passage, or nil, is left alone. Returns nil."
+  [passage]
+  #?(:clj nil
+     :cljs (when (= :editor (:surface passage))
+             (editor/flash-range! (:index passage) (:length passage))))
+  nil)

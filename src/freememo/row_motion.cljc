@@ -157,3 +157,70 @@
          (.disconnect observer)
          (some-> @!frame js/cancelAnimationFrame)))
      :clj nil))
+
+#?(:cljs
+   (defn- list-rows
+     "[[key node top] ...] for the keyed children of `parent`, in DOM order.
+      `top` is from the parent's top edge, so content that grows ABOVE the
+      list in the same frame moves no row: measured, a reorder moved the list
+      73px down and slid the one row that kept its place. offsetTop ignores
+      transforms, so a running slide does not change what is read."
+     [^js parent]
+     (into []
+       (keep (fn [^js el]
+               (when-let [k (.. el -dataset -rowKey)]
+                 [k el (if (identical? (.-offsetParent el) parent)
+                         (.-offsetTop el)
+                         (- (.-offsetTop el) (.-offsetTop parent)))])))
+       (array-seq (.-children parent)))))
+
+(defn install-list!
+  "Animate a reorder of the keyed children of `parent`, a plain list that is
+   not a tape table: each child carries `data-row-key` and takes its place
+   from the layout, not from `--order`.
+   Pre:  every child of one key carries the same `data-row-key` for its life.
+   Post: when the ORDER of the keys changes, each row that moved slides from
+         its old place to its new one. A layout change that keeps the order (a
+         row that grows, a form that opens) moves nothing, and nor does a row
+         that is added or removed. Nothing moves under reduced motion.
+         Returns a teardown fn."
+  [parent]
+  #?(:cljs
+     (let [!last (atom nil)                ; {:order [k ...] :tops {k px}}
+           !moving (atom {})               ; key -> {:node :anim :from}
+           !frame (atom nil)
+           reduced (js/matchMedia "(prefers-reduced-motion: reduce)")
+           step!
+           (fn []
+             (reset! !frame nil)
+             (let [rows (list-rows parent)
+                   order (mapv first rows)
+                   tops (into {} (map (juxt first #(nth % 2))) rows)
+                   {prev-order :order prev-tops :tops} @!last
+                   moving @!moving
+                   offsets (update-vals moving residual)]
+               (when (and prev-order (not= order prev-order) (not (.-matches reduced)))
+                 (reset! !moving
+                   (reduce
+                     (fn [acc [k ^js node top]]
+                       (if-some [old (get prev-tops k)]
+                         (let [from (+ (- old top) (get offsets k 0))]
+                           (some-> (get-in moving [k :anim]) .cancel)
+                           (if (< 0.5 (js/Math.abs from))
+                             (assoc acc k {:node node :from from :anim (slide! node from)})
+                             acc))
+                         acc))
+                     {}
+                     rows)))
+               (reset! !last {:order order :tops tops})))
+           schedule! (fn [_ _]
+                       (when-not @!frame
+                         (reset! !frame (js/requestAnimationFrame step!))))
+           observer (js/MutationObserver. schedule!)]
+       (.observe observer parent #js {:childList true :subtree true :characterData true
+                                      :attributes true :attributeFilter #js ["data-row-key"]})
+       (schedule! nil nil)
+       (fn []
+         (.disconnect observer)
+         (some-> @!frame js/cancelAnimationFrame)))
+     :clj nil))
