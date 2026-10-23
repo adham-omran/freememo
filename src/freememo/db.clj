@@ -9419,8 +9419,10 @@
 
 (def ^:private flashcard-ts-cols
   "Timestamp columns that arrive as ISO strings after a JSONB round-trip and
-   must be CAST back to timestamp on restore."
-  #{:created_at :updated_at :anki_synced_at})
+   must be CAST back to timestamp on restore. `mtime` is the desktop sync
+   clock (freememo.sync-schema): uncast, its string failed every card undo
+   (measured 2026-10-23). The row trigger rewrites it on insert anyway."
+  #{:created_at :updated_at :anki_synced_at :mtime})
 
 (defn- cast-timestamps
   "Wrap present, non-nil timestamp values as CAST(? AS timestamp) for honeysql."
@@ -9596,7 +9598,7 @@
 
 (def ^:private group-ts-cols
   "Timestamp columns shared by occlusion_groups and score_groups."
-  [:created_at :updated_at])
+  [:created_at :updated_at :mtime])
 
 (defn- restore-group-rows-tx!
   "Re-insert deleted occlusion/score group rows on the given connectable,

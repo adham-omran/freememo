@@ -9,6 +9,7 @@
    [freememo.bibliography-form :as bibform]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
+   [freememo.motion :as motion]
    #?(:clj [freememo.db :as db])))
 
 #?(:clj
@@ -168,7 +169,11 @@
                   (TopicPage user-id enc-key topic-id
                     navigate!
                     llm-enabled?
-                    queue-ctx nil))
+                    queue-ctx nil)
+                  ;; TopicPage stays mounted across items, so the next topic is
+                  ;; a new key on this node, not a mount. The bar below stays
+                  ;; still. Last form: an effect gates no frame.
+                  (motion/on-new-key! dom/node topic-id motion/arrive-forward!))
                 (BottomBar user-id topic-id !queue-idx)))
             ;; The session owns the title. TopicPage never writes one.
             (PageTitle user-id [:topic topic-id])))))))

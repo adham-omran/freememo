@@ -397,7 +397,7 @@
     ;; Row ids of the last window, server-side, for row-motion/arrivals!.
     ;; Outside the region, so a refresh that remounts it keeps them.
     (let [!seen (e/server (atom {}))
-          ;; Filter and sort. A change to them is navigation, not an arrival.
+          ;; Filter and sort, as requested. A change to them scrolls to the top.
           view-key (subvec (vec request-key) 2 7)]
       (loading/WithLatestServerRegion request-key
         ;; Electric let bindings run concurrently. The tree shape and maintained
@@ -424,15 +424,21 @@
                 {:pending? true}
 
                 (and (:ok? items-result) (:ok? stats-result))
+                ;; The filters travel with the rows they built, for the
+                ;; row-motion/arrivals! scope: the region keeps the old rows
+                ;; while it refreshes, and the current filters must not be
+                ;; paired with them.
                 (loading/region-success result-key
-                  (build-tree-rows (:value items-result) (:value stats-result)
-                    filter-text kind-filter status-filter sort-col sort-dir expansion))
+                  {:rows (build-tree-rows (:value items-result) (:value stats-result)
+                           filter-text kind-filter status-filter sort-col sort-dir expansion)
+                   :view-key [filter-text kind-filter status-filter sort-col sort-dir]})
 
                 :else
                 (loading/region-failure result-key
                   (or (:error items-result) (:error stats-result) "Unknown error"))))))
-        (e/fn [flat-rows phase error]
-          (let [row-count (e/server (count flat-rows))]
+        (e/fn [tree phase error]
+          (let [flat-rows (e/server (:rows tree))
+                row-count (e/server (count flat-rows))]
             (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
               (dom/div
                 (dom/props {:role "rowgroup"
@@ -461,7 +467,7 @@
                     ;; row's content and its position cross together. Rows new
                     ;; since the last window slide in. The scroll offset is in
                     ;; the scope, so a row that scrolls into view is not new.
-                    (let [arrived (e/server (row-motion/arrivals! !seen [view-key offset]
+                    (let [arrived (e/server (row-motion/arrivals! !seen [(:view-key tree) offset]
                                               (tree-row-ids flat-rows)))
                           window (e/server
                                    (e/diff-by :id (tree-window flat-rows offset limit arrived)))]
