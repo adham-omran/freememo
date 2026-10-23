@@ -150,14 +150,16 @@
 (e/defn WithLatestServerRegion
   "Render one collection region without moving the collection to the client.
 
-   `Thunk` must return region-success or region-failure.
+   `Thunk` must return region-success or region-failure. While it waits it
+   may return {:pending? true} or be empty.
 
    Pre : request-key contains every input that changes the result.
          Loaded sites all collection reads on the server.
    Post: Loading receives cold while no collection exists.
          Loaded receives the last successful server value, phase, and error.
          Failed receives a cold-load error.
-   Invariant: only readiness metadata crosses before Loaded requests a row."
+   Invariant: only readiness metadata crosses before Loaded requests a row.
+              Once a value exists, the value Loaded receives is never empty."
   [request-key Thunk Loaded Loading Failed]
   (e/client
     (let [!metadata (atom {:has-value? false
@@ -169,9 +171,14 @@
             (e/with-cycle [previous {:value no-region-value
                                      :settled-key ::not-settled
                                      :error nil}]
-              (let [outcome (Thunk)]
+              ;; Thunk is EMPTY, not pending, while an e/Offload in it runs a
+              ;; new thunk. Read directly, that empties this cycle, then the
+              ;; collection, then every row Loaded mounted: a Library expand
+              ;; unmounted all rows twice (measured on the wire, 2026-10-23).
+              ;; `as-vec` turns the empty outcome into nil, kept as pending.
+              (let [outcome (peek (e/as-vec (Thunk)))]
                 (cond
-                  (:pending? outcome) previous
+                  (or (nil? outcome) (:pending? outcome)) previous
                   (:ok? outcome)
                   {:value (:value outcome)
                    :settled-key (or (:request-key outcome) request-key)
