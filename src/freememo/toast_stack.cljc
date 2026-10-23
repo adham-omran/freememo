@@ -97,15 +97,18 @@
               (dom/text label)
               (let [click (dom/On "click" identity nil)
                     [t _] (e/Token click)]
+                ;; The undo runs FIRST, and alone. Dismissing removes this
+                ;; toast, which unmounts this frame. With the undo after the
+                ;; dismiss, and beside (t) in a concurrent `do`, it was torn
+                ;; down before it ran: Undo did nothing (measured 2026-10-23).
                 (when t
-                  (case (e/server (dismiss!* user-id id))
-                    (do (when undo-id
-                          (case (e/server (undo-from-toast!* user-id undo-id)) nil))
-                        (when nav
-                          (if (vector? nav)
-                            (apply navigate! nav)
-                            (navigate! nav)))
-                        (t)))))))
+                  (case (e/server (if undo-id (undo-from-toast!* user-id undo-id) ::no-undo))
+                    (case (e/server (dismiss!* user-id id))
+                      (do (when nav
+                            (if (vector? nav)
+                              (apply navigate! nav)
+                              (navigate! nav)))
+                          (t))))))))
 
           ;; Close × — always present
           (dom/button
