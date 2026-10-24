@@ -9,6 +9,276 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20261024-b17d279
+
+### For users
+
+- **Walkthroughs teach the change between two commits.** On an imported
+  repository, `Walk through commits…` lets you pick the first and the last
+  commit to learn. FreeMemo groups the changes into steps, one idea per step,
+  and the tutor teaches each step in the assistant panel.
+  - **The screen shows each file whole, with each step's lines in its own
+    color.** A rail lists the files of the step. A color shows which step wrote
+    a line, not what was added. Removed lines do not show.
+  - **The tutor first tests what you know about the starting commit**, in a new
+    chat. Its answers cite the changes of the step.
+  - **You can merge a step into another one** when the model split one idea in
+    two. A confirmation names both steps and the number of changes that move.
+    `Edit step` holds Rename and Merge.
+  - **Preparation shows in the Activity monitor, and you can cancel it.** A
+    failed preparation has `Try again`.
+  - **The screen fits a laptop.** In a narrow column the steps take one row that
+    scrolls sideways, and the file list moves above the code.
+- **A repository opens on a home page.** It shows the source, `Update`, your
+  walkthroughs and the imported commits. A commit opens on a card with its
+  message, author, date and changed files, and `Walk through this commit`.
+  Repository, commit and directory nodes no longer show an empty editor, the
+  toolbar or a card table.
+  - **`Add files to repository…` adds directories and extensions after the
+    import.** It only adds. Existing topics keep their notes and cards, and a
+    file you deleted does not come back.
+- **You can pin questions to passages of a repository file.** Select text in a
+  rendered Markdown file or in code, then choose Ask. The passage gets a
+  numbered pin, and the pin follows the file to each new commit. A passage that
+  changed shows as stale.
+  - **`Ask N pins` sends every open pin in one tutor turn.** The tutor finds the
+    ideas that your questions depend on and builds a question map from them.
+  - **The map is a tab beside Chat.** It reads as a trail: done ideas, the
+    current idea, then open ones. `Teach me`, `Teach again` and `I know this`
+    act on one idea. Point at a citation to outline its passage in the file.
+  - **A deleted pin gives its number back** until the tutor has seen it. The pin
+    list explains the other gaps under `Deleted`.
+- **Knowledge → Known ideas lists what you know.** Each idea shows how you know
+  it, its files, its last check and its cards. A band at the top lists the ideas
+  due for a check.
+  - **`Make cards` writes 3 basic cards from the quotes of an idea.** `Check me`
+    opens the Quiz on those cards.
+  - **The page of an idea shows the answer that proved it**, its history, its
+    cards and where it appears. `Not learned yet` removes its marks.
+- **The assistant panel has chat history.** The history button lists the chats
+  of the document under Pinned, Today, Previous 7 days and Older, with a search
+  field. The `⋯` menu on a row, or a right-click, renames, pins or deletes a
+  chat. You can undo a delete for 12 hours.
+  - **The panel reopens the chat you last opened on the document.** `+ New`
+    gives an empty panel. A chat exists only after its first message.
+  - **A chat can fork.** `/fork <question>` forks at the latest message, and
+    `Fork here` forks at an answer. The next answer in the parent reads its
+    forks, and you can exclude a fork. History draws a line from each parent to
+    its forks.
+  - **A chat compacts itself before it gets too large for the model.** The
+    composer shows how full the context is, for example `102.6k / 1M tokens`.
+  - **Type `/` at the start of the composer to see the slash commands.**
+- **Select text in an assistant answer to act on that part.** `Generate cards`
+  makes cards from it. `Ask aside` opens a floating side chat, so a small
+  question does not go into the main chat. `Annotate` marks a part with a note,
+  and the next send answers each marked part in its own section.
+- **A desktop app for macOS and Windows is in testing.** It runs FreeMemo on your
+  computer with its own database, so you can study offline. It syncs with
+  freememo.net when it has a connection. AI features run through freememo.net
+  and spend your credits there. There is no public download yet. Contact me if
+  you want to try it.
+  - **Settings → Desktop App shows the sync state and your signed-in
+    computers.** Rows that could not sync go to a report, and you can restore
+    them from it.
+  - **The trial has no end date for now.**
+  - **On a Mac, FreeMemo stays in the menu bar**, so it opens at once. `⌘F`
+    finds text in the page, and `⌘,` opens Settings.
+- **You can import a Google Doc from any of your Google accounts.** Connect the
+  accounts in Settings → Google Accounts, then pick a Doc from Import → Google
+  Doc. FreeMemo reads only the Docs you pick. `Pull` reads the Doc again and adds
+  a snapshot when the Doc changed. Older snapshots are marked done and keep
+  their extracts and cards.
+- **A right-click menu works in the editor, card fields, Library rows, card rows
+  and PDF pages.** Each of its items is also a palette command. The `⋯` button
+  on a Library row opens the same menu.
+  - **Right-click selected text for Cut and Copy.**
+  - **`Sync topic with Anki` syncs one branch of the tree.**
+- **Card actions moved out of the toolbar.** Select text, and the popover holds
+  Extract and Cards. Cards has a count, the three card kinds, and a `…` menu
+  with Include context, Compare models, `Generate from selection` (`⌘G`),
+  Generate with prompt and Parse questions.
+  - **Right-click in the editor for Add new card.** With no selection,
+    `Generate cards from this document…` opens a form for one run over the whole
+    document.
+  - **Reading mode and read-only panes keep a small Extract and Add new card
+    pair**, because no popover opens there.
+- **The format menu has a new layout.** It has a block-type row, a grid of
+  icons, an Insert section, and a Cloze or Cards section, all in one icon style.
+  In the document editor, Audio is no longer in the menu. Use `Insert audio` in
+  the palette.
+- **The card table under a document has a filter bar.** It filters by text, by
+  card kind, and to unsynced cards, and it highlights each match. `Filter cards`
+  in the palette puts the cursor in it.
+- **Rows move instead of jumping.** A new card slides into the card table.
+  Library rows slide on expand, collapse and delete, and a new extract slides
+  into the side panel. A card that Undo restores slides back to its place. The
+  system setting for reduced motion turns all of this off.
+  - **Your own actions get a short motion.** Extract flashes the source passage.
+    Learn Next slides the next topic in. Done keeps its pressed look for a
+    moment before the queue moves on, and a click in that moment does nothing.
+    The Quiz answer opens downward. A count flashes when your action changes it.
+    Curriculum blocks slide when you reorder them.
+- **The Quiz page shows placeholders while it loads**, instead of empty boxes.
+  The Knowledge views and AI costs get the same placeholders.
+- **The Learn page scrolls.** On a short window, the queue used to shrink to
+  about two rows. It now shows up to 12 rows, with the dashboard below it.
+- **`⌘Enter` (`Ctrl+Enter`) saves the Bibliography modal.**
+- **Text no longer joins facts with a middle dot.** For example, a new commit
+  topic is titled `a1b2c3d (main)`.
+- **On a phone, the format menu keeps clear of the browser's Cut, Copy and Paste
+  bar.**
+- Bug fix: **Undo on a deleted card did nothing.** It restores the card again.
+- Bug fix: **the Status tab and the Library tree showed 0 items and 0 cards for
+  every document.**
+- Bug fix: **Learn Next rebuilt the whole viewer.** On a text topic that came
+  after a PDF, it rebuilt about every 1.3 s. The viewer now updates in place.
+- Bug fix: **Library → Cards loaded twice on every visit.**
+- Bug fix: **an expand or collapse in Library emptied the table for a moment.**
+- Bug fix: **adding a card emptied every row of the card table twice.**
+- Bug fix: **the card count in the selection popover did not save.**
+- Bug fix: **a pasted image could show `Upload failed`** when the image was
+  already stored.
+- Bug fix: **a video with no audio track showed a raw ffmpeg error.** It now
+  imports. If you asked for a transcript, a message says the video has no audio.
+  A failed video run now shows as failed in the Activity monitor.
+- Bug fix: **exam generation and grading could charge credits and then fail to
+  save.** The fault came with the undoable curriculum delete in the last
+  release. If you lost credits this way, contact me.
+- Bug fix: **deleting a curriculum right after you created it could stay on
+  `Curriculum not found.`**
+- Bug fix: **Tab could leave the command palette.** Focus now stays inside each
+  modal.
+- Bug fix: **Escape in an open typeahead list closed the whole modal.** It now
+  closes the list only.
+- Bug fix: **a selection across a formula opened the format menu far below the
+  text**, and the editor showed a second scrollbar.
+- Bug fix: **a PDF whose title held hidden control characters imported with no
+  bibliography.**
+
+### Known issues
+
+- **Walkthroughs are not tested on every forge.** The token form of each forge
+  is untested. A repository clone larger than 2 GiB is refused, and that limit
+  is a guess.
+- **Google Doc import has not run against a real Google account.** Connecting a
+  second account may not work for every account yet. The import reads the Doc
+  as Markdown, so underline, text color and alignment are lost. A code block may
+  arrive as plain paragraphs.
+- **The desktop app is not signed**, so macOS and Windows warn when you open it.
+  The Windows installer has not run on a real Windows computer. On the desktop,
+  a change to a file larger than 128 MiB fails to sync until a new build ships.
+- **An `Ask aside` thread lives in server memory only.** A server restart or a
+  deploy loses it.
+- **Three fork and compaction defaults are not final**: the fork divider, the
+  8,000-token reserve, and the order that compacts inherited history first.
+- **The fix for `/compact` on Gemini 3.8 Flash is probable, not confirmed.** It
+  failed with HTTP 400 before this update.
+- **The context meter counts the newest answer only.** It moves when you ask
+  from another page, because the open page is most of each request.
+- **In card fields, indent takes two clicks in the format menu.** Tab moves
+  between fields there, so the menu is the only way to indent.
+- **The right-click menu has no Paste**, because reading the clipboard needs a
+  permission prompt. Use `⌘V` (`Ctrl+V`).
+- **A row slide can stall for a moment** when a large query result arrives.
+- **Titles stored before this update keep the middle dot.**
+
+### Technical
+
+- **19 new tables.** Question pins and maps: `question_maps`, `question_roots`,
+  `question_pins`, `question_pin_tombstones`, `known_marks` and
+  `flashcard_entities`. Walkthroughs: `walkthroughs`, `walkthrough_concepts` and
+  `walkthrough_hunks`. Desktop sync: `topic_versions`, `sync_graves`,
+  `sync_conflicts`, `sync_state`, `id_blocks`, `local_id_blocks`,
+  `desktop_tokens`, `desktop_auth_codes`, `desktop_accounts` and
+  `desktop_licenses`.
+- **Every id and foreign key is now `BIGINT`, and each synced table gains `usn`
+  and `mtime`.** Row triggers stamp them and write graves. The first boot
+  rewrote every keyed table under a lock, in 4 min 38 s on production. The
+  deploy health gate went to 30 minutes for that one deploy and back to 180 s
+  after it.
+- **New columns.** `assistant_chats` gains `pinned_at`, `last_opened_at`,
+  `parent_chat_id`, `fork_message_id`, `excluded_at` and `staged_delete_id`.
+  `assistant_checkpoints` gains `scope` and `for_chat_id`. `topics` gains
+  `drive_file_id`, `google_account_sub` and `snapshot_hash`.
+  `kg_entities.from_diagnosis`, `question_roots.learned_at`,
+  `known_marks.proof_run_id` and `question_pins.tutor_seen_at` are new too.
+- **Topic kinds go from 17 to 19**: `gdoc` (structural) and `gdoc-snapshot`
+  (read-only). `update-topic-content!` refuses a write to any read-only kind.
+- **Account export covers 51 tables, up from 41.** The nine desktop and sync
+  tables are excluded. Export and sync now select named columns instead of
+  `to_jsonb(t) - col`. The old shape hex-encoded a whole `bytea` first, and a
+  file over 128 MiB failed with `string too long to represent as jsonb string`.
+- **Repository bytes come from a blob-less bare clone per repository**
+  (`freememo.git-clone`), not from a forge archive. Update is a fetch. Git runs
+  over HTTPS only, the token goes in a per-call header and never into the
+  clone's config, and one operation runs per clone at a time. The `Dockerfile`
+  installs git 2.40 or later. New env vars: `FORGE_CLONE_ROOT` and
+  `FORGE_MAX_CLONE_BYTES`. `docker-compose.selfhost.yml` mounts a
+  `forge-clones` volume. Without it, a new container clones each repository
+  again on use.
+- **The desktop app** (`electron/`) bundles PostgreSQL and a JRE and runs the
+  uberjar with `FREEMEMO_PEER=desktop` on 127.0.0.1. Sign-in is a PKCE loopback
+  flow through `/desktop/authorize`. `/api/desktop/ai/*` proxies AI calls,
+  bills credits and enforces the model allowlist. `sync_apply` serves both
+  peers and merges rows per table class. The license price lives in private
+  config.
+- **Desktop builds.** `uberjar :build/aot true` makes the jar listen in about
+  4 s instead of 50 to 72 s. The freememo.net deploy does not pass the flag.
+  `prod` now requires Electric's `lang3`, which an AOT jar needs at each
+  WebSocket open. On a case-insensitive Mac disk the AOT stage runs in a child
+  JVM on a case-sensitive APFS image. Releases are versioned `YYYY.M.N` from
+  git. `npm run dist:win` builds the NSIS installer in electron-builder's Wine
+  image. `electron/scripts/update-mac.sh` rebuilds only what changed.
+- **Sync apply fixes.** During an apply, the document summary triggers record
+  the affected roots and refresh each one once before commit. 8,000 topics now
+  apply in 2.1 s, not at a quadratic rate. A full download commits per page and
+  resumes from `sync_state.full_download`. A row whose parent is in a later page
+  or batch waits instead of failing. A losing version's history row commits
+  inside its savepoint. `sync-now!` catches `Throwable`, so an `Error` no
+  longer stops the 5-minute schedule.
+- **The `@` menu no longer reads every document's content.** `get-root-topics`
+  counts bytes with `octet_length`, and the new `get-root-topic-titles` serves
+  the `@` menu, the Knowledge lists and the Quiz document list. The `@` query
+  runs in `e/Offload`. Production's JVM was killed 33 s after a user typed `@`
+  on 2026-10-21. No memory metric confirms the cause.
+- **Context menu** - registry entries with a `:target` (`freememo.command-targets`).
+  `dispatch!` checks the target at the boundary. Queued target commands check
+  ownership per subject on the server, and `db/rename-topic!` gains an owner
+  clause. The menu lives in the top layer.
+- **Row motion** - `freememo.row-motion` animates by `data-row-key`, and
+  `freememo.motion` holds the other motions. The card table, Library Cards, the
+  documents tree and the side panel diff their windows by row key on the
+  server. `WithLatestServerRegion` keeps its previous value while a rerun is
+  empty (`loading.cljc`). Each query result carries its own motion scope.
+- **Learn Next in place** - `topic_state.cljc` moves gates inside `e/Offload`
+  thunks, makes branching derivations plain fns, and reseeds view-state atoms
+  only when their seed key changes.
+- **Card undo** - the toast runs the undo before it dismisses itself, and the
+  restore casts `mtime`.
+- **Card actions** - `CardActionsHost` mounts the command owners with no
+  control, and `freememo.gen-settings` is one client-global map of the generate
+  settings.
+- **Assistant context** - `freememo.model-context` reads context lengths from
+  the OpenRouter model catalog and caches them for one day. A compaction
+  request now ends on a user turn.
+- **Other fixes.** `upsert-media-row!` uses `ON CONFLICT DO NOTHING`.
+  `get-document-status` returns bare count keys again. `->jsonb` and
+  `merge-biblio` strip NUL and other C0 characters.
+  `curriculum-deleted-since?` binds a `java.sql.Timestamp`.
+  `modal-shell/trap-tab!` tests each candidate for tabbability. A shared
+  `Typeahead` now keeps Escape while its list is open, for every caller.
+- **Format menu icons** come from `freememo.icon-paths` (Lucide on a 24-unit
+  grid), which the Electric icons and the plain-DOM menu both read.
+- `test/freememo/separator_test.clj` fails on a middle dot anywhere in `src/`.
+- The Playwright suite accounts for every checklist row. The build guard now
+  proves the served build by its JS files, their sizes and their mtimes.
+- Publish-clean excludes more private deployment files from public history.
+- Two temporary debug logs stay in the `Ask aside` card path until the fix is
+  confirmed.
+- These were not driven in a browser before release: Google Doc import with a
+  real account, the desktop app on a real Windows computer, the Quiz verdict
+  motion, and the context meter moving after an answer.
+
 ## v20261002-b0e8697
 
 ### For users
