@@ -163,7 +163,9 @@
           editor-live? (e/watch editor/!editor-ready?)]
     (dom/div
       ;; `editor-pane` is what `.editor-hidden` hides (document-view/ContentColumn).
-      (dom/props {:class "editor-pane"
+      ;; `editor-text` is the getting-started spotlight's anchor for Extract and
+      ;; Generate, whose controls appear on a selection here.
+      (dom/props {:class "editor-pane" :data-tour "editor-text"
                   :style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
 

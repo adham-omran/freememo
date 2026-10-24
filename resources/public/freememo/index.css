@@ -379,6 +379,33 @@ html:has(> body > .app-shell) > body {
 .modal-md { width: 420px; max-width: 90%; }
 .modal-lg { width: 600px; max-width: 90%; }
 
+/* freememo.card-actions-host: owners with no control of their own. The div
+   only gives their modals an element of their own. */
+.card-actions-host { display: contents; }
+
+/* The right-click "Generate cards…" form (freememo.document-generate-form). */
+.document-generate-form {
+    width: 360px;
+    max-width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.document-generate-form h3 { margin: 0 0 var(--sp-2); font-size: 16px; }
+.document-generate-form__context {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: var(--sp-2);
+}
+.document-generate-form__buttons {
+    display: flex;
+    gap: var(--sp-2);
+    justify-content: flex-end;
+    margin-top: var(--sp-3);
+}
+.document-generate-form__buttons .btn-primary { order: 1; }
+
 /* Card add/edit modal inner panel — viewport-relative.
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
@@ -783,16 +810,17 @@ html:has(> body > .app-shell) > body {
    is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
    the smallest tier where inline content fits without overflow.
 
-   Tier ladder (cumulative; tier N also implies all of tier <N). Card-type +
-   Context moved into the Generate dropdown menu (C3) and Priority into the
-   Document-Options modal (C5), so their former inline tiers no longer hide
-   anything; tier 3 is now a reserved no-op the detector skips:
+   Tier ladder (cumulative; tier N also implies all of tier <N). Card-type,
+   Context and the card count moved into the selection popover
+   (plans/toolbar-card-actions-fold.md) and Priority into the Document-Options
+   modal (C5), so their former inline tiers no longer hide anything; tiers 3
+   and 4 are reserved no-ops:
    - collapse-0: nothing hidden, all labels visible
    - collapse-1: labels + citation hidden (icon-only buttons), except the
      labels marked `.icon-label--tier-2`
    - collapse-2: + those labels + Document-meta group hidden (.toolbar-collapse-docmeta)
    - collapse-3: (reserved — no additional inline element)
-   - collapse-4: (reserved — CardCount moved into the Generate dropdown menu)
+   - collapse-4: (reserved — no additional inline element)
    - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
    - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
    - collapse-7: + Anki Sync button hidden (.toolbar-collapse-sync) */
@@ -871,20 +899,9 @@ html:has(> body > .app-shell) > body {
     display: flex;
     visibility: visible;
 }
-.toolbar-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 13px;
-}
 .toolbar-sep { color: var(--color-border); }
 /* Card-type segmented control (radiogroup a11y) — replaces the ◉/○ radio-dot
    rows: one connected row of pill segments + a one-line description. */
-.toolbar-generate-menu-settings .toolbar-type-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-}
 .segmented {
     display: inline-flex;
     border: 1px solid var(--color-border);
@@ -1135,7 +1152,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     .ai-task-row { grid-template-columns: minmax(0, 1fr) repeat(3, 60px); }
     .ai-level-head { font-size: 12px; }
 }
-.toolbar-generate-group { margin-left: auto; }
 
 /* Toolbar groups — flat flex runs separated by .toolbar-group-divider
    (Excel/Sheets model). No box: the bar's own tint is the only fill layer. */
@@ -1151,16 +1167,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     align-items: center;
     gap: 8px;
 }
-
-/* Generate group — keeps card-count stepper + Generate buttons together so the
-   parameter clusters with the action that consumes it. Flat (no box); the
-   inner .toolbar-generate-group's margin-left:auto is neutralized here. */
-.toolbar-generate-cluster {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.toolbar-generate-cluster .toolbar-generate-group { margin-left: 0; }
 
 /* ── Ghost toolbar buttons ─────────────────────────────────────────
    Flat (transparent, no border) at rest; square radius-md tinted background on
@@ -1219,7 +1225,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    add 2px in content-box). line-height:1 keeps icon+label vertically centered. */
 .toolbar-group .btn,
 .toolbar-sync-trigger,
-.toolbar-generate-trigger,
 .number-stepper-btn,
 .number-stepper-input {
     height: 28px;
@@ -1377,9 +1382,8 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     display: inline;
 }
 
-/* ── Toolbar dropdowns (Generate / Sync) ──────────────────────────────────
-   Generate + Sync each consolidate multiple buttons into one trigger that
-   opens a menu. The source buttons remain mounted (hidden) so their refs,
+/* ── Toolbar dropdowns (the PDF bar's Copy / Scan, and Sync) ───────────────
+   Each consolidates multiple buttons into one trigger that opens a menu. The source buttons remain mounted (hidden) so their refs,
    modals, and e/Token paths stay live; menu items dispatch via .click() on
    the existing refs (same pattern the overflow proxies use).
 
@@ -1395,21 +1399,11 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    the layout entirely; the inner direct-child `button` rule hides each source
    button but leaves modal divs (rendered as sibling children inside each
    *Button e/defn) visible — display:none on the wrapper itself would have
-   killed the modals too.
-
-   The `.toolbar-generate-group` rule covers `ToolbarGenerate`'s Generate +
-   Generate-with-Prompt buttons, which are grandchildren of the sources
-   wrapper (nested inside an internal `.toolbar-generate-group` div) and
-   therefore NOT caught by the `> button` direct-child selector. The
-   PromptDialog modal sits as a separate `dom/div` sibling inside the same
-   `ToolbarGenerate` body, so it remains visible when activated. */
+   killed the modals too. */
 .toolbar-dropdown-sources {
     display: contents;
 }
 .toolbar-dropdown-sources > button {
-    display: none !important;
-}
-.toolbar-dropdown-sources .toolbar-generate-group {
     display: none !important;
 }
 
@@ -1426,27 +1420,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     margin-left: 2px;
     opacity: 0.85;
 }
-
-/* Split generate button — primary zone (generate) + caret zone (open menu)
-   share one pill: inner corners squared, a translucent hairline between them.
-   Both zones are .btn.btn-primary with backgrounds set inline by state. */
-.toolbar-generate-split {
-    display: inline-flex;
-    align-items: stretch;
-}
-.toolbar-generate-primary {
-    gap: 6px;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-}
-.toolbar-generate-caret {
-    padding-left: 6px;
-    padding-right: 6px;
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.35);
-}
-.toolbar-generate-caret svg { opacity: 0.85; }
 
 /* Menu — absolutely positioned below trigger. z-index above tooltips/PDF.
    Card background, modal-style shadow to lift it visually off the toolbar. */
@@ -1465,12 +1438,11 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     flex-direction: column;
     gap: 2px;
 }
-/* Copy / Scan / Generate triggers sit toward the right of their bars; right-align
+/* Copy / Scan triggers sit toward the right of their bars; right-align
    their menus so a left-anchored menu can't run past the
    toolbar's right edge and get clipped by `.toolbar`'s `overflow-x: clip`. */
 .toolbar-copy-dropdown .toolbar-dropdown-menu,
-.toolbar-scan-dropdown .toolbar-dropdown-menu,
-.toolbar-generate-dropdown .toolbar-dropdown-menu {
+.toolbar-scan-dropdown .toolbar-dropdown-menu {
     left: auto;
     right: 0;
 }
@@ -1517,26 +1489,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     font-size: 11px;
     color: var(--color-text-hint);
     white-space: nowrap;
-}
-
-/* Generation settings block at the top of the Generate dropdown menu (C3):
-   card-type radios + Context toggle live here as live widgets above the
-   actions. Stacked, padded to align with the menu items below. */
-.toolbar-generate-menu-settings {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px 12px;
-}
-.toolbar-generate-menu-settings .toolbar-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.toolbar-dropdown-separator {
-    height: 1px;
-    background: var(--color-border);
-    margin: 4px 0;
 }
 
 .header-bar {
@@ -3013,9 +2965,6 @@ textarea:hover {
        and the dropdown menu at the toolbar's bottom edge so the card-table
        below visually painted over them. */
 
-    /* Remove auto-margin push in dropdown context */
-    .toolbar-generate-group { margin-left: 0; }
-
     /* Card-table min-width intentionally not set here: at narrow viewports the
        table is allowed to shrink so its fixed 40px X-delete column stays
        within the scroll viewport. Question/answer columns ellipsize as needed. */
@@ -3366,6 +3315,29 @@ textarea:hover {
     text-align: center;
     font-size: 13px;
     color: var(--color-text-primary);
+}
+/* Cards row 1: count, the three kind glyphs, and `...`. 20px stepper buttons
+   and 28px glyphs fit the 194px content box with 4px gaps. */
+.format-menu .fmt-cardgen-row {
+    justify-content: space-between;
+    gap: 4px;
+    padding: 0 2px;
+}
+.format-menu .fmt-cardgen-row .number-stepper-btn { width: 20px; }
+.format-menu .fmt-kind-group { display: flex; gap: 0; }
+.format-menu .fmt-kind-group .fmt-btn,
+.format-menu .fmt-cardgen-row > .fmt-dd > .fmt-btn { width: 28px; }
+/* The `...` popup: Include context, its pages, Compare models. */
+.format-menu .fmt-cardgen-popup { left: auto; right: 0; width: 188px; }
+.format-menu .fmt-cardgen-popup .fmt-cardgen-row { justify-content: flex-start; padding: 0 8px; }
+.format-menu .fmt-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 8px;
+    font-size: 13px;
+    cursor: pointer;
 }
 
 /* Popups: block type, colour, overflow. format-menu's popup-group keeps at

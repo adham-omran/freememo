@@ -69,15 +69,7 @@
 (e/declare extract-status)
 
 ;; ── LLM / generation ─────────────────────────────────────────────────────
-(e/declare card-type)
-(e/declare card-count-val)
-(e/declare use-context)
-(e/declare context-window)
-(e/declare context-tooltip)
 (e/declare context-mode)
-(e/declare gen-active?)
-(e/declare gen-pending)
-(e/declare gen-error)
 
 ;; ── Layout / display ─────────────────────────────────────────────────────
 (e/declare layout)
@@ -162,10 +154,6 @@
 (e/declare !transcript-pct)
 (e/declare !top-pct)
 (e/declare !top-pct-save)
-(e/declare !use-context)
-(e/declare !context-window)
-(e/declare !card-type)
-(e/declare !card-count)
 
 ;; ── Video state (kind='video' topics only) ─────────────────────────────────
 ;; The <video> element is the single playback clock; !video-el publishes the

@@ -352,9 +352,6 @@
                     dctx/page-number (when is-pdf? current-page)
                     dctx/static-content effective-content
                     dctx/context-mode context-mode
-                    dctx/context-tooltip (if is-pdf?
-                                           "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                           "Include context for better cards. With a selection: extract text. Without: original page text.")
                     dctx/extract-status toolbar-extract-status
                     dctx/origin (:origin queue-ctx)
                     dctx/on-done! (:on-done! queue-ctx)]

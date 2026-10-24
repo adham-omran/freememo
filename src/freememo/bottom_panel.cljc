@@ -4,22 +4,23 @@
      BottomPanel — the ContentCardTable, rendered BELOW the content.
 
    ToolbarBar owns the live-content derivation from editor/!dirty-html (only the
-   toolbar consumes it for card-gen context), so the caller doesn't thread dirty
-   state through props."
+   toolbar and the card-action owners consume it, for card-gen context), so the
+   caller doesn't thread dirty state through props."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.rich-text-editor :as editor]
    [freememo.content-toolbar :refer [ContentToolbar]]
+   [freememo.card-actions-host :refer [CardActionsHost]]
    [freememo.content-card-table :refer [ContentCardTable]]))
 
 (e/defn ToolbarBar
   "Full-width command toolbar, rendered as a top bar above the content.
-   Derives live-content from the editor's dirty html (only the toolbar consumes
-   it for card-gen context) and binds it as dctx/content-text for ContentToolbar.
-   Every other input arrives via ambient doc-context (dctx), bound upstream by
-   DocumentToolbars / TopicPage."
+   Derives live-content from the editor's dirty html and binds it as
+   dctx/content-text for ContentToolbar and CardActionsHost, whose Generate
+   reads it. Every other input arrives via ambient doc-context (dctx), bound
+   upstream by DocumentToolbars / TopicPage."
   []
   (e/client
     (let [topic-id       dctx/topic-id
@@ -29,7 +30,8 @@
                            (:html dirty)
                            static-content)]
       (binding [dctx/content-text live-content]
-        (ContentToolbar)))))
+        (ContentToolbar)
+        (CardActionsHost)))))
 
 (e/defn BottomPanel
   "Bottom card-table region for both PDF-page and extract topic views.

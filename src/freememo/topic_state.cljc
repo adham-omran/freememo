@@ -54,7 +54,7 @@
            ;; Scalars only — TopicPage destructures this map client-side, so
            ;; every key crosses the wire on each :refresh tick. Content bodies
            ;; are fetched separately: get-topic-content* (gated off for PDFs)
-           ;; and content-toolbar-generate/get-parent-content* (server-side
+           ;; and content-toolbar-helpers/get-parent-content* (server-side
            ;; at the point of use).
            {:kind kind
             :parent-id parent-id

@@ -20,6 +20,7 @@
             [freememo.neoreader-picker :as neoreader]
             [freememo.optimistic :as opt]
             [freememo.pdf-cache :as pdf-cache]
+            [freememo.rich-text-editor :as rich-text-editor]
             [freememo.target-modals :as modals]))
 
 (defn- report!
@@ -214,6 +215,30 @@
         (.deleteText ed selection-index selection-length "user")
         (.focus ed)
         (.setSelection ed selection-index 0 "user")))))
+
+;; The document editor's card actions. Both owners live in
+;; freememo.card-actions-host; these rows only reach them.
+;;
+;; Pre : the target is the document editor's caret (:document-editor).
+;; Post: Add new card opens AddCardModal, with the selection the right-click
+;;       kept in the front field, or empty with none: the range is restored
+;;       or cleared first, because the owner reads the editor's selection. Generate cards opens the
+;;       whole-document form, or toasts when no owner is mounted.
+(bus/register-handler! :add-new-card-at-caret
+  (fn [_ctx target]
+    (let [^js ed (-> target :surface :quill)
+          {:keys [selection-index selection-length]} (subject target)]
+      ;; The editor caches its last range for card actions, so with nothing
+      ;; selected the cache must go too, or an old passage fills the card.
+      (if (pos? selection-length)
+        (.setSelection ed selection-index selection-length "silent")
+        (rich-text-editor/release-selection!))
+      (bus/dispatch! :add-new))))
+
+(bus/register-handler! :generate-document-cards
+  (fn [_ctx _target]
+    (when-not (bus/run-invoker! :open-document-generate-form)
+      (report! "Card generation is not available here."))))
 
 (defn- at-caret!
   "Focus the target's editor with the caret at the subject's index, then call

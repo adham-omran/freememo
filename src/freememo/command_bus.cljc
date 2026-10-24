@@ -187,6 +187,16 @@
   [command-id]
   (first (vals (get @!invokers command-id))))
 
+(defn run-invoker!
+  "Run a mounted publisher's handle for `command-id`, with no registry lookup.
+   For plain-CLJS callers (the selection popover, a target handler) that drive
+   an invoker the registry does not list, such as :persist-gen-settings.
+   Post: true when a handle ran, false when none is mounted."
+  [command-id]
+  (if-let [invoke (invoker-for command-id)]
+    (do (invoke) true)
+    false))
+
 ;; ── Invocation queue (for :queue and :electric exec) ───────────────────────
 
 (defonce !invocations (atom []))  ; [{:invocation-id :command-id :payload}]

@@ -11,11 +11,11 @@
    [clojure.string :as str]
    [freememo.doc-context :as dctx]
    [freememo.selected-passage :as selected-passage]
+   [freememo.gen-settings :as gs]
    [freememo.card-models :as card-models]
    [freememo.math :as math]
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
-   [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
@@ -231,42 +231,44 @@
             (dom/text "Close")
             (dom/On "click" (fn [_] (reset! !open nil)) nil)))))))
 
-(e/defn CardCompareButton
-  "Toolbar button that opens the card-model compare modal for the current
-   content/selection. Reads doc-context like ToolbarGenerate; captures the
-   editor selection at click time so the compared content matches Generate."
+(defn- take-selection-html!
+  "The reader's selection as HTML, marked gold, or nil. Same subject order as
+   Generate: freememo.selected-passage."
+  []
+  #?(:clj nil
+     :cljs (let [passage (selected-passage/current)]
+             (selected-passage/mark! passage :color "var(--color-highlight-gold)")
+             (when-not (str/blank? (:text passage))
+               (:html passage)))))
+
+(e/defn CompareInvoker
+  "The :compare-card-gen command's owner: opens the card-model compare modal
+   for the current content or selection. It renders no control but the modal.
+   The selection popover's `...` popup and the palette reach it through the
+   command bus (plans/toolbar-card-actions-fold.md §2).
+
+   Pre : mounted once per viewed topic, by CardActionsHost, under the
+         toolbar's doc-context bindings.
+   Post: while mounted, :compare-card-gen is available. Kind, count and
+         context come from freememo.gen-settings at open time."
   []
   (e/client
     (let [user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id
           root-topic-id dctx/root-topic-id page-number dctx/page-number
           content-text dctx/content-text context-mode dctx/context-mode
-          use-context dctx/use-context context-window dctx/context-window
-          card-type dctx/card-type card-count-val dctx/card-count-val
+          {card-type :kind card-count :count use-context :context? context-window :context-pages}
+          (gs/effective (e/watch gs/!gen-settings))
           is-code? dctx/is-code?
           !open (atom nil) open (e/watch !open)
           model-ids (e/server (settings/card-model-ids))]
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary"
-                    :aria-label "Compare card models"})
-        (tooltip/Tooltip! "Generate with several models and compare (uses credits per model)")
-        (icons/Icon :sparkles :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare models"))
-        (let [node dom/node]
-          (bus/publish-invoker! :compare-card-gen (fn [] (.click node)))
-          (e/on-unmount (fn [] (bus/retract-invoker! :compare-card-gen))))
-        (dom/On "click"
-          (fn [_]
-            ;; Same subject order as Generate: freememo.selected-passage.
-            (let [passage (selected-passage/current)]
-              (selected-passage/mark! passage :color "var(--color-highlight-gold)")
-              (reset! !open {:selection-html (when-not (str/blank? (:text passage))
-                                               (:html passage))})))
-          nil))
+      (bus/publish-invoker! :compare-card-gen
+        (fn [] (reset! !open {:selection-html (take-selection-html!)})))
+      (e/on-unmount (fn [] (bus/retract-invoker! :compare-card-gen)))
       (when open
         (CardCompareModal
           {:selection-html (:selection-html open)
            :content-text content-text :context-mode context-mode :use-context use-context
            :topic-id topic-id :root-topic-id root-topic-id :page-number page-number
-           :context-window context-window :card-type card-type :card-count card-count-val
+           :context-window context-window :card-type card-type :card-count card-count
            :user-id user-id :enc-key enc-key :pre-prompt nil :is-code? is-code?}
           model-ids !open)))))

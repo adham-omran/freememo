@@ -440,22 +440,25 @@
 #?(:cljs
    (defn- caret-target
      "The caret target of `ed`: where an insert lands, and the selection a Cut
-      or Copy row acts on (index and length, 0 when nothing is selected)."
-     [^js ed]
+      or Copy row acts on (index and length, 0 when nothing is selected).
+      `document-editor?` is true only for the document editor, whose caret
+      also offers the card actions."
+     [^js ed document-editor?]
      (when (.isEnabled ed)
        (let [^js r (.getSelection ed)]
          {:kind :caret
           :subjects [{:index (caret-index ed)
                       :selection-index (if r (.-index r) 0)
                       :selection-length (if r (.-length r) 0)
-                      :math-ready? (formula-ui/installed? ed)}]
+                      :math-ready? (formula-ui/installed? ed)
+                      :document-editor? document-editor?}]
           :surface {:quill ed :anchor-el (.-root ed)}}))))
 
 #?(:cljs
    (defn- target-at
      "The target under `node` inside `ed`: an image, an audio clip, else the
       caret. `facts` are what the editor's surface lends (topic, pin count)."
-     [^js ed ^js node facts]
+     [^js ed ^js node facts document-editor?]
      (case (.-tagName node)
        "IMG" {:kind :image
               :subjects [(merge (select-keys facts [:topic-id :root-topic-id :pin-count])
@@ -464,7 +467,7 @@
        "AUDIO" {:kind :audio-clip
                 :subjects [{:looping? (.hasAttribute node "loop")}]
                 :surface {:quill ed :node node :anchor-el node}}
-       (caret-target ed))))
+       (caret-target ed document-editor?))))
 
 (defn install-context-menu!
   "Right-click inside `ed` opens the context menu for what is under the
@@ -475,37 +478,41 @@
    Pre  : `ed` is a Quill instance whose container is mounted. An ancestor lends
           {:topic-id :root-topic-id :pin-count} through
           context-menu-surface/provide-facts! where image pins apply; without
-          one the pin and occlusion rows are hidden.
+          one the pin and occlusion rows are hidden. `opts` takes
+          `:document-editor?`, true only for the document editor
+          (rich_text_editor), whose caret offers the card actions.
    Post : a contextmenu inside `.ql-editor` opens the shared menu, unless it was
           a Shift+right-click. Opening it on an image first releases the resize
           module, whose capture-phase keydown would take the menu's arrow keys.
    Inv  : teardown leaves no listener and no focus target owned by `ed`."
-  [ed]
-  #?(:cljs
-     (let [^js ed ed
-           ^js container (.-container ed)
-           on-menu (fn [^js e]
-                     (let [^js node (.-target e)]
-                       (when (.closest node ".ql-editor")
-                         (when (= "IMG" (.-tagName node))
-                           (release-resize-selection! ed))
-                         (menu-surface/open-menu! e
-                           (target-at ed node (menu-surface/facts-for container))
-                           #(caret-rect ed)))))
-           on-selection (fn [range _old _source]
-                          (when range
-                            (when-let [t (caret-target ed)]
-                              (menu-surface/publish-focus-target! ed t))))
-           on-focusout (fn [e] (menu-surface/focus-left! ed container e))]
-       (.addEventListener container "contextmenu" on-menu)
-       (.on ed "selection-change" on-selection)
-       (.addEventListener container "focusout" on-focusout)
-       (fn []
-         (.removeEventListener container "contextmenu" on-menu)
-         (.off ed "selection-change" on-selection)
-         (.removeEventListener container "focusout" on-focusout)
-         (menu-surface/retract-focus-target! ed)))
-     :clj nil))
+  ([ed] (install-context-menu! ed {}))
+  ([ed {:keys [document-editor?]}]
+   #?(:cljs
+      (let [^js ed ed
+            document-editor? (boolean document-editor?)
+            ^js container (.-container ed)
+            on-menu (fn [^js e]
+                      (let [^js node (.-target e)]
+                        (when (.closest node ".ql-editor")
+                          (when (= "IMG" (.-tagName node))
+                            (release-resize-selection! ed))
+                          (menu-surface/open-menu! e
+                            (target-at ed node (menu-surface/facts-for container) document-editor?)
+                            #(caret-rect ed)))))
+            on-selection (fn [range _old _source]
+                           (when range
+                             (when-let [t (caret-target ed document-editor?)]
+                               (menu-surface/publish-focus-target! ed t))))
+            on-focusout (fn [e] (menu-surface/focus-left! ed container e))]
+        (.addEventListener container "contextmenu" on-menu)
+        (.on ed "selection-change" on-selection)
+        (.addEventListener container "focusout" on-focusout)
+        (fn []
+          (.removeEventListener container "contextmenu" on-menu)
+          (.off ed "selection-change" on-selection)
+          (.removeEventListener container "focusout" on-focusout)
+          (menu-surface/retract-focus-target! ed)))
+      :clj nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Quill instance lifecycle — plain defns so side effects are stable.

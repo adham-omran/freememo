@@ -3,7 +3,6 @@
   (:require
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]
    [freememo.command-bus :as bus]
    [freememo.rich-text-editor :as editor]
    #?(:clj [freememo.cards :as cards])
@@ -102,34 +101,32 @@
      :cljs nil))
 
 (e/defn ParseQuestionsInvoker
-  "Host the hidden Electric flow for the selection popover command.
+  "Host the Electric flow for the selection popover command.
 
-   Pre : a document toolbar supplies the card owner ids.
-   Post: each accepted invocation captures the current text and range. A batch
-         that creates cards marks its source range with the card-source gold.
-   Inv : the published command handle exists only while this component mounts."
+   Pre : CardActionsHost supplies the card owner ids.
+   Post: each invocation captures the current text and range. A batch that
+         creates cards marks its source range with the card-source gold.
+   Inv : the published command handle exists only while this component mounts,
+         and the request atom is local, so a token fires only on an invocation."
   [user-id topic-id root-topic-id]
   (e/client
-    (dom/button
-      (dom/props {:style {:display "none"}
-                  :type "button" :aria-hidden "true" :tabindex "-1"})
-      (let [node dom/node]
-        (bus/publish-invoker! :parse-questions (fn [] (.click node)))
-        (e/on-unmount (fn [] (bus/retract-invoker! :parse-questions))))
-      (let [parse-request (dom/On "click"
-                            (fn [_]
-                              (let [selection (editor/get-selection!)]
-                                {:request-id (str (random-uuid))
-                                 :selection selection}))
-                            nil)
-            [t ?error] (e/Token parse-request)]
-        (dom/props {:disabled (some? t)})
-        (when t
-          (let [creation-result (e/server
-                                  (e/Offload
-                                    #(create-selected-question-cards!*
-                                       user-id topic-id root-topic-id
-                                       (get-in parse-request [:selection :text]))))]
+    (let [!parse-request (atom nil)
+          parse-request (e/watch !parse-request)
+          [t ?error] (e/Token parse-request)]
+      (bus/publish-invoker! :parse-questions
+        (fn []
+          (reset! !parse-request {:request-id (str (random-uuid))
+                                  :selection (editor/get-selection!)})))
+      (e/on-unmount (fn [] (bus/retract-invoker! :parse-questions)))
+      (when t
+        (let [creation-result (e/server
+                                (e/Offload
+                                  #(create-selected-question-cards!*
+                                     user-id topic-id root-topic-id
+                                     (get-in parse-request [:selection :text]))))]
+          ;; e/Offload answers nil while the save runs. Spending the token
+          ;; then would unmount this branch and cancel the save.
+          (when (some? creation-result)
             (if (:success creation-result)
               (if (created-cards-highlight-selection? creation-result)
                 (case (e/client

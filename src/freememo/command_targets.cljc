@@ -66,7 +66,11 @@
    :not-looping        (fn [s] (false? (:looping? s)))
    :math-ready         (fn [s] (true? (:math-ready? s)))
    :has-selection      (fn [s] (not (str/blank? (:selection-text s))))
-   :has-text-selection (fn [s] (pos? (or (:selection-length s) 0)))})
+   :has-text-selection (fn [s] (pos? (or (:selection-length s) 0)))
+   :no-text-selection  (fn [s] (= 0 (:selection-length s)))
+   ;; The document editor's caret, not a card field's: card actions act on
+   ;; the open document (plans/toolbar-card-actions-fold.md §5).
+   :document-editor    (fn [s] (true? (:document-editor? s)))})
 
 (def enable-reasons
   "Why an item shows disabled, for each test an `:enable-if` may name."

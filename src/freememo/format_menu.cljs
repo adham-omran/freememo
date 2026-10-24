@@ -36,16 +36,17 @@
 
    Layout (plans/format-menu-notion-layout.md), top to bottom: a full-width
    block-type row; a 5×2 icon grid whose last cell, More formatting, opens Size, Align,
-   indent, direction and table; an Insert section; then a labelled Cloze or
-   Cards section. Every glyph is a freememo.icon-paths entry, so the whole card
+   indent, direction and table; an Insert section; then a labelled Cloze
+   section, or Extract and Cards. Every glyph is a freememo.icon-paths entry, so the whole card
    draws on one grid at one stroke weight. At most one popup is open, and
    hiding the card closes it.
 
    `opts` (2-arity install!) turns on optional controls: `:image?` adds an
    image-insert row, `:audio?` an audio-insert row, `:cloze?` adds the Cloze
    section (all three drive freememo.editor-actions), `:card-gen?` adds the
-   document editor's Cards section: count, Generate here, and Parse
-   questions.
+   document editor's Extract and Cards sections: Extract; then count, kind,
+   `...` (context and Compare models), Generate here, Generate with prompt,
+   and Parse questions.
    The document editor passes `:card-gen?/:audio?`; card fields pass
    `:image?/:audio?/:cloze?`. The document editor takes images by paste and drop
    only, which is why it passes no `:image?` — audio has no such history, so it
@@ -55,7 +56,7 @@
    through the anchored popover in freememo.formula-ui."
   (:require [clojure.string :as str]
             [freememo.editor-actions :as editor-actions]
-            [freememo.card-count :as cc]
+            [freememo.gen-settings :as gs]
             [freememo.command-bus :as bus]
             [freememo.commands :as commands]
             [freememo.editor-popovers :as editor-popovers]
@@ -133,7 +134,7 @@
 
    `label` is the accessible name; `tooltip` (default `label`) is the hover text.
    The two diverge exactly where a chord belongs in the tooltip but not in the
-   accessible name — `ExtractTopicButton`/`AddCardButton`'s established shape."
+   accessible name — the toolbar buttons' established shape."
   ([icon-k label on-click] (glyph-button icon-k label on-click label))
   ([icon-k label on-click tooltip]
    (let [b (el "button" "fmt-btn")]
@@ -389,66 +390,142 @@
 ;; Card assembly
 ;; ---------------------------------------------------------------------------
 
+(defn- dispatch-hiding!
+  "Restore the cached range, dispatch `command-id` once, and hide the card.
+   The command's owner reads the selection, so the range must be live first."
+  [^js q get-rng ^js card command-id]
+  (reselect! q (get-rng))
+  (bus/dispatch! command-id)
+  (set! (.. card -style -display) "none"))
+
+(defn- extract-section
+  "The document editor's Extract section: one row that dispatches :extract.
+   Extract is not a card action, so it is not in Cards."
+  [^js q get-rng ^js card]
+  (let [sec (section)]
+    (.appendChild sec
+      (item-button :scissors "Extract" #(dispatch-hiding! q get-rng card :extract)
+        :tooltip (str "Extract the selection as a topic (" (commands/display-chord :extract) ")")
+        :end (commands/display-chord :extract)))
+    sec))
+
+(defn- stepper
+  "A `− N +` stepper with no visible label. `label` names the group and each
+   button. Returns {:el :value-el :dec :inc}."
+  [label]
+  (let [wrap    (el "div" "number-stepper")
+        dec-btn (el "button" "number-stepper-btn")
+        value   (el "span" "number-stepper-value")
+        inc-btn (el "button" "number-stepper-btn")]
+    (.setAttribute wrap "role" "group")
+    (.setAttribute wrap "aria-label" label)
+    (doseq [[b text aria] [[dec-btn "−" (str "Fewer: " label)] [inc-btn "+" (str "More: " label)]]]
+      (set! (.-type b) "button")
+      (set! (.-textContent b) text)
+      (.setAttribute b "aria-label" aria)
+      (keep-selection! b))
+    (.appendChild wrap dec-btn)
+    (.appendChild wrap value)
+    (.appendChild wrap inc-btn)
+    {:el wrap :value-el value :dec dec-btn :inc inc-btn}))
+
+(def ^:private kind-icons
+  {"basic" :rectangle-horizontal "cloze" :cloze-new "overlapping" :layers})
+
 (defn- card-gen-section
-  "The document editor's Cards section: a `Count −/+` stepper over the shared
-   cc/!card-count global, `Generate here`, and `Parse questions`. Returns
-   {:section :sync}, where `sync` repaints the number and −/+ disabled state
-   from the global (called on build and on every external change via
-   install!'s add-watch).
+  "The document editor's Cards section (plans/toolbar-card-actions-fold.md §4).
+   Row 1: a count stepper, the three kinds as glyphs, and `...`, which opens
+   Include context with its page stepper, and Compare models. Then Generate
+   here, Generate with prompt, and Parse questions. Returns {:section :sync},
+   where `sync` repaints every control from freememo.gen-settings (called on
+   build and on every external change via install!'s add-watch).
 
    Pre:  `card` is the menu card element (hidden to dismiss); `get-rng` returns
-         the cached selection {:index :length}.
-   Post: −/+ clamp to [card-count-min, card-count-max], mutate the global, and
-         persist via the :persist-card-count invoker (no-op if unpublished, e.g.
-         reading-mode). `Generate here` and `Parse questions` each restore the
-         selection, dispatch their command once (:generate, :parse-questions),
-         and hide the card. Parsing and persistence stay in the mounted
-         Electric invokers. `keep-selection!` blocks the mousedown blur so the
-         cached range survives the click."
-  [^js q get-rng ^js card]
-  (let [sec      (section)
-        row      (el "div" "fmt-cardgen-row")
-        stepper  (el "div" "number-stepper")
-        lbl      (el "span" "number-stepper-label")
-        dec-btn  (el "button" "number-stepper-btn")
-        numspan  (el "span" "number-stepper-value")
-        inc-btn  (el "button" "number-stepper-btn")
-        current  (fn [] (or @cc/!card-count cc/card-count-min))
-        persist! (fn [] (when-let [f (get @bus/!invokers :persist-card-count)] (f)))
-        sync!    (fn []
-                   (let [v (current)]
-                     (set! (.-textContent numspan) (str v))
-                     (set! (.-disabled dec-btn) (<= v cc/card-count-min))
-                     (set! (.-disabled inc-btn) (>= v cc/card-count-max))))
-        step!    (fn [delta]
-                   (reset! cc/!card-count (cc/clamp (+ (current) delta)))
-                   (persist!)
-                   (sync!))
-        dispatch-hiding! (fn [command-id]
-                           (reselect! q (get-rng))   ; restore the cached range
-                           (bus/dispatch! command-id)
-                           (set! (.. card -style -display) "none"))]
-    (set! (.-textContent lbl) "Count")
-    (set! (.-type dec-btn) "button")
-    (set! (.-textContent dec-btn) "−")
-    (.setAttribute dec-btn "aria-label" "Fewer cards to generate")
-    (set! (.-type inc-btn) "button")
-    (set! (.-textContent inc-btn) "+")
-    (.setAttribute inc-btn "aria-label" "More cards to generate")
-    (keep-selection! dec-btn)
-    (keep-selection! inc-btn)
-    (on-click! dec-btn #(step! -1))
-    (on-click! inc-btn #(step! 1))
-    (.appendChild stepper lbl)
-    (.appendChild stepper dec-btn)
-    (.appendChild stepper numspan)
-    (.appendChild stepper inc-btn)
-    (.appendChild row stepper)
+         the cached selection {:index :length}; `group` is the card's popup
+         group.
+   Post: each control writes one setting through `gs/assoc-setting!`, then runs
+         the :persist-gen-settings invoker (no-op if unmounted). Each action row
+         restores the selection, dispatches its command once and hides the
+         card; generation itself stays in the mounted Electric owners.
+         `keep-selection!` blocks the mousedown blur so the cached range
+         survives the click."
+  [^js q get-rng ^js card group]
+  (let [sec       (section)
+        row       (el "div" "fmt-cardgen-row")
+        cards     (stepper "Cards to generate")
+        kinds     (el "div" "fmt-kind-group")
+        popup     (el "div" "fmt-dd-popup fmt-cardgen-popup")
+        more      (el "button" "fmt-btn")
+        ctx-label (el "label" "fmt-check")
+        ctx-box   (el "input" "")
+        ctx-text  (el "span" "")
+        pages-row (el "div" "fmt-cardgen-row")
+        pages     (stepper "Context pages")
+        pages-sfx (el "span" "number-stepper-suffix")
+        persist!  (fn [] (bus/run-invoker! :persist-gen-settings))
+        !sync     (atom nil)
+        write!    (fn [k v] (gs/assoc-setting! k v) (persist!) (@!sync))
+        step!     (fn [k delta] (write! k (+ (get (gs/current) k) delta)))
+        kind-btns (into {}
+                    (for [k gs/kinds]
+                      (let [label (gs/kind-labels k)
+                            b (glyph-button (kind-icons k) label #(write! :kind k)
+                                (str "Generate " label " cards"))]
+                        (.setAttribute b "role" "radio")
+                        (.appendChild kinds b)
+                        [k b])))
+        sync!     (fn []
+                    (let [{card-count :count :keys [kind context? context-pages]} (gs/current)]
+                      (set! (.-textContent (:value-el cards)) (str card-count))
+                      (set! (.-disabled (:dec cards)) (<= card-count gs/count-min))
+                      (set! (.-disabled (:inc cards)) (>= card-count gs/count-max))
+                      (doseq [[k b] kind-btns]
+                        (if (= k kind) (.add (.-classList b) "active") (.remove (.-classList b) "active"))
+                        (.setAttribute b "aria-checked" (str (= k kind))))
+                      (set! (.-checked ctx-box) context?)
+                      (set! (.-textContent (:value-el pages)) (str context-pages))
+                      (set! (.-textContent pages-sfx) (if (= 1 context-pages) "page" "pages"))
+                      (set! (.-disabled (:dec pages)) (or (not context?) (<= context-pages gs/context-pages-min)))
+                      (set! (.-disabled (:inc pages)) (or (not context?) (>= context-pages gs/context-pages-max)))))]
+    (reset! !sync sync!)
+    (on-click! (:dec cards) #(step! :count -1))
+    (on-click! (:inc cards) #(step! :count 1))
+    (on-click! (:dec pages) #(step! :context-pages -1))
+    (on-click! (:inc pages) #(step! :context-pages 1))
+    (.setAttribute kinds "role" "radiogroup")
+    (.setAttribute kinds "aria-label" "Card kind")
+    ;; `...`: Include context, its pages, and Compare models.
+    (set! (.-type more) "button")
+    (set! (.-innerHTML more) (icon :ellipsis))
+    (.setAttribute more "title" "More generation options")
+    (.setAttribute more "aria-label" "More generation options")
+    (set! (.-type ctx-box) "checkbox")
+    (set! (.-textContent ctx-text) "Include context")
+    (.setAttribute ctx-label "title" "Send the surrounding text with the passage, for better cards")
+    (keep-selection! ctx-label)
+    (.addEventListener ctx-box "change" (fn [_] (write! :context? (.-checked ctx-box))))
+    (.addEventListener ctx-label "click" (fn [^js e] (.stopPropagation e)))
+    (.appendChild ctx-label ctx-box)
+    (.appendChild ctx-label ctx-text)
+    (.appendChild (:el pages) pages-sfx)
+    (.appendChild pages-row (:el pages))
+    (.appendChild popup ctx-label)
+    (.appendChild popup pages-row)
+    (.appendChild popup
+      (item-button :git-compare "Compare models…"
+        (fn [] ((:close! group)) (dispatch-hiding! q get-rng card :compare-card-gen))
+        :tooltip "Generate with several models and compare (uses credits per model)"))
+    (.appendChild row (:el cards))
+    (.appendChild row kinds)
+    (.appendChild row (popover group more popup))
     (.appendChild sec (heading "Cards"))
     (.appendChild sec row)
-    (.appendChild sec (item-button :sparkles "Generate here" #(dispatch-hiding! :generate)
+    (.appendChild sec (item-button :sparkles "Generate here" #(dispatch-hiding! q get-rng card :generate)
                         :tooltip "Generate cards from the selection"))
-    (.appendChild sec (item-button :circle-help "Parse questions" #(dispatch-hiding! :parse-questions)
+    (.appendChild sec (item-button :pen-sparkles "Generate with prompt…"
+                        #(dispatch-hiding! q get-rng card :gen-prompt)
+                        :tooltip "Generate cards from the selection, with your own instructions"))
+    (.appendChild sec (item-button :circle-help "Parse questions" #(dispatch-hiding! q get-rng card :parse-questions)
                         :tooltip "Create basic cards from selected question-and-answer lines"))
     {:section sec :sync sync!}))
 
@@ -479,18 +556,18 @@
 (defn- build-card
   "Build the menu card and its controls. Returns
    {:card <el> :refresh (fn []) :!sync <atom> :close-popups! (fn [])
-    :card-count-sync (fn [] | nil)}.
+    :gen-settings-sync (fn [] | nil)}.
 
    Layout, top to bottom: the block-type row; a 5×2 grid (colour, bold,
    italic, underline, clear / strike, code, bullet, numbered, More formatting); Insert;
-   then Cloze (:cloze?) or Cards (:card-gen?).
+   then Cloze (:cloze?), or Extract and Cards (:card-gen?).
 
    `refresh` syncs active-state from the cached range. Every control, after
    mutating the document, calls `(@!sync)` — install! sets that to refresh
    ALONE, deliberately not re-placing: a format that changes the text metrics
    would otherwise jitter the card under the cursor. `get-rng` returns the cached
    {:index :length}. `opts` = {:image? :audio? :cloze? :card-gen?}
-   (§ ns docstring). :card-count-sync is nil unless :card-gen?."
+   (§ ns docstring). :gen-settings-sync is nil unless :card-gen?."
   [^js q get-rng opts]
   (let [card    (el "div" "format-menu")
         group   (popup-group)
@@ -511,7 +588,7 @@
         format-sec (section)
         insert-sec (section)
         media?     (or (:image? opts) (:audio? opts))
-        cardgen    (when (:card-gen? opts) (card-gen-section q get-rng card))
+        cardgen    (when (:card-gen? opts) (card-gen-section q get-rng card group))
         page-break-btn (item-button :page-boundary "Restore page boundary"
                          (after #(editor-actions/insert-page-break! q (:index (get-rng)))))
         block-sec  (section)]
@@ -562,11 +639,12 @@
     (when (:cloze? opts)
       (.appendChild card (cloze-section q get-rng after)))
     (when cardgen
+      (.appendChild card (extract-section q get-rng card))
       (.appendChild card (:section cardgen)))
     {:card card
      :!sync !sync
      :close-popups! (:close! group)
-     :card-count-sync (:sync cardgen)      ; nil when no Cards section
+     :gen-settings-sync (:sync cardgen)    ; nil when no Cards section
      :refresh
      (fn []
        (let [af (active-format q (get-rng))
@@ -716,9 +794,9 @@
    (let [q editor
         container (.-container q)
         !rng (atom nil)                                   ; cached selection
-        {:keys [card refresh !sync card-count-sync close-popups!]} (build-card q #(deref !rng) opts)
+        {:keys [card refresh !sync gen-settings-sync close-popups!]} (build-card q #(deref !rng) opts)
         ;; Unique per-install key so N editors' watches never collide.
-        watch-key (gensym "fmt-cardcount")
+        watch-key (gensym "fmt-gen-settings")
         ;; A selection wants the card — true even while place! keeps it hidden
         ;; because the selection scrolled out of the container. Guarding on the
         ;; card's own display instead would strand it: the scroll that hides it
@@ -761,11 +839,11 @@
     (.addEventListener js/window "resize" reposition)
     (.addEventListener js/document "mousedown" on-doc-down true)
     (.addEventListener js/document "keydown" on-key)
-    ;; Card-gen row (if present): paint from the shared global now, and keep it
-    ;; live when the toolbar stepper changes the count while the popup is open.
-    (when card-count-sync
-      (card-count-sync)
-      (add-watch cc/!card-count watch-key (fn [_ _ _ _] (card-count-sync))))
+    ;; Cards section (if present): paint from gen-settings now, and keep it live
+    ;; when the settings arrive from the server or another surface changes them.
+    (when gen-settings-sync
+      (gen-settings-sync)
+      (add-watch gs/!gen-settings watch-key (fn [_ _ _ _] (gen-settings-sync))))
     (fn teardown []
       (.off q "selection-change" on-selection)
       (.removeEventListener (.-root q) "scroll" reposition false)
@@ -774,5 +852,5 @@
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
       (unregister-popover!)
-      (when card-count-sync (remove-watch cc/!card-count watch-key))
+      (when gen-settings-sync (remove-watch gs/!gen-settings watch-key))
       (when (.-parentNode card) (.remove card))))))

@@ -301,7 +301,7 @@
              :detail "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."
              :commands #{:scan :copy-text}}
             {:label "Edit & split ({extract})"
-             :detail "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."
+             :detail "Fix the text in the editor. Select a passage, then choose Extract in the menu that opens. Extract turns it into a child topic linked back to the page."
              :commands #{:extract}}
             {:label "Mark done ({done})"
              :detail "Mark a page Done to drop it from your review queue while keeping the content."
@@ -522,13 +522,13 @@
     :title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [{:label "Generate ({generate})"
-             :detail "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
+             :detail "Select a passage. In the menu that opens, set the card count and pick Basic, Cloze or Overlapping, then choose Generate here. With nothing selected, {generate} generates from the whole page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
              :commands #{:generate}}
             {:label "Generate with a prompt"
-             :detail "Add a custom instruction (e.g. \"focus on definitions\") — recent prompts autocomplete."
+             :detail "Choose Generate with prompt… in the same menu to add a custom instruction (e.g. \"focus on definitions\"). Recent prompts autocomplete."
              :commands #{:gen-prompt}}
-            {:label "Compare models"
-             :detail "Run the same content through two or more card models side by side and keep the set you prefer; each model is a separate, billed generation."
+            {:label "Context and Compare models"
+             :detail "The ⋯ button in that menu turns context on or off and sets how many pages it takes. Compare models… there runs the same content through two or more card models side by side, so you keep the set you prefer. Each model is a separate, billed generation."
              :commands #{:compare-card-gen}}
             {:label "Curate"
              :detail "Add a card from a text selection ({add-new}) — the passage is marked in the editor — edit any card's question/answer or cloze, or delete the weak ones."
@@ -650,6 +650,9 @@
             {:label "Cut or copy a selection"
              :detail "Select text in a document or a card field and right-click it to cut or copy it. To paste, press Ctrl+V or Cmd+V, or Shift+right-click for the browser's menu."
              :commands #{:cut-editor-selection :copy-editor-selection}}
+            {:label "Add or generate cards"
+             :detail "Right-click in a document to add a new card. Text you selected goes into its front. With nothing selected, Generate cards… opens a small form to generate from the whole document with its own count, kind and context."
+             :commands #{:add-new-card-at-caret :generate-document-cards}}
             {:label "Insert in the editor"
              :detail "Right-click in a document or a card field to insert a formula, a table, an image, a code block or a divider at the cursor."
              :commands #{:insert-formula :insert-table :insert-image :insert-code-block :insert-divider}}
