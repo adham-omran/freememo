@@ -45,12 +45,12 @@
    image-insert row, `:audio?` an audio-insert row, `:cloze?` adds the Cloze
    section (all three drive freememo.editor-actions), `:card-gen?` adds the
    document editor's Extract and Cards sections: Extract; then count, kind,
-   `...` (context and Compare models), Generate here, Generate with prompt,
+   `...` (context and Compare models), Generate from selection, Generate with prompt,
    and Parse questions.
-   The document editor passes `:card-gen?/:audio?`; card fields pass
-   `:image?/:audio?/:cloze?`. The document editor takes images by paste and drop
-   only, which is why it passes no `:image?` — audio has no such history, so it
-   gets its button on both surfaces.
+   The document editor passes `:card-gen?`; card fields pass
+   `:image?/:audio?/:cloze?`. The document editor takes images by paste and
+   drop, and audio through the palette's Insert audio, so its card keeps room
+   for the card actions instead.
 
    Math has no control here: formulas are created by typing `\\(…\\)` and edited
    through the anchored popover in freememo.formula-ui."
@@ -520,8 +520,10 @@
     (.appendChild row (popover group more popup))
     (.appendChild sec (heading "Cards"))
     (.appendChild sec row)
-    (.appendChild sec (item-button :sparkles "Generate here" #(dispatch-hiding! q get-rng card :generate)
-                        :tooltip "Generate cards from the selection"))
+    ;; :generate is ⌘G. With a selection, ⌘G and this row do the same thing.
+    (.appendChild sec (item-button :sparkles "Generate from selection" #(dispatch-hiding! q get-rng card :generate)
+                        :tooltip (str "Generate cards from the selection (" (commands/display-chord :generate) ")")
+                        :end (commands/display-chord :generate)))
     (.appendChild sec (item-button :pen-sparkles "Generate with prompt…"
                         #(dispatch-hiding! q get-rng card :gen-prompt)
                         :tooltip "Generate cards from the selection, with your own instructions"))

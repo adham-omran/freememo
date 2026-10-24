@@ -522,7 +522,7 @@
     :title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [{:label "Generate ({generate})"
-             :detail "Select a passage. In the menu that opens, set the card count and pick Basic, Cloze or Overlapping, then choose Generate here. With nothing selected, {generate} generates from the whole page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
+             :detail "Select a passage. In the menu that opens, set the card count and pick Basic, Cloze or Overlapping, then choose Generate from selection or press {generate}. With nothing selected, {generate} generates from the whole page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
              :commands #{:generate}}
             {:label "Generate with a prompt"
              :detail "Choose Generate with prompt… in the same menu to add a custom instruction (e.g. \"focus on definitions\"). Recent prompts autocomplete."

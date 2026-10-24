@@ -434,7 +434,7 @@
                                                         :!toast !link-toast
                                                         :!base-url !document-base-url
                                                         :!import-status !import-status})
-                              :format-menu-teardown (format-menu/install! editor {:card-gen? true :audio? true})
+                              :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
                               ;; The shared context menu: image, clip and caret
                               ;; rows (plans/custom-context-menu.md 4.1.1).

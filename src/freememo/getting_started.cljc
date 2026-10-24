@@ -101,11 +101,11 @@
             (spotlight/show! {:anchors [:generate]
                               :route-key (spotlight/route-key :viewer (or extract-id text-topic-id))
                               :title "Make flashcards"
-                              :body "Select a passage, then choose Generate here in the menu that opens."}))
+                              :body "Select a passage, then choose Generate from selection in the menu that opens."}))
         :else
         (spotlight/show! {:anchors []
                           :title "Make flashcards"
-                          :body "Import a document with text first. Then select a passage and choose Generate here."}))
+                          :body "Import a document with text first. Then select a passage and choose Generate from selection."}))
 
       :quiz
       (do (navigate! :quiz)
