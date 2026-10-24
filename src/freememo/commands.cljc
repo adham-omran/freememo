@@ -423,8 +423,8 @@
                            :exec :electric :when #{:viewer}
                            :table #{:topics :flashcards}
                            :views #{:card-mutations}}
-     ;; The palette twin of the format menu's Insert audio button, for the
-     ;; document editor only: a card field's editor lives inside its modal and
+     ;; Insert audio for the document editor, whose format menu has no Audio
+     ;; row (card fields keep theirs). Document editor only: a card field's editor lives inside its modal and
      ;; publishes nothing the palette can reach. freememo.rich-text-editor
      ;; registers the handler and a preparer that is nil while no document
      ;; editor is mounted. :views is empty for the reason :apply-code-language
