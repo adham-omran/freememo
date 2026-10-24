@@ -382,8 +382,7 @@
    button. So this governs the duplicate case; off keeps the reader where they
    are, and the toast is still there to follow.
 
-   Forms5 `Checkbox!`, the standalone persisted-toggle shape
-   `content-toolbar-settings/ContextSettings` uses."
+   Forms5 `Checkbox!`, the standalone persisted-toggle shape."
   [user-id]
   (e/client
     (let [server-value (e/server (settings/get-link-import-navigates user-id))

@@ -895,7 +895,7 @@
 ;; value, the four cannot disagree.
 ;;
 ;; `close!` is a 0-arg thunk rather than a show-atom, because the two callers end
-;; the modal differently: AddCardButton flips its own boolean, while the copy
+;; the modal differently: AddCardInvoker flips its own boolean, while the copy
 ;; host clears !editing-card. Neither should be a concern of this component.
 (e/defn AddCardModal [close! !card-kind !prefill topic-id root-topic-id user-id copy-source]
   (e/client

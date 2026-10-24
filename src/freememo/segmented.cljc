@@ -2,7 +2,7 @@
   "One option of a segmented control — a `role=radio` button that reports its
    selection through a caller-supplied Save.
 
-   Extracted from content-toolbar-settings' card-type control so the Settings
+   Extracted from the toolbar's former card-type control so the Settings
    page and the pre-prompt dialog render the same widget instead of copies;
    freememo.number-stepper is the precedent for a control shared by a toolbar
    and a non-toolbar caller.

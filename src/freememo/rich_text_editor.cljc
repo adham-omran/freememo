@@ -439,7 +439,7 @@
                               ;; The shared context menu: image, clip and caret
                               ;; rows (plans/custom-context-menu.md 4.1.1).
                               ;; Card fields install the same one.
-                              :context-menu-teardown (quill-field/install-context-menu! editor)
+                              :context-menu-teardown (quill-field/install-context-menu! editor {:document-editor? true})
                               ;; Drag a clip by its grip to another line.
                               :clip-drag-teardown (editor-actions/install-clip-drag! editor)
                               ;; Formula popover + typed-source conversion. Only

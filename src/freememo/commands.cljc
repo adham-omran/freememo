@@ -681,6 +681,17 @@
                          :target :caret :menu [1 4] :views #{}}
      :insert-divider    {:label "Insert divider" :class :mutation :exec :client
                          :target :caret :menu [1 5] :views #{}}
+     ;; The document editor's card actions (plans/toolbar-card-actions-fold.md
+     ;; §5). Palette-hidden: :add-new and :generate already list them there.
+     :add-new-card-at-caret {:label "Add new card from the editor" :menu-label "Add new card…"
+                             :class :nav :exec :client :palette-hidden true
+                             :target :caret :target-if #{:document-editor}
+                             :menu [2 1] :views #{}}
+     :generate-document-cards {:label "Generate cards from this document…"
+                               :menu-label "Generate cards…"
+                               :class :mutation :exec :client :palette-hidden true
+                               :target :caret :target-if #{:document-editor :no-text-selection}
+                               :menu [2 2] :views #{}}
 
      :copy-pdf-selection {:label "Copy selected PDF text" :menu-label "Copy" :class :query
                           :target :pdf-page :target-if #{:has-selection} :menu [0 1]}

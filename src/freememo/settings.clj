@@ -619,6 +619,25 @@
       (tel/error! {:id ::save-card-count} e)
       {:success false :error "Failed to save card count"})))
 
+(defn get-generate-settings
+  "The four settings a Generate action reads, in the shape of
+   `freememo.gen-settings/defaults`."
+  [user-id]
+  {:count (get-card-count user-id)
+   :kind (get-card-type user-id)
+   :context? (get-context-enabled user-id)
+   :context-pages (get-context-pages user-id)})
+
+(defn save-generate-settings!
+  "Save every key of a `freememo.gen-settings` map.
+   Post: {:success true} when all four saves succeeded, else the first error."
+  [user-id {card-count :count :keys [kind context? context-pages]}]
+  (let [results [(save-card-count user-id card-count)
+                 (save-card-type user-id kind)
+                 (save-context-enabled user-id (boolean context?))
+                 (save-context-pages user-id context-pages)]]
+    (or (first (remove :success results)) {:success true})))
+
 (defn get-last-document [user-id]
   (try
     (when-let [v (db/get-setting user-id LAST_DOCUMENT)]

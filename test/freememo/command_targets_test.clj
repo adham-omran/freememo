@@ -42,7 +42,9 @@
                :not-looping        [{:looping? false} {:looping? true}]
                :math-ready         [{:math-ready? true} {:math-ready? false}]
                :has-selection      [{:selection-text "a"} {:selection-text " "}]
-               :has-text-selection [{:selection-length 3} {:selection-length 0}]}]
+               :has-text-selection [{:selection-length 3} {:selection-length 0}]
+               :no-text-selection  [{:selection-length 0} {:selection-length 3}]
+               :document-editor    [{:document-editor? true} {:document-editor? false}]}]
     (is (= (set (keys targets/subject-tests)) (set (keys cases)))
       "every subject test has a case here")
     (doseq [[k [pass fail]] cases]
@@ -51,8 +53,27 @@
 
 (deftest an-absent-fact-hides-the-item
   (doseq [k [:root :not-root :dismissed :not-dismissed :not-done :not-pdf-root
-             :deletable :looping :not-looping :math-ready]]
+             :deletable :looping :not-looping :math-ready
+             :no-text-selection :document-editor]]
     (is (not (passes? k {})) (str k " hides on a subject that does not say"))))
+
+(deftest card-actions-show-only-on-the-document-editors-caret
+  ;; plans/toolbar-card-actions-fold.md §5.3.
+  (let [add (assoc (commands/command :add-new-card-at-caret) :id :add-new-card-at-caret)
+        gen (assoc (commands/command :generate-document-cards) :id :generate-document-cards)
+        caret (fn [subject] {:kind :caret :subjects [subject]})
+        card-field {:index 0 :selection-index 0 :selection-length 0 :document-editor? false}
+        document {:index 0 :selection-index 0 :selection-length 0 :document-editor? true}
+        selected (assoc document :selection-length 5)]
+    (testing "a card field offers neither"
+      (is (not (targets/applicable? add (caret card-field))))
+      (is (not (targets/applicable? gen (caret card-field)))))
+    (testing "the document editor with nothing selected offers both"
+      (is (targets/applicable? add (caret document)))
+      (is (targets/applicable? gen (caret document))))
+    (testing "a selection keeps Add and drops Generate"
+      (is (targets/applicable? add (caret selected)))
+      (is (not (targets/applicable? gen (caret selected)))))))
 
 (deftest a-pdf-of-unknown-position-offers-no-generate
   (is (not (passes? :not-pdf-root {:topic-kind "pdf"})))
