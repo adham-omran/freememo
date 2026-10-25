@@ -121,6 +121,9 @@
    :walkthroughs
    :walkthrough_concepts
    :walkthrough_hunks
+   ;; Before the runs: a run names the map its request carried
+   ;; (plans/idea-trail.md §3.1). A map references only `topics`.
+   :question_maps
    :assistant_chats
    :assistant_messages
    :assistant_runs
@@ -133,7 +136,6 @@
    :kg_questions
    :kg_question_facts
    :kg_reviews
-   :question_maps
    :question_roots
    :question_pins
    :question_pin_tombstones

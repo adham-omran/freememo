@@ -110,7 +110,8 @@
    :assistant_messages {:chat_id :assistant_chats}
    :assistant_runs {:chat_id :assistant_chats
                     :user_message_id :assistant_messages
-                    :assistant_message_id :assistant_messages}
+                    :assistant_message_id :assistant_messages
+                    :question_map_id :question_maps}
    :assistant_checkpoints {:chat_id :assistant_chats :run_id :assistant_runs
                            :covered_from_message_id :assistant_messages
                            :covered_through_message_id :assistant_messages
@@ -126,7 +127,8 @@
    :kg_question_facts {:question_id :kg_questions :fact_id :kg_facts}
    :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}
    :question_maps {:repo_topic_id :topics}
-   :question_roots {:map_id :question_maps :entity_id :kg_entities}
+   :question_roots {:map_id :question_maps :entity_id :kg_entities
+                    :created_run_id :assistant_runs}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
                    :root_id :question_roots}
    :question_pin_tombstones {:map_id :question_maps}

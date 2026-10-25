@@ -41,6 +41,7 @@
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
 (declare run-once!)
+(declare infer-idea-trails!)
 (declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
 (declare owns-topic?)
@@ -2392,7 +2393,15 @@
    purged (D7).
 
    `flashcard_entities` links a card made from a known idea to that idea
-   (known-ideas §1.2). Either side's delete removes the link."
+   (known-ideas §1.2). Either side's delete removes the link.
+
+   The idea trail (plans/idea-trail.md §3.1):
+   `assistant_runs.question_map_id` is the map whose message the run's request
+   carried. A request carries at most one. `question_roots.created_run_id` is
+   the run whose map block created the root. Both go NULL with their target.
+   `created_run_inferred` and `known_marks.proof_run_inferred` say that
+   `infer-idea-trails!` found the pointer by time, not that a write recorded
+   it."
   []
   (jdbc/execute! ds ["ALTER TABLE question_roots
                       ADD COLUMN IF NOT EXISTS learned_at TIMESTAMPTZ"])
@@ -2406,7 +2415,20 @@
       PRIMARY KEY (flashcard_id, entity_id)
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcard_entities_entity
-                      ON flashcard_entities(entity_id)"]))
+                      ON flashcard_entities(entity_id)"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_runs
+                      ADD COLUMN IF NOT EXISTS question_map_id BIGINT
+                        REFERENCES question_maps(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_runs_question_map
+                      ON assistant_runs(question_map_id, created_at)
+                      WHERE question_map_id IS NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE question_roots
+                      ADD COLUMN IF NOT EXISTS created_run_id BIGINT
+                        REFERENCES assistant_runs(id) ON DELETE SET NULL,
+                      ADD COLUMN IF NOT EXISTS created_run_inferred BOOLEAN NOT NULL DEFAULT false"])
+  (jdbc/execute! ds ["ALTER TABLE known_marks
+                      ADD COLUMN IF NOT EXISTS proof_run_inferred BOOLEAN NOT NULL DEFAULT false"])
+  (run-once! "2026-10-25-idea-trails" infer-idea-trails!))
 
 (declare retire-legacy-pin-labels!)
 
@@ -3927,15 +3949,18 @@
   "Create one user turn, its assistant placeholder, and its durable run.
 
    Pre: chat-id exists and the caller already passed the ownership and credit
-   gates. `run` contains :run-uuid, snapshots, provider session, and model.
+   gates. `run` contains :run-uuid, snapshots, provider session, and model,
+   and :question-map-id when the request carried that map's message.
    Post: returns {:created true :run-id :run-uuid :user-message-id
    :assistant-message-id}, {:created false :active-run-uuid}, or
    {:created false :chat-missing? true} when the chat is gone or staged.
+   A created run names :question-map-id when the chat's user owns that map
+   (plans/idea-trail.md §3.1).
    Invariant: one chat has at most one active answer or compaction run. This
    transaction owns the chat lock that enforces the invariant."
   [chat-id user-text client-id
    {:keys [run-uuid retry-of-run-uuid provider-session-id requested-model
-           request-snapshot source-snapshot evidence]}]
+           request-snapshot source-snapshot evidence question-map-id]}]
   (jdbc/with-transaction [tx ds]
     (if-not (jdbc/execute-one! tx [(str "SELECT id FROM assistant_chats WHERE id = ? "
                                        "AND staged_delete_id IS NULL FOR UPDATE")
@@ -3977,6 +4002,12 @@
                                          :source_snapshot (->jsonb (or source-snapshot []))}]
                                :returning [:id]})))]
           (insert-assistant-run-evidence! tx run-id evidence)
+          (when question-map-id
+            (jdbc/execute! tx ["UPDATE assistant_runs r SET question_map_id = m.id
+                                  FROM question_maps m, assistant_chats c
+                                 WHERE r.id = ? AND c.id = r.chat_id
+                                   AND m.id = ? AND m.user_id = c.user_id"
+                               run-id question-map-id]))
           (jdbc/execute! tx ["UPDATE assistant_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
                              chat-id])
           {:created true :run-id run-id :run-uuid run-uuid
@@ -4792,6 +4823,86 @@
                 :data {:seen (::jdbc/update-count seen)
                        :retired (::jdbc/update-count retired)}}
        "Marked pins seen and retired deleted pin numbers"))))
+
+(defn infer-idea-trails!
+  "The idea-trail inference (plans/idea-trail.md §3.2), over every map, or over
+   `map-ids` only (a test's own maps). Run through run-once!, never directly.
+
+   Steps 2 and 3 rest on one fact: `apply-question-map-plan!` writes a root and
+   a mark in the run worker just before `complete-assistant-answer-run!`. So
+   the run that wrote them completed within moments after their `created_at`.
+   `completed_at` is a `timestamp`, cast in the session time zone. The app JVM
+   runs this at boot, in the zone the writes used.
+   Post: in order, each only where the pointer is NULL —
+         1. an answer run whose request carried a question-map message names
+            the map of the first evidence row that is the map's file;
+         2. a root names the first completed run on its map that completed in
+            the 2 minutes after the root, with `created_run_inferred`;
+         3. a `tutor` mark names the first completed run on a map where a root
+            of its entity is learned, that completed in the 2 minutes after
+            the mark, with `proof_run_inferred`."
+  ([tx] (infer-idea-trails! tx nil))
+  ([tx map-ids]
+   (let [ids (when map-ids (long-array map-ids))
+         runs (jdbc/execute-one! tx
+                ["UPDATE assistant_runs r SET question_map_id = pick.map_id
+                    FROM (SELECT DISTINCT ON (r.id) r.id AS run_id, m.id AS map_id
+                            FROM assistant_runs r
+                            JOIN assistant_chats c ON c.id = r.chat_id
+                            JOIN assistant_evidence e ON e.run_id = r.id
+                            JOIN question_maps m ON m.user_id = c.user_id
+                                                AND m.repo_topic_id = e.document_topic_id
+                                                AND m.repo_path = e.document_title
+                           WHERE r.kind = 'answer' AND r.question_map_id IS NULL
+                             AND jsonb_typeof(r.request_snapshot->'messages') = 'array'
+                             AND EXISTS (SELECT 1
+                                           FROM jsonb_array_elements(r.request_snapshot->'messages') msg
+                                          WHERE msg->>'role' = 'system'
+                                            AND msg->>'content' LIKE '# Question map%')
+                           ORDER BY r.id, e.id) pick
+                   WHERE r.id = pick.run_id
+                     AND (?::bigint[] IS NULL OR pick.map_id = ANY(?::bigint[]))"
+                 ids ids])
+         roots (jdbc/execute-one! tx
+                 ["UPDATE question_roots q SET created_run_id = pick.run_id,
+                                               created_run_inferred = true
+                     FROM (SELECT q.id AS root_id,
+                                  (SELECT r.id FROM assistant_runs r
+                                    WHERE r.question_map_id = q.map_id
+                                      AND r.kind = 'answer' AND r.status = 'completed'
+                                      AND r.completed_at::timestamptz
+                                          BETWEEN q.created_at AND q.created_at + interval '2 minutes'
+                                    ORDER BY r.completed_at, r.id LIMIT 1) AS run_id
+                             FROM question_roots q
+                            WHERE q.created_run_id IS NULL
+                              AND (?::bigint[] IS NULL OR q.map_id = ANY(?::bigint[]))) pick
+                    WHERE q.id = pick.root_id AND pick.run_id IS NOT NULL"
+                  ids ids])
+         marks (jdbc/execute-one! tx
+                 ["UPDATE known_marks k SET proof_run_id = pick.run_id,
+                                            proof_run_inferred = true
+                     FROM (SELECT k.entity_id,
+                                  (SELECT r.id FROM assistant_runs r
+                                     JOIN question_roots q ON q.map_id = r.question_map_id
+                                    WHERE q.entity_id = k.entity_id AND q.status = 'learned'
+                                      AND r.kind = 'answer' AND r.status = 'completed'
+                                      AND r.completed_at::timestamptz
+                                          BETWEEN k.created_at AND k.created_at + interval '2 minutes'
+                                    ORDER BY r.completed_at, r.id LIMIT 1) AS run_id
+                             FROM known_marks k
+                            WHERE k.source = 'tutor' AND k.proof_run_id IS NULL
+                              AND (?::bigint[] IS NULL
+                                   OR EXISTS (SELECT 1 FROM question_roots q
+                                               WHERE q.entity_id = k.entity_id
+                                                 AND q.map_id = ANY(?::bigint[])))) pick
+                    WHERE k.entity_id = pick.entity_id AND k.source = 'tutor'
+                      AND pick.run_id IS NOT NULL"
+                  ids ids])]
+     (tel/log! {:level :info :id ::inferred-idea-trails
+                :data {:runs (::jdbc/update-count runs)
+                       :roots (::jdbc/update-count roots)
+                       :marks (::jdbc/update-count marks)}}
+       "Inferred the map of old runs, the creating run of old roots and the proof of old marks"))))
 
 (defn move-everyone-to-best-level!
   "Set every AI task of every existing user to the Best level (product decision,
@@ -15214,7 +15325,8 @@
    Pre:  every label the plan names is a root after :new-roots is applied —
          the planner guarantees it.
    Post: nil when the map is not the user's. Otherwise, in one transaction:
-         new roots exist; each named pin links its root; each learned root is
+         new roots exist and name the run as the one that created them
+         (plans/idea-trail.md §3.1); each named pin links its root; each learned root is
          `learned` with `learned_at` set, its open pins are `closed`, and its entity has a `tutor`
          known mark (§6.4.5) whose `proof_run_id` names the run (known-ideas
          §1.1); the `next` root, when named and not learned, is
@@ -15227,11 +15339,15 @@
                                  map-id user-id])
       (doseq [{:keys [label in-document? citations entity-id]} new-roots]
         (jdbc/execute! tx
-          ["INSERT INTO question_roots (map_id, label, entity_id, in_document, citations)
-            VALUES (?, ?, (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?), ?, ?)
+          ["INSERT INTO question_roots (map_id, label, entity_id, in_document, citations,
+                                        created_run_id)
+            VALUES (?, ?, (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?), ?, ?,
+                    (SELECT ar.id FROM assistant_runs ar
+                       JOIN assistant_chats c ON c.id = ar.chat_id
+                      WHERE ar.run_uuid = ? AND c.user_id = ?))
             ON CONFLICT (map_id, label) DO NOTHING"
            map-id (sanitize-utf8 label) entity-id user-id (boolean in-document?)
-           (->jsonb (vec citations))]))
+           (->jsonb (vec citations)) run-uuid user-id]))
       (doseq [[label entity-id] relinks]
         (jdbc/execute! tx
           ["UPDATE question_roots
@@ -15277,7 +15393,9 @@
                                                    as_of_sha = coalesce(excluded.as_of_sha,
                                                                         known_marks.as_of_sha),
                                                    proof_run_id = coalesce(excluded.proof_run_id,
-                                                                           known_marks.proof_run_id)"
+                                                                           known_marks.proof_run_id),
+                                                   proof_run_inferred = excluded.proof_run_id IS NULL
+                                                                        AND known_marks.proof_run_inferred"
                                             as-of-sha run-uuid map-id ids])
                          (::jdbc/update-count
                            (jdbc/execute-one! tx ["UPDATE question_pins SET status = 'closed', updated_at = now()
@@ -15524,8 +15642,9 @@
                    :file_topic_id :pins [{:label :question :status :created_at}]}]
           :cards [{:id :kind :question :cloze :synced? :last_review :due}]
           :reviews [{:flashcard_id :rating :reviewed_at}], newest first
-          :proof {:answer :chat_id :root_topic_id} or nil}.
-         `:proof` is the user message of the newest tutor mark's proof run."
+          :proof {:answer :chat_id :root_topic_id :inferred?} or nil}.
+         `:proof` is the user message of the newest tutor mark's proof run.
+         `:inferred?` says `infer-idea-trails!` found that run by time."
   [user-id entity-id]
   (let [opts {:builder-fn rs/as-unqualified-maps}]
     (when-let [entity (jdbc/execute-one! ds
@@ -15533,7 +15652,7 @@
                          entity-id user-id]
                         opts)]
       (let [marks (jdbc/execute! ds
-                    ["SELECT k.source, k.created_at, k.proof_run_id,
+                    ["SELECT k.source, k.created_at, k.proof_run_id, k.proof_run_inferred,
                              k.as_of_repo_topic_id AS repo_topic_id, t.title AS repo_title
                         FROM known_marks k
                         LEFT JOIN topics t ON t.id = k.as_of_repo_topic_id AND t.user_id = ?
@@ -15582,8 +15701,8 @@
                            ORDER BY reviewed_at DESC"
                          user-id (entity-id-array (map :id cards))]
                         opts))
-            proof-run (:proof_run_id (first (filter #(and (= "tutor" (:source %)) (:proof_run_id %))
-                                              marks)))
+            proof-mark (first (filter #(and (= "tutor" (:source %)) (:proof_run_id %)) marks))
+            proof-run (:proof_run_id proof-mark)
             proof (when proof-run
                     (jdbc/execute-one! ds
                       ["SELECT msg.content AS answer, c.id AS chat_id, c.root_topic_id
@@ -15598,7 +15717,53 @@
           :roots (mapv #(assoc % :pins (mapv (fn [p] (dissoc p :root_id)) (pins (:id %)))) roots)
           :cards (mapv #(-> % (assoc :synced? (boolean (:synced %))) (dissoc :synced)) cards)
           :reviews (vec reviews)
-          :proof proof)))))
+          :proof (some-> proof (assoc :inferred? (boolean (:proof_run_inferred proof-mark)))))))))
+
+(defn idea-trail
+  "The turns that led to `user-id`'s idea `entity-id` (plans/idea-trail.md
+   §3.3): the completed answer runs that carried the map of its proof run,
+   from the run that created the idea's root on that map to the proof run.
+   With no creating run, the trail starts at the root's `created_at`.
+   Post: nil when the entity is not the user's, has no proof run, the proof
+         run names no map, or no turn is in a live chat. Otherwise {:turns [{:run_id :created_at :chat_id
+         :chat_title :root_topic_id :question}] :inferred?}, oldest first, from
+         live owned chats only. `:question` is the turn's user message.
+         `:inferred?` is true when the start or the proof was inferred."
+  [user-id entity-id]
+  (let [rows (jdbc/execute! ds
+               ["WITH proof AS (
+                   SELECT ar.question_map_id AS map_id, ar.created_at, k.proof_run_inferred
+                     FROM known_marks k
+                     JOIN kg_entities e ON e.id = k.entity_id AND e.user_id = ?
+                     JOIN assistant_runs ar ON ar.id = k.proof_run_id
+                    WHERE k.entity_id = ? AND k.source = 'tutor'
+                      AND ar.question_map_id IS NOT NULL),
+                 root AS (
+                   SELECT q.created_run_inferred,
+                          coalesce(s.created_at, q.created_at::timestamp) AS from_at
+                     FROM question_roots q
+                     JOIN proof ON proof.map_id = q.map_id
+                     LEFT JOIN assistant_runs s ON s.id = q.created_run_id
+                    WHERE q.entity_id = ?
+                    ORDER BY q.created_at, q.id
+                    LIMIT 1)
+                 SELECT r.id AS run_id, r.created_at, c.id AS chat_id, c.title AS chat_title,
+                        c.root_topic_id, um.content AS question,
+                        root.created_run_inferred OR proof.proof_run_inferred AS inferred
+                   FROM proof
+                  CROSS JOIN root
+                   JOIN assistant_runs r ON r.question_map_id = proof.map_id
+                                        AND r.created_at BETWEEN root.from_at AND proof.created_at
+                   JOIN assistant_chats c ON c.id = r.chat_id AND c.user_id = ?
+                                         AND c.staged_delete_id IS NULL
+                   JOIN assistant_messages um ON um.id = r.user_message_id
+                  WHERE r.kind = 'answer' AND r.status = 'completed'
+                  ORDER BY r.created_at, r.id"
+                user-id entity-id entity-id user-id]
+               {:builder-fn rs/as-unqualified-maps})]
+    (when (seq rows)
+      {:turns (mapv #(dissoc % :inferred) rows)
+       :inferred? (boolean (some :inferred rows))})))
 
 (defn idea-material
   "What cards are made from for `user-id`'s entity (known-ideas §2.1, §2.2).

@@ -9508,6 +9508,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .idea-page__sync { font-size: 12px; color: var(--color-text-secondary); }
 .idea-page__sync--pending { color: var(--color-warning-dark); font-weight: 600; }
 .idea-page__actions { display: flex; flex-direction: column; gap: 8px; }
+.idea-page__chats { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.idea-page__chats li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .idea-page__where { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .idea-page__muted { margin: 0; color: var(--color-text-secondary); font-size: 13px; }
 
