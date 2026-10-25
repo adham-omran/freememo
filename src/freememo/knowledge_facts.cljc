@@ -361,15 +361,6 @@
                     (tape/FilterLabel (str "Status: " (status-label status))
                       (fn [] (reset! !status "approved"))))
                   (tape/ClearFilters (fn [] (clear-search!) (reset! !status "approved")))))
-              (tape/BatchBar n-selected (:hidden counts) !selected
-                (e/fn []
-                  (when (and searching? (< n-selected doc-fact-count))
-                    (SelectDocumentButton doc-ids doc-fact-count !selected))
-                  (when (= "duplicate" status)
-                    (tape/BatchAction "Not a duplicate" false false
-                      (fn [] (reset! !action (scope/action :unmark @!selected true)))))
-                  (tape/BatchAction "Delete" true false
-                    (fn [] (reset! !confirm-delete {:ids (vec @!selected)})))))
               ;; reset-key, not the row count: a sweep changes the count under a user
               ;; who is mid-scroll, and that must not snap them to the top; changing
               ;; the status, the search or the sort genuinely means a different list.
@@ -381,6 +372,18 @@
                   (tape/PlainHeader "Object")
                   (tape/SortHeader "Page" :page :asc order !order)
                   (tape/PlainHeader ""))
+                ;; Over the header row, not above the table: a bar that pushed the table
+                ;; down by a row on every first tick was visually jarring.
+                (e/fn []
+                  (tape/BatchBar n-selected (:hidden counts) !selected
+                    (e/fn []
+                      (when (and searching? (< n-selected doc-fact-count))
+                        (SelectDocumentButton doc-ids doc-fact-count !selected))
+                      (when (= "duplicate" status)
+                        (tape/BatchAction "Not a duplicate" false false
+                          (fn [] (reset! !action (scope/action :unmark @!selected true)))))
+                      (tape/BatchAction "Delete" true false
+                        (fn [] (reset! !confirm-delete {:ids (vec @!selected)}))))))
                 grid-cols item-count
                 [status query sort-col sort-dir]
                 (cond

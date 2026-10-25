@@ -316,12 +316,6 @@
                   (dom/props {:class "knowledge-filter-labels"})
                   (tape/FilterLabel (str "Search: " query) clear-search!)
                   (tape/ClearFilters clear-search!)))
-              (tape/BatchBar n-selected (:hidden counts) !selected
-                (e/fn []
-                  (tape/BatchAction "Distill" false false
-                    (fn [] (reset! !confirm-bulk {:kind :distill :ids (vec @!selected)})))
-                  (tape/BatchAction "Generate questions" false false
-                    (fn [] (reset! !confirm-bulk {:kind :generate :ids (vec @!selected)})))))
               (tape/HeadedTapeTable
                 (e/fn []
                   (tape/SelectAllHeader docs :id item-count (:shown counts) !selected)
@@ -329,6 +323,15 @@
                   (tape/SortHeader "Facts" :facts :desc order !order)
                   (tape/SortHeader "Pages" :pages :desc order !order)
                   (tape/PlainHeader ""))
+                ;; Over the header row, not above the table: a bar that pushed the table
+                ;; down by a row on every first tick was visually jarring.
+                (e/fn []
+                  (tape/BatchBar n-selected (:hidden counts) !selected
+                    (e/fn []
+                      (tape/BatchAction "Distill" false false
+                        (fn [] (reset! !confirm-bulk {:kind :distill :ids (vec @!selected)})))
+                      (tape/BatchAction "Generate questions" false false
+                        (fn [] (reset! !confirm-bulk {:kind :generate :ids (vec @!selected)}))))))
                 grid-cols item-count [query sort-col sort-dir]
                 (if searching?
                   "No documents match this search."

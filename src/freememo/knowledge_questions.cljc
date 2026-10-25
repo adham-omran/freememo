@@ -190,15 +190,6 @@
                       (reset! !flagged? false)
                       (reset! !suspended? false)
                       (reset! !source-id nil)))))
-              (tape/BatchBar (count selected) (:hidden counts) !selected
-                (e/fn []
-                  (tape/BatchAction "Flag" false false
-                    (fn [] (reset! !action (scope/action :flag @!selected true))))
-                  (tape/BatchAction "Suspend" false false
-                    (fn [] (reset! !action (scope/action :suspend @!selected true))))
-                  (menu/MenuButton !bar-menu (:row-key bar-menu) :batch "the selected questions" nil)
-                  (tape/BatchAction "Delete" true false
-                    (fn [] (reset! !confirm-delete {:ids (vec @!selected)})))))
               (tape/HeadedTapeTable
                 (e/fn []
                   (tape/SelectAllHeader questions :id item-count (:shown counts) !selected)
@@ -208,6 +199,18 @@
                   (tape/SortHeader "Facts" :facts :desc order !order)
                   (tape/PlainHeader "State")
                   (tape/PlainHeader ""))
+                ;; Over the header row, not above the table: a bar that pushed the table
+                ;; down by a row on every first tick was visually jarring.
+                (e/fn []
+                  (tape/BatchBar (count selected) (:hidden counts) !selected
+                    (e/fn []
+                      (tape/BatchAction "Flag" false false
+                        (fn [] (reset! !action (scope/action :flag @!selected true))))
+                      (tape/BatchAction "Suspend" false false
+                        (fn [] (reset! !action (scope/action :suspend @!selected true))))
+                      (menu/MenuButton !bar-menu (:row-key bar-menu) :batch "the selected questions" nil)
+                      (tape/BatchAction "Delete" true false
+                        (fn [] (reset! !confirm-delete {:ids (vec @!selected)}))))))
                 grid-cols item-count
                 [query source-id entity-id flagged? suspended? sort-col sort-dir]
                 (cond
