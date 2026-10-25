@@ -16,6 +16,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.tooltip :as tooltip]
    [clojure.string :as str]
    [freememo.assistant-message-content :as message-content]
    [freememo.assistant-transcript :as transcript]
@@ -81,7 +82,8 @@
           (dom/h3 (dom/text "Side question"))
           (dom/button
             (dom/props {:class "assistant-side-question__close" :type "button"
-                        :title "Close" :aria-label "Close side question"})
+                        :aria-label "Close side question"})
+            (tooltip/Tooltip! "Close")
             (dom/text "✕")
             (dom/On "click" (fn [_] (reset! !side nil)) nil)))
         (dom/blockquote

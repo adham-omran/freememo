@@ -12,7 +12,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.assistant-chat-tree :as tree]))
+   [freememo.assistant-chat-tree :as tree]
+   [freememo.tooltip :as tooltip]))
 
 (e/defn ChatLineage
   "Pre: `chat-options` is the panel's chat list, each with :id, :label,
@@ -43,8 +44,8 @@
                   (dom/span
                     (dom/props {:class "assistant-lineage__step"})
                     (dom/button
-                      (dom/props {:type "button" :class "assistant-lineage__link"
-                                  :data-tooltip "Open this chat"})
+                      (dom/props {:type "button" :class "assistant-lineage__link"})
+                      (tooltip/Tooltip! "Open this chat")
                       (dom/text (:label ancestor))
                       (dom/On "click" (fn [_] (open! (:id ancestor))) nil))
                     (dom/span
@@ -56,10 +57,10 @@
                 (dom/text (:label chat)))
               (dom/button
                 (dom/props {:type "button" :class "btn btn-secondary assistant-lineage__exclude"
-                            :aria-pressed (str (boolean excluded?))
-                            :data-tooltip (if excluded?
-                                            "The parent chat does not read this chat"
-                                            "The parent chat reads this chat in its answers")})
+                            :aria-pressed (str (boolean excluded?))})
+                (tooltip/Tooltip! (if excluded?
+                                    "The parent chat does not read this chat"
+                                    "The parent chat reads this chat in its answers"))
                 (dom/text (if excluded? "Include in parent" "Exclude from parent"))
                 (dom/On "click" (fn [_] (set-excluded! active (not excluded?))) nil))))
           (when (seq children)
@@ -75,9 +76,9 @@
                     (dom/props {:type "button"
                                 :class (str "assistant-lineage__link"
                                          (when (:excluded? child)
-                                           " assistant-lineage__link--excluded"))
-                                :data-tooltip (if (:excluded? child)
-                                                "Excluded: this chat does not read it"
-                                                "Open this branch")})
+                                           " assistant-lineage__link--excluded"))})
+                    (tooltip/Tooltip! (if (:excluded? child)
+                                        "Excluded: this chat does not read it"
+                                        "Open this branch"))
                     (dom/text (:label child))
                     (dom/On "click" (fn [_] (open! (:id child))) nil)))))))))))

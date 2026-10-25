@@ -7,6 +7,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    [freememo.row-motion :as row-motion]
    [freememo.modal-shell :as modal]
    [freememo.page-title :refer [PageTitle]]
@@ -366,7 +367,8 @@
   (e/client
     (dom/button
       (dom/props {:type "button" :class "curriculum-icon-button"
-                  :disabled disabled? :aria-label label :title label})
+                  :disabled disabled?})
+      (tooltip/Tooltip! label :aria? true)
       (icons/Icon (if (= label "Move up") :chevron-up :chevron-down) :size 14)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (when token
@@ -521,8 +523,8 @@
           (dom/h2 (dom/text (:title block)))
           (dom/button
             (dom/props {:type "button" :class "link-button curriculum-rename-block"
-                        :data-tooltip "Rename block"
                         :aria-label (str "Rename " (:title block))})
+            (tooltip/Tooltip! "Rename block")
             (icons/Icon :pen-line :size 13)
             (dom/On "click" (fn [_] (reset! !editing? true)) nil)))
         (let [commits

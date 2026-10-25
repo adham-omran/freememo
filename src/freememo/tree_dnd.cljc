@@ -31,7 +31,8 @@
    the gap is a cosmetic best-effort, never a correctness hole."
   (:require
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]))
+   [hyperfiddle.electric-dom3 :as dom]
+   [freememo.tooltip :as tooltip]))
 
 (e/defn DragDropRow! [my-id draggable? !drag-src drag-src forbidden !drop-cmd]
   (e/client
@@ -74,10 +75,10 @@
                                     source? "Cancel move"
                                     valid?  "Move the selected topic under this topic"
                                     active? "Not a valid destination for the selected topic"
-                                    :else   "Move this topic (then activate a destination row's grip)")
-                      :title (if active?
-                               (if source? "Click to cancel move" "Click to move the selected topic here")
-                               "Drag to re-nest, or click to start a move")})
+                                    :else   "Move this topic (then activate a destination row's grip)")})
+          (tooltip/Tooltip! (if active?
+                              (if source? "Click to cancel move" "Click to move the selected topic here")
+                              "Drag to re-nest, or click to start a move"))
           (dom/text "⠿")
           ;; Grabbing the grip must not bubble to the row's navigate click.
           (dom/On "mousedown" (fn [e] (.stopPropagation e)) nil)

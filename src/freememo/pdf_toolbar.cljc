@@ -131,7 +131,8 @@
         (let [prev-disabled? (or (= page-number 1) (= total 0))]
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
-                        :title "Previous Page" :disabled prev-disabled?})
+                        :disabled prev-disabled?})
+            (tooltip/Tooltip! "Previous Page" :aria? true)
             (dom/text "◀")
             ;; The chord dispatches through this button rather than calling nav!
             ;; itself: !current-page is frame-local to DocumentViewState, so the
@@ -168,7 +169,8 @@
         (let [next-disabled? (or (>= page-number total) (= total 0))]
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
-                        :title "Next Page" :disabled next-disabled?})
+                        :disabled next-disabled?})
+            (tooltip/Tooltip! "Next Page" :aria? true)
             (dom/text "▶")
             (let [node dom/node]
               (bus/publish-invoker! :next-page node (fn [] (.click node)))
@@ -285,13 +287,15 @@
                             :padding-left "12px"
                             :border-left "1px solid var(--color-border)"}})
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom Out"})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (tooltip/Tooltip! "Zoom Out" :aria? true)
           (dom/text "−")
           (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
         (dom/input
-          (dom/props {:type "text" :value zoom-val :title "Zoom level (%)" :class "input"
+          (dom/props {:type "text" :value zoom-val :class "input"
                       :style {:width "52px" :text-align "center" :padding "4px"
                               :border-radius "3px"}})
+          (tooltip/Tooltip! "Zoom level (%)" :aria? true)
           (dom/On "focus" (fn [_] (reset! !zoom-focused true)) nil)
           (dom/On "blur"
             ;; Read the typed value BEFORE clearing focus — clearing it first lets
@@ -307,7 +311,8 @@
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v) (reset! !zoom-val v))))
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom In"})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (tooltip/Tooltip! "Zoom In" :aria? true)
           (dom/text "+")
           (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
         (PdfFitToggle)

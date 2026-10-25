@@ -222,18 +222,18 @@
       (dom/props {:class "tape-cell-progress"})
       (if (pos? pages-total)
         (dom/span
-          (dom/props {:data-tooltip (str pages-done " of " pages-total
-                                      " page" (when (not= 1 pages-total) "s")
-                                      " extracted")})
+          (tooltip/Tooltip! (str pages-done " of " pages-total
+                              " page" (when (not= 1 pages-total) "s")
+                              " extracted"))
           (dom/text (str pages-done "/" pages-total)))
         (dom/span (dom/props {:class "tape-cell-absent"}) (dom/text "—")))
       (when (pos? pages-at-cap)
         (dom/span
-          (dom/props {:class "tape-cell-warn"
-                      :data-tooltip (str pages-at-cap " page"
-                                      (when (not= 1 pages-at-cap) "s")
-                                      " failed twice and will not be retried."
-                                      "\nEditing a page clears its attempts.")})
+          (dom/props {:class "tape-cell-warn"})
+          (tooltip/Tooltip! (str pages-at-cap " page"
+                              (when (not= 1 pages-at-cap) "s")
+                              " failed twice and will not be retried."
+                              "\nEditing a page clears its attempts."))
           (dom/text (str pages-at-cap " failed")))))))
 
 ;; ── Rows ───────────────────────────────────────────────────────────

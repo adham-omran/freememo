@@ -11,6 +11,7 @@
    [freememo.assistant-panel-data :as panel-data]
    [freememo.assistant-panel-rows :as rows]
    [freememo.assistant-slash-menu :as slash-menu]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn active-pending-fork
@@ -137,8 +138,8 @@
                           (str "Forking at “" (:excerpt fork) "”")
                           "Forking at the latest message")))
             (dom/button
-              (dom/props {:class "assistant-panel__ref-remove" :type "button"
-                          :title "Cancel the fork" :aria-label "Cancel the fork"})
+              (dom/props {:class "assistant-panel__ref-remove" :type "button"})
+              (tooltip/Tooltip! "Cancel the fork" :aria? true)
               (dom/text "×")
               (dom/On "click" (fn [_] (reset! !pending-fork nil)) nil))))
         ;; Keep the virtual-scroll frame stable while the form processes an input
@@ -154,9 +155,8 @@
                 (dom/props {:class "assistant-panel__ref-chip"})
                 (dom/text (str "@" (:title reference)))
                 (dom/button
-                  (dom/props {:class "assistant-panel__ref-remove" :type "button"
-                              :title "Remove reference"
-                              :aria-label "Remove reference"})
+                  (dom/props {:class "assistant-panel__ref-remove" :type "button"})
+                  (tooltip/Tooltip! "Remove reference" :aria? true)
                   (dom/text "×")
                   (let [event (dom/On "click" identity nil)
                         [remove-token _] (e/Token event)]
@@ -188,9 +188,8 @@
                   (dom/props {:class "assistant-panel__annotation" :dir "auto"})
                   (dom/span (dom/text (annotation-preview item)))
                   (dom/button
-                    (dom/props {:class "assistant-panel__ref-remove" :type "button"
-                                :title "Remove annotation"
-                                :aria-label "Remove annotation"})
+                    (dom/props {:class "assistant-panel__ref-remove" :type "button"})
+                    (tooltip/Tooltip! "Remove annotation" :aria? true)
                     (dom/text "×")
                     (dom/On "click"
                       (fn [_] (swap! !annotations answer-selection/remove-annotation
@@ -365,6 +364,6 @@
         ;; there. It shows nothing until the chat has an answer with a count.
         (when context-usage
           (dom/div
-            (dom/props {:class "assistant-panel__context-usage tooltip-right"
-                        :data-tooltip context-usage/usage-tooltip})
+            (dom/props {:class "assistant-panel__context-usage tooltip-right"})
+            (tooltip/Tooltip! context-usage/usage-tooltip)
             (dom/text (context-usage/usage-text context-usage))))))))
