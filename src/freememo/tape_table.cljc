@@ -89,17 +89,22 @@
 (e/defn HeadedTapeTable
   "`TapeTable` with a header row the caller renders: `Head` is an e/fn of no
    arguments that mounts one `dom/th` per column of `grid-cols`, in order.
+   `HeadOverlay` is nil or an e/fn of no arguments whose content is laid over
+   the header row — the slot a `BatchBar` goes in, so opening it moves nothing.
    Everything else — Pre, Post, the window, the empty overlay — is TapeTable's."
-  [Head grid-cols item-count reset-key empty-message Row]
+  [Head HeadOverlay grid-cols item-count reset-key empty-message Row]
   (e/client
-    (dom/table
-      (dom/props {:class "tape-table-header table-frame-head"
-                  :style {:width "100%" :--grid-cols grid-cols}})
-      (dom/thead
-        (dom/props {:style {:display "contents"}})
-        (dom/tr
+    (dom/div
+      (dom/props {:class "tape-table-head-frame"})
+      (dom/table
+        (dom/props {:class "tape-table-header table-frame-head"
+                    :style {:width "100%" :--grid-cols grid-cols}})
+        (dom/thead
           (dom/props {:style {:display "contents"}})
-          (Head))))
+          (dom/tr
+            (dom/props {:style {:display "contents"}})
+            (Head))))
+      (when HeadOverlay (HeadOverlay)))
     (dom/div
       ;; max-height caps the table at `visible-rows`, and the window follows it.
       ;; max-height, not height: a viewport shorter than 10 rows still shrinks the
@@ -182,7 +187,7 @@
     (HeadedTapeTable
       (e/fn [] (e/for [h (e/diff-by identity headers)]
                  (dom/th (dom/text h))))
-      grid-cols item-count reset-key empty-message Row)))
+      nil grid-cols item-count reset-key empty-message Row)))
 
 ;; ── Curation pieces: header cells, the select cell, the batch bar ──────────
 
@@ -273,8 +278,10 @@
           nil)))))
 
 (e/defn BatchBar
-  "The bar a selection opens above the table: the count, the view's bulk
-   actions, and Cancel. It is one row tall, so the table moves by one row.
+  "The bar a selection opens over the table's header row: the count, the
+   view's bulk actions, and Cancel. It goes in `HeadedTapeTable`'s
+   `HeadOverlay` slot and leaves the select-all checkbox uncovered, so ticking
+   the first row moves nothing — a bar above the table pushed every row down.
    `hidden` counts selected rows the current filter does not list — a filter
    change keeps the selection, so the bar must say what the actions reach
    (plans/knowledge-tables-selection-and-bulk.md O1).

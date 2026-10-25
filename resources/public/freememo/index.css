@@ -2299,21 +2299,27 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
 }
 .tape-table-header th.tape-th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
 .tape-table-header th.tape-th-sort:hover { color: var(--color-text-primary); }
-/* One row tall (tape-table/row-height), so opening it moves the table by
-   exactly one row. */
+/* The header row is the frame the batch bar lies over (tape-table/BatchBar).
+   The bar starts after the 34px select column, so the select-all checkbox
+   stays reachable, and stops at the header's 10px gutter. It never takes
+   layout space, so opening it moves no row. */
+.tape-table-head-frame { position: relative; flex-shrink: 0; }
 .tape-batch-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 34px;
+    right: 10px;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 41px;
-    box-sizing: border-box;
-    flex-shrink: 0;
     padding: 0 10px;
-    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     background: var(--color-primary-tint);
     color: var(--color-primary-tint-text);
     font-size: 13px;
 }
+.tape-batch-bar .btn-sm { padding-block: 2px; }
 .tape-batch-count { font-weight: 600; white-space: nowrap; }
 .tape-batch-bar .tape-batch-cancel { margin-left: auto; }
 /* Text of unknown direction fills its cell, so `dir="auto"` can align an
@@ -2321,8 +2327,9 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    whatever its direction. */
 .tape-table-body td > .tape-cell-text[dir="auto"] { flex: 1 1 auto; min-width: 0; text-align: start; }
 /* Row actions wait while a selection exists: the batch bar acts instead. */
-.tape-table-body td.tape-cell-actions-inert { opacity: 0.4; pointer-events: none; }
 .tape-scroll table tr.row-withheld td { opacity: 0.55; }
+/* After .row-withheld and as specific, so a suspended row's actions dim too. */
+.tape-scroll table tr td.tape-cell-actions-inert { opacity: 0.4; pointer-events: none; }
 .type-badge.question-kind-atomic { background: var(--color-badge-pdf); }
 .type-badge.question-kind-synthesis { background: var(--color-badge-epub); }
 /* freememo.row-menu. Fixed and placed by Floating UI; hidden until placed so

@@ -232,10 +232,6 @@
                       (str "Source: " (or (some #(when (= source-id (:id %)) (:label %)) doc-options) source-id))
                       (fn [] (reset! !source-id nil))))
                   (tape/ClearFilters (fn [] (clear-search!) (reset! !source-id nil)))))
-              (tape/BatchBar n-selected (:hidden counts) !selected
-                (e/fn []
-                  (tape/BatchAction "Merge into one…" false (< n-selected 2)
-                    (fn [] (reset! !merge-pick {:ids (vec @!selected)})))))
               (tape/HeadedTapeTable
                 (e/fn []
                   (tape/SelectAllHeader entities :id item-count (:shown counts) !selected)
@@ -243,6 +239,13 @@
                   (tape/PlainHeader "Aliases")
                   (tape/SortHeader "Facts" :facts :desc order !order)
                   (tape/PlainHeader ""))
+                ;; Over the header row, not above the table: a bar that pushed the table
+                ;; down by a row on every first tick was visually jarring.
+                (e/fn []
+                  (tape/BatchBar n-selected (:hidden counts) !selected
+                    (e/fn []
+                      (tape/BatchAction "Merge into one…" false (< n-selected 2)
+                        (fn [] (reset! !merge-pick {:ids (vec @!selected)}))))))
                 grid-cols item-count [query source-id sort-col sort-dir]
                 (if filtered?
                   "No entities match these filters."

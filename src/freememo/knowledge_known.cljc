@@ -281,9 +281,6 @@
                 (fn [] (reset! !source ""))))
             (when due-only? (tape/FilterLabel "Due only" (fn [] (reset! !due-only? false))))
             (tape/ClearFilters (fn [] (clear-search!) (reset! !source "") (reset! !due-only? false)))))
-        (tape/BatchBar n-selected (:hidden counts) !selected
-          (e/fn []
-            (CheckButton user-id navigate! (vec selected) selected-cards "Check me")))
         (tape/HeadedTapeTable
           (e/fn []
             (tape/SelectAllHeader shown :entity_id item-count (:shown counts) !selected)
@@ -293,6 +290,12 @@
             (tape/SortHeader "Last checked" :checked :desc order !order)
             (tape/PlainHeader "Cards")
             (tape/PlainHeader ""))
+          ;; Over the header row, not above the table: a bar that pushed the table
+          ;; down by a row on every first tick was visually jarring.
+          (e/fn []
+            (tape/BatchBar n-selected (:hidden counts) !selected
+              (e/fn []
+                (CheckButton user-id navigate! (vec selected) selected-cards "Check me"))))
           list-grid item-count [query source due-only? sort-col sort-dir]
           (if (zero? total)
             "No known ideas yet. Pin questions on a repository file and choose Ask, or mark an idea in a question map."
