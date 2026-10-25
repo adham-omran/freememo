@@ -46,6 +46,7 @@
          "delete-assistant-chat" "Deleted chat"
          "move-topic"         "Moved a topic"
          "reject-question"    "Rejected a question"
+         "bulk-reject-questions" (str "Deleted " (plural "question"))
          "reject-fact"        "Rejected a fact"
          "bulk-reject-facts"  (str "Deleted " (plural "fact"))
          ;; Distinct from a delete on purpose: this row is the detector's work,

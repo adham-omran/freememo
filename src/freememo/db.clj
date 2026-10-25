@@ -1124,7 +1124,7 @@
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-         'delete-assistant-chat')),
+         'bulk-reject-questions','delete-assistant-chat')),
       entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
                     'assistant-chat')),
       entity_refs JSONB NOT NULL,
@@ -1144,7 +1144,7 @@
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
                          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-         'delete-assistant-chat'))"])
+                         'bulk-reject-questions','delete-assistant-chat'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
                       CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
@@ -12224,6 +12224,41 @@
        user-id]
       {:builder-fn rs/as-unqualified-maps})))
 
+(defn owned-root-topic-ids
+  "Which of `topic-ids` are live root documents of `user-id`: owned, parentless
+   and not staged for deletion. The ownership gate for bulk actions that start
+   a run per document. Ids bind as ONE int4[] parameter.
+   Post: vector of ids, ascending; foreign, non-root and staged ids are absent."
+  [user-id topic-ids]
+  (let [ids (vec (distinct topic-ids))]
+    (if (empty? ids)
+      []
+      (mapv :id
+        (jdbc/execute! ds
+          ["SELECT id FROM topics
+            WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
+              AND id = ANY(?)
+            ORDER BY id"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn kg-documents-with-facts-among
+  "Which of `graph-topic-ids` hold at least one approved fact of `user-id`: the
+   documents a question run has something to work on. Ids bind as ONE int4[]
+   parameter.
+   Post: vector of graph_topic_ids, ascending."
+  [user-id graph-topic-ids]
+  (let [ids (vec (distinct graph-topic-ids))]
+    (if (empty? ids)
+      []
+      (mapv :graph_topic_id
+        (jdbc/execute! ds
+          ["SELECT DISTINCT graph_topic_id FROM kg_facts
+            WHERE user_id = ? AND status = 'approved' AND graph_topic_id = ANY(?)
+            ORDER BY 1"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
 (def sweep-statuses
   "The `kg_facts.status` values the shipped duplicate sweep compares.
 
@@ -12521,6 +12556,60 @@
     (jdbc/execute! ds
       ["UPDATE kg_questions SET status = ? WHERE id = ?" prev-status question-id])))
 
+(defn reject-kg-questions!
+  "Reject a selection of questions as ONE operation: one transaction, one undo
+   entry. Not a loop over reject-kg-question!, which would write one undo entry
+   per question into a log hard-capped at 100 rows per user.
+
+   Each question keeps its own prior status in the snapshot, so undo restores
+   an approved question to approved and a retired one to retired.
+   Pre:  question-ids from the user's selection; ownership re-checked in SQL.
+         Ids go in as ONE int4[] parameter, so a large selection stays under
+         PostgreSQL's 65,535 bound-parameter ceiling.
+   Post: {:rejected n :undo-id id-or-nil}. n counts only owned questions that
+         were not already rejected; :undo-id is nil iff n = 0. Foreign ids and
+         already-rejected ids are skipped silently."
+  [user-id question-ids]
+  (let [ids (vec (distinct question-ids))]
+    (if (empty? ids)
+      {:rejected 0 :undo-id nil}
+      (let [{:keys [snaps undo-id]}
+            (jdbc/with-transaction [tx ds]
+              (let [rows (jdbc/execute! tx
+                           ["SELECT id, status FROM kg_questions
+                             WHERE user_id = ? AND id = ANY(?) AND status <> 'rejected'
+                             ORDER BY id FOR UPDATE"
+                            user-id (int-array ids)]
+                           {:builder-fn rs/as-unqualified-maps})]
+                (if (empty? rows)
+                  {:snaps [] :undo-id nil}
+                  (let [hit (mapv :id rows)
+                        snaps (mapv (fn [{:keys [id status]}]
+                                      {:question-id id :prev-status status})
+                                rows)]
+                    (jdbc/execute! tx
+                      ["UPDATE kg_questions SET status = 'rejected'
+                        WHERE user_id = ? AND id = ANY(?)"
+                       user-id (int-array hit)])
+                    {:snaps snaps
+                     :undo-id (insert-undo-entry-raw! tx user-id "bulk-reject-questions"
+                                "question" hit snaps)}))))]
+        ;; Pruning stays outside the transaction, as in withdraw-kg-facts!.
+        (when undo-id (prune-undo-log! ds user-id))
+        {:rejected (count snaps) :undo-id undo-id}))))
+
+(defn restore-rejected-questions!
+  "Undo a bulk-reject-questions: each question gets its OWN prior status back.
+   Pre:  snapshot is the vector of {:question-id :prev-status} written by
+         reject-kg-questions!.
+   Post: one UPDATE per distinct prior status, in one transaction."
+  [snapshot]
+  (jdbc/with-transaction [tx ds]
+    (doseq [[prev-status snaps] (group-by :prev-status snapshot)]
+      (jdbc/execute! tx
+        ["UPDATE kg_questions SET status = ? WHERE id = ANY(?)"
+         prev-status (int-array (map :question-id snaps))]))))
+
 (defn reject-kg-fact!
   "Reject a fact and, like set-kg-fact-status!'s reject path, retire every live
    question that covers it — but snapshot the EXACT question ids retired so undo
@@ -12670,6 +12759,24 @@
               WHERE id = ? AND user_id = ? AND status = 'duplicate'"
              fact-id user-id]))))
 
+(defn unmark-kg-facts-duplicate!
+  "Return many duplicate-marked facts to approved in ONE statement. Same
+   semantics as unmark-kg-fact-duplicate!, including that the questions the mark
+   retired are NOT un-retired.
+   Pre:  fact-ids from the user's selection; ownership and status re-checked in
+         SQL. The ids bind as ONE int4[] parameter.
+   Post: the number of rows that changed. Foreign ids and facts not currently
+         marked duplicate are skipped silently."
+  [user-id fact-ids]
+  (let [ids (vec (distinct fact-ids))]
+    (if (empty? ids)
+      0
+      (::jdbc/update-count
+       (jdbc/execute-one! ds
+         ["UPDATE kg_facts SET status = 'approved', reviewed_at = now()
+           WHERE user_id = ? AND id = ANY(?) AND status = 'duplicate'"
+          user-id (int-array ids)])))))
+
 (defn restore-withdrawn-facts!
   "Undo a bulk-reject-facts or a mark-duplicate-facts: restore every fact's own
    prior status and set exactly the questions that operation retired back to
@@ -12724,16 +12831,12 @@
               WHERE id = ? AND user_id = ?"
              (sanitize-utf8 new-label) (sanitize-utf8 new-label) entity-id user-id]))))
 
-(defn merge-kg-entities!
-  "Merge `absorbed-id` into `target-id`: facts repointed, labels/aliases
-   unioned, absorbed row deleted. Facts whose repoint would collide with the
-   per-document s/p/o unique indexes are deleted (they are duplicates by
-   definition). All-or-nothing transaction.
-   Pre:  both entities belong to user-id and differ (violation = caller bug).
-   Post: no kg_facts row references absorbed-id; absorbed row gone."
-  [user-id target-id absorbed-id]
-  (jdbc/with-transaction [tx ds]
-    (let [owned (jdbc/execute! tx
+(defn- merge-kg-entities-tx!
+  "The body of merge-kg-entities!, on a caller's transaction so several merges
+   can share one. See merge-kg-entities! for the contract.
+   Pre:  `tx` is an open transaction."
+  [tx user-id target-id absorbed-id]
+  (let [owned (jdbc/execute! tx
                   ["SELECT id FROM kg_entities WHERE user_id = ? AND id IN (?, ?)"
                    user-id target-id absorbed-id])]
       (when (or (= target-id absorbed-id) (not= 2 (count owned)))
@@ -12776,7 +12879,77 @@
           FROM kg_entities a
           WHERE t.id = ? AND a.id = ?" target-id absorbed-id])
       (jdbc/execute! tx ["DELETE FROM kg_entities WHERE id = ?" absorbed-id])
-      true)))
+      true))
+
+(defn merge-kg-entities!
+  "Merge `absorbed-id` into `target-id`: facts repointed, labels/aliases
+   unioned, absorbed row deleted. Facts whose repoint would collide with the
+   per-document s/p/o unique indexes are deleted (they are duplicates by
+   definition). All-or-nothing transaction.
+   Pre:  both entities belong to user-id and differ (violation = caller bug).
+   Post: no kg_facts row references absorbed-id; absorbed row gone."
+  [user-id target-id absorbed-id]
+  (jdbc/with-transaction [tx ds]
+    (merge-kg-entities-tx! tx user-id target-id absorbed-id)))
+
+(defn merge-kg-entities-into!
+  "Merge every entity in `absorbed-ids` into `keep-id` as ONE transaction: a
+   failure on any of them leaves all of them unmerged.
+   Pre:  absorbed-ids non-empty, keep-id not among them, every id owned by
+         user-id. A violation throws before anything is written (caller bug,
+         same as merge-kg-entities!).
+   Post: the number of entities absorbed; no kg_facts row references any of
+         them and their rows are gone."
+  [user-id keep-id absorbed-ids]
+  (let [absorbed (vec (distinct absorbed-ids))]
+    (when (or (empty? absorbed) (some #{keep-id} absorbed))
+      (throw (ex-info "merge-kg-entities-into!: need at least one absorbed entity, and not the kept one"
+               {:user-id user-id :keep keep-id :absorbed absorbed})))
+    (jdbc/with-transaction [tx ds]
+      (let [wanted (conj absorbed keep-id)
+            owned (jdbc/execute! tx
+                    ["SELECT id FROM kg_entities WHERE user_id = ? AND id = ANY(?)
+                      FOR UPDATE"
+                     user-id (int-array wanted)])]
+        (when (not= (count wanted) (count owned))
+          (throw (ex-info "merge-kg-entities-into!: every entity must be owned by the user"
+                   {:user-id user-id :keep keep-id :absorbed absorbed}))))
+      (doseq [a absorbed]
+        (merge-kg-entities-tx! tx user-id keep-id a))
+      (count absorbed))))
+
+(defn kg-entity-labels
+  "Label and approved-fact count for the user's entities among `entity-ids`, for
+   the merge step that picks which selected entity to keep. Reads by id, not by
+   the Entities view's filter, so an entity the current search hides is still
+   listed. fact_count uses list-kg-entities' subquery.
+   Pre:  ids bind as ONE int4[] parameter; ownership enforced in SQL.
+   Post: vector of {:id :label :fact_count}, fact_count DESC then label. Foreign
+         and missing ids are absent."
+  [user-id entity-ids]
+  (let [ids (vec (distinct entity-ids))]
+    (if (empty? ids)
+      []
+      (vec
+        (jdbc/execute! ds
+          ["SELECT e.id, e.label,
+              (SELECT COUNT(*) FROM kg_facts f
+               WHERE (f.subject_entity_id = e.id OR f.object_entity_id = e.id)
+                 AND f.status = 'approved') AS fact_count
+            FROM kg_entities e
+            WHERE e.user_id = ? AND e.id = ANY(?)
+            ORDER BY fact_count DESC, e.label"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn get-kg-entity-label
+  "The label of one entity, ownership enforced in SQL.
+   Post: the label string, or nil when the entity is missing or not owned."
+  [user-id entity-id]
+  (:label
+   (jdbc/execute-one! ds
+     ["SELECT label FROM kg_entities WHERE id = ? AND user_id = ?" entity-id user-id]
+     {:builder-fn rs/as-unqualified-maps})))
 
 (defn get-kg-approved-predicates
   "The user's approved vocabulary, for the extraction prompt."
@@ -13102,6 +13275,27 @@
                   suspended = COALESCE(?, suspended)
               WHERE id = ? AND user_id = ?"
              flagged suspended question-id user-id]))))
+
+(defn set-kg-questions-flag!
+  "Set ONE curation flag on many questions in a single UPDATE. Like
+   set-kg-question-flags!, writes NO FSRS column. Scoped to approved questions,
+   the population the Questions bank lists, so a stale selection cannot change
+   a rejected question the user no longer sees.
+   Pre:  flag is :flagged or :suspended; value is a boolean; ownership re-checked
+         in SQL. Ids bind as ONE int4[] parameter.
+   Post: the number of rows whose flag CHANGED. A question already in the target
+         state is not counted, so the toast does not claim work that did not happen."
+  [user-id question-ids flag value]
+  (let [col (case flag :flagged "flagged" :suspended "suspended")
+        ids (vec (distinct question-ids))]
+    (if (empty? ids)
+      0
+      (::jdbc/update-count
+       (jdbc/execute-one! ds
+         [(str "UPDATE kg_questions SET " col " = ?
+                WHERE user_id = ? AND id = ANY(?) AND status = 'approved'
+                  AND " col " IS DISTINCT FROM ?")
+          (boolean value) user-id (int-array ids) (boolean value)])))))
 
 (defn update-kg-question!
   "Edit question text and/or reference answer (nil field = keep current)."

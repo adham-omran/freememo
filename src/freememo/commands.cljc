@@ -366,6 +366,32 @@
      ;; covering questions is part of the same transaction, hence kg_questions here.
      :bulk-reject-facts {:label "Delete facts" :class :mutation :palette-hidden true
                          :table #{:kg_facts :kg_questions} :views #{:kg-mutations}}
+     ;; Bulk operations of the Knowledge tables (freememo.knowledge-bulk). Each is
+     ;; one transaction, one audit line and one bump from the server fn itself, so
+     ;; none has an :exec or a palette entry. See plans/knowledge-tables-selection-and-bulk.md §5.
+     ;; Question reject writes one undo entry and touches only kg_questions.
+     :bulk-reject-questions {:label "Delete questions" :class :mutation :palette-hidden true
+                             :table #{:kg_questions :undo_log} :views #{:kg-mutations}}
+     :bulk-flag-questions {:label "Flag questions" :class :mutation :palette-hidden true
+                           :table #{:kg_questions} :views #{:kg-mutations}}
+     :bulk-suspend-questions {:label "Suspend questions" :class :mutation :palette-hidden true
+                              :table #{:kg_questions} :views #{:kg-mutations}}
+     ;; Returns duplicate-marked facts to approved. It does not un-retire the
+     ;; questions the mark retired, so kg_questions is not a table here.
+     :bulk-unmark-duplicate-facts {:label "Restore duplicate facts" :class :mutation
+                                   :palette-hidden true
+                                   :table #{:kg_facts} :views #{:kg-mutations}}
+     ;; Irreversible: no undo entry. Facts are repointed or deleted as duplicates.
+     :bulk-merge-entities {:label "Merge entities" :class :mutation :palette-hidden true
+                           :table #{:kg_entities :kg_facts} :views #{:kg-mutations}}
+     ;; Start a run per document on the existing executors. The runs bump
+     ;; :kg-mutations themselves when they finish; this entry covers the start.
+     :bulk-distill {:label "Distill selected documents" :class :mutation :palette-hidden true
+                    :table #{:kg_facts :kg_entities :kg_predicates} :views #{:kg-mutations}}
+     :bulk-generate-questions {:label "Generate questions for selected documents"
+                               :class :mutation :palette-hidden true
+                               :table #{:kg_questions :kg_question_facts}
+                               :views #{:kg-mutations}}
      ;; Near-duplicate sweep (freememo.kg-dedup). Two entries, not one: the
      ;; document-scoped run and the whole-library run differ in blast radius, and
      ;; a single command with a hidden scope would make the wider one unreachable
