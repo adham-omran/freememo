@@ -573,22 +573,22 @@
     :title "Building a knowledge graph"
     :intro "Distill a document into a fact graph you can curate and quiz against."
     :steps [{:label "Distill"
-             :detail "Knowledge → Documents → Distill on a document. It runs in the background with a spinner and a Cancel; Re-distill re-runs it. Facts land approved — you curate by exception, not one by one."
-             :commands #{:distill}}
+             :detail "Knowledge → Documents → Distill on a document. It runs in the background with a spinner and a Pause; Re-distill re-runs it. Facts land approved, so you curate by exception, not one by one. To distill many documents, tick them and choose Distill in the bar above the table. The confirmation states how many documents run, and each run spends credits."
+             :commands #{:distill :bulk-distill}}
             {:label "Generate questions"
-             :detail "Questions turns each fact into an atomic question; both actions are also in the {toggle-palette} palette."
-             :commands #{:generate-questions}}
+             :detail "Generate questions, in a document's ⋯ menu, turns each fact into an atomic question. Tick several documents and choose Generate questions in the bar to run them all. Documents with no approved facts are skipped. Both actions are also in the {toggle-palette} palette."
+             :commands #{:generate-questions :bulk-generate-questions}}
             {:label "Fix the facts"
-             :detail "Facts (N) opens the fact table — edit or relink an object, or × to reject a fact."
-             :commands #{}}
+             :detail "Browse facts, in a document's ⋯ menu, opens the fact table. Edit changes or relinks a fact's object, and Delete in the ⋯ menu removes it. Tick facts to delete many at once with one Undo. With the status filter on Duplicates, Not a duplicate returns the ticked facts to the graph."
+             :commands #{:bulk-reject-facts :bulk-unmark-duplicate-facts}}
             {:label "Curate entities"
-             :detail "Entities: Rename one, Merge… two that name the same thing (irreversible), or Synthesize questions for one."
-             :commands #{}}
+             :detail "Entities: Rename one, or choose Synthesize questions in its ⋯ menu. To merge entities that name the same thing, tick them, choose Merge into one, and pick the entity to keep. A merge cannot be undone."
+             :commands #{:bulk-merge-entities}}
             {:label "Curate questions"
-             :detail "Questions: click a row to edit its question and reference answer, or × to reject it."
-             :commands #{}}
+             :detail "Questions: click a row to edit its question and reference answer. A row's ⋯ menu flags, suspends or deletes it. Tick questions to flag, suspend or delete many at once, and one Undo restores a delete. Every Knowledge table sorts by a column header, and its filters stay in the address bar."
+             :commands #{:bulk-reject-questions :bulk-flag-questions :bulk-suspend-questions}}
             {:label "Known ideas"
-             :detail "Knowledge → Known ideas lists every idea you know: the ideas the tutor confirmed from your answers, and the ideas you marked with I know this. Each row says how you know it, the files it came from, when you last checked it, and its cards. Make cards writes 3 cards from the passages and questions behind the idea. Check me opens the Quiz on the idea's cards, due or not, and the band above the table lists the ideas due for a check. Open shows the idea's page: the answer that showed it, how you got there, its cards and its checks. Undo my mark removes only your own mark. Not learned yet removes both marks and puts the idea back on every map that has it; its cards stay."
+             :detail "Knowledge → Known ideas lists every idea you know: the ideas the tutor confirmed from your answers, and the ideas you marked with I know this. Each row says how you know it, the files it came from, when you last checked it, and its cards. Make cards writes 3 cards from the passages and questions behind the idea. Check me opens the Quiz on the idea's cards, due or not, and the band above the table lists the ideas due for a check. Tick several ideas and choose Check me in the bar to check them together. The idea's name opens its page: the answer that showed it, how you got there, its cards and its checks. In a row's ⋯ menu, Make more writes more cards, and Undo my mark removes only your own mark. Not learned yet removes both marks and puts the idea back on every map that has it; its cards stay."
              :commands #{:go-known-ideas :mark-idea-not-learned :undo-idea-self-mark}}]}
    {:slug "quiz"
     :title "Testing yourself — Quiz & Timed Quiz"
@@ -732,7 +732,6 @@
    :add-pin                   :pending
    :apply-code-language       :pending
    :bulk-delete-cards         :pending
-   :bulk-reject-facts         :pending
    :card-history              :pending
    :compare-ocr               :pending
    :copy-all                  :pending

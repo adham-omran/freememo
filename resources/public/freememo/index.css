@@ -2237,6 +2237,129 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     pointer-events: none;
 }
 
+/* Curation tables (plans/knowledge-tables-selection-and-bulk.md): the filter
+   row, active-filter labels, the select column, sortable headers, the batch
+   bar and the row menu. Shared by the five Knowledge views. */
+.knowledge-view {
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 108px - var(--app-top-chrome, 0px));
+}
+.knowledge-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 10px 0;
+}
+.knowledge-search { flex: 1; min-width: 140px; }
+.knowledge-filter-pick { width: 200px; }
+.knowledge-filter-select { max-width: 150px; }
+.knowledge-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+.knowledge-filter-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: -2px 0 10px;
+}
+.filter-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-primary);
+    cursor: pointer;
+}
+.filter-label-x { color: var(--color-text-secondary); }
+.filter-clear {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 0;
+    background: none;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+}
+.tape-table-header th.tape-th-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 4px;
+}
+.tape-table-header th.tape-th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+.tape-table-header th.tape-th-sort:hover { color: var(--color-text-primary); }
+/* One row tall (tape-table/row-height), so opening it moves the table by
+   exactly one row. */
+.tape-batch-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 41px;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 0 10px;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: var(--color-primary-tint);
+    color: var(--color-primary-tint-text);
+    font-size: 13px;
+}
+.tape-batch-count { font-weight: 600; white-space: nowrap; }
+.tape-batch-bar .tape-batch-cancel { margin-left: auto; }
+/* Text of unknown direction fills its cell, so `dir="auto"` can align an
+   Arabic row to the right. A shrink-wrapped span sat at the cell's left edge
+   whatever its direction. */
+.tape-table-body td > .tape-cell-text[dir="auto"] { flex: 1 1 auto; min-width: 0; text-align: start; }
+/* Row actions wait while a selection exists: the batch bar acts instead. */
+.tape-table-body td.tape-cell-actions-inert { opacity: 0.4; pointer-events: none; }
+.tape-scroll table tr.row-withheld td { opacity: 0.55; }
+.type-badge.question-kind-atomic { background: var(--color-badge-pdf); }
+.type-badge.question-kind-synthesis { background: var(--color-badge-epub); }
+/* freememo.row-menu. Fixed and placed by Floating UI; hidden until placed so
+   it never paints at the viewport corner for a frame. */
+.row-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1100;
+    min-width: 180px;
+    padding: 4px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+    visibility: hidden;
+}
+.row-menu[data-placed] { visibility: visible; }
+.row-menu-item {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    text-align: start;
+    cursor: pointer;
+}
+.row-menu-item:hover,
+.row-menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
+.row-menu-item-danger { color: var(--color-danger-text); }
+.merge-choices { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.merge-choice { display: flex; justify-content: space-between; gap: 12px; text-align: start; }
+.merge-choice-facts { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
+
 /* Sticky header for a table inside its scroll box (.tx-head), used by
    schedule_detail. The cost-history table that introduced it now uses
    freememo.tape-table instead. It's a grid sharing the
@@ -9273,9 +9396,6 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     border: 1px solid var(--color-warning); background: color-mix(in srgb, var(--color-warning) 10%, transparent);
 }
 .known-ideas__due-text { flex: 1; min-width: 200px; font-size: 13px; }
-.known-ideas__filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
-.known-ideas__search { flex: 1; min-width: 160px; }
-.known-ideas__count { font-size: 12px; color: var(--color-text-secondary); }
 .known-ideas__idea,
 .known-ideas__cards {
     font: inherit; padding: 0; border: 0; background: none; cursor: pointer;

@@ -41,8 +41,10 @@
 
 (defn list-rows
   "The rows of the known ideas list (known-ideas §3.2), due ideas first.
-   Post: [{:entity_id :label :how :from :checked :due? :card_count :material?
-           :self? :sources}], no timestamps."
+   Post: [{:entity_id :label :how :from :checked :checked_ms :due? :card_count
+           :material? :self? :sources}]. The one time is `:checked_ms`, epoch
+         milliseconds or nil, so the list can sort by last check; every other
+         time is text."
   [user-id]
   (mapv (fn [idea]
           {:entity_id (:entity_id idea)
@@ -52,6 +54,7 @@
            :how (how-known idea)
            :from (origin-text idea)
            :checked (check-text idea)
+           :checked_ms (some-> (:last_check idea) .toInstant .toEpochMilli)
            :due? (:due? idea)
            :card_count (:card_count idea)
            :material? (:material? idea)})
