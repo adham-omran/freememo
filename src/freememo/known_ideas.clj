@@ -60,11 +60,31 @@
            :material? (:material? idea)})
     (db/known-ideas user-id)))
 
+(defn- trail-view
+  "The idea trail for the page (plans/idea-trail.md §3.3), from
+   `db/idea-trail`'s result. Only the first turn's text crosses the wire: the
+   chats hold the rest.
+   Post: nil for nil. Otherwise {:first-date :first-question :turn-count
+         :chats [{:chat_id :chat_title :turns}] :inferred?}, the chats in the
+         order of their first turn."
+  [{:keys [turns inferred?]}]
+  (when-let [{:keys [created_at question]} (first turns)]
+    (let [per-chat (frequencies (map :chat_id turns))]
+      {:first-date (util/format-date-short created_at)
+       :first-question question
+       :turn-count (count turns)
+       :chats (into [] (comp (map #(select-keys % [:chat_id :chat_title]))
+                         (distinct)
+                         (map #(assoc % :turns (per-chat (:chat_id %)))))
+                turns)
+       :inferred? inferred?})))
+
 (defn idea-page
   "One idea for its page (known-ideas §5), dates as text.
    Post: nil when the entity is not the user's. Otherwise `db/known-idea`'s
          map with every time formatted, plus `:events` for How you got here
-         (§5.3.3): only times a row stores, oldest first."
+         (§5.3.3): only times a row stores, oldest first, and `:trail`, the
+         turns that led to it (plans/idea-trail.md §3.3), or nil."
   [user-id entity-id]
   (when-let [idea (db/known-idea user-id entity-id)]
     (let [fmt util/format-date-short
@@ -95,7 +115,7 @@
                  (:cards idea))]
       (-> idea
         (update :marks (fn [ms] (mapv #(-> % (assoc :date (fmt (:created_at %)))
-                                           (dissoc :created_at :proof_run_id))
+                                           (dissoc :created_at :proof_run_id :proof_run_inferred))
                                   ms)))
         (update :roots (fn [rs] (mapv #(-> % (assoc :learned (fmt (:learned_at %)))
                                            (dissoc :learned_at :pins))
@@ -107,6 +127,7 @@
                                            (dissoc :last_review :due :question :cloze))
                                   cs)))
         (assoc :events events
+               :trail (trail-view (db/idea-trail user-id entity-id))
                :last-check (some->> (:cards idea) (keep :last_review) seq (apply max-key #(.getTime ^java.util.Date %)) fmt)
                :next-check (some->> (:cards idea) (keep :due) seq (apply min-key #(.getTime ^java.util.Date %)) fmt)
                :last-rating (some-> (first (:reviews idea)) :rating long)
@@ -132,13 +153,15 @@
     (do (commands/bump! user-id :undo-idea-self-mark) {:ok true})
     {:error "There was no mark of yours to undo."}))
 
-(defn open-proof-chat!
-  "Make the chat of `user-id`'s proof the one the panel opens on its document
-   (§5.3.2). Post: the chat's document topic id, or nil."
-  [user-id entity-id]
-  (when-let [{:keys [chat_id root_topic_id]} (:proof (db/known-idea user-id entity-id))]
-    (when (db/mark-assistant-chat-opened! user-id chat_id)
-      root_topic_id)))
+(defn open-chat!
+  "Make `user-id`'s chat `chat-id` the one the panel opens on its document:
+   the proof's chat (§5.3.2), or a chat of the idea trail
+   (plans/idea-trail.md §3.3).
+   Post: the chat's document topic id, or nil when the chat is not a live chat
+         of the user."
+  [user-id chat-id]
+  (when (db/mark-assistant-chat-opened! user-id chat-id)
+    (:assistant_chats/root_topic_id (db/get-assistant-chat user-id chat-id))))
 
 (def idea-card-count 3)
 

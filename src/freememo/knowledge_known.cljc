@@ -35,7 +35,8 @@
 
 (defn run-idea-command!*
   "Run one idea command. `kind` is :check, :make, :undo, :unlearn or
-   :open-chat, and `arg` is an entity id, or a vector of them for :check.
+   :open-chat, and `arg` is an entity id, a vector of them for :check, or a
+   chat id for :open-chat.
    Post: {:ok true …} or {:error message}."
   [user-id kind arg]
   #?(:clj (case kind
@@ -43,7 +44,7 @@
             :make (ki/make-cards! user-id arg)
             :undo (ki/undo-self-mark! user-id arg)
             :unlearn (ki/not-learned! user-id arg)
-            :open-chat (if-let [topic-id (ki/open-proof-chat! user-id arg)]
+            :open-chat (if-let [topic-id (ki/open-chat! user-id arg)]
                          {:ok true :topic-id topic-id}
                          {:error "That chat is no longer there."})
             ;; An unknown kind is a caller bug. It must not fail the session.
@@ -381,11 +382,45 @@
             "Never checked.")))
       (CheckButton user-id navigate! [entity_id] (count cards) "Check me again"))))
 
+(defn- turns-text [n]
+  (str n (if (= 1 n) " turn" " turns")))
+
+(def ^:private inferred-note
+  "Found by matching times. The app did not record this when it happened.")
+
+(e/defn IdeaTrail
+  "The conversation that led to the idea (plans/idea-trail.md §3.3): its
+   first turn, the number of turns, and one Open per chat."
+  [user-id navigate! {:keys [first-date first-question turn-count chats inferred?]}]
+  (e/client
+    (dom/section
+      (dom/props {:class "idea-page__card" :aria-labelledby "idea-trail-h"})
+      (dom/h2 (dom/props {:id "idea-trail-h"}) (dom/text "The conversation"))
+      (if first-date
+        (do (dom/p (dom/text (str "It started on " first-date " with:")))
+            (dom/blockquote (dom/props {:class "idea-page__proof" :dir "auto"})
+              (dom/text first-question))
+            (dom/p (dom/text (str (turns-text turn-count)
+                                  " led to the answer above, in "
+                                  (if (= 1 (count chats)) "one chat." (str (count chats) " chats.")))))
+            (dom/ul
+              (dom/props {:class "idea-page__chats"})
+              (e/for [{:keys [chat_id chat_title turns]} (e/diff-by :chat_id chats)]
+                (dom/li
+                  (dom/span (dom/props {:dir "auto"})
+                    (dom/text (str (or chat_title "Untitled chat") " (" (turns-text turns) ")")))
+                  (IdeaAction user-id navigate! [:open-chat chat_id] "Open"
+                    "btn btn-sm btn-secondary" false nil))))
+            (when inferred?
+              (dom/p (dom/props {:class "idea-page__muted"}) (dom/text inferred-note))))
+        (dom/p (dom/props {:class "idea-page__muted"})
+          (dom/text "No conversation is stored for this idea."))))))
+
 (e/defn IdeaBody
   "The sections of one idea's page (§5.3)."
   [user-id idea navigate!]
   (e/client
-    (let [{:keys [entity_id label marks roots proof events]} idea
+    (let [{:keys [entity_id label marks roots proof events trail]} idea
           self? (some #(= "self" (:source %)) marks)]
       (dom/div
         (dom/props {:class "idea-page__title-row"})
@@ -403,10 +438,13 @@
             (if proof
               (do (dom/blockquote (dom/props {:class "idea-page__proof" :dir "auto"})
                     (dom/text (:answer proof)))
-                  (IdeaAction user-id navigate! [:open-chat entity_id] "Open the chat"
+                  (when (:inferred? proof)
+                    (dom/p (dom/props {:class "idea-page__muted"}) (dom/text inferred-note)))
+                  (IdeaAction user-id navigate! [:open-chat (:chat_id proof)] "Open the chat"
                     "btn btn-sm btn-secondary" false nil))
               (dom/p (dom/props {:class "idea-page__muted"})
                 (dom/text "No answer is stored for this idea."))))
+          (IdeaTrail user-id navigate! trail)
           (dom/section
             (dom/props {:class "idea-page__card" :aria-labelledby "idea-history-h"})
             (dom/h2 (dom/props {:id "idea-history-h"}) (dom/text "How you got here"))
