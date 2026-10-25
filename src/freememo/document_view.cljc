@@ -20,6 +20,7 @@
    [freememo.gdoc-home :refer [GdocHome]]
    [freememo.gdoc-snapshot-pane :refer [GdocSnapshotPane]]
    [freememo.topic-kinds :as topic-kinds]
+   [freememo.tooltip :as tooltip]
    [freememo.repo-home :refer [RepoHome]]
    [freememo.walkthrough-screen :refer [WalkthroughScreen]]
    [freememo.walkthrough-state :as walkthrough-state]
@@ -96,11 +97,11 @@
     (let [vertical-split? (= axis :y)]
       (dom/div
         (dom/props {:class (if vertical-split? "split-divider-v" "split-divider-h")
-                    :title "Drag to resize panels"
                     :role "separator"
                     :aria-orientation (if vertical-split? "horizontal" "vertical")
                     :aria-label label :tabindex "0"
                     :aria-valuenow (str (int (or pct 0)))})
+        (tooltip/Tooltip! "Drag to resize panels")
         (dom/On "pointerdown" (fn [e] (util/start-drag! e axis !pct)) nil)
         (dom/On "keydown" (fn [e] (util/key-resize-pct! e axis !pct nil)) nil)))))
 

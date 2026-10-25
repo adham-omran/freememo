@@ -14,6 +14,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    [freememo.client-errors :as ce]
    #?(:cljs [freememo.score-pdf :as score-pdf])
    #?(:cljs [freememo.score-rect-editor :as rect-editor])
@@ -103,27 +104,31 @@
               (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)"
                                   :margin-bottom "var(--sp-2)"}})
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :title "Previous page"
+                (dom/props {:class "btn btn-sm btn-secondary"
                             :disabled (<= page 1)})
+                (tooltip/Tooltip! "Previous page" :aria? true)
                 (dom/text "◀")
                 (dom/On "click" (fn [_] (swap! !page #(max 1 (dec %)))) nil))
               (dom/span
                 (dom/props {:style {:font-size "13px"}})
                 (dom/text (str "Page " page " of " total)))
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :title "Next page"
+                (dom/props {:class "btn btn-sm btn-secondary"
                             :disabled (>= page total)})
+                (tooltip/Tooltip! "Next page" :aria? true)
                 (dom/text "▶")
                 (dom/On "click" (fn [_] (swap! !page #(min total (inc %)))) nil))
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom out"
+                (dom/props {:class "btn btn-sm btn-secondary"
                             :style {:margin-left "var(--sp-2)"}
                             :disabled (<= zoom 1)})
+                (tooltip/Tooltip! "Zoom out" :aria? true)
                 (dom/text "−")
                 (dom/On "click" (fn [_] (swap! !zoom #(max 1 (/ % 1.5)))) nil))
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom in"
+                (dom/props {:class "btn btn-sm btn-secondary"
                             :disabled (>= zoom 6)})
+                (tooltip/Tooltip! "Zoom in" :aria? true)
                 (dom/text "+")
                 (dom/On "click" (fn [_] (swap! !zoom #(min 6 (* % 1.5)))) nil))
               (dom/span

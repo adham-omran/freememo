@@ -14,6 +14,7 @@
    [freememo.ocr-models :as ocr-models]
    [freememo.settings-group :as group]
    [freememo.tape-table :as tape]
+   [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    [clojure.string :as str]
    #?(:clj [freememo.db :as db])
@@ -142,21 +143,25 @@
           (dom/span (dom/props {:class badge-class}) (dom/text badge-text)))
         (dom/td (dom/props {:class "tape-cell-meta"}) (dom/text (or when-str "")))
         (dom/td
-          (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (or endpoint "")})
+          (dom/span (dom/props {:class "tape-cell-text"})
+            (tooltip/Tooltip! (or endpoint ""))
             (dom/text (endpoint-label endpoint))))
         (dom/td
-          (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (or model "")})
+          (dom/span (dom/props {:class "tape-cell-text"})
+            (tooltip/Tooltip! (or model ""))
             (dom/text (model-label model))))
         (dom/td (dom/props {:class "tape-cell-num tape-cell-strong"
                             :style {:color (if debit? "var(--color-danger-text)"
                                                       "var(--color-success-dark)")}})
-          (dom/span (dom/props {:data-tooltip (or usd-str "")})
+          (dom/span
+            (tooltip/Tooltip! (or usd-str ""))
             (dom/text (str amount_iqd))))
         (dom/td (dom/props {:class "tape-cell-num"}) (dom/text (str balance_after)))
         (dom/td (dom/props {:class "tape-cell-num tape-cell-meta"})
           (if (= toks "0/0/0")
             (dom/span (dom/props {:class "tape-cell-absent"}) (dom/text "—"))
-            (dom/span (dom/props {:data-tooltip "input / output / cached tokens"})
+            (dom/span
+              (tooltip/Tooltip! "input / output / cached tokens")
               (dom/text toks))))))))
 (e/defn CostHistorySection
   "AI costs group for the Usage settings tab. Read-only; user-scoped."

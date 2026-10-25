@@ -39,6 +39,9 @@
             #?(:cljs [freememo.context-menu])
             #?(:cljs [freememo.target-handlers])
             #?(:clj [freememo.target-commands])
+            ;; The tooltip bubble installs its listeners at load
+            ;; (plans/tooltip-top-layer.md): nothing else names it.
+            #?(:cljs [freememo.tooltip-layer])
             [freememo.activity-panel :refer [ActivityPanel]]
             [freememo.nav-rail :as nav-rail :refer [NavRail]]
             [freememo.spotlight :as spotlight :refer [Spotlight]]

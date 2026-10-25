@@ -17,6 +17,7 @@
    [freememo.quiz-page :as quiz-page]
    [freememo.row-menu :as menu]
    [freememo.tape-table :as tape]
+   [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.known-ideas :as ki])
    #?(:clj [freememo.logging :as log])
@@ -118,7 +119,8 @@
   [user-id navigate! command label class disabled? tip]
   (e/client
     (dom/span
-      (dom/props {:class "known-ideas__tip" :data-tooltip tip})
+      (dom/props {:class "known-ideas__tip"})
+      (tooltip/Tooltip! tip)
       (e/for [[t clicked] (e/diff-by first
                             (e/as-vec (forms/Button! command :class class :label label
                                         :disabled disabled?)))]
@@ -169,14 +171,14 @@
       (tape/SelectCell entity_id label !selected selected)
       (dom/td
         (dom/button
-          (dom/props {:type "button" :class "known-ideas__idea tape-cell-text" :dir "auto"
-                      :data-tooltip label})
+          (dom/props {:type "button" :class "known-ideas__idea tape-cell-text" :dir "auto"})
+          (tooltip/Tooltip! label)
           (dom/text label)
           (dom/On "click" (fn [_] (open-idea! navigate! entity_id)) nil)))
       (dom/td (dom/props {:class "tape-cell-meta"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip how}) (dom/text how)))
+        (dom/span (dom/props {:class "tape-cell-text"}) (tooltip/Tooltip! how) (dom/text how)))
       (dom/td (dom/props {:class "tape-cell-meta"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip from :dir "auto"}) (dom/text from)))
+        (dom/span (dom/props {:class "tape-cell-text" :dir "auto"}) (tooltip/Tooltip! from) (dom/text from)))
       (dom/td (dom/props {:class (if due? "known-ideas__checked--due" "tape-cell-meta")})
         (dom/text checked))
       (dom/td

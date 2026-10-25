@@ -21,6 +21,7 @@
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal]
    [freememo.client-errors :as ce]
+   [freememo.tooltip :as tooltip]
    #?(:cljs [freememo.live-doc-image-editor :as img-ed])
    #?(:cljs [freememo.vendor-libs :as vendor])))
 
@@ -90,7 +91,8 @@
   [compact? busy launcher-style open-sheet!]
   (e/client
     (dom/button
-      (dom/props {:title "Add photos" :disabled busy :style launcher-style})
+      (dom/props {:disabled busy :style launcher-style})
+      (tooltip/Tooltip! "Add photos" :aria? compact?)
       (dom/text (if compact? "＋" "＋ Add photos"))
       (dom/On "click" (fn [_] (open-sheet!)) nil))))
 
@@ -165,11 +167,11 @@
                                 :style {:width "100%" :height "100%"}})
                     (paint-thumb! dom/node entry))))
               (dom/button
-                (dom/props {:title "Remove"
-                            :style {:position "absolute" :top "2px" :right "2px"
+                (dom/props {:style {:position "absolute" :top "2px" :right "2px"
                                     :font-size "12px" :line-height "1" :padding "2px 5px"
                                     :border "none" :border-radius "3px" :cursor "pointer"
                                     :background "rgba(0,0,0,0.55)" :color "white"}})
+                (tooltip/Tooltip! "Remove" :aria? true)
                 (dom/text "✕")
                 (dom/On "click" (fn [e] (.stopPropagation e) (remove! id)) nil)))))))))
 
@@ -249,13 +251,13 @@
               (dom/text "＋ Add another")
               (dom/On "click" (fn [_] (open-sheet!)) nil))
             (dom/button
-              (dom/props {:title "Add staged photos as pages"
-                          :disabled (or busy converting? (empty? staged))
+              (dom/props {:disabled (or busy converting? (empty? staged))
                           :style {:padding "10px 18px" :border "none" :border-radius "6px"
                                   :font-weight "600" :font-size "14px"
                                   :cursor (if (or busy converting? (empty? staged)) "not-allowed" "pointer")
                                   :background "var(--color-accent, #2d6cdf)" :color "white"
                                   :opacity (if (or busy converting? (empty? staged)) "0.6" "1")}})
+              (tooltip/Tooltip! "Add staged photos as pages")
               (dom/text (cond busy "Uploading…"
                               converting? "Preparing…"
                               :else (str "Done (" (count staged) " page" (when (not= 1 (count staged)) "s") ")")))

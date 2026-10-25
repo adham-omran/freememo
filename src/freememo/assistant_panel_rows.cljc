@@ -16,6 +16,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.assistant-modes :as modes]
+   [freememo.tooltip :as tooltip]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    #?(:clj [freememo.assistant :as assistant])))
@@ -64,10 +65,10 @@
    !pending-web-search?]
   (e/client
     (dom/label
-      (dom/props {:class "assistant-panel__footer-field"
-                  :title (if web-search-supported?
-                           "Allow this chat to search the web"
-                           "The selected model does not support web search")})
+      (dom/props {:class "assistant-panel__footer-field"})
+      (tooltip/Tooltip! (if web-search-supported?
+                          "Allow this chat to search the web"
+                          "The selected model does not support web search"))
       (e/amb
         (e/for [[token {requested? :web-search}]
                 (forms/Checkbox! :web-search web-search?
@@ -127,8 +128,8 @@
                                       (when selected?
                                         " assistant-panel__mention-option--selected"))
                              :type "button" :role "option"
-                             :aria-selected (str selected?)
-                             :data-tooltip (:title document)})
+                             :aria-selected (str selected?)})
+                          (tooltip/Tooltip! (:title document))
                           (dom/text (:title document))
                           (dom/On "mousedown"
                             (fn [event]

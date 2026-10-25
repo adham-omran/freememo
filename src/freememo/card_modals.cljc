@@ -17,6 +17,7 @@
    [freememo.command-bus :as bus]
    [freememo.cloze :as cloze]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.toasts :as toasts])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.db :as db])
@@ -526,8 +527,8 @@
                         :source (composed-card kind live-fields)}
           [click-event btn-node]
           (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                        :data-tooltip "Save this card, then start a new one from its content"})
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+            (tooltip/Tooltip! "Save this card, then start a new one from its content")
             (dom/text "Create copy…")
             ;; The palette entry is tab-scoped and cannot say "a card editor is
             ;; open", so this registration IS the modal-scope guard. Retracting
@@ -751,8 +752,8 @@
                                 (t))))
                         (t (:error result))))))))
             (dom/button
-              (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                          :data-tooltip "View previous versions of this card"})
+              (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+              (tooltip/Tooltip! "View previous versions of this card")
               (dom/text "History")
               (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
             ;; Between History and Cancel. Save carries :order "1" and so stays
@@ -1034,9 +1035,8 @@
               (when (= kind "basic")
                 (dom/button
                   (dom/props {:class "btn btn-secondary" :type "button"
-                              :title "Flip question and answer"
-                              :aria-label "Flip question and answer"
                               :style {:padding "4px" :border-radius "999px"}})
+                  (tooltip/Tooltip! "Flip question and answer" :aria? true)
                   (icons/Icon :refresh-cw :size 15)
                   (dom/On "click"
                     (fn [_]

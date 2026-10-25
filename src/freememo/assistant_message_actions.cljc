@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [freememo.assistant-chat-tree :as tree]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])))
 
 (defn fork-request
@@ -33,9 +34,8 @@
           (when-not (str/blank? content)
             (dom/button
               (dom/props {:class "assistant-msg-card" :type "button"
-                          :title "Generate a flashcard from this reply"
-                          :aria-label "Generate a flashcard from this reply"
                           :disabled sending?})
+              (tooltip/Tooltip! "Generate a flashcard from this reply" :aria? true)
               (let [click (dom/On "click" identity nil)
                     [generate-token _] (e/Token click)
                     generating? (some? generate-token)]
@@ -49,15 +49,15 @@
                     (generate-token))))))
           (dom/button
             (dom/props {:class "assistant-msg-card assistant-msg-details"
-                        :type "button" :title "Answer details"
-                        :aria-label "Answer details"})
+                        :type "button"})
+            (tooltip/Tooltip! "Answer details" :aria? true)
             (icons/Icon :info :size 14)
             (dom/On "click" (fn [_] (reset! !details-run run-uuid)) nil))
           (dom/button
             (dom/props {:class "assistant-msg-card assistant-msg-fork" :type "button"
-                        :title "Fork here: ask a new question in a branch of this chat"
                         :aria-label "Fork here"
                         :disabled (or sending? (str/blank? content))})
+            (tooltip/Tooltip! "Fork here: ask a new question in a branch of this chat")
             (dom/text "⑂")
             (dom/On "click"
               (fn [_] (reset! !pending-fork (fork-request active message)))
@@ -65,8 +65,8 @@
           (when (and (= "failed" status) (not inherited?))
             (dom/button
               (dom/props {:class "assistant-msg-card" :type "button"
-                          :title "Retry answer" :aria-label "Retry answer"
                           :disabled sending?})
+              (tooltip/Tooltip! "Retry answer" :aria? true)
               (dom/text "↻")
               (let [retry-click (dom/On "click" identity nil)
                     [retry-token _] (e/Token retry-click)]

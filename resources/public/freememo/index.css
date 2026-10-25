@@ -636,10 +636,10 @@ html:has(> body > .app-shell) > body {
        content. Without this, the container expands to fit content and the
        ResizeObserver can never detect overflow (scrollWidth ≡ clientWidth). */
     min-width: 0;
-    /* Establishes a stacking context so tooltips (and the overflow dropdown)
-       paint over later DOM siblings such as .tape-scroll. Without this,
-       sibling elements after .toolbar-container paint on top regardless of
-       the tooltip's z-index, since both live in the same stacking context.
+    /* Establishes a stacking context so the overflow dropdown paints over
+       later DOM siblings such as .tape-scroll. Without this, sibling elements
+       after .toolbar-container paint on top regardless of the dropdown's
+       z-index, since both live in the same stacking context.
        Stacking ladder (descending): main ContentToolbar 3 > PdfToolbar 2 >
        pane resizers/.split-divider-h 1 > pane content 0. The toolbars MUST
        outrank the resizers (z-index:1), else the resizers paint over the
@@ -656,7 +656,9 @@ html:has(> body > .app-shell) > body {
    With z-index:auto its Add-card dropdown (z:50) and tooltips (z:1100)
    escape to root level and paint over the waveform strip / PDF pane, while
    the PdfToolbar's own tooltips (context level 2) still paint over this
-   bar's plain contents (level 0) — a bar-level z-index can't satisfy both. */
+   bar's plain contents (level 0) — a bar-level z-index can't satisfy both.
+   Tooltips have painted in the top layer since plans/tooltip-top-layer.md,
+   so only the dropdown half of this still applies. */
 .toolbar-container.score-toolbar-container {
     z-index: auto;
 }
@@ -678,8 +680,8 @@ html:has(> body > .app-shell) > body {
     border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-subtle);
     /* overflow-x: clip clips horizontal overflow (the content-aware tier
-       system's purpose); overflow-y: visible lets tooltips and dropdowns
-       escape vertically. `clip` is the only overflow value that does NOT
+       system's purpose); overflow-y: visible lets dropdowns escape
+       vertically. `clip` is the only overflow value that does NOT
        coerce a sibling `visible` to `auto`. */
     overflow-x: clip;
     overflow-y: visible;
@@ -1296,7 +1298,7 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
 /* ── Icon buttons (Lucide SVG via freememo.icons) ─────────────────
    Foundations: square aspect, ≥32×32 touch target, hover bg, focus ring.
    Per-icon SVGs inherit `currentColor` so button color flows to stroke.
-   Tooltip on hover is driven by [data-tooltip] (see index.css:1303). */
+   A hover tooltip comes from freememo.tooltip/Tooltip!. */
 .icon-btn {
     display: inline-flex;
     align-items: center;
@@ -2067,18 +2069,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     transform: translateY(calc(var(--order, 0) * var(--row-height)));
 }
 .tape-scroll table td { overflow: hidden; }
-.tape-scroll table td:has([data-tooltip]:hover) {
-    overflow: visible;
-}
-/* Paint the tooltip IN FRONT of the rows below it. Each row is transformed
-   (see `transform` above), and `transform` makes every row its own stacking
-   context — so the tooltip's z-index is trapped inside its row and later rows
-   (later in DOM order) paint over it. Rows are position:absolute, so raising
-   the hovered row's z-index reorders it ahead of its auto-z-index siblings,
-   carrying the escaped tooltip above them. */
-.tape-scroll table tr:has([data-tooltip]:hover) {
-    z-index: 1;
-}
 /* Zebra striping (opt-in via .row-alt on the tr). Placed before :hover so hover
    wins on equal specificity. */
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
@@ -2159,9 +2149,8 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
 .tape-table-body td.tape-cell-strong { font-weight: 600; }
 /* Inline "(merging)" state note in an action cell. */
 .tape-table-body .tape-cell-note { font-size: 11px; }
-/* Inner spans. The td owns clipping (see `.tape-scroll table td` above, whose
-   :has([data-tooltip]:hover) escape must win so tooltips render uncut), so the
-   ellipsis lives here. */
+/* Inner spans. The td owns clipping (see `.tape-scroll table td` above), so
+   the ellipsis lives here. */
 .tape-table-body .tape-cell-text {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3337,7 +3326,7 @@ textarea:hover {
 .format-menu {
     position: fixed;
     /* 1100 (not 1000) so the card clears .modal-backdrop (1000) inside card
-       modals, matching the [data-tooltip] precedent. */
+       modals. */
     z-index: 1100;
     box-sizing: border-box;
     width: 206px;
@@ -4474,16 +4463,27 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     to { opacity: 1; }
 }
 
-/* ── Tooltip (data-tooltip attribute, instant on hover) ───────── */
+/* ── Tooltip (freememo.tooltip-layer, plans/tooltip-top-layer.md) ─
+   `Tooltip!` writes `data-tooltip` and freememo.tooltip-layer shows its text
+   in ONE bubble in the top layer, placed by Floating UI. The top layer
+   escapes every transform, overflow clip and stacking context, so no
+   container needs a tooltip override. Keep `position: relative` on hosts:
+   the old `::after` bubble needed it, and a host may now rely on it for its
+   own positioned children. */
 [data-tooltip] {
     position: relative;
 }
-[data-tooltip]::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%) translateY(4px);
+/* The UA [popover] rule centres the element with `inset: 0; margin: auto` and
+   draws a border and padding, so this rule resets them. The layer sets `left`
+   and `top`, then `data-placed`: hidden until then, so a bubble never flashes
+   at its previous place. z-index only matters where the Popover API is
+   missing. */
+.tooltip-bubble {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    border: 0;
+    overflow: visible;
     padding: 6px 10px;
     background: var(--color-tooltip-bg);
     backdrop-filter: blur(2px);
@@ -4492,147 +4492,14 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.4;
     border-radius: 4px;
     white-space: pre-wrap;
+    width: max-content;
     max-width: min(40ch, calc(100vw - 2rem));
     overflow-wrap: break-word;
     pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    /* No transition: show and hide are both instant. A fade-OUT would keep a
-       stale bubble painted for its duration, and in a virtual-scroll list the
-       cursor re-enters the next recycled row's trigger before the previous
-       bubble finishes fading — stacking several detached tooltips over the
-       rows. Instant hide guarantees at most one bubble, only while genuinely
-       hovered. */
-    /* Above .modal-backdrop (1000) so a tooltip on a button inside a modal
-       is never painted under the backdrop. */
     z-index: 1100;
 }
-[data-tooltip]:hover::after {
-    opacity: 1;
-    visibility: visible;
-}
-/* Touch devices latch `:hover` after a tap, leaving a stale bubble painted over
-   whatever opens next (e.g. a confirm modal — the bubble is z-index:1100, above
-   the backdrop). No hover intent exists on touch, so drop the affordance. */
-@media (hover: none) {
-    [data-tooltip]::after { content: none; }
-}
-/* Suppress the tooltip while the element's menu is open. The cursor is still
-   over the trigger after a click, so :hover stays true and the tooltip would
-   otherwise paint over the open menu. Specificity (0,3,1) beats the show rule. */
-[data-tooltip][aria-expanded="true"]:hover::after {
-    opacity: 0;
+.tooltip-bubble:not([data-placed]) {
     visibility: hidden;
-}
-[data-tooltip].tooltip-right::after {
-    left: auto;
-    right: 0;
-    transform: translateY(4px);
-}
-
-/* Modern browsers: anchor the tooltip to its trigger and let the engine flip
-   it (above / opposite side) when the default below-centered placement would
-   overflow the viewport, so it never overruns an edge or covers the buttons
-   below it. Non-supporting browsers keep the static below-centered rules above. */
-/* Hover devices only. A touch device shows no tooltip (content: none above),
-   so the anchored path does nothing for it. On an iPhone in Safari, every
-   tooltip host that took this path and no override below was left unpainted,
-   with its space kept: Check Anki, Keep FreeMemo, Keep Anki, and the select-all
-   and sync-direction header cells in /library/cards. The hosts that the
-   .toolbar and .tape-scroll overrides move back to absolute positioning
-   painted. */
-@supports (position-area: bottom) {
-  @media (hover: hover) {
-    [data-tooltip]::after {
-        position: fixed;
-        position-area: bottom;
-        position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
-        position-try-order: most-height;
-        top: auto;
-        left: auto;
-        right: auto;
-        bottom: auto;
-        margin: 4px;
-        transform: none;
-    }
-    [data-tooltip].tooltip-right::after {
-        position-area: bottom span-left;
-    }
-  }
-}
-
-/* Toolbar tooltips: plain absolute positioning relative to the button (which is
-   position:relative via [data-tooltip]). top:100% is always the button's bottom
-   edge, so the tooltip sits directly BELOW — the anchor-positioning engine was
-   resolving `position-area:bottom` to an overlapping spot here. Placed after the
-   @supports block and higher-specificity so it wins in every browser. */
-.toolbar [data-tooltip]::after,
-.toolbar [data-tooltip].tooltip-right::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 0;
-    right: auto;
-    bottom: auto;
-    margin: 6px 0 0 0;
-    transform: none;
-}
-
-/* Quiz curation-bar tooltips (Flag / Suspend & Skip / Edit): same fix as
-   `.toolbar`. These three buttons sit directly above the answer textarea, and
-   `position-try-order: most-height` reads the taller space ABOVE the bar and flips
-   the bubble up over the question text. Pin it below the button instead. */
-.curation-bar [data-tooltip]::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    margin: 6px 0 0 0;
-    transform: translateX(-50%);
-}
-
-/* Virtual-scroll (.tape-scroll) tooltips: the anchor-positioning `position:fixed`
-   path (@supports block above) detaches from its button as the list scrolls — the
-   implicit anchor stops tracking once the trigger moves inside the overflow:auto
-   scroll box, so the tooltip drifts and eventually leaves the viewport. Pin it with
-   plain absolute positioning relative to the button (position:relative via
-   [data-tooltip]); top:100% is the button's bottom edge, so it stays attached
-   directly below on every scroll offset. Mirrors the .toolbar override above;
-   centered to match the base [data-tooltip]::after rule. Placed after @supports and
-   higher-specificity so it wins in every browser. */
-.tape-scroll [data-tooltip]::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    margin: 4px 0 0 0;
-    transform: translateX(-50%);
-}
-.tape-scroll [data-tooltip].tooltip-right::after {
-    left: auto;
-    right: 0;
-    transform: none;
-}
-/* Right-anchor every tooltip in the LAST cell of a knowledge table, so the bubble
-   cannot leave the scroll box on the inline-end side. Measured: hovering a button
-   in that cell raised the container's scrollWidth from 888 to 897, because
-   `.tape-scroll table td:has([data-tooltip]:hover)` un-clips the cell and the
-   centered bubble then overhangs the right edge. A horizontal scrollbar there
-   shortens clientHeight, which re-runs Scroll-window and re-mounts the rows —
-   hover jitter. One rule rather than a class per button: the last cell is the
-   action cell in all four views, and a button added later cannot forget it.
-   Specificity (0,3,3) beats the rule above at (0,2,1). */
-.tape-table-body td:last-child [data-tooltip]::after {
-    left: auto;
-    right: 0;
-    transform: none;
 }
 
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */

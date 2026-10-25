@@ -18,6 +18,7 @@
    [freememo.row-motion :as row-motion]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
+   [freememo.tooltip :as tooltip]
    [freememo.navigation :as nav]
    [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.command-bus :as bus]
@@ -277,10 +278,10 @@
         (when open?
           (dom/div
             (dom/props {:class (str "side-panel__resize side-panel__resize--" (name side))
-                        :title "Drag to resize"
                         :role "separator" :aria-orientation "vertical"
                         :aria-label resize-aria-label :tabindex "0"
                         :aria-valuenow (str (int (or width-px 0)))})
+            (tooltip/Tooltip! "Drag to resize")
             (dom/On "pointerdown"
               (fn [e]
                 (mark-resizing! (.-currentTarget e))

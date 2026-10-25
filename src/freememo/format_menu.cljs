@@ -61,7 +61,8 @@
             [freememo.commands :as commands]
             [freememo.editor-popovers :as editor-popovers]
             [freememo.icon-paths :as icon-paths]
-            [freememo.selection-placement :as sel-place]))
+            [freememo.selection-placement :as sel-place]
+            [freememo.tooltip :as tooltip]))
 
 ;; ---------------------------------------------------------------------------
 ;; Icons. Every control draws a freememo.icon-paths entry: Lucide's 24-unit
@@ -140,7 +141,7 @@
    (let [b (el "button" "fmt-btn")]
      (set! (.-type b) "button")
      (set! (.-innerHTML b) (icon icon-k))
-     (.setAttribute b "title" tooltip)
+     (tooltip/set-tooltip! b tooltip)
      (.setAttribute b "aria-label" label)
      (keep-selection! b)
      (on-click! b on-click)
@@ -161,7 +162,7 @@
       (let [e (el "span" "fmt-item-end")]
         (set! (.-textContent e) end)
         (.appendChild b e)))
-    (.setAttribute b "title" (or tooltip label))
+    (tooltip/set-tooltip! b (or tooltip label))
     (.setAttribute b "aria-label" label)
     (keep-selection! b)
     (on-click! b on-click)
@@ -289,7 +290,7 @@
   [kind label value pick!]
   (let [b (el "button" (str "fmt-swatch fmt-swatch-" (name kind) (when-not value " fmt-swatch-default")))]
     (set! (.-type b) "button")
-    (.setAttribute b "title" label)
+    (tooltip/set-tooltip! b label)
     (.setAttribute b "aria-label" (str label " " (name kind) " colour"))
     (when (= kind :text)
       (set! (.-textContent b) "A")
@@ -324,7 +325,7 @@
         close!  (:close! group)]
     (set! (.-type trigger) "button")
     (set! (.-innerHTML trigger) (icon :baseline))
-    (.setAttribute trigger "title" "Text and background colour")
+    (tooltip/set-tooltip! trigger "Text and background colour")
     (.setAttribute trigger "aria-label" "Text and background colour")
     (.appendChild popup (colour-section q get-rng after "color" :text "Text color" text-colours close!))
     (.appendChild popup (colour-section q get-rng after "background" :bg "Background color" background-colours close!))
@@ -350,7 +351,7 @@
         block-sec (section)]
     (set! (.-type trigger) "button")
     (set! (.-innerHTML trigger) (icon :ellipsis))
-    (.setAttribute trigger "title" "More formatting")
+    (tooltip/set-tooltip! trigger "More formatting")
     (.setAttribute trigger "aria-label" "More formatting")
     (doseq [[label value] [["Small" "small"] ["Normal" false] ["Large" "large"] ["Huge" "huge"]]]
       (let [b (el "button" "fmt-segment")]
@@ -497,11 +498,11 @@
     ;; `...`: Include context, its pages, and Compare models.
     (set! (.-type more) "button")
     (set! (.-innerHTML more) (icon :ellipsis))
-    (.setAttribute more "title" "More generation options")
+    (tooltip/set-tooltip! more "More generation options")
     (.setAttribute more "aria-label" "More generation options")
     (set! (.-type ctx-box) "checkbox")
     (set! (.-textContent ctx-text) "Include context")
-    (.setAttribute ctx-label "title" "Send the surrounding text with the passage, for better cards")
+    (tooltip/set-tooltip! ctx-label "Send the surrounding text with the passage, for better cards")
     (keep-selection! ctx-label)
     (.addEventListener ctx-box "change" (fn [_] (write! :context? (.-checked ctx-box))))
     (.addEventListener ctx-label "click" (fn [^js e] (.stopPropagation e)))
@@ -669,7 +670,7 @@
            (set! (.. page-break-btn -style -display) (if ctx "" "none"))
            (set! (.. insert-sec -style -display) (if (or media? ctx) "" "none"))
            (set! (.-disabled page-break-btn) (not page))
-           (.setAttribute page-break-btn "title"
+           (tooltip/set-tooltip! page-break-btn
              (cond (nil? ctx) "Restore page boundary"
                    page (str "Restore the boundary for page " page)
                    :else "No page is missing a boundary here")))))}))

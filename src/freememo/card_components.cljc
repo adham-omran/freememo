@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
    [freememo.a11y :as a11y]
+   [freememo.tooltip :as tooltip]
    [clojure.string :as str]
    [freememo.logging :as log]
    #?(:clj [freememo.toasts :as toasts])
@@ -105,7 +106,8 @@
 (e/defn DeleteCardButton [member-ids user-id]
   (e/client
     (dom/button
-      (dom/props {:class "btn-delete-x" :title "Delete card"})
+      (dom/props {:class "btn-delete-x"})
+      (tooltip/Tooltip! "Delete card" :aria? true)
       (dom/text "\u00D7")
       (let [click-event (dom/On "click" (fn [event] (.stopPropagation event) member-ids) nil)
             [t ?error] (e/Token click-event)]
@@ -357,12 +359,13 @@
           ;; Sync indicator
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"
-                                :border-bottom "1px solid var(--color-border)" :font-size "10px"}
-                        :title (case sync-st
-                                 :unsynced "Not synced to Anki"
-                                 :synced (str "Synced to Anki")
-                                 :modified "Modified since last sync"
-                                 :mixed "This row's cards are in different sync states")})
+                                :border-bottom "1px solid var(--color-border)" :font-size "10px"}})
+            (tooltip/Tooltip! (case sync-st
+                                :unsynced "Not synced to Anki"
+                                :synced (str "Synced to Anki")
+                                :modified "Modified since last sync"
+                                :mixed "This row's cards are in different sync states")
+              :aria? true)
             (dom/text (case sync-st
                         :unsynced "\u25CB"
                         :synced "\u25CF"
@@ -439,9 +442,9 @@
 (e/defn RetryPendingButton [tempid user-id]
   (e/client
     (dom/button
-      (dom/props {:title "Retry"
-                  :style {:background "transparent" :border "none" :cursor "pointer"
+      (dom/props {:style {:background "transparent" :border "none" :cursor "pointer"
                           :color "var(--color-danger-text)" :font-size "13px"}})
+      (tooltip/Tooltip! "Retry" :aria? true)
       (dom/text "↻")
       (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
             [t _] (e/Token click)]
@@ -456,9 +459,9 @@
 (e/defn DismissPendingButton [tempid user-id]
   (e/client
     (dom/button
-      (dom/props {:title "Dismiss"
-                  :style {:background "transparent" :border "none" :cursor "pointer"
+      (dom/props {:style {:background "transparent" :border "none" :cursor "pointer"
                           :color "var(--color-text-hint)" :font-size "13px"}})
+      (tooltip/Tooltip! "Dismiss" :aria? true)
       (dom/text "×")
       (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
             [t _] (e/Token click)]
@@ -492,12 +495,13 @@
         (dom/td
           (dom/props {:style {:padding "6px 4px" :text-align "center" :font-size "10px"
                               :border-bottom "1px solid var(--color-border)"
-                              :color (if (= :error status) "var(--color-danger)" "var(--color-success)")}
-                      :title (case status
-                               :pending "Saving…"
-                               :confirmed "Saved"
-                               :error (or (:error entry) "Save failed")
-                               "")})
+                              :color (if (= :error status) "var(--color-danger)" "var(--color-success)")}})
+          (tooltip/Tooltip! (case status
+                              :pending "Saving…"
+                              :confirmed "Saved"
+                              :error (or (:error entry) "Save failed")
+                              "")
+            :aria? true)
           (dom/text (case status :pending "…" :confirmed "✓" :error "!" "")))
         ;; Front — cloze spans both content columns
         (dom/td

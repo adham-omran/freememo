@@ -24,7 +24,8 @@
             [freememo.command-targets :as targets]
             [freememo.commands :as commands]
             [freememo.editor-popovers :as editor-popovers]
-            [freememo.menu-placement :as placement]))
+            [freememo.menu-placement :as placement]
+            [freememo.tooltip :as tooltip]))
 
 ;; {:el <div> :teardown (fn []) :opener <element> :anchor <anchor>} | nil
 (defonce ^:private !menu (atom nil))
@@ -177,7 +178,7 @@
     (set! (.-textContent b) label)
     (when disabled-reason
       (.setAttribute b "aria-disabled" "true")
-      (.setAttribute b "data-tooltip" disabled-reason))
+      (tooltip/set-tooltip! b disabled-reason))
     (.addEventListener b "click"
       (fn [^js e]
         (.stopPropagation e)

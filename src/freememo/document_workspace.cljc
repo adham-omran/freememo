@@ -9,6 +9,7 @@
    [freememo.bottom-panel :refer [BottomPanel]]
    [freememo.command-bus :as bus]
    [freememo.topic-kinds :as topic-kinds]
+   [freememo.tooltip :as tooltip]
    [freememo.util :as util]))
 
 (e/defn DocumentSplitDivider []
@@ -19,10 +20,10 @@
           reset-split! dctx/reset-split!]
       (dom/div
         (dom/props {:class "split-divider-v"
-                    :title "Drag to resize panels (double-click to reset)"
                     :role "separator" :aria-orientation "horizontal"
                     :aria-label "Resize content and card table" :tabindex "0"
                     :aria-valuenow (str (int (or top-pct 0)))})
+        (tooltip/Tooltip! "Drag to resize panels (double-click to reset)")
         (dom/On "pointerdown"
           (fn [event]
             (util/start-drag! event :y !top-pct

@@ -25,7 +25,8 @@
    that `math/set-html!` owns. A browser without the API shows none."
   (:require [clojure.string :as str]
             [freememo.math :as math]
-            [freememo.selection-placement :as sel-place]))
+            [freememo.selection-placement :as sel-place]
+            [freememo.tooltip :as tooltip]))
 
 (def ^:private highlight-name
   "The CSS highlight name; index.css styles `::highlight(assistant-annotation)`."
@@ -105,7 +106,7 @@
   (let [b (el "button" "btn btn-sm btn-secondary answer-selection-menu__action")]
     (set! (.-type b) "button")
     (set! (.-textContent b) label)
-    (.setAttribute b "title" title)
+    (tooltip/set-tooltip! b title)
     ;; Keep the selection: a mousedown on a button would otherwise collapse it
     ;; before the click reads it.
     (.addEventListener b "mousedown" #(.preventDefault %))
@@ -128,11 +129,11 @@
     (.setAttribute input "aria-label" "Annotation note")
     (set! (.-type save) "button")
     (set! (.-textContent save) "✓")
-    (.setAttribute save "title" "Save annotation")
+    (tooltip/set-tooltip! save "Save annotation")
     (.setAttribute save "aria-label" "Save annotation")
     (set! (.-type cancel) "button")
     (set! (.-textContent cancel) "✕")
-    (.setAttribute cancel "title" "Cancel")
+    (tooltip/set-tooltip! cancel "Cancel")
     (.setAttribute cancel "aria-label" "Cancel")
     (doseq [c [generate ask annotate]] (.appendChild actions c))
     (doseq [c [input save cancel]] (.appendChild note c))

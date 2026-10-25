@@ -380,8 +380,8 @@
   (e/client
     (let [[click-event btn-node]
           (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                        :data-tooltip "Save this group, then start a second one over the same image"})
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+            (tooltip/Tooltip! "Save this group, then start a second one over the same image")
             (dom/text "Duplicate")
             ;; Same command as the text modal's Create copy… — see
             ;; commands/:copy-card. Keyed by node, because this button and the
@@ -489,13 +489,13 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :order "1"}})
             (dom/button
-              (dom/props {:class "btn btn-primary" :disabled (some? t)
-                          :title "One card per mask group; the front hides only the asked group's masks."})
+              (dom/props {:class "btn btn-primary" :disabled (some? t)})
+              (tooltip/Tooltip! "One card per mask group; the front hides only the asked group's masks.")
               (dom/text "Hide One, Guess One")
               (dom/On "click" (fn [_] (submit! "hide-one")) nil))
             (dom/button
-              (dom/props {:class "btn btn-primary" :disabled (some? t)
-                          :title "One card per mask group; the front hides every mask and highlights the asked group's."})
+              (dom/props {:class "btn btn-primary" :disabled (some? t)})
+              (tooltip/Tooltip! "One card per mask group; the front hides every mask and highlights the asked group's.")
               (reset! !primary-btn dom/node)
               (dom/text "Hide All, Guess One")
               (dom/On "click" (fn [_] (submit! "hide-all")) nil))))
@@ -508,8 +508,8 @@
             initial-rects initial-elements initial-geometry initial-fields user-id))
         (when edit?
           (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                        :data-tooltip "View previous mask placements"})
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+            (tooltip/Tooltip! "View previous mask placements")
             (dom/text "History")
             (dom/On "click" (fn [_] (reset! !history-open? true)) nil)))
         (dom/button

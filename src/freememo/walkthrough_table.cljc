@@ -11,6 +11,7 @@
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    [freememo.tape-table :as tape]
+   [freememo.tooltip :as tooltip]
    [freememo.walkthrough-name :as wname]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.walkthrough :as wt])))
@@ -93,10 +94,12 @@
       (dom/props {:class "wt-row" :style {:--order i} :data-walkthrough-id (str (:id w))})
       (dom/On "click" (fn [_] (navigate! :viewer (nav/nav-walkthrough repo-id (:id w)))) nil)
       (dom/td (dom/props {:class "tape-cell-strong tape-cell-click wt-row__name" :dir "auto"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (:display-name w)})
+        (dom/span (dom/props {:class "tape-cell-text"})
+          (tooltip/Tooltip! (:display-name w))
           (dom/text (:display-name w))))
       (dom/td (dom/props {:class "tape-cell-muted tape-cell-click" :dir "ltr"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip (:range w)})
+        (dom/span (dom/props {:class "tape-cell-text"})
+          (tooltip/Tooltip! (:range w))
           (dom/text (:range w))))
       (dom/td (dom/props {:class (str "tape-cell-sm tape-cell-click wt-row__progress"
                                    (when (= "failed" (:status w)) " wt-row__progress--failed"))})

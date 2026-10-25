@@ -25,6 +25,7 @@
    [freememo.icons :as icons]
    [freememo.interaction-trail :as trail]
    [freememo.modal-shell :as modal-shell]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.user-state :as us])))
 
@@ -457,8 +458,8 @@
             (dom/text (:label chat))))
         (when excluded?
           (dom/span
-            (dom/props {:class "assistant-history__excluded"
-                        :data-tooltip "Its parent chat does not read it"})
+            (dom/props {:class "assistant-history__excluded"})
+            (tooltip/Tooltip! "Its parent chat does not read it")
             (dom/text "excluded")))
         (when pinned?
           (dom/span
@@ -543,8 +544,8 @@
       (dom/div
         (dom/props {:class "assistant-panel__bar assistant-history__bar"})
         (dom/button
-          (dom/props {:type "button" :class "btn btn-secondary assistant-history__back"
-                      :aria-label "Back to chat" :data-tooltip "Back to chat"})
+          (dom/props {:type "button" :class "btn btn-secondary assistant-history__back"})
+          (tooltip/Tooltip! "Back to chat" :aria? true)
           (icons/Icon :arrow-left :size 14)
           (dom/On "click" (fn [_] (reset! !history-open? false)) nil))
         (dom/input
@@ -559,8 +560,8 @@
                 (focus-first-history-row! view-node)))
             nil))
         (dom/button
-          (dom/props {:class "btn btn-secondary assistant-panel__new" :type "button"
-                      :data-tooltip "Start a new chat about this page"})
+          (dom/props {:class "btn btn-secondary assistant-panel__new" :type "button"})
+          (tooltip/Tooltip! "Start a new chat about this page")
           (dom/text "＋ New")
           (dom/On "click" (fn [_] (new-chat!)) nil)))
       (dom/div
@@ -619,8 +620,8 @@
     (dom/div
       (dom/props {:class "assistant-panel__bar"})
       (dom/button
-        (dom/props {:type "button" :class "btn btn-secondary assistant-panel__history"
-                    :aria-label "Chat history" :data-tooltip "Chat history"})
+        (dom/props {:type "button" :class "btn btn-secondary assistant-panel__history"})
+        (tooltip/Tooltip! "Chat history" :aria? true)
         (icons/Icon :history :size 14)
         (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
       (if (and active renaming-active?)
@@ -631,13 +632,14 @@
           (dom/props {:type "button"
                       :class (str "assistant-panel__title"
                                (when-not active " assistant-panel__title--new"))
-                      :disabled (nil? active)
-                      :data-tooltip (when active "Rename this chat")})
+                      :disabled (nil? active)})
+          (tooltip/Tooltip! (when active "Rename this chat"))
           (dom/text (if active (or active-title "Untitled") "New chat"))
           (dom/On "click" (fn [_] (when active (reset! !renaming-active? true))) nil)))
       (dom/button
         (dom/props {:class "btn btn-secondary assistant-panel__new"
-                    :type "button" :data-tooltip "Start a new chat about this page"})
+                    :type "button"})
+        (tooltip/Tooltip! "Start a new chat about this page")
         (dom/text "＋ New")
         (dom/On "click" (fn [_] (new-chat!)) nil)))))
 
