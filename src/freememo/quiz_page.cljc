@@ -30,6 +30,7 @@
    [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal-shell]
+   [freememo.motion :as motion]
    [freememo.navigation :as nav]
    [freememo.question-curation :as curate]
    [freememo.quiz-card-turn :as card-turn]
@@ -58,7 +59,7 @@
                        n (get per-doc id 0)]
                    (when (pos? n)
                      {:id id :title (:topics/title t) :questions n}))))
-         (db/get-root-topics user-id)))))
+         (db/get-root-topic-titles user-id)))))
 
 #?(:clj
    (defn active-session*
@@ -640,6 +641,9 @@
                                                  :schedule (:schedule res)}))
                             (t))))))))))
           (dom/div
+            ;; The verdict rises in as the result of the answer. Here, not in
+            ;; QuizFeedback: the dashboard history renders that too.
+            (e/snapshot (motion/rise-in! dom/node))
             (fb/QuizFeedback (:result feedback) (:answer feedback)
               (:entities qdata) !entity-card navigate-source!)
             (dom/button

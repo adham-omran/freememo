@@ -8,6 +8,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.desktop-section :as desktop-section]
    [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
@@ -17,7 +18,10 @@
    [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.code-pane :refer [CodePane]]
    [freememo.commit-card :refer [CommitCard]]
-   [freememo.forge-kinds :as forge-kinds]
+   [freememo.gdoc-home :refer [GdocHome]]
+   [freememo.gdoc-snapshot-pane :refer [GdocSnapshotPane]]
+   [freememo.topic-kinds :as topic-kinds]
+   [freememo.tooltip :as tooltip]
    [freememo.repo-home :refer [RepoHome]]
    [freememo.walkthrough-screen :refer [WalkthroughScreen]]
    [freememo.walkthrough-state :as walkthrough-state]
@@ -94,11 +98,11 @@
     (let [vertical-split? (= axis :y)]
       (dom/div
         (dom/props {:class (if vertical-split? "split-divider-v" "split-divider-h")
-                    :title "Drag to resize panels"
                     :role "separator"
                     :aria-orientation (if vertical-split? "horizontal" "vertical")
                     :aria-label label :tabindex "0"
                     :aria-valuenow (str (int (or pct 0)))})
+        (tooltip/Tooltip! "Drag to resize panels")
         (dom/On "pointerdown" (fn [e] (util/start-drag! e axis !pct)) nil)
         (dom/On "keydown" (fn [e] (util/key-resize-pct! e axis !pct nil)) nil)))))
 
@@ -184,8 +188,9 @@
           effective-content dctx/effective-content navigate! dctx/navigate!
           ;; Forge structure holds no notes: a repository shows its home or
           ;; an open walkthrough, a commit its card, a directory nothing
-          ;; (plans/repository-home.md §4.1.2).
-          structure? (forge-kinds/structure-kind? kind)
+          ;; (plans/repository-home.md §4.1.2). A Google Doc root shows its
+          ;; home (plans/google-docs-pull.md).
+          structure? (topic-kinds/home-kind? kind)
           walkthrough-id (when (= kind "repo")
                            (walkthrough-state/open-on (e/watch walkthrough-state/!route)
                              page-topic-id))]
@@ -202,6 +207,8 @@
           (WalkthroughScreen walkthrough-id))
         (when (= kind "commit")
           (CommitCard))
+        (when (= kind "gdoc")
+          (GdocHome))
         (when-not structure?
           (dom/div
             ;; The focus-reader class is the ONLY scope for the centered-column
@@ -248,7 +255,12 @@
               ;; text-change, so mounting it for a poem would make the poem
               ;; editable and let one keystroke overwrite the rendered fallback
               ;; the importer stored. A poem page has no .ql-editor.
-              (if dctx/is-poem? (PoemPane) (EditorPane)))))))))
+              ;; A Google Doc snapshot is read-only for the same reason
+              ;; (plans/google-docs-pull.md).
+              (cond
+                dctx/is-poem? (PoemPane)
+                (= kind "gdoc-snapshot") (GdocSnapshotPane)
+                :else (EditorPane)))))))))
 
 (e/defn DocumentColumns
   "Resizable top region of a document view: left panel, content, and optional
@@ -281,8 +293,10 @@
         ;; MIDDLE: content column.
         (ContentColumn)
 
-        ;; RIGHT: collapsible assistant panel.
-        (when show-assistant?
+        ;; RIGHT: collapsible assistant panel. A desktop local account has no
+        ;; assistant (15.4.4), so only a poem's الشرح keeps the panel there.
+        (when (and show-assistant?
+                (or dctx/is-poem? (e/server (desktop-section/account-ai?* user-id))))
           (RightSidePanel page-topic-id root-topic-id user-id dctx/is-poem?))))))
 
 
@@ -335,16 +349,13 @@
         ;; already bound at the root.
         ;; Forge structure holds no notes and no cards, so it has no toolbar
         ;; (plans/repository-home.md §4.1.2).
-        (when-not (forge-kinds/structure-kind? kind)
+        (when-not (topic-kinds/home-kind? kind)
           (binding [dctx/topic-id page-topic-id
                     dctx/audio? (= kind "audio")
                     dctx/root-topic-id toolbar-root-id
                     dctx/page-number (when is-pdf? current-page)
                     dctx/static-content effective-content
                     dctx/context-mode context-mode
-                    dctx/context-tooltip (if is-pdf?
-                                           "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                           "Include context for better cards. With a selection: extract text. Without: original page text.")
                     dctx/extract-status toolbar-extract-status
                     dctx/origin (:origin queue-ctx)
                     dctx/on-done! (:on-done! queue-ctx)]

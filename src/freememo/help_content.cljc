@@ -207,6 +207,24 @@
             {:label "What you get"
              :detail "The PDF opens in the Viewer, and its Zotero citation becomes the document's bibliography. Only PDFs import. Zotero 7 to 10 are supported."
              :commands #{}}]}
+   {:slug "import-google-doc"
+    :title "Import a Google Doc"
+    :intro "Study a Google Doc from any of your Google accounts, and pull its changes later. FreeMemo only reads the Doc."
+    :steps [{:label "Connect an account"
+             :detail "Settings → Google Accounts → Connect a Google account. Google asks which account to use, so you can pick a work account while you are signed in to FreeMemo with a personal one. FreeMemo can read only the Docs you pick."
+             :commands #{}}
+            {:label "Pick a Doc"
+             :detail "Import → More sources → Google Doc. Click Choose a Doc beside the account, then pick the Doc in Google's file picker."
+             :commands #{:import-google-doc}}
+            {:label "What you get"
+             :detail "A Google Doc topic, and under it one snapshot topic, named by the time it was pulled. A snapshot is read-only. It keeps the Doc's headings, lists, tables, links, code blocks and images, but not underline or text colour. Select text in it to Extract or to generate cards."
+             :commands #{}}
+            {:label "Pull changes"
+             :detail "On the Google Doc topic, press Pull. When the Doc changed, a new snapshot is added. The earlier snapshot is marked done, so it leaves the Learn queue, and its extracts and cards stay where they are. When nothing changed, no snapshot is added."
+             :commands #{:pull-google-doc}}
+            {:label "When access ends"
+             :detail "If the account is disconnected, or the Doc is deleted or no longer shared, Pull says why. Every snapshot you already have stays."
+             :commands #{}}]}
    {:slug "learning-a-codebase"
     :title "Import code"
     :intro "Study a code repository as a topic tree. Import it from GitHub, GitLab or Forgejo, or upload a .zip."
@@ -283,7 +301,7 @@
              :detail "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."
              :commands #{:scan :copy-text}}
             {:label "Edit & split ({extract})"
-             :detail "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."
+             :detail "Fix the text in the editor. Select a passage, then choose Extract in the menu that opens. Extract turns it into a child topic linked back to the page."
              :commands #{:extract}}
             {:label "Mark done ({done})"
              :detail "Mark a page Done to drop it from your review queue while keeping the content."
@@ -504,13 +522,13 @@
     :title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [{:label "Generate ({generate})"
-             :detail "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
+             :detail "Select a passage. In the menu that opens, set the card count and pick Basic, Cloze or Overlapping, then choose Generate from selection or press {generate}. With nothing selected, {generate} generates from the whole page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."
              :commands #{:generate}}
             {:label "Generate with a prompt"
-             :detail "Add a custom instruction (e.g. \"focus on definitions\") — recent prompts autocomplete."
+             :detail "Choose Generate with prompt… in the same menu to add a custom instruction (e.g. \"focus on definitions\"). Recent prompts autocomplete."
              :commands #{:gen-prompt}}
-            {:label "Compare models"
-             :detail "Run the same content through two or more card models side by side and keep the set you prefer; each model is a separate, billed generation."
+            {:label "Context and Compare models"
+             :detail "The ⋯ button in that menu turns context on or off and sets how many pages it takes. Compare models… there runs the same content through two or more card models side by side, so you keep the set you prefer. Each model is a separate, billed generation."
              :commands #{:compare-card-gen}}
             {:label "Curate"
              :detail "Add a card from a text selection ({add-new}) — the passage is marked in the editor — edit any card's question/answer or cloze, or delete the weak ones."
@@ -573,22 +591,22 @@
     :title "Building a knowledge graph"
     :intro "Distill a document into a fact graph you can curate and quiz against."
     :steps [{:label "Distill"
-             :detail "Knowledge → Documents → Distill on a document. It runs in the background with a spinner and a Cancel; Re-distill re-runs it. Facts land approved — you curate by exception, not one by one."
-             :commands #{:distill}}
+             :detail "Knowledge → Documents → Distill on a document. It runs in the background with a spinner and a Pause; Re-distill re-runs it. Facts land approved, so you curate by exception, not one by one. To distill many documents, tick them and choose Distill in the bar above the table. The confirmation states how many documents run, and each run spends credits."
+             :commands #{:distill :bulk-distill}}
             {:label "Generate questions"
-             :detail "Questions turns each fact into an atomic question; both actions are also in the {toggle-palette} palette."
-             :commands #{:generate-questions}}
+             :detail "Generate questions, in a document's ⋯ menu, turns each fact into an atomic question. Tick several documents and choose Generate questions in the bar to run them all. Documents with no approved facts are skipped. Both actions are also in the {toggle-palette} palette."
+             :commands #{:generate-questions :bulk-generate-questions}}
             {:label "Fix the facts"
-             :detail "Facts (N) opens the fact table — edit or relink an object, or × to reject a fact."
-             :commands #{}}
+             :detail "Browse facts, in a document's ⋯ menu, opens the fact table. Edit changes or relinks a fact's object, and Delete in the ⋯ menu removes it. Tick facts to delete many at once with one Undo. With the status filter on Duplicates, Not a duplicate returns the ticked facts to the graph."
+             :commands #{:bulk-reject-facts :bulk-unmark-duplicate-facts}}
             {:label "Curate entities"
-             :detail "Entities: Rename one, Merge… two that name the same thing (irreversible), or Synthesize questions for one."
-             :commands #{}}
+             :detail "Entities: Rename one, or choose Synthesize questions in its ⋯ menu. To merge entities that name the same thing, tick them, choose Merge into one, and pick the entity to keep. A merge cannot be undone."
+             :commands #{:bulk-merge-entities}}
             {:label "Curate questions"
-             :detail "Questions: click a row to edit its question and reference answer, or × to reject it."
-             :commands #{}}
+             :detail "Questions: click a row to edit its question and reference answer. A row's ⋯ menu flags, suspends or deletes it. Tick questions to flag, suspend or delete many at once, and one Undo restores a delete. Every Knowledge table sorts by a column header, and its filters stay in the address bar."
+             :commands #{:bulk-reject-questions :bulk-flag-questions :bulk-suspend-questions}}
             {:label "Known ideas"
-             :detail "Knowledge → Known ideas lists every idea you know: the ideas the tutor confirmed from your answers, and the ideas you marked with I know this. Each row says how you know it, the files it came from, when you last checked it, and its cards. Make cards writes 3 cards from the passages and questions behind the idea. Check me opens the Quiz on the idea's cards, due or not, and the band above the table lists the ideas due for a check. Open shows the idea's page: the answer that showed it, how you got there, its cards and its checks. Undo my mark removes only your own mark. Not learned yet removes both marks and puts the idea back on every map that has it; its cards stay."
+             :detail "Knowledge → Known ideas lists every idea you know: the ideas the tutor confirmed from your answers, and the ideas you marked with I know this. Each row says how you know it, the files it came from, when you last checked it, and its cards. Make cards writes 3 cards from the passages and questions behind the idea. Check me opens the Quiz on the idea's cards, due or not, and the band above the table lists the ideas due for a check. Tick several ideas and choose Check me in the bar to check them together. The idea's name opens its page: the answer that showed it, the conversation that led to it, how you got there, its cards and its checks. The conversation starts at the tutor turn that first named the idea, and Open opens each chat it spans. In a row's ⋯ menu, Make more writes more cards, and Undo my mark removes only your own mark. Not learned yet removes both marks and puts the idea back on every map that has it; its cards stay."
              :commands #{:go-known-ideas :mark-idea-not-learned :undo-idea-self-mark}}]}
    {:slug "quiz"
     :title "Testing yourself — Quiz & Timed Quiz"
@@ -622,7 +640,44 @@
              :commands #{:move-topic :show-hierarchy :show-pins}}
             {:label "Review a subset"
              :detail "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."
-             :commands #{:open-subset-review}}]}
+             :commands #{:open-subset-review :review-topic}}]}
+   {:slug "right-click-menu"
+    :title "Right-click menu"
+    :intro "Right-click a row, an image, a PDF page or a place in the text to see what you can do there."
+    :steps [{:label "Open the menu"
+             :detail "Right-click, or press Shift+F10 or the Menu key on a focused row or in the editor. Use the arrow keys to move and Enter to choose. Press Escape to close it. Shift+right-click shows the browser's own menu."
+             :commands #{}}
+            {:label "Cut or copy a selection"
+             :detail "Select text in a document or a card field and right-click it to cut or copy it. To paste, press Ctrl+V or Cmd+V, or Shift+right-click for the browser's menu."
+             :commands #{:cut-editor-selection :copy-editor-selection}}
+            {:label "Add or generate cards"
+             :detail "Right-click in a document to add a new card. Text you selected goes into its front. With nothing selected, Generate cards… opens a small form to generate from the whole document with its own count, kind and context."
+             :commands #{:add-new-card-at-caret :generate-document-cards}}
+            {:label "Insert in the editor"
+             :detail "Right-click in a document or a card field to insert a formula, a table, an image, a code block or a divider at the cursor."
+             :commands #{:insert-formula :insert-table :insert-image :insert-code-block :insert-divider}}
+            {:label "Act on an image"
+             :detail "Right-click an image to copy it, save it, pin it to the front or back of its topic, or make image occlusion cards from it. A topic holds at most 2 pins."
+             :commands #{:copy-image :save-image :copy-image-address :pin-image-front
+                         :pin-image-back :open-image-occlusion}}
+            {:label "Loop an audio clip"
+             :detail "Right-click an audio clip to make it loop, or to stop it looping."
+             :commands #{:loop-audio-clip :stop-audio-clip-loop}}
+            {:label "Act on a topic"
+             :detail "Right-click a document in the Library, the Hierarchy panel, the Learn queue or the Search results. The ⋯ button on a Library row opens the same menu. Sync with Anki syncs only that topic and the topics under it."
+             :commands #{:open-topic :open-topic-in-new-tab :rename-topic :move-topic-to-top-level
+                         :set-topic-priority :mark-topic-done :generate-cards-for-topic
+                         :sync-topic-with-anki :sync-topic-with-neoreader :open-document-options
+                         :dismiss :undismiss :delete-topic}}
+            {:label "Act on a card"
+             :detail "Right-click a card in Library → Cards or in a document's card table to edit it, see its history, open its topic or delete it. With several cards selected, Delete removes them all."
+             :commands #{:open-card-editor :card-history :open-card-source-topic :delete-cards}}
+            {:label "Act on a PDF page"
+             :detail "Right-click a PDF page to copy the selected text, scan the page, or generate cards from it."
+             :commands #{:copy-pdf-selection :scan-pdf-page :generate-cards-for-page}}
+            {:label "Use the command palette"
+             :detail "With a row or the editor focused, open {toggle-palette}. It lists the same commands for that row or for the cursor."
+             :commands #{}}]}
    {:slug "keyboard"
     :title "Control FreeMemo with the keyboard"
     :intro "Use focus keys, the command palette, and contextual controls to operate FreeMemo without a pointer."
@@ -716,7 +771,9 @@
    "code"           "learning-a-codebase"
    "repo"           "learning-a-codebase"
    "commit"         "learning-a-codebase"
-   "dir"            "learning-a-codebase"})
+   "dir"            "learning-a-codebase"
+   "gdoc"           "import-google-doc"
+   "gdoc-snapshot"  "import-google-doc"})
 
 (def undocumented
   "Registry ids no step documents, each with its reason. `:pending` means Help
@@ -724,7 +781,7 @@
    entries, and the cap only goes down (plans/searchable-help.md 6.4)."
   {:credits-granted           "Bookkeeping after a payment. No user action runs it."
    :debit-credits             "Bookkeeping after a charge. No user action runs it."
-   :open-topic                "Opens a topic from a link. It is not a step a user takes."
+   :show-error-toast          "Shows an error a menu row met in the browser. No user action runs it."
    :save-video-position       "Saved on pause and on leaving. No user action runs it."
    :save-reading-position     "Saved on a scroll pause and on leaving. No user action runs it."
    :mark-assistant-chat-opened "Saved when a chat opens. No user action runs it."
@@ -732,13 +789,10 @@
    :add-pin                   :pending
    :apply-code-language       :pending
    :bulk-delete-cards         :pending
-   :bulk-reject-facts         :pending
-   :card-history              :pending
    :compare-ocr               :pending
    :copy-all                  :pending
    :copy-card                 :pending
    :delete-document           :pending
-   :dismiss                   :pending
    :find-next-marked-card     :pending
    :find-next-remarked-card   :pending
    :find-next-suspended-card  :pending
@@ -750,7 +804,6 @@
    :push-biblio               :pending
    :refetch-biblio            :pending
    :remove-pin                :pending
-   :rename-topic              :pending
    :reset-dedup-thresholds    :pending
    :restore                   :pending
    :save-biblio               :pending
@@ -764,7 +817,6 @@
    :toggle-focus-reader       :pending
    :toggle-left-pane          :pending
    :toggle-pin-placement      :pending
-   :undismiss                 :pending
    :undo-entry                :pending
    :update-occlusion          :pending})
 

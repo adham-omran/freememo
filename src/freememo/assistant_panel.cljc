@@ -94,9 +94,12 @@
                  pending-web-search?)
           chat-options (:chat-options data)
           mention-query (panel-data/mention-query draft)
+          ;; Offloaded: this re-runs on every key typed after `@`, and a plain
+          ;; e/server call held the whole session for each run. The latch keeps
+          ;; the previous list while the next one loads.
           reference-documents
-          (e/server (assistant/referenceable-docs
-                      user-id root-topic-id mention-query))
+          (e/server (e/Offload #(assistant/referenceable-docs
+                                  user-id root-topic-id mention-query)))
           reference-document-count (e/server (count reference-documents))
           active-reference-index
           (if (pos? reference-document-count)

@@ -1,25 +1,26 @@
 (ns freememo.content-toolbar
-  "Unified card generation toolbar for both page-level and extract-level content.
-   Orchestrator — delegates to ToolbarSettings, ToolbarActions, GenerateDropdown,
-   and AnkiSyncButton. Generate + Generate-with-Prompt are consolidated into the
-   Generate dropdown. The original button e/defns are mounted hidden inside it
-   so their refs/modals/tokens stay live."
+  "The document toolbar for both page-level and extract-level content: Anki
+   Sync, the lifecycle actions, and the document context and meta groups.
+
+   Extract, Add new card and Generate have no buttons here. Their controls are
+   the selection popover and the right-click menu, and their owners mount in
+   freememo.card-actions-host (plans/toolbar-card-actions-fold.md). Surfaces
+   with no selection popover keep a compact Extract and Add new card pair."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.content-toolbar-helpers :as helpers]
-   [freememo.card-count :as cc]
-   [freememo.content-toolbar-actions :as actions]
+   [freememo.gen-settings :as gs]
+   [freememo.topic-kinds :as topic-kinds]
+   [freememo.card-action-buttons :refer [CardActionButtons]]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
-   [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
    [freememo.document-options :refer [DocumentOptionsTrigger]]
    [freememo.document-options-targets :as doc-options-targets]
    [freememo.transcribe-button :refer [TranscribeButton]]
    [freememo.jump-to-source-button :refer [JumpToSourcePageButton]]
-   #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
@@ -28,17 +29,12 @@
    [freememo.tooltip :as tooltip]
    [freememo.focus-reader :refer [FocusReaderToggle]]))
 
-;; State map keys:
+;; Ambient doc-context the toolbar reads:
 ;; {:user-id       — user identifier
 ;;  :enc-key       — encryption key
-;;  :topic-id      — the entity (page or extract topic) where cards are created
+;;  :topic-id      — the entity (page or extract topic) the toolbar acts on
 ;;  :root-topic-id — the root topic for scoping (PDF root, standalone root, etc.)
-;;  :page-number   — current page number (for page-level context queries, nil for non-PDF)
-;;  :content-text  — full text (page text for :page mode, extract text for :extract mode)
-;;  :context-mode  — :page or :extract (extract context fetches the parent
-;;                   topic's content server-side at the generate site)
-;;  :context-tooltip — string for the Context checkbox title attribute
-;;  :llm-enabled?  — whether LLM features are enabled
+;;  :context-mode  — :page or :extract
 ;; }
 
 ;; install-overflow-detector! lives in freememo.toolbar-overflow (shared with
@@ -47,21 +43,17 @@
 (e/defn OverflowPanel
   "The ⋮ overflow dropdown/panel body — proxy buttons for actions that collapse
    out of the inline toolbar at narrow widths (Document-options,
-   DocumentMeta, Add-new/Export/Pull/Push/Delete). Split out of ContentToolbar
+   DocumentMeta, Sync and Delete). Split out of ContentToolbar
    per the JVM 64KB method-limit convention (§7.4); always mounted (display via
    CSS/.overflow-open) so its e/Token handlers stay live."
   [biblio-target-id is-pdf? unsynced-count extract-status !overflow-open]
   (e/client
     (dom/div (dom/props {:class "toolbar-overflow-panel"})
 
-      ;; Priority / Context / Basic-Cloze proxies removed: Priority moved
-      ;; into the Document-Options modal (C5); card-type + Context moved
-      ;; into the Generate dropdown menu (C3), which is itself a dropdown
-      ;; and works on mobile, so no overflow proxy is needed.
-
-      ;; CardCount is no longer proxied into the ⋮ overflow panel — it now
-      ;; lives inside the Generate dropdown menu (always a dropdown, works at
-      ;; every tier). The inline stepper below still shows until it collapses.
+      ;; Priority / Context / Basic-Cloze / count proxies removed: Priority
+      ;; moved into the Document-Options modal (C5); card type, count and
+      ;; Context moved into the selection popover
+      ;; (plans/toolbar-card-actions-fold.md), so no overflow proxy is needed.
 
       ;; Bibliography (Refetch) proxy removed — Refetch folded into the
       ;; Edit-Bibliography modal (C4).
@@ -101,14 +93,6 @@
       ;; Proxy action buttons — hidden on desktop, visible in dropdown on mobile.
       ;; Each dispatches its command through the bus (same path as
       ;; keyboard shortcuts and the palette).
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-default"
-                    :aria-label "Add new"})
-        (icons/Icon :plus :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new"))
-        (dom/On "click" (fn [_]
-                          (bus/dispatch! :add-new)
-                          (reset! !overflow-open false)) nil))
       ;; One Anki action. The separate Pull item is gone — a pull is an outcome
       ;; reconcile chooses per card, not a direction the user picks.
       (dom/button
@@ -132,37 +116,11 @@
                             (bus/dispatch! :delete-document)
                             (reset! !overflow-open false)) nil))))))
 
-(e/defn CardCountPersister
-  "Hidden button that persists the shared card-count global on demand.
-   The format-menu selection popup (plain CLJS) can't call e/server, so it
-   fires this via the :persist-card-count invoker after mutating cc/!card-count.
-
-   Pre:  cc/!card-count holds the value to persist.
-   Post: the click callback reads @cc/!card-count SYNCHRONOUSLY (fresh value —
-         no reactive-propagation race) and saves it server-side.
-   Invariant: the value MUST come from the click-time deref, never an e/watch
-              binding, or a save could race a just-issued reset!."
-  [user-id]
-  (e/client
-    (dom/button
-      (dom/props {:style {:display "none"} :type "button"
-                  :aria-hidden "true" :tabindex "-1"})
-      (let [node dom/node]
-        (bus/publish-invoker! :persist-card-count (fn [] (.click node)))
-        (e/on-unmount (fn [] (bus/retract-invoker! :persist-card-count))))
-      (let [v (dom/On "click" (fn [_] @cc/!card-count) nil)
-            [t _] (e/Token v)]
-        (when t
-          (case (e/server (e/Offload #(user-settings/save-card-count user-id v)))
-            (t)))))))
-
 (e/defn ContentToolbar []
   (e/client
     (let [user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id audio? dctx/audio?
-          root-topic-id dctx/root-topic-id page-number dctx/page-number content-text dctx/content-text
-          context-mode dctx/context-mode context-tooltip dctx/context-tooltip llm-enabled? dctx/llm-enabled?
-          extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
-          citation dctx/citation page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
+          root-topic-id dctx/root-topic-id context-mode dctx/context-mode
+          extract-status dctx/extract-status navigate! dctx/navigate!
           reading-mode? dctx/reading-mode?
           ;; Unsynced card count. The refresh sum is built on the server, as in
           ;; ContentCardTable, for the reason given there.
@@ -180,29 +138,13 @@
           ;; PDF (root or page) → :page context; extract/web/epub → :extract.
           ;; Document-options shows the extraction-style select only for PDFs.
           is-pdf? (= context-mode :page)
-          ;; Load settings from server
-          server-context-enabled (e/server (user-settings/get-context-enabled user-id))
-          server-context-pages (e/server (user-settings/get-context-pages user-id))
-          server-card-type (e/server (user-settings/get-card-type user-id))
-          server-card-count (e/server (user-settings/get-card-count user-id))
-
-          ;; Shared settings atoms (used by both ToolbarSettings and ToolbarGenerate/Actions)
-          !use-context (atom server-context-enabled)
-          use-context (e/watch !use-context)
-          !context-window (atom server-context-pages)
-          context-window (e/watch !context-window)
-          !card-type (atom server-card-type)
-          card-type (e/watch !card-type)
-          ;; Shared client-global (freememo.card-count) — the format-menu popup
-          ;; reads/writes the same atom. Seeded once from the server value below.
-          !card-count cc/!card-count
-          card-count-val (e/watch !card-count)
-
-          ;; Generation status (per-user, keyed by topic-id)
-          card-gen-status (e/server (get (e/watch (us/get-atom user-id :card-gen-status)) topic-id))
-          gen-pending (or (:pending card-gen-status) 0)
-          gen-active? (or (some? (:active-id card-gen-status)) (pos? gen-pending))
-          gen-error (:error card-gen-status)
+          ;; Anki Sync's default kind is the kind Generate makes.
+          card-type (:kind (gs/effective (e/watch gs/!gen-settings)))
+          ;; Surfaces where a selection opens no popover keep the compact
+          ;; Extract + Add new card pair: the code pane and a read-only reader
+          ;; take their selection outside Quill.
+          popover-less? (or dctx/is-code?
+                          (contains? topic-kinds/read-only-content-kinds dctx/kind))
 
           ;; Overflow menu state
           !overflow-open (atom false)
@@ -219,24 +161,16 @@
           ;; updates fire downstream where tier matters reactively).
           _collapse-tier (e/watch !collapse-tier)]
 
-      ;; Seed the shared card-count global once, when the server value arrives
-      ;; and nothing has set it yet. Guarded so later re-renders never clobber a
-      ;; value the user changed via the toolbar stepper or the format-menu popup.
-      (when (and (some? server-card-count) (nil? card-count-val))
-        (reset! cc/!card-count server-card-count))
-
       (if reading-mode?
         ;; Reading mode (mobile learn, A2): reduce to the IR verbs — Extract +
-        ;; Add-Card. Everything else (Generate, Sync, doc-meta, history, …) and
-        ;; the overflow machinery are dropped for a distraction-free read.
+        ;; Add-Card. Everything else (Sync, doc-meta, history, …) and the
+        ;; overflow machinery are dropped for a distraction-free read. A phone
+        ;; has no right-click and no chords, so the pair stays here.
         (dom/div
           (dom/props {:class "toolbar-container"})
           (dom/div
             (dom/props {:class "toolbar"})
-            (dom/div
-              (dom/props {:class "toolbar-group"})
-              (binding [dctx/card-type card-type]
-                (actions/ToolbarActions)))))
+            (CardActionButtons)))
 
         (dom/div
         ;; Electric's reactive class binding owns base + overflow-open only.
@@ -259,51 +193,30 @@
               (OverflowPanel biblio-target-id is-pdf? unsynced-count extract-status !overflow-open)
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:
-          ;; 1 Extract/Add, 2 Generate, 3 Sync, 4 History/Priority/Done/Delete,
-          ;; 5 Transcribe/Jump-to-source/Document-options.
+          ;; 1 Extract/Add (popover-less surfaces only), 2 Sync,
+          ;; 3 History/Priority/Done/Delete, 4 Transcribe/Jump-to-source/
+          ;; Document-options, 5 Document meta.
           ;; Collapse tiers are by CSS class (not position). Dividers between
           ;; groups carry the collapse class of the neighbor that disappears so
           ;; they hide in lockstep (no dangling separator): the Sync→lifecycle
           ;; divider hides with Sync (.toolbar-collapse-sync, tier 7); the
           ;; lifecycle→doc-context divider hides with doc-context
-          ;; (.toolbar-collapse-bib, tier 5). Groups 1/2 always show their main
-          ;; button, so D1/D2 never dangle.
+          ;; (.toolbar-collapse-bib, tier 5). Group 1 always shows both
+          ;; buttons, so its divider never dangles.
 
-          ;; 1. Extract + Add new (IR Tools).
-              (dom/div
-                (dom/props {:class "toolbar-group"})
-                (binding [dctx/card-type card-type]
-                  (actions/ToolbarActions)))
+          ;; 1. Extract + Add new card, where a selection has no popover.
+              (when popover-less?
+                (CardActionButtons)
+                (dom/div (dom/props {:class "toolbar-group-divider"})))
 
-              (dom/div (dom/props {:class "toolbar-group-divider"}))
-
-          ;; 2. Generate group — Generate dropdown + parameters together.
-          ;; ToolbarGenerate mounts hidden inside the dropdown so its e/Token
-          ;; paths, PromptDialog, and button refs stay live; generate/prompt
-          ;; atoms stay LOCAL to it (avoids reactive loops). Context is the
-          ;; first to collapse (.toolbar-collapse-first).
-              (dom/div
-                (dom/props {:class "toolbar-group toolbar-generate-cluster"})
-                (binding [dctx/card-type card-type
-                          dctx/card-count-val card-count-val dctx/use-context use-context
-                          dctx/context-window context-window dctx/gen-active? gen-active?
-                          dctx/gen-pending gen-pending dctx/gen-error gen-error
-                          dctx/!use-context !use-context dctx/!context-window !context-window
-                          dctx/!card-type !card-type dctx/!card-count !card-count]
-                  (GenerateDropdown))
-                ;; Hidden persister — lets the format-menu popup save the count.
-                (CardCountPersister user-id))
-
-              (dom/div (dom/props {:class "toolbar-group-divider"}))
-
-          ;; 3. Anki Sync (unboxed, lone button). .toolbar-collapse-sync sits on
+          ;; 2. Anki Sync (unboxed, lone button). .toolbar-collapse-sync sits on
           ;; the button; its modal is a sibling and stays mounted.
               (AnkiSyncButton user-id root-topic-id card-type unsynced-count)
 
           ;; Divider hides with Sync at tier 7 (no dangling separator).
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-sync"}))
 
-          ;; 4. History / Priority / Done / Delete. History + Priority always
+          ;; 3. History / Priority / Done / Delete. History + Priority always
           ;; present; Done/Delete only for extract topics.
               (dom/div
                 (dom/props {:class "toolbar-group"})
@@ -312,7 +225,7 @@
           ;; Divider hides with the doc-context group at tier 5.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))
 
-          ;; 5. Transcribe (audio) + Jump-to-source + Document-options.
+          ;; 4. Transcribe (audio) + Jump-to-source + Document-options.
           ;; Refetch-bibliography folded into the Edit-Bibliography modal (C4).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-doc-context-group toolbar-collapse-bib"})
@@ -328,7 +241,7 @@
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))
 
-          ;; 6. Document meta (last group, first to collapse): Edit-Bibliography
+          ;; 5. Document meta (last group, first to collapse): Edit-Bibliography
           ;; + Mark-PDF-Done + citation + progress. Citation collapses at tier 1,
           ;; the rest at tier 2 (.toolbar-collapse-docmeta on the group).
               (dom/div

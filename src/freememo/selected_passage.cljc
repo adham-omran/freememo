@@ -4,9 +4,10 @@
 
    Generate, Generate with Prompt, Compare models, Extract and Add new card
    all read it, so the order the surfaces are tried in is stated once, here:
-   the code pane's rendered Markdown view, then its source view, then the
-   document editor. A code-pane selection is the live DOM selection, so it
-   wins over a Quill range the editor may still hold from earlier. With the
+   a read-only rendered surface (the code pane's Markdown view, or a Google
+   Doc snapshot), then the code pane's source view, then the document editor.
+   A read-only selection is the live DOM selection, so it wins over a Quill
+   range the editor may still hold from earlier. With the
    editor pane hidden, the Quill fallback reads nothing, because hiding it
    calls `editor/release-selection!`."
   (:require
@@ -19,7 +20,7 @@
    Pre : none. Client only; nil on the JVM.
    Post: nil when no surface holds a selection. Otherwise
          {:html :text :surface}, where :html is non-empty and :surface is one
-         of :code-rendered, :code-source or :editor. :index and :length are
+         of :rendered, :code-source or :editor. :index and :length are
          present iff :surface is :editor. :html keeps the form each surface
          gave before this namespace existed — rendered HTML, an escaped code
          block, or the editor's stored form. :text can be blank (an
@@ -28,7 +29,7 @@
   #?(:clj nil
      :cljs
      (if-let [html (code-pane/rendered-selection-html)]
-       {:html html :text (str (.getSelection js/window)) :surface :code-rendered}
+       {:html html :text (str (.getSelection js/window)) :surface :rendered}
        (if-let [text (code-pane/pane-selection-text)]
          {:html (code-pane/source-block-html text) :text text :surface :code-source}
          (when-let [{:keys [html text index length]} (editor/get-selection-html!)]
@@ -41,10 +42,22 @@
    Pre : `passage` came from `current`, or is nil.
    Post: an :editor passage is highlighted with `opts`, as
          `editor/highlight-range!` takes them. Any other passage, or nil, is
-         left alone: the code pane is read-only and has nothing to mark.
+         left alone: those surfaces are read-only and have nothing to mark.
          Returns nil."
   [passage & opts]
   #?(:clj nil
      :cljs (when (= :editor (:surface passage))
              (apply editor/highlight-range! (:index passage) (:length passage) opts)))
+  nil)
+
+(defn flash!
+  "Flash `passage` once where it was taken from, so the reader sees it become
+   an item.
+   Pre : `passage` came from `current`, or is nil.
+   Post: an :editor passage flashes, and its document is not changed. Any
+         other passage, or nil, is left alone. Returns nil."
+  [passage]
+  #?(:clj nil
+     :cljs (when (= :editor (:surface passage))
+             (editor/flash-range! (:index passage) (:length passage))))
   nil)

@@ -194,16 +194,18 @@
                             :background "var(--color-bg-toolbar)"
                             :position "relative" :z-index "1"}})
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :title "Play / pause"})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (tooltip/Tooltip! "Play / pause" :aria? true)
           (dom/text "⏯")
           (dom/On "click" (fn [_] (play-pause!*)) nil))
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :title "Play selection"})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (tooltip/Tooltip! "Play selection")
           (dom/text "▶ selection")
           (dom/On "click" (fn [_] (play-region!*)) nil))
         (dom/button
-          (dom/props {:class (if loop? "btn btn-sm btn-primary" "btn btn-sm btn-secondary")
-                      :title "Loop the selection while practicing"})
+          (dom/props {:class (if loop? "btn btn-sm btn-primary" "btn btn-sm btn-secondary")})
+          (tooltip/Tooltip! "Loop the selection while practicing")
           (dom/text "⟲ loop")
           (dom/On "click" (fn [_]
                             (let [on? (swap! !loop? not)]
@@ -211,8 +213,8 @@
             nil))
         (dom/input
           (dom/props {:type "range" :min "0" :max "1" :step "0.05" :value "1"
-                      :title "Volume"
                       :style {:width "72px"}})
+          (tooltip/Tooltip! "Volume" :aria? true)
           (dom/On "input"
             (fn [e]
               (set-volume!* (js/parseFloat (-> e .-target .-value))))
@@ -220,13 +222,15 @@
         (dom/div
           (dom/props {:style {:display "flex" :flex-direction "column" :gap "2px"}})
           (dom/button
-            (dom/props {:class "btn btn-secondary" :title "Zoom waveform in"
+            (dom/props {:class "btn btn-secondary"
                         :style {:padding "0 6px" :font-size "12px" :line-height "1.4"}})
+            (tooltip/Tooltip! "Zoom waveform in" :aria? true)
             (dom/text "+")
             (dom/On "click" (fn [_] (zoom-by! 1.5)) nil))
           (dom/button
-            (dom/props {:class "btn btn-secondary" :title "Zoom waveform out"
+            (dom/props {:class "btn btn-secondary"
                         :style {:padding "0 6px" :font-size "12px" :line-height "1.4"}})
+            (tooltip/Tooltip! "Zoom waveform out" :aria? true)
             (dom/text "−")
             (dom/On "click" (fn [_] (zoom-by! (/ 1 1.5))) nil)))
         (dom/div
@@ -403,18 +407,18 @@
                                 :display "flex" :flex-direction "column" :gap "2px"
                                 :white-space "nowrap"}})
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :title "Front: audio clip — Back: notation"})
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (tooltip/Tooltip! "Front: audio clip — Back: notation")
               (dom/text "Audio front")
               (dom/On "click" (fn [_] (start-pipeline! ["audio-front"])) nil))
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :title "Front: notation — Back: audio clip"})
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (tooltip/Tooltip! "Front: notation — Back: audio clip")
               (dom/text "Sheet front")
               (dom/On "click" (fn [_] (start-pipeline! ["sheet-front"])) nil))
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :title "Two Anki notes, one per direction, sharing the same media"})
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (tooltip/Tooltip! "Two Anki notes, one per direction, sharing the same media")
               (dom/text "Both")
               (dom/On "click"
                 (fn [_] (start-pipeline! ["audio-front" "sheet-front"])) nil))))

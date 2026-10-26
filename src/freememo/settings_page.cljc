@@ -13,11 +13,13 @@
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
    [freememo.forge-settings-section :refer [ForgeTokensSection]]
+   [freememo.google-accounts-section :refer [GoogleAccountsSection]]
    [freememo.settings-group :as group]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
    [freememo.modal-shell :as modal]
    [freememo.settings-tab :as settings-tab]
+   [freememo.desktop-section :as desktop-section]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])))
 
@@ -31,8 +33,10 @@
    {:id "settings-ai" :label "AI Features"}
    {:id "settings-appearance" :label "Appearance"}
    {:id "settings-anki" :label "Anki Sync"}
+   {:id "settings-desktop" :label "Desktop App"}
    {:id "settings-zotero" :label "Zotero"}
    {:id "settings-forges" :label "Git Forges"}
+   {:id "settings-google" :label "Google Accounts"}
    {:id "settings-extension" :label "Browser Extension"}
    {:id "settings-keyboard" :label "Keyboard Shortcuts"}])
 
@@ -378,8 +382,7 @@
    button. So this governs the duplicate case; off keeps the reader where they
    are, and the toast is still there to follow.
 
-   Forms5 `Checkbox!`, the standalone persisted-toggle shape
-   `content-toolbar-settings/ContextSettings` uses."
+   Forms5 `Checkbox!`, the standalone persisted-toggle shape."
   [user-id]
   (e/client
     (let [server-value (e/server (settings/get-link-import-navigates user-id))
@@ -637,8 +640,13 @@
           (SettingsTab active "settings-ai" (e/fn [] (AIFeaturesSection user-id enc-key)))
           (SettingsTab active "settings-appearance" (e/fn [] (AppearanceSection user-id)))
           (SettingsTab active "settings-anki" (e/fn [] (AnkiSyncSection user-id)))
+          ;; plans/electron-local-db-sync.md 3.2, 5.2, 13.7
+          (SettingsTab active "settings-desktop"
+            (e/fn [] (desktop-section/DesktopAppSection user-id base-url client-country)))
           (SettingsTab active "settings-zotero" (e/fn [] (ZoteroSection user-id)))
           ;; plans/git-forge-integration.md §4.2
           (SettingsTab active "settings-forges" (e/fn [] (ForgeTokensSection user-id)))
+          ;; plans/google-docs-pull.md row 2.5
+          (SettingsTab active "settings-google" (e/fn [] (GoogleAccountsSection user-id)))
           (SettingsTab active "settings-extension" (e/fn [] (BrowserExtensionSection user-id)))
           (SettingsTab active "settings-keyboard" (e/fn [] (KeyboardShortcutsSection))))))))

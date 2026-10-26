@@ -115,7 +115,7 @@
        "&scope=openid%20email%20profile"
        "&state=" (url-encode state)))
 
-(defn- parse-jwt-payload
+(defn parse-jwt-payload
   "Base64-decode the payload section (index 1) of a JWT and parse as JSON.
    Does not verify the signature — we trust Google's token endpoint directly."
   [id-token]

@@ -12,7 +12,28 @@
 
 (def all
   #{"basic" "pdf" "page" "epub" "web" "wikipedia" "markdown" "supermemo"
-    "video" "video-playlist" "audio" "score" "poem" "code" "repo" "commit" "dir"})
+    "video" "video-playlist" "audio" "score" "poem" "code" "repo" "commit" "dir"
+    "gdoc" "gdoc-snapshot"})
+
+(def home-kinds
+  "Kinds whose viewer page is a home rather than a document: no notes editor,
+   no document toolbar and no card table. The forge structure kinds
+   (`forge-kinds/structure-kinds`) and a Google Doc root, whose home lists its
+   snapshots and holds Pull (plans/google-docs-pull.md)."
+  #{"repo" "commit" "dir" "gdoc"})
+
+(defn home-kind?
+  "True when a topic of `kind` shows a home instead of a document."
+  [kind]
+  (contains? home-kinds kind))
+
+(def read-only-content-kinds
+  "Kinds whose `content` the user reads and never edits. The viewer mounts a
+   reader for them instead of the editor, and `db/update-topic-content!`
+   refuses to write their `content`. A poem's content is a fallback rendered
+   from its package. A Google Doc snapshot's is the Doc as one Pull exported it
+   (plans/google-docs-pull.md)."
+  #{"poem" "gdoc-snapshot"})
 
 (defn pdf-root-id
   "The id the PDF viewer and the toolbar's card generation treat as the document

@@ -178,3 +178,141 @@
                 texts))
           (is (every? string? (map :date (:events page))))
           (is (:material? page)))))))
+
+;; ── The idea trail (plans/idea-trail.md) ───────────────────────────
+
+(defn- answer-run!
+  "A turn sent through `create-assistant-answer-run!`, then completed.
+   Post: {:id :uuid}."
+  [chat question map-id]
+  (let [uuid (str (random-uuid))
+        {:keys [run-id]} (db/create-assistant-answer-run! chat question nil
+                           {:run-uuid uuid :provider-session-id "test"
+                            :request-snapshot {} :question-map-id map-id})]
+    (jdbc/execute! db/ds ["UPDATE assistant_runs SET status = 'completed',
+                                  completed_at = CURRENT_TIMESTAMP WHERE id = ?" run-id])
+    {:id run-id :uuid uuid}))
+
+(defn- old-run!
+  "A completed turn as the app stored it before the idea trail: no map named.
+   `created` and `completed` are timestamptz text. A `map-message?` run's
+   request carried a question-map message, and `evidence-of` is the
+   [document-topic-id title] of its one evidence row. Post: the run's id."
+  [chat question created completed map-message? evidence-of]
+  (let [message! (fn [role content]
+                   (:id (jdbc/execute-one! db/ds ["INSERT INTO assistant_messages (chat_id, role, content)
+                                                  VALUES (?, ?, ?) RETURNING id" chat role content]
+                          opts)))
+        snapshot (str "{\"messages\": [{\"role\": \"system\", \"content\": \""
+                   (if map-message? "# Question map\\n\\n## Roots" "# Something else")
+                   "\"}]}")
+        id (:id (jdbc/execute-one! db/ds
+                  ["INSERT INTO assistant_runs (run_uuid, chat_id, kind, status, user_message_id,
+                                                assistant_message_id, provider_session_id,
+                                                request_snapshot, created_at, completed_at)
+                    VALUES (?, ?, 'answer', 'completed', ?, ?, 'test', CAST(? AS jsonb),
+                            CAST(? AS timestamptz)::timestamp, CAST(? AS timestamptz)::timestamp)
+                    RETURNING id"
+                   (str (random-uuid)) chat (message! "user" question) (message! "assistant" "Reply.")
+                   snapshot created completed]
+                  opts))]
+    (when-let [[doc title] evidence-of]
+      (jdbc/execute! db/ds ["INSERT INTO assistant_evidence (run_id, citation_key, document_topic_id,
+                                                             document_title, display_label)
+                             VALUES (?, 'E1', ?, ?, ?)" id doc title title]))
+    id))
+
+(deftest a-trail-runs-from-the-creating-turn-to-the-proof
+  (with-users [u other]
+    (let [repo (topic! u "repo" nil nil)
+          map-id (db/ensure-question-map! u repo "docs/a.md")
+          map-b (db/ensure-question-map! u repo "docs/b.md")
+          other-map (db/ensure-question-map! other (topic! other "repo" nil nil) "docs/a.md")
+          entity (first (db/insert-kg-entities! u ["Ports"]))
+          chat (db/create-assistant-chat! u repo "Ports chat" "tutor")
+          ask (answer-run! chat "I pinned these passages." map-id)
+          _ (db/apply-question-map-plan! u map-id
+              {:new-roots [{:label "Ports" :in-document? true :entity-id entity :citations []}]
+               :pin-roots {} :learned #{} :next "Ports" :run-uuid (:uuid ask)})
+          middle (answer-run! chat "Is it the signature?" map-id)
+          _ (answer-run! chat "Something about b." map-b)
+          foreign (answer-run! chat "Not my map." other-map)
+          proof (answer-run! chat "Shape, degree, type and timing." map-id)
+          _ (db/apply-question-map-plan! u map-id
+              {:new-roots [] :pin-roots {} :learned #{"Ports"} :next nil :run-uuid (:uuid proof)})
+          _ (answer-run! chat "After the proof." map-id)]
+      (testing "§3.1: a run names its map only when the chat's user owns it"
+        (is (= map-id (:question_map_id (jdbc/execute-one! db/ds
+                                          ["SELECT question_map_id FROM assistant_runs WHERE id = ?"
+                                           (:id middle)] opts))))
+        (is (nil? (:question_map_id (jdbc/execute-one! db/ds
+                                      ["SELECT question_map_id FROM assistant_runs WHERE id = ?"
+                                       (:id foreign)] opts)))))
+      (testing "§3.1: a new root names the run that created it"
+        (is (= (:id ask) (:created_run_id (jdbc/execute-one! db/ds
+                                            ["SELECT created_run_id FROM question_roots WHERE map_id = ?"
+                                             map-id] opts)))))
+      (testing "§3.3: the trail holds the turns on the map, from the creating turn to the proof"
+        (let [{:keys [turns inferred?]} (db/idea-trail u entity)]
+          (is (= ["I pinned these passages." "Is it the signature?" "Shape, degree, type and timing."]
+                (map :question turns)))
+          (is (false? inferred?))
+          (is (nil? (db/idea-trail other entity)))))
+      (testing "the page shows the first turn, the count and the chat, as text"
+        (let [{:keys [trail proof]} (ki/idea-page u entity)]
+          (is (= "I pinned these passages." (:first-question trail)))
+          (is (= 3 (:turn-count trail)))
+          (is (= [{:chat_id chat :chat_title "Ports chat" :turns 3}] (:chats trail)))
+          (is (string? (:first-date trail)))
+          (is (false? (:inferred? proof)))))
+      (testing "Open opens only a live chat of the user"
+        (is (= repo (ki/open-chat! u chat)))
+        (is (nil? (ki/open-chat! other chat)))))))
+
+(deftest old-confirmations-get-an-inferred-trail
+  (with-users [u]
+    (let [repo (topic! u "repo" nil nil)
+          map-id (db/ensure-question-map! u repo "docs/a.md")
+          entity (first (db/insert-kg-entities! u ["Ports"]))
+          chat (db/create-assistant-chat! u repo "Old chat" "tutor")
+          file [repo "docs/a.md"]]
+      (db/apply-question-map-plan! u map-id
+        {:new-roots [{:label "Ports" :in-document? true :entity-id entity :citations []}]
+         :pin-roots {} :learned #{} :next "Ports"})
+      (db/apply-question-map-plan! u map-id
+        {:new-roots [] :pin-roots {} :learned #{"Ports"} :next nil})
+      (jdbc/execute! db/ds ["UPDATE question_roots SET created_at = '2026-10-06T10:00:00Z'
+                              WHERE map_id = ?" map-id])
+      (jdbc/execute! db/ds ["UPDATE known_marks SET created_at = '2026-10-06T11:00:00Z'
+                              WHERE entity_id = ?" entity])
+      (let [ask (old-run! chat "I pinned these passages." "2026-10-06T09:59:40Z"
+                  "2026-10-06T10:00:05Z" true file)
+            middle (old-run! chat "Is it the signature?" "2026-10-06T10:30:00Z"
+                     "2026-10-06T10:30:20Z" true file)
+            _ (old-run! chat "No map here." "2026-10-06T10:40:00Z" "2026-10-06T10:40:20Z" false file)
+            proof (old-run! chat "Shape, degree, type and timing." "2026-10-06T10:59:40Z"
+                    "2026-10-06T11:00:04Z" true file)]
+        (jdbc/with-transaction [tx db/ds] (db/infer-idea-trails! tx [map-id]))
+        (testing "§3.2: old runs on the map name it, and the run with no map message does not"
+          (is (= #{ask middle proof}
+                (set (map :id (jdbc/execute! db/ds ["SELECT id FROM assistant_runs WHERE question_map_id = ?"
+                                                    map-id] opts))))))
+        (testing "§3.2: the root and the mark name the runs that completed just after them"
+          (is (= [ask true] ((juxt :created_run_id :created_run_inferred)
+                             (jdbc/execute-one! db/ds ["SELECT created_run_id, created_run_inferred
+                                                          FROM question_roots WHERE map_id = ?" map-id]
+                               opts))))
+          (is (= [proof true] ((juxt :proof_run_id :proof_run_inferred)
+                               (jdbc/execute-one! db/ds ["SELECT proof_run_id, proof_run_inferred
+                                                            FROM known_marks WHERE entity_id = ?" entity]
+                                 opts)))))
+        (testing "§3.3: the trail and the answer say they were inferred"
+          (let [{:keys [turns inferred?]} (db/idea-trail u entity)]
+            (is (= [ask middle proof] (map :run_id turns)))
+            (is (true? inferred?)))
+          (is (true? (get-in (db/known-idea u entity) [:proof :inferred?]))))
+        (testing "a recorded confirmation clears the proof's inferred flag"
+          (let [later (answer-run! chat "Again." map-id)]
+            (db/apply-question-map-plan! u map-id
+              {:new-roots [] :pin-roots {} :learned #{"Ports"} :next nil :run-uuid (:uuid later)})
+            (is (false? (get-in (db/known-idea u entity) [:proof :inferred?])))))))))

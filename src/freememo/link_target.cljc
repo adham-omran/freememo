@@ -124,8 +124,11 @@
 (def ^:private topic-href-re #"^/viewer/topic/(\d+)$")
 (def ^:private handler-scheme-re #"(?i)^(?:mailto|tel)$")
 
-;; topics.id is a Postgres `integer`, so no topic is numbered above this.
-(def ^:private max-topic-id 2147483647)
+;; topics.id is a Postgres `bigint`, and a desktop client mints ids above 2^40.
+;; The cap is the largest integer a JS number holds exactly (2^53 - 1), so both
+;; peers parse the same ids and neither rounds.
+(def ^:private max-topic-id 9007199254740991)
+(def ^:private max-topic-id-digits 16)
 
 (defn- topic-id-of
   "The topic a `/viewer/topic/<id>` path names, or nil when it names none.
@@ -139,7 +142,7 @@
          the ordinary relative-URL path."
   [path]
   (when-let [[_ digits] (re-matches topic-href-re path)]
-    (when (<= (count digits) 10)          ; fits a Long and a JS safe integer
+    (when (<= (count digits) max-topic-id-digits) ; fits a Long and a JS safe integer
       (let [n #?(:clj (Long/parseLong digits) :cljs (js/parseInt digits 10))]
         (when (<= 1 n max-topic-id) n)))))
 

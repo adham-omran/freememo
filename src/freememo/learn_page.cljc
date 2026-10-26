@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-svg3 :as svg]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
@@ -75,6 +76,8 @@
                                                   (if (seq preview) preview title)))]
                             {:id (:topics/id row)
                              :kind kind
+                             :title title
+                             :root? is-root
                              :display-title display-title
                              :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
                              :due-date (format-due-date (:topics/next_review_at row))
@@ -506,12 +509,20 @@
           id (:id item)
           source-container (:source-container item)
           [badge-text badge-color] (bibform/topic-badge kind source-container)
-          open! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))]
+          open! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))
+          ;; Context menu (plans/custom-context-menu.md 4.2.1). Rename starts
+          ;; from the title, not from the preview a non-root row displays.
+          target (menu-surface/topic-row-target
+                   {:topic-id id :title (or (:title item) display-title) :topic-kind kind
+                    :root? (boolean (:root? item))
+                    :status item-status :deletable? (not= "page" kind)}
+                   :learn)]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :role "row"
                     :style {:opacity (if inactive? "0.6" "1")
                             :--order i}})
+        (menu-surface/RowMenu target)
         (dom/On "click" open! nil)
         (dom/td
           (dom/props {:role "cell" :class "learn-queue-document"})

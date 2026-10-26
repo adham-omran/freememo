@@ -217,7 +217,7 @@
     (is (= "" (panel-data/draft-without-reference "@Zig" "Zig")))))
 
 (deftest document-mentions-filter-on-the-server
-  (with-redefs [db/get-root-topics
+  (with-redefs [db/get-root-topic-titles
                 (fn [_]
                   [{:topics/id 9 :topics/title "Open document"}
                    {:topics/id 2 :topics/title "Frontend Design"}

@@ -60,6 +60,7 @@
   (:require
    [clojure.string :as str]
    [freememo.anki-lease :as lease]
+   [freememo.anki-subtree-request :as subtree]
    [freememo.user-state :as us]))
 
 ;; ---------------------------------------------------------------------------
@@ -244,6 +245,18 @@
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :video-process-errors) (key->id work-key)))}
 
+   ;; A Google Doc Pull (freememo.google-docs, plans/google-docs-pull.md).
+   ;; SERVER tier: it runs on an e/Offload thread no browser owns. The member
+   ;; is the `gdoc` root, so one Doc has one row at a time. The export cannot be
+   ;; interrupted (clj-http), and nothing is worth cancelling in a fetch this
+   ;; short, so no canceller is declared.
+   :gdoc-pull
+   {:label "Pulling Google Doc"
+    :tier :server :subject :topic :work-key id->key
+    :state-key :pulling-gdocs :phase "pulling"
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :gdoc-pull-errors) (key->id work-key)))}
+
    :distill-doc
    {:label "Distilling facts"
     :tier :server :subject :topic :work-key id->key
@@ -320,17 +333,22 @@
    ;; the driver stopped proving it is alive, and the reporter leaves that row
    ;; for the staleness rule to interrupt.
    ;;
-   ;; A sync spans the whole collection, so there is one at a time per user and
-   ;; nowhere to navigate.
+   ;; One lease per user covers both kinds of run, because both write the same
+   ;; Anki collection. A whole-collection run has no subject and nowhere to
+   ;; navigate. A branch run (`anki-subtree-request`) holds its root topic as
+   ;; the subject, so the row names it and the panel's Open button goes there.
+   ;; The lease's key is the work key, "collection" or "branch-<id>", so
+   ;; discovery derives both the key and the subject from it.
    :anki-reconcile
    {:label "Syncing with Anki"
-    :tier :server :subject :none :work-key (constantly lease/owner-key)
+    :tier :server :subject :topic :work-key subtree/work-key
     :state-key :anki-run :key-fn identity
+    :owner-key->args (fn [k] [(subtree/root-id k)])
     :progress-unit :count
     :canceller-key :anki-run-cancellers
     :entry->state (fn [entry] (lease/reading entry (System/currentTimeMillis)))
-    :error-fn (fn [uid _work-key]
-                (get @(us/get-atom uid :anki-run-errors) lease/owner-key))}
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :anki-run-errors) work-key))}
 
    ;; ── Account transfer. SERVER tier, not pushed. ─────────────────────────
    ;; An export streams on a Jetty request thread and an import runs in an

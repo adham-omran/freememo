@@ -55,6 +55,12 @@
         (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page)
               layout   (ts/DocumentLayoutState resolved)
               view     (ts/DocumentViewState resolved topic-id (:focus? layout))]
-          (DocumentRoot (merge resolved layout view))
+          ;; Reconciled so that a branch switch anywhere upstream reaches
+          ;; DocumentRoot as a change to its one argument, never as a
+          ;; shrink and a grow, which would unmount and rebuild the whole
+          ;; viewer. The providers already derive through plain fns for this
+          ;; reason (see topic-state/topic-facts); this keeps a future `if`
+          ;; there from costing a rebuild.
+          (DocumentRoot (e/Reconcile (merge resolved layout view)))
           ;; Last, so its value is the body's and it is never skipped.
           (PublishTopicKind (:kind resolved)))))))

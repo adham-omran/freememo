@@ -11,6 +11,7 @@
             [clj-http.client :as http]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [freememo.ai-tiers :as ai-tiers]
             [freememo.card-models :as card-models]
             [freememo.llm-json :as llm-json]
             [freememo.ocr-models :as ocr-models]
@@ -147,19 +148,19 @@
               {:reasoning_effort "low" :verbosity "high"})))))
   (testing "a text-only request gets no structured fields"
     (let [fields (openrouter/chat-completion-fields
-                   (card-models/resolve-model "gpt-6-sol")
+                   (card-models/resolve-model "gpt-6.1-sol")
                    {:reasoning_effort "low"})]
       (is (not (contains? fields :response_format)))
       (is (not (get-in fields [:provider :require_parameters]))))))
 
 (deftest structured-chat-fields-require-json-compatible-routes
   (testing "an unpinned model gets JSON mode and parameter-compatible routing"
-    (is (= {:model "openai/gpt-6-sol"
+    (is (= {:model "openai/gpt-6.1-sol"
             :reasoning_effort "low"
             :response_format {:type "json_object"}
             :provider {:require_parameters true}}
           (openrouter/structured-chat-completion-fields
-            (card-models/resolve-model "gpt-6-sol")
+            (card-models/resolve-model "gpt-6.1-sol")
             {:reasoning_effort "low" :verbosity "high"}))))
   (testing "the GLM provider routing is merged, not replaced"
     (is (= {:model "z-ai/glm-5.3-flash"
@@ -197,7 +198,7 @@
   (testing "an entry that permits none keeps it"
     ;; Ling 3.0 Flash measured 2026-09-11: "none" returns HTTP 200 with 0
     ;; reasoning tokens on both of its providers, DeepInfra and Novita.
-    (doseq [id ["gpt-6-sol" "gpt-6-luna" "claude-sonnet-5" "ling-3.0-flash"]]
+    (doseq [id ["gpt-6.1-sol" "gpt-6-luna" "claude-sonnet-5" "ling-3.0-flash"]]
       (is (= "none" (:reasoning_effort
                       (openrouter/chat-completion-fields
                         (card-models/resolve-model id)
@@ -212,9 +213,23 @@
             alone. A flag there would be metadata no code reads."
     (is (empty? (filter :reasoning-mandatory? ocr-models/registry)))))
 
+(deftest the-models-retired-on-2026-10-26-leave-the-picker-and-redirect
+  (doseq [[old new slug] [["gpt-6-sol" "gpt-6.1-sol" "openai/gpt-6.1-sol"]
+                          ["deepseek-v4-flash" "deepseek-v4.1-flash"
+                           "deepseek/deepseek-v4.1-flash-1017"]]]
+    (is (not (some #{old} (map :id card-models/registry))) old)
+    (is (= new (:id (card-models/resolve-model old))) old)
+    (is (= slug (:openrouter-model (card-models/resolve-model old))) old))
+  (testing "the default and the Best level run the new Sol"
+    (is (= "gpt-6.1-sol" card-models/default-id))
+    (is (= "gpt-6.1-sol" (get-in ai-tiers/presets [:cards "best" "model"]))))
+  (testing "the scanning picker keeps GPT-6 Sol"
+    (is (= "openai/gpt-6-sol"
+          (:openrouter-model (ocr-models/resolve-model "openai-gpt-6-sol"))))))
+
 (deftest the-models-retired-on-2026-09-23-leave-the-picker-and-redirect
-  (let [moves {"gpt-5.1" "gpt-6-sol" "gpt-5.6-luna" "gpt-6-luna"
-               "gpt-5.6-terra" "gpt-6-sol" "gpt-5.6-sol" "gpt-6-sol"
+  (let [moves {"gpt-5.1" "gpt-6.1-sol" "gpt-5.6-luna" "gpt-6-luna"
+               "gpt-5.6-terra" "gpt-6.1-sol" "gpt-5.6-sol" "gpt-6.1-sol"
                "gemini-3-flash" "gemini-3.8-flash" "gemini-3.6-flash" "gemini-3.8-flash"
                "claude-haiku-4.5" "claude-sonnet-5"}]
     (doseq [[old new] moves]
@@ -317,7 +332,7 @@
     (is (= {} (openrouter/usage-tokens nil)))))
 
 (deftest native-web-search-support-and-sources-are-explicit
-  (is (card-models/native-web-search-supported? "gpt-6-sol"))
+  (is (card-models/native-web-search-supported? "gpt-6.1-sol"))
   (is (not (card-models/native-web-search-supported? "glm-5.3-flash")))
   (is (every? (comp card-models/web-search-supported? :id)
         card-models/registry))

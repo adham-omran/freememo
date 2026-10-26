@@ -4,7 +4,9 @@
    Invariant: at most one entry per [level message], UNLESS pushed with
    :dedup? false (undo toasts opt out so each action stacks separately).
    :created-at is epoch millis (long) — serializable across the Electric wire."
-  (:require [freememo.user-state :as us])
+  (:require [clojure.string :as str]
+            [freememo.desktop-link :as link]
+            [freememo.user-state :as us])
   (:import [java.util UUID]))
 
 (defn- new-id [] (str (UUID/randomUUID)))
@@ -25,6 +27,21 @@
         (assoc queue idx merged))
       (conj queue toast))))
 
+(def sign-in-path
+  "The path that starts a desktop sign-in. Electron stops the navigation and
+   opens the browser sign-in (plans/electron-local-db-sync.md 15.5.1)."
+  "/desktop/sign-in")
+
+(defn error-actions
+  "15.4.2 — the actions an error toast gets from its message, so no call site
+   builds them. A feature that needs an account throws
+   `link/sign-in-message`, and whatever error shape carries that text to the
+   toast, the toast offers the sign-in."
+  [level message]
+  (if (and (= :error level) (str/includes? (str message) link/sign-in-message))
+    [{:label "Sign in" :href sign-in-path}]
+    []))
+
 (defn push!
   "Push a toast for user-id. Returns the toast :id (preserves an existing
    id if dedup hits — see dedup-merge).
@@ -37,7 +54,7 @@
         record  {:id         (new-id)
                  :level      level
                  :message    (str message)
-                 :actions    (vec actions)
+                 :actions    (into (vec actions) (error-actions level message))
                  :created-at (System/currentTimeMillis)
                  :sticky?    (boolean sticky?)}]
     (if dedup?

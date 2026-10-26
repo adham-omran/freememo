@@ -18,6 +18,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-reconcile-panels :as recon]
+   [freememo.anki-subtree-request :as subtree]
    [freememo.command-bus :as bus]
    #?(:clj [freememo.toasts :as toasts])))
 
@@ -47,23 +48,32 @@
    Only the tab whose claim wins the account's lease runs phases; the Activity
    monitor reads that lease, so this component mirrors nothing into it.
 
-   It takes only `user-id`: a reconcile has no scope to narrow, and its whole
-   point is that a card deleted in a document nobody has open still gets its
-   Anki note removed."
+   It takes only `user-id`. The chord and the palette run the whole collection,
+   because their point is that a card deleted in a document nobody has open
+   still gets its Anki note removed.
+
+   It is also the driver for a BRANCH run: `anki-subtree-request/
+   request-subtree-sync!` queues a topic id, and this component collects it and
+   starts a run scoped to that topic and its descendants. That run settles no
+   tombstones, so a deleted card's note stays until the next full run. Both
+   kinds take the same lease, so a branch request while any run is going gets
+   the \"Sync already in progress\" toast."
   [user-id]
   (e/client
     (let [state (recon/fresh-state)
-          !busy-bump (atom 0)]
+          !busy-bump (atom 0)
+          start-run! (fn [root-id]
+                       (when (= :busy (recon/start! state false root-id))
+                         (swap! !busy-bump inc)))]
       (dom/button
         (dom/props {:style {:display "none"} :aria-hidden "true" :tabindex "-1"
                     :data-quick-sync "1"})
-        (let [node dom/node]
+        (let [node dom/node
+              unwatch! (subtree/watch! start-run!)]
           (bus/publish-invoker! :quick-sync (fn [] (.click node)))
-          (e/on-unmount (fn [] (bus/retract-invoker! :quick-sync))))
-        (dom/On "click"
-          (fn [_]
-            (when (= :busy (recon/start! state))
-              (swap! !busy-bump inc)))
-          nil))
+          (e/on-unmount (fn []
+                          (bus/retract-invoker! :quick-sync)
+                          (unwatch!))))
+        (dom/On "click" (fn [_] (start-run! nil)) nil))
       (QuickSyncBusyToast user-id !busy-bump)
       (recon/ReconcileExecutor user-id state))))

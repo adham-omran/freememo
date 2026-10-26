@@ -16,7 +16,8 @@
    the editor's own subtree, so no mutation-feedback loop can form.
 
    install! wires the listeners and returns a teardown fn removing everything."
-  (:require [freememo.editor-popovers :as editor-popovers]))
+  (:require [freememo.editor-popovers :as editor-popovers]
+            [freememo.tooltip :as tooltip]))
 
 (defn- el [tag class]
   (let [n (js/document.createElement tag)]
@@ -145,7 +146,7 @@
         on-key (fn [^js e] (when (and (popup-open?) (= "Escape" (.-key e))) (close-popup!)))
         unregister-popover! (editor-popovers/register! popup-open? close-popup!)]
     (set! (.-type trigger) "button")
-    (.setAttribute trigger "title" "Code language")
+    (tooltip/set-tooltip! trigger "Code language")
     (.setAttribute trigger "aria-label" "Code block language")
     ;; Keep the editor selection on click so selection-change doesn't hide us.
     (.addEventListener trigger "mousedown" (fn [^js e] (.preventDefault e)))

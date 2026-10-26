@@ -13,11 +13,15 @@
    [freememo.forms-ext :as forms-ext]
    [freememo.navigation :as nav]
    [freememo.question-pin-state :as pin-state]
+   [freememo.knowledge-scope :as scope]
    [freememo.quiz-page :as quiz-page]
-   [freememo.tape-table :refer [TapeTable]]
+   [freememo.row-menu :as menu]
+   [freememo.tape-table :as tape]
+   [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.known-ideas :as ki])
    #?(:clj [freememo.logging :as log])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ── Server reads and writes ────────────────────────────────────────
@@ -32,7 +36,8 @@
 
 (defn run-idea-command!*
   "Run one idea command. `kind` is :check, :make, :undo, :unlearn or
-   :open-chat, and `arg` is an entity id, or a vector of them for :check.
+   :open-chat, and `arg` is an entity id, a vector of them for :check, or a
+   chat id for :open-chat.
    Post: {:ok true …} or {:error message}."
   [user-id kind arg]
   #?(:clj (case kind
@@ -40,7 +45,7 @@
             :make (ki/make-cards! user-id arg)
             :undo (ki/undo-self-mark! user-id arg)
             :unlearn (ki/not-learned! user-id arg)
-            :open-chat (if-let [topic-id (ki/open-proof-chat! user-id arg)]
+            :open-chat (if-let [topic-id (ki/open-chat! user-id arg)]
                          {:ok true :topic-id topic-id}
                          {:error "That chat is no longer there."})
             ;; An unknown kind is a caller bug. It must not fail the session.
@@ -114,7 +119,8 @@
   [user-id navigate! command label class disabled? tip]
   (e/client
     (dom/span
-      (dom/props {:class "known-ideas__tip" :data-tooltip tip})
+      (dom/props {:class "known-ideas__tip"})
+      (tooltip/Tooltip! tip)
       (e/for [[t clicked] (e/diff-by first
                             (e/as-vec (forms/Button! command :class class :label label
                                         :disabled disabled?)))]
@@ -141,47 +147,38 @@
     (IdeaAction user-id navigate! [:make entity-id] label "btn btn-sm btn-secondary"
       (not material?) (when-not material? "No passage to make cards from"))))
 
-(e/defn RowMore
-  "The row's overflow actions (§3.8), opened in place: a menu that drops out
-   of a row would be clipped by the scroll box. Keyed on the idea, so a
-   recycled row never shows another idea's open menu."
-  [user-id navigate! {:keys [entity_id card_count material? self?]}]
-  (e/client
-    (e/for-by identity [id [entity_id]]
-      (let [!open? (atom false) open? (e/watch !open?)]
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-sm btn-secondary"
-                      :aria-expanded (str open?)})
-          (dom/text (if open? "Less" "More"))
-          (dom/On "click" (fn [_] (swap! !open? not)) nil))
-        (when open?
-          (when (pos? card_count)
-            (MakeCardsButton user-id navigate! id material? "Make more"))
-          (when self?
-            (IdeaAction user-id navigate! [:undo id] "Undo my mark" "btn btn-sm btn-secondary"
-              false nil))
-          (IdeaAction user-id navigate! [:unlearn id] "Not learned yet" "btn btn-sm btn-secondary"
-            false nil))))))
+(defn run-known-action!*
+  "Run one menu action of the list. `kind` is :make, :undo or :unlearn and
+   `ids` holds one entity id. An error goes to a toast, because the menu that
+   asked has closed and holds no error slot.
+   Post: the command's result map."
+  [user-id {:keys [kind ids]}]
+  #?(:clj (let [r (run-idea-command!* user-id kind (first ids))]
+            (when (:error r)
+              (toasts/push! user-id {:level :error :message (:error r)}))
+            r)
+     :cljs nil))
 
 (e/defn IdeaRow
-  "One known idea (§3.2). Each action runs in its own button, so a row that
-   scrolls away takes its pending action with it."
+  "One known idea (§3.2). The label opens the idea's page; Check me is the one
+   action in the row, and the rest are in its ⋯ menu."
   [user-id {:keys [entity_id label how from checked due? card_count material?] :as row}
-   i navigate!]
+   i navigate! !selected selected !menu open-row-key selecting?]
   (e/client
     (dom/tr
       (dom/props {:class (str (when (even? i) "row-alt") (when due? " known-ideas__row--due"))
                   :style {:--order i}})
+      (tape/SelectCell entity_id label !selected selected)
       (dom/td
         (dom/button
-          (dom/props {:type "button" :class "known-ideas__idea tape-cell-text" :dir "auto"
-                      :data-tooltip label})
+          (dom/props {:type "button" :class "known-ideas__idea tape-cell-text" :dir "auto"})
+          (tooltip/Tooltip! label)
           (dom/text label)
           (dom/On "click" (fn [_] (open-idea! navigate! entity_id)) nil)))
       (dom/td (dom/props {:class "tape-cell-meta"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip how}) (dom/text how)))
+        (dom/span (dom/props {:class "tape-cell-text"}) (tooltip/Tooltip! how) (dom/text how)))
       (dom/td (dom/props {:class "tape-cell-meta"})
-        (dom/span (dom/props {:class "tape-cell-text" :data-tooltip from}) (dom/text from)))
+        (dom/span (dom/props {:class "tape-cell-text" :dir "auto"}) (tooltip/Tooltip! from) (dom/text from)))
       (dom/td (dom/props {:class (if due? "known-ideas__checked--due" "tape-cell-meta")})
         (dom/text checked))
       (dom/td
@@ -191,13 +188,10 @@
             (dom/text (str card_count (if (= 1 card_count) " card" " cards")))
             (dom/On "click" (fn [_] (open-idea-cards! navigate! entity_id)) nil))
           (MakeCardsButton user-id navigate! entity_id material? "Make cards")))
-      (dom/td (dom/props {:class "tape-cell-actions"})
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-sm btn-secondary"})
-          (dom/text "Open")
-          (dom/On "click" (fn [_] (open-idea! navigate! entity_id)) nil))
+      (dom/td (dom/props {:class (if selecting? "tape-cell-actions tape-cell-actions-inert"
+                                   "tape-cell-actions")})
         (CheckButton user-id navigate! [entity_id] card_count "Check me")
-        (RowMore user-id navigate! row)))))
+        (menu/MenuButton !menu open-row-key entity_id label row)))))
 
 (e/defn DueBand
   "The ideas due for a check, above the table, hidden when none are (§3.4)."
@@ -215,7 +209,21 @@
           (str "Check me on " (if (= 1 (count due-ids)) "this one" (str "these " (count due-ids)))))))))
 
 (def ^:private list-grid
-  "minmax(180px,1.4fr) minmax(170px,1fr) minmax(150px,1fr) 130px 100px minmax(230px,max-content)")
+  "Select 34px; Last checked 120px; Cards 100px; actions hold Check me and ⋯.
+   The minimums add up to 824px, inside the page's 960px (spec §7.5)."
+  "34px minmax(170px,1.4fr) minmax(140px,1fr) minmax(130px,1fr) 120px 100px 130px")
+
+(def ^:private sort-keys
+  "Sortable column → the row key it sorts by. No sort means due ideas first."
+  {:idea :label :checked :checked_ms})
+
+(def ^:private default-sort [nil nil])
+
+(defn shown-rows
+  "The rows the filters keep, in the requested order."
+  [rows query source due-only? sort-col sort-dir]
+  (let [kept (filter-rows rows query source due-only?)]
+    (if-let [k (sort-keys sort-col)] (tape/sort-rows kept k sort-dir) kept)))
 
 (e/defn KnownIdeasView
   "The Known ideas list (§3): a due band, filters and the table. Every read
@@ -223,50 +231,101 @@
    reload."
   [user-id navigate!]
   (e/client
-    (let [!query (atom "") query (e/watch !query)
-          !query-timer (atom nil)
-          !source (atom "") source (e/watch !source)
-          !due-only? (atom false) due-only? (e/watch !due-only?)
+    (let [initial (util/query-params)
+                    seed-source (get initial "source")
+          !query (atom (or (get initial "q") "")) query (e/watch !query)
+          !search-epoch (atom 0) search-epoch (e/watch !search-epoch)
+          !source (atom (if (some #(= seed-source (first %)) source-options) seed-source ""))
+          source (e/watch !source)
+          !due-only? (atom (scope/flag-set? initial "due")) due-only? (e/watch !due-only?)
+          !order (atom (scope/parse-sort (get initial "sort") (set (keys sort-keys)) default-sort))
+          order (e/watch !order)
+          [sort-col sort-dir] order
+          !selected (atom #{}) selected (e/watch !selected)
+          !menu (atom nil) menu (e/watch !menu)
+          !action (atom nil) action (e/watch !action)
           rows (e/server
                  (let [rev (+ (e/watch (us/get-atom user-id :question-mutations))
                              (e/watch (us/get-atom user-id :card-mutations))
                              (e/watch (us/get-atom user-id :kg-mutations)))]
                    (e/Offload #(list-rows* rev user-id))))
-          shown (e/server (filter-rows rows query source due-only?))
+          shown (e/server (shown-rows rows query source due-only? sort-col sort-dir))
           item-count (e/server (count shown))
           total (e/server (count rows))
+          counts (e/server (tape/selection-counts shown :entity_id selected))
+          selected-cards (e/server (reduce + 0 (keep #(when (contains? selected (:entity_id %))
+                                                         (:card_count %))
+                                                 rows)))
           due-labels (e/server (into [] (comp (filter :due?) (map :label)) rows))
-          due-ids (e/server (into [] (comp (filter :due?) (map :entity_id)) rows))]
+          due-ids (e/server (into [] (comp (filter :due?) (map :entity_id)) rows))
+          n-selected (count selected)
+          selecting? (pos? n-selected)
+          filtered? (or (not (str/blank? query)) (not (str/blank? source)) due-only?)
+          clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))]
       (dom/div
         (dom/props {:class "known-ideas"})
         (DueBand user-id due-labels due-ids navigate!)
         (dom/div
-          (dom/props {:class "known-ideas__filters"})
-          (dom/input
-            (dom/props {:placeholder "Search ideas and files…" :class "input known-ideas__search"
-                        :aria-label "Search known ideas"})
-            (dom/On "input"
-              (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
-              nil))
+          (dom/props {:class "knowledge-filters"})
+          (scope/SearchInput "Search ideas and files…" query !query search-epoch)
           (e/for [[t {picked :source}] (forms-ext/Select! :source source source-options
                                          :class "input" :aria-label "Filter by source")]
             (case (reset! !source picked) (t)))
-          (dom/button
-            (dom/props {:type "button"
-                        :class (str "filter-chip" (when due-only? " filter-chip-active"))
-                        :aria-pressed (boolean due-only?)})
-            (dom/text "Due only")
-            (dom/On "click" (fn [_] (swap! !due-only? not)) nil))
-          (dom/span (dom/props {:class "known-ideas__count"})
+          (scope/FilterToggle "Due only" due-only? !due-only?)
+          (dom/span (dom/props {:class "knowledge-count"})
             (dom/text (str item-count (if (= 1 item-count) " idea" " ideas")))))
-        (TapeTable ["Idea" "How you know it" "From" "Last checked" "Cards" ""]
-          list-grid item-count [query source due-only?]
+        (when filtered?
+          (dom/div
+            (dom/props {:class "knowledge-filter-labels"})
+            (when-not (str/blank? query)
+              (tape/FilterLabel (str "Search: " query) clear-search!))
+            (when-not (str/blank? source)
+              (tape/FilterLabel (str "Source: " (some #(when (= source (first %)) (second %)) source-options))
+                (fn [] (reset! !source ""))))
+            (when due-only? (tape/FilterLabel "Due only" (fn [] (reset! !due-only? false))))
+            (tape/ClearFilters (fn [] (clear-search!) (reset! !source "") (reset! !due-only? false)))))
+        (tape/HeadedTapeTable
+          (e/fn []
+            (tape/SelectAllHeader shown :entity_id item-count (:shown counts) !selected)
+            (tape/SortHeader "Idea" :idea :asc order !order)
+            (tape/PlainHeader "How you know it")
+            (tape/PlainHeader "From")
+            (tape/SortHeader "Last checked" :checked :desc order !order)
+            (tape/PlainHeader "Cards")
+            (tape/PlainHeader ""))
+          ;; Over the header row, not above the table: a bar that pushed the table
+          ;; down by a row on every first tick was visually jarring.
+          (e/fn []
+            (tape/BatchBar n-selected (:hidden counts) !selected
+              (e/fn []
+                (CheckButton user-id navigate! (vec selected) selected-cards "Check me"))))
+          list-grid item-count [query source due-only? sort-col sort-dir]
           (if (zero? total)
             "No known ideas yet. Pin questions on a repository file and choose Ask, or mark an idea in a question map."
             "No ideas match the filters.")
           (e/fn [i]
             (when-let [row (e/server (nth shown i nil))]
-              (IdeaRow user-id row i navigate!))))))))
+              (IdeaRow user-id row i navigate! !selected selected !menu (:row-key menu) selecting?))))
+        (menu/RowMenu !menu menu
+          (e/fn [m]
+            (let [{:keys [entity_id card_count self?]} (:row m)]
+              (when (pos? card_count)
+                (menu/MenuItem !menu "Make more" false
+                  (fn [] (reset! !action (scope/action :make [entity_id] false)))))
+              (when self?
+                (menu/MenuItem !menu "Undo my mark" false
+                  (fn [] (reset! !action (scope/action :undo [entity_id] false)))))
+              (menu/MenuItem !menu "Not learned yet" false
+                (fn [] (reset! !action (scope/action :unlearn [entity_id] false)))))))
+        ;; The one place a menu action runs; it outlives the menu that wrote it.
+        (let [[t _] (e/Token action)]
+          (when t
+            (case (e/server (e/Offload #(run-known-action!* user-id action)))
+              (t))))
+        (scope/UrlState {"q" query
+                         "source" (when-not (str/blank? source) source)
+                         "due" (scope/flag-param due-only?)
+                         "sort" (scope/sort-param order default-sort)})))))
 
 ;; ── The idea page ──────────────────────────────────────────────────
 
@@ -325,11 +384,45 @@
             "Never checked.")))
       (CheckButton user-id navigate! [entity_id] (count cards) "Check me again"))))
 
+(defn- turns-text [n]
+  (str n (if (= 1 n) " turn" " turns")))
+
+(def ^:private inferred-note
+  "Found by matching times. The app did not record this when it happened.")
+
+(e/defn IdeaTrail
+  "The conversation that led to the idea (plans/idea-trail.md §3.3): its
+   first turn, the number of turns, and one Open per chat."
+  [user-id navigate! {:keys [first-date first-question turn-count chats inferred?]}]
+  (e/client
+    (dom/section
+      (dom/props {:class "idea-page__card" :aria-labelledby "idea-trail-h"})
+      (dom/h2 (dom/props {:id "idea-trail-h"}) (dom/text "The conversation"))
+      (if first-date
+        (do (dom/p (dom/text (str "It started on " first-date " with:")))
+            (dom/blockquote (dom/props {:class "idea-page__proof" :dir "auto"})
+              (dom/text first-question))
+            (dom/p (dom/text (str (turns-text turn-count)
+                                  " led to the answer above, in "
+                                  (if (= 1 (count chats)) "one chat." (str (count chats) " chats.")))))
+            (dom/ul
+              (dom/props {:class "idea-page__chats"})
+              (e/for [{:keys [chat_id chat_title turns]} (e/diff-by :chat_id chats)]
+                (dom/li
+                  (dom/span (dom/props {:dir "auto"})
+                    (dom/text (str (or chat_title "Untitled chat") " (" (turns-text turns) ")")))
+                  (IdeaAction user-id navigate! [:open-chat chat_id] "Open"
+                    "btn btn-sm btn-secondary" false nil))))
+            (when inferred?
+              (dom/p (dom/props {:class "idea-page__muted"}) (dom/text inferred-note))))
+        (dom/p (dom/props {:class "idea-page__muted"})
+          (dom/text "No conversation is stored for this idea."))))))
+
 (e/defn IdeaBody
   "The sections of one idea's page (§5.3)."
   [user-id idea navigate!]
   (e/client
-    (let [{:keys [entity_id label marks roots proof events]} idea
+    (let [{:keys [entity_id label marks roots proof events trail]} idea
           self? (some #(= "self" (:source %)) marks)]
       (dom/div
         (dom/props {:class "idea-page__title-row"})
@@ -347,10 +440,13 @@
             (if proof
               (do (dom/blockquote (dom/props {:class "idea-page__proof" :dir "auto"})
                     (dom/text (:answer proof)))
-                  (IdeaAction user-id navigate! [:open-chat entity_id] "Open the chat"
+                  (when (:inferred? proof)
+                    (dom/p (dom/props {:class "idea-page__muted"}) (dom/text inferred-note)))
+                  (IdeaAction user-id navigate! [:open-chat (:chat_id proof)] "Open the chat"
                     "btn btn-sm btn-secondary" false nil))
               (dom/p (dom/props {:class "idea-page__muted"})
                 (dom/text "No answer is stored for this idea."))))
+          (IdeaTrail user-id navigate! trail)
           (dom/section
             (dom/props {:class "idea-page__card" :aria-labelledby "idea-history-h"})
             (dom/h2 (dom/props {:id "idea-history-h"}) (dom/text "How you got here"))

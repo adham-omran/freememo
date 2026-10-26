@@ -24,11 +24,15 @@
 
 (use-fixtures :each (fn [f] (clear!) (try (f) (finally (clear!)))))
 
+(def ^:private collection
+  "The work key, and so the lease key, of a whole-collection run."
+  "collection")
+
 (defn- age-heartbeat!
-  "Make the lease's last heartbeat `ms` old."
+  "Make the lease's last heartbeat `ms` old, whichever key holds it."
   [ms]
-  (swap! (us/get-atom uid :anki-run) update lease/owner-key
-    assoc :heartbeat-at (- (System/currentTimeMillis) ms)))
+  (swap! (us/get-atom uid :anki-run) update-vals
+    #(assoc % :heartbeat-at (- (System/currentTimeMillis) ms))))
 
 (deftest the-lease-ttl-is-the-activity-staleness
   (is (= activity/stale-after-ms lease/ttl-ms)
@@ -65,7 +69,7 @@
     (is (= {:phase "writing" :done 100 :total 300}
           (select-keys (lease/current uid) [:phase :done :total])))
     (testing "the canceller the registry exposes marks the run"
-      ((registry/owner-cancel-fn "anki-reconcile" uid lease/owner-key))
+      ((registry/owner-cancel-fn "anki-reconcile" uid collection))
       (is (= :cancel (lease/report-progress! uid run-id {:phase "writing" :done 200 :total 300})))
       (is (lease/busy? uid) "the lease holds until the driver releases it"))))
 
@@ -76,35 +80,35 @@
         (is (= :released (lease/release! uid run-id error)))
         (is (nil? (lease/current uid)))
         (is (not (lease/busy? uid)))
-        (is (nil? (registry/owner-cancel-fn "anki-reconcile" uid lease/owner-key)))
-        (is (= error (registry/work-error "anki-reconcile" uid lease/owner-key)))))))
+        (is (nil? (registry/owner-cancel-fn "anki-reconcile" uid collection)))
+        (is (= error (registry/work-error "anki-reconcile" uid collection)))))))
 
 (deftest a-claim-clears-the-previous-error
   (let [{run-id :run-id} (lease/claim! uid)]
     (lease/release! uid run-id "boom")
     (lease/claim! uid)
-    (is (nil? (registry/work-error "anki-reconcile" uid lease/owner-key)))))
+    (is (nil? (registry/work-error "anki-reconcile" uid collection)))))
 
 (deftest the-activity-reading-follows-the-lease
   (let [{run-id :run-id} (lease/claim! uid)]
     (lease/report-progress! uid run-id {:phase "writing" :done 100 :total 300})
     (testing "a live run reads its progress, and is cancellable"
-      (let [state (registry/read-state "anki-reconcile" uid lease/owner-key)]
+      (let [state (registry/read-state "anki-reconcile" uid collection)]
         (is (= {:phase "writing" :done 100 :total 300}
               (select-keys state [:phase :done :total])))
         (is (:cancellable state))
         (is (not (:stale? state)))))
     (testing "discovery names the run under its work key"
-      (is (= [{:work-key lease/owner-key :subject-id nil}]
+      (is (= [{:work-key collection :subject-id nil}]
             (vec (registry/live-work "anki-reconcile" uid)))))
     (testing "a driver that stopped heartbeating reads stale, not gone — so the
               reporter neither refreshes nor closes the row as a success"
       (age-heartbeat! (inc lease/ttl-ms))
-      (is (:stale? (registry/read-state "anki-reconcile" uid lease/owner-key))))
+      (is (:stale? (registry/read-state "anki-reconcile" uid collection))))
     (testing "a cancelled run reads as gone, so discovery opens no second row"
       (age-heartbeat! 0)
       (lease/request-cancel! uid run-id)
-      (is (nil? (registry/read-state "anki-reconcile" uid lease/owner-key))))))
+      (is (nil? (registry/read-state "anki-reconcile" uid collection))))))
 
 (deftest batches-cover-the-plan-in-order
   (let [ids (vec (range 250))]
@@ -114,3 +118,18 @@
     (is (= 50 (count (rec/batch-at ids 2))))
     (is (= {:phase "writing" :done 100 :total 250} (rec/batch-progress ids 0)))
     (is (= {:phase "writing" :done 250 :total 250} (rec/batch-progress ids 2)))))
+
+(deftest a-branch-run-and-a-full-run-share-one-lease
+  (let [{run-id :run-id} (lease/claim! uid 42)]
+    (testing "the branch run is keyed and discovered as its branch"
+      (is (= #{"branch-42"} (set (keys @(us/get-atom uid :anki-run)))))
+      (is (= [{:work-key "branch-42" :subject-id 42}]
+            (vec (registry/live-work "anki-reconcile" uid))))
+      (is (some? (registry/owner-cancel-fn "anki-reconcile" uid "branch-42"))))
+    (testing "a whole-collection run is refused while the branch run lives"
+      (is (= :busy (lease/claim! uid))))
+    (testing "an expired branch lease is replaced, not kept beside the new one"
+      (age-heartbeat! (inc lease/ttl-ms))
+      (is (map? (lease/claim! uid)))
+      (is (= #{collection} (set (keys @(us/get-atom uid :anki-run)))))
+      (is (= :not-owner (lease/release! uid run-id nil))))))

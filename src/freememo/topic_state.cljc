@@ -54,7 +54,7 @@
            ;; Scalars only — TopicPage destructures this map client-side, so
            ;; every key crosses the wire on each :refresh tick. Content bodies
            ;; are fetched separately: get-topic-content* (gated off for PDFs)
-           ;; and content-toolbar-generate/get-parent-content* (server-side
+           ;; and content-toolbar-helpers/get-parent-content* (server-side
            ;; at the point of use).
            {:kind kind
             :parent-id parent-id
@@ -169,6 +169,155 @@
   #?(:clj (when topic-id (or (:topics/status (db/get-topic topic-id)) "active"))
      :cljs nil))
 
+;; ---------------------------------------------------------------------------
+;; Derivations as plain fns
+;; ---------------------------------------------------------------------------
+;;
+;; A reactive `if`, `when`, `or`, `and` or `cond` that switches branch does not
+;; emit a CHANGE. It shrinks the old branch and grows the new one in one diff,
+;; and that diff travels to everything downstream. An e/Offload whose thunk
+;; closes over such a value loses its latched result and has NO value until
+;; the thunk returns again. One binding with no value empties the map that
+;; TopicPage merges, and DocumentRoot unmounts: the whole viewer is torn down
+;; and rebuilt.
+;;
+;; The Learn session switches topic kind on most Next clicks, so every one of
+;; these branches switched there. Measured with a per-frame recorder
+;; (playwright/probe-learn-next.mjs): a PDF to text Next unmounted
+;; DocumentRoot, and on the text topic it then rebuilt about every 1.3 s.
+;;
+;; A plain fn call is one reactive node, so its new value is a change. Every
+;; derivation below that branches is therefore a plain fn, called from the
+;; providers. See plans/learn-next-in-place.md.
+
+(defn topic-facts
+  "The overview's derived facts, branching inside a plain fn (see above).
+
+   Pre:  `overview` is get-topic-overview*'s map or nil; `topic-id` is the
+         topic in view.
+   Post: a map with :kind :pdf-root-id :is-pdf? :is-score? :focus-available?
+         :focus-scope-id :has-source-pane? :editor-scope-id :bib-topic-id
+         :pdf-root?."
+  [overview topic-id]
+  (let [kind (:kind overview)
+        pdf-root-id (:pdf-root-id overview)
+        root-topic-id (:root-topic-id overview)
+        is-pdf? (some? pdf-root-id)
+        focus-available? (focus-reader/available? kind is-pdf?)
+        ;; A source pane sits beside the editor only on these three (§2.2).
+        ;; `kind` cannot say it: a kg-code topic is kind "code" with no pane.
+        has-source-pane? (boolean (or is-pdf? (:is-video? overview) (:is-code? overview)))]
+    {:kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
+     :is-score? (boolean (:is-score? overview))
+     :focus-available? focus-available?
+     :focus-scope-id (when focus-available? (or pdf-root-id topic-id))
+     :has-source-pane? has-source-pane?
+     ;; The PDF root on a PDF, so that it equals focus-scope-id — the two
+     ;; flags exclude each other and must name one document (§1.2).
+     :editor-scope-id (when has-source-pane? (or pdf-root-id root-topic-id topic-id))
+     ;; Bibliography target: PDF pages own no bibliography (resolve to the
+     ;; document root); every other kind (extract/root/web/epub) is its own
+     ;; owner. get-topic-citation* resolves the effective source from here.
+     :bib-topic-id (if (= kind "page") (or pdf-root-id root-topic-id) topic-id)
+     :pdf-root? (and is-pdf? (= kind "pdf"))}))
+
+(defn initial-page-of
+  "The page a PDF opens on: URL page anchor > persisted last page > 1 for a
+   PDF root; a page topic carries its page number. nil off a PDF.
+
+   CLAMPED, because both sources can name a page the document does not have.
+   A hand-typed URL is one. The other is a value the shipped scroll-report
+   leak already WROTE to `last_page_<doc>`, which is why clamping happens on
+   read and no migration over `settings` exists — a stored 40 on a 5-page
+   document heals itself here, on the next open."
+  [kind is-pdf? page-number url-page stored-last-page pdf-page-count]
+  (when is-pdf?
+    (cond
+      (= kind "page") page-number
+      (= kind "pdf") (page-merge/clamp-page (or url-page stored-last-page 1) pdf-page-count)
+      :else 1)))
+
+(defn or-else
+  "`x` unless it is nil or false, else `default`. `or` as a plain fn."
+  [x default]
+  (or x default))
+
+(defn all?
+  "Whether every argument is truthy. `and` as a plain fn, returning a boolean."
+  [& xs]
+  (every? boolean xs))
+
+(defn if-else
+  "`then` when `test` is truthy, else `else`. `if` over two values as a plain
+   fn, for a choice between values that are both already computed."
+  [test then else]
+  (if test then else))
+
+(defn effective-content-of
+  "The body the editor shows: the whole document in merged mode, the page
+   text on a PDF, else the topic's stored content."
+  [merged? is-pdf? is-score? merged-html text-result static-content]
+  (cond
+    merged? merged-html
+    (and is-pdf? (not is-score?)) (when (:success text-result) (:text text-result))
+    :else static-content))
+
+(defn target-page-of
+  "The page a same-document jump asks for, or nil. See DocumentViewState."
+  [is-pdf? pdf-root-id nav-target]
+  (when (and is-pdf? pdf-root-id nav-target (= (:topic-id nav-target) pdf-root-id))
+    (:page nav-target)))
+
+(defn page-topic-id-of
+  "The page topic in view on a PDF, else the topic itself. Score topics have
+   no page children, so they keep their own id."
+  [is-pdf? is-score? page-info topic-id]
+  (if (and is-pdf? (not is-score?))
+    (or (:topic-id page-info) topic-id)
+    topic-id))
+
+(defn reseed!
+  "Resets `!a` to `v` when `k` differs from the key `!seen` holds, and records
+   `k`. Returns nil.
+
+   The providers' view-state atoms are created ONCE per mount and reseeded
+   through this, never rebuilt as `(atom seed)`. A seed re-emits on every
+   `:refresh` bump, with an equal value: the editor's auto-save bumps it
+   about 1 s after a topic loads. `(atom seed)` then built a new atom, and a
+   new atom gives `e/watch` a new flow, which reaches every consumer as a
+   shrink and a grow. page-info and text-result close over the current page,
+   so their Offloads lost their latched values and DocumentRoot unmounted for
+   one frame — the whole viewer rebuilt after each Next onto a new kind.
+   Keying on the seed also stops a refresh from resetting state the user
+   changed, such as the page they scrolled to.
+
+   `!seen` maps `slot` to the key last seen; an absent slot always seeds."
+  [!a !seen slot k v]
+  (when (not= (get @!seen slot ::unseeded) k)
+    (swap! !seen assoc slot k)
+    (reset! !a v))
+  nil)
+
+(defn seed-layout!
+  "Reseeds DocumentLayoutState's per-document atoms from `resolved`. One plain
+   call, so the provider stays under the JVM method cap."
+  [!seen !layout !focus? !editor-hidden? resolved]
+  (let [{:keys [pdf-root-id initial-layout focus-scope-id focus-available? initial-focus?
+                editor-scope-id has-source-pane? initial-editor-hidden?]} resolved]
+    (reseed! !layout !seen :layout [pdf-root-id initial-layout]
+      (or-else initial-layout "left-right"))
+    (reseed! !focus? !seen :focus [focus-scope-id focus-available? initial-focus?]
+      (all? focus-available? initial-focus?))
+    (reseed! !editor-hidden? !seen :editor-hidden
+      [editor-scope-id has-source-pane? initial-editor-hidden?]
+      (all? has-source-pane? initial-editor-hidden?))))
+
+(defn seed-view!
+  "Reseeds DocumentViewState's per-topic atoms. See seed-layout!."
+  [!seen !current-page !total topic-id initial-page pdf-page-count]
+  (reseed! !current-page !seen :current-page [topic-id initial-page] initial-page)
+  (reseed! !total !seen :total [topic-id pdf-page-count] (or-else pdf-page-count 0)))
+
 (defn default-split-pct []
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
      :clj 75))
@@ -199,24 +348,22 @@
           scan-dpi (e/server (e/Offload #(settings/get-scan-dpi user-id)))
 
           overview (e/server (e/Offload #(get-topic-overview* refresh topic-id)))
-          kind (:kind overview)
-          pdf-root-id (:pdf-root-id overview)
-          is-pdf? (some? pdf-root-id)
-          is-score? (boolean (:is-score? overview))
-          focus-available? (focus-reader/available? kind is-pdf?)
-          focus-scope-id (when focus-available? (or pdf-root-id topic-id))
+          ;; Every branch over the overview happens inside this plain fn, so a
+          ;; topic switch changes these values in place (see topic-facts).
+          facts (topic-facts overview topic-id)
+          kind (:kind facts)
+          pdf-root-id (:pdf-root-id facts)
+          is-pdf? (:is-pdf? facts)
+          is-score? (:is-score? facts)
+          focus-available? (:focus-available? facts)
+          focus-scope-id (:focus-scope-id facts)
           ;; The document's page count, bound once. It bounds `initial-page`
           ;; below and seeds DocumentViewState's `!total`, which bounds every
           ;; later page change — one quantity, named once.
           pdf-page-count (:pdf-page-count overview)
           root-topic-id (:root-topic-id overview)
-          ;; A source pane sits beside the editor only on these three (§2.2).
-          ;; `kind` cannot say it: a kg-code topic is kind "code" with no pane.
-          has-source-pane? (or is-pdf? (boolean (:is-video? overview))
-                             (boolean (:is-code? overview)))
-          ;; The PDF root on a PDF, so that it equals focus-scope-id — the two
-          ;; flags exclude each other and must name one document (§1.2).
-          editor-scope-id (when has-source-pane? (or pdf-root-id root-topic-id topic-id))
+          has-source-pane? (:has-source-pane? facts)
+          editor-scope-id (:editor-scope-id facts)
           ;; Content body fetched separately and gated: PDF panes get their
           ;; text from get-page-text*, so fetching the topic's stored content
           ;; for them was a dead transfer. Score topics ARE pdf-paned but have
@@ -226,38 +373,37 @@
           ;; tuple (empty-amb semantics — the value never goes nil; see
           ;; freememo.loading), so a downstream reader can compare the fetched-for
           ;; id against the live topic-id to detect that the shown body is stale.
-          static-content+id (e/server (when (or (not is-pdf?) is-score?)
-                                        (e/Offload
-                                          (fn [] [topic-id (get-topic-content* refresh topic-id)]))))
-          static-content (when static-content+id (nth static-content+id 1))
-          static-content-topic-id (when static-content+id (nth static-content+id 0))
-          ;; initial-page precedence: URL page anchor > persisted last-page > 1
-          ;; for a PDF root; a page-topic carries its page number intrinsically.
-          ;; The last-page fetch is skipped when the URL already supplies a page.
           ;;
-          ;; CLAMPED, because both sources can name a page the document does not
-          ;; have. A hand-typed URL is one. The other is a value the shipped
-          ;; scroll-report leak already WROTE to `last_page_<doc>`, which is why
-          ;; clamping happens on read and no migration over `settings` exists —
-          ;; a stored 40 on a 5-page document heals itself here, on the next
-          ;; open. A page topic needs no clamp: it carries its own number.
-          initial-page (when is-pdf?
-                         (cond
-                           (= kind "page") (:page-number overview)
-                           (= kind "pdf") (page-merge/clamp-page
-                                            (or url-page
-                                                (e/server (e/Offload #(settings/get-last-page user-id pdf-root-id)))
-                                                1)
-                                            pdf-page-count)
-                           :else 1))
+          ;; Every kind gate in this let is the thunk's FIRST act, never a `when`
+          ;; around the e/Offload. A `when` around it mounts a new Offload when
+          ;; the gate opens, and a new Offload has no value until its thunk
+          ;; returns. One binding with no value empties the map TopicPage
+          ;; merges, so DocumentRoot unmounts and the whole viewer is rebuilt.
+          ;; The Learn session crosses kinds on every Next, and the gate
+          ;; outside the thunk tore the viewer down on each PDF/text crossing
+          ;; (plans/learn-next-in-place.md). Inside the thunk, e/Offload's latch
+          ;; holds the previous value until the new one lands.
+          static-content+id (e/server (e/Offload
+                                        (fn [] (when (or (not is-pdf?) is-score?)
+                                                 [topic-id (get-topic-content* refresh topic-id)]))))
+          static-content (get static-content+id 1)
+          static-content-topic-id (get static-content+id 0)
+          ;; The last-page fetch is skipped when the URL already supplies a page.
+          stored-last-page (e/server
+                             (e/Offload #(when (and (= kind "pdf") (nil? url-page))
+                                           (settings/get-last-page user-id pdf-root-id))))
+          initial-page (initial-page-of kind is-pdf? (:page-number overview) url-page
+                         stored-last-page pdf-page-count)
           initial-layout (e/server
-                           (when is-pdf?
-                             (e/Offload #(or (settings/get-pdf-layout user-id pdf-root-id) "left-right"))))
+                           (e/Offload #(when is-pdf?
+                                         (or (settings/get-pdf-layout user-id pdf-root-id)
+                                             "left-right"))))
           ;; Each supported document stores its own focus-reader preference.
           ;; PDF pages share the PDF root preference.
           initial-focus? (e/server
-                           (boolean (when focus-scope-id
-                                      (e/Offload #(settings/get-focus-reader user-id focus-scope-id)))))
+                           (e/Offload #(boolean
+                                         (when focus-scope-id
+                                           (settings/get-focus-reader user-id focus-scope-id)))))
           ;; The gate is the thunk's first act, so this binding always has a
           ;; value and never turns pending when the scope appears or goes
           ;; (see the merged-doc note in DocumentViewState).
@@ -269,16 +415,13 @@
           initial-card-table-open? (e/server
                                      (e/Offload #(settings/get-card-table-open user-id)))
 
-          ;; Bibliography target: PDF pages own no bibliography (resolve to the
-          ;; document root); every other kind (extract/root/web/epub) is its own
-          ;; owner. get-topic-citation* resolves the effective source from here.
-          bib-topic-id (if (= kind "page") (or pdf-root-id root-topic-id) topic-id)
-          pdf-root? (and is-pdf? (= kind "pdf"))
+          bib-topic-id (:bib-topic-id facts)
+          pdf-root? (:pdf-root? facts)
           citation (e/server (e/Offload #(bibform/get-topic-citation* refresh user-id bib-topic-id)))
           ;; A score is its own pdf-root-id, and its done toggle reads this
           ;; too (bibliography_toolbar.cljc, DocumentDoneToggle).
-          pdf-status (e/server (when (or pdf-root? is-score?)
-                                 (e/Offload #(get-topic-status* meta-refresh pdf-root-id))))
+          pdf-status (e/server (e/Offload #(when (or pdf-root? is-score?)
+                                             (get-topic-status* meta-refresh pdf-root-id))))
           scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
           ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))]
       {;; caller passthrough
@@ -327,7 +470,7 @@
           ;; Content↕card-table split (global per-user, persisted). Seeded from
           ;; settings; nil → client default. Manual drag + double-click persist
           ;; via !top-pct-save; layout toggle resets live but does not persist.
-          !top-pct (atom (or initial-top-pct (default-split-pct)))
+          !top-pct (atom (or-else initial-top-pct (default-split-pct)))
           top-pct (e/watch !top-pct)
           !top-pct-save (atom nil)
           top-pct-save (e/watch !top-pct-save)
@@ -353,7 +496,9 @@
                                (set-card-table-open! (not @!card-table-open?)))
 
           ;; PDF split layout (persisted per-doc)
-          !layout (atom (or initial-layout "left-right"))
+          ;; Created once and reseeded per document (see reseed!).
+          !layout (atom "left-right")
+          !seen (atom {})
           layout (e/watch !layout)
           !layout-save (atom nil)
           layout-save (e/watch !layout-save)
@@ -370,7 +515,7 @@
                              (reset! !top-pct new-top-pct)))
           ;; The focus reader is available only for the standard text view and
           ;; real PDFs. Its state stays separate from the PDF split layout.
-          !focus? (atom (boolean (and focus-available? initial-focus?)))
+          !focus? (atom false)
           focus? (e/watch !focus?)
           !focus-save (atom nil)
           focus-save (e/watch !focus-save)
@@ -378,7 +523,7 @@
           ;; Hidden editor pane (plans/editor-pane-toggle.md §2.3). Only
           ;; documents with a source pane can hide it, so a stored flag on a
           ;; repo's dir node reads false there and the editor shows.
-          !editor-hidden? (atom (boolean (and has-source-pane? initial-editor-hidden?)))
+          !editor-hidden? (atom false)
           editor-hidden? (e/watch !editor-hidden?)
           !editor-hidden-save (atom nil)
           editor-hidden-save (e/watch !editor-hidden-save)
@@ -435,7 +580,10 @@
             (if (:success r)
               (case r (t-card-table-open))
               (t-card-table-open (:error r))))))
-      {:top-pct top-pct :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!
+      {;; The reseeds ride in the returned map so that they always run; their
+       ;; value is nil.
+       ::seeded (seed-layout! !seen !layout !focus? !editor-hidden? resolved)
+       :top-pct top-pct :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!
        :card-table-open? card-table-open? :set-card-table-open! set-card-table-open!
        :toggle-card-table! toggle-card-table!
        :layout layout :layout-save layout-save :t-layout t-layout :toggle-layout! toggle-layout!
@@ -461,9 +609,11 @@
           ;; Merged reading (plans/merged-page-reading.md). The whole PDF becomes
           ;; one document with a boundary marker per page. Score topics are out:
           ;; they have no page children.
-          merged? (boolean (and is-pdf? (not is-score?) focus?))
+          merged? (all? is-pdf? (not is-score?) focus?)
           ;; Current PDF page (mutated by PdfPane via callback)
-          !current-page (atom initial-page)
+          ;; Created once and reseeded per topic (see reseed!).
+          !current-page (atom nil)
+          !seen (atom {})
           current-page (e/watch !current-page)
           ;; PDF page count — surfaced by PdfViewerComponent via on-total!,
           ;; consumed by PdfToolbar's "of N" + nav-button disabled states.
@@ -473,7 +623,7 @@
           ;; only writer that never runs. Both nav buttons disable on
           ;; `(= total 0)`, so an unseeded atom strands them. The viewer
           ;; overwrites this with its own count as soon as it mounts.
-          !total (atom (or pdf-page-count 0))
+          !total (atom 0)
           total (e/watch !total)
           ;; Last-page persistence. The writer is DocumentBody, not PdfPane:
           ;; focus reader unmounts the pane, and a writer that unmounts stops
@@ -516,9 +666,7 @@
           ;; viewer doesn't snap back if the user navigates manually.
           !nav-target (atom nil)
           nav-target (e/watch !nav-target)
-          target-page (when (and is-pdf? pdf-root-id nav-target
-                              (= (:topic-id nav-target) pdf-root-id))
-                        (:page nav-target))
+          target-page (target-page-of is-pdf? pdf-root-id nav-target)
           ;; Live page-info — re-derives as user navigates pages. Score topics
           ;; have no page children: skip the fetch, keep the topic's own id.
           ;; Gate inside the thunk, matching merged-doc and text-result below.
@@ -528,9 +676,7 @@
           page-info (e/server
                       (e/Offload #(when (and is-pdf? (not is-score?))
                                     (get-page-info* refresh meta-refresh pdf-root-id current-page))))
-          page-topic-id (if (and is-pdf? (not is-score?))
-                          (or (:topic-id page-info) topic-id)
-                          topic-id)
+          page-topic-id (page-topic-id-of is-pdf? is-score? page-info topic-id)
           ;; Effective content: merged mode -> the whole document; PDF ->
           ;; fetched page text; non-PDF and score -> static (score pages carry
           ;; no per-page text).
@@ -570,40 +716,30 @@
           text-result (e/server
                         (e/Offload #(when (and is-pdf? (not is-score?) (not merged?))
                                       (get-page-text* refresh pdf-root-id current-page))))
-          ;; `e/Reconcile` is what keeps a mode change from tearing down the
-          ;; document view. Its docstring: "collapse :grow/:shrink diffs into
-          ;; :change diffs based on position … Use case: inhibit undesired
-          ;; duplicate effects."
-          ;;
-          ;; Without it, this `cond` swapping branches emits a shrink of the old
-          ;; branch and a grow of the new one in one diff, and that ripples UP
-          ;; the DAG — every parent sees a shrink and a grow. `e/on-unmount`
-          ;; fires on a shrink/grow but not on a change, so the ripple reached
-          ;; RichTextEditorComponent and called `destroy-editor!`. Measured: a
-          ;; focus toggle rebuilt DocumentColumns, ContentColumn and EditorPane
-          ;; and destroyed the Quill instance.
-          effective-content (e/Reconcile
-                              (cond
-                                merged? merged-html
-                                (and is-pdf? (not is-score?))
-                                (when (:success text-result) (:text text-result))
-                                :else static-content))
+          ;; A plain call, never a reactive `cond`. A `cond` that swaps branches
+          ;; emits a shrink of the old branch and a grow of the new one, and that
+          ;; ripples UP the DAG. `e/on-unmount` fires on a shrink/grow but not on
+          ;; a change, so the ripple reached RichTextEditorComponent and called
+          ;; `destroy-editor!` on a focus toggle. `e/Reconcile` around the `cond`
+          ;; fixed that toggle, but a Learn session Next from a text topic to a
+          ;; PDF still unmounted DocumentBody's whole layout `div` with it in
+          ;; place. As a plain call, every switch is a change (see topic-facts).
+          effective-content (effective-content-of merged? is-pdf? is-score?
+                              merged-html text-result static-content)
           ;; Topic the shown editor body belongs to. Non-PDF/score read the
           ;; static body → carry its fetched-for id, which lags the live topic-id
           ;; through a switch (stale-detectable). Real PDFs read per-page text
           ;; keyed on the page, not the topic; pin this to page-topic-id so the
           ;; editor's staleness check is a no-op there and PDF page-nav keeps its
           ;; in-place update unchanged.
-          effective-content-topic-id (if (and is-pdf? (not is-score?))
+          effective-content-topic-id (if-else (all? is-pdf? (not is-score?))
                                        page-topic-id
                                        static-content-topic-id)
           ;; The identity of the body in the editor — see doc-context. Merged
           ;; mode holds the whole document, so it is the root; every other mode
           ;; holds one topic's body, so it is that topic.
-          ;; Reconciled for the same reason as effective-content above: an
-          ;; unreconciled `if` emits shrink+grow on every toggle, and that
-          ;; ripples up the DAG until an `e/on-unmount` fires.
-          editor-doc-id (e/Reconcile (if merged? pdf-root-id page-topic-id))
+          ;; A plain call for the same reason as effective-content above.
+          editor-doc-id (if-else merged? pdf-root-id page-topic-id)
           ;; Score editor state — owned here (the stable client ancestor) so the
           ;; waveform strip, the PDF-toolbar rect button, the rect modal, and
           ;; the score card bar all share one pending-card selection.
@@ -628,8 +764,10 @@
           ;; incremental-reading view). phone? alone drives PdfToolbar's compact
           ;; layout for every PDF on a phone.
           phone? (e/watch viewport/!phone?)
-          reading-mode? (and phone? (= (:origin queue-ctx) :learn))]
-      {:!current-page !current-page :current-page current-page
+          reading-mode? (all? phone? (= (:origin queue-ctx) :learn))]
+      {;; As in DocumentLayoutState: in the map so that they always run.
+       ::seeded (seed-view! !seen !current-page !total topic-id initial-page pdf-page-count)
+       :!current-page !current-page :current-page current-page
        :on-page-change! on-page-change!
        :last-page-save last-page-save :t-last-page t-last-page
        :!total !total :total total :!nav-target !nav-target :target-page target-page

@@ -3,7 +3,6 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -11,20 +10,15 @@
    [freememo.loading :as loading]
    [freememo.read-region :as read-region]
    [freememo.route-timing :as route-timing]
+   [freememo.row-motion :as row-motion]
    [freememo.a11y :as a11y]
-   [freememo.card-components :as card-components]
-   [freememo.pdf-cache :as pdf-cache]
    [freememo.bibliography-form :as bibform]
-   [freememo.modal-shell :as modal]
    [freememo.viewport :as viewport]
-   [freememo.util :as util]
    [freememo.tree-dnd :as tree-dnd]
-   [freememo.library-row-actions :refer [RowActionsMenu]]
-   [freememo.commands :as commands]
-   [hyperfiddle.electric-forms5 :as forms]
+   [freememo.context-menu-surface :as menu-surface]
+   [freememo.neoreader-kinds :as nrkinds]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.logging :as log])
-   #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
 
@@ -38,14 +32,6 @@
      (read-region/measured-result :library-tree
        #(vec (db/get-library-tree-items user-id expansion)))
      :cljs (loading/region-success [])))
-
-;; Atomic rename + refresh — single e/server target so Electric can't drop
-;; the side effect when the binding is "unused" in the client body.
-(defn rename-and-refresh! [user-id id new-title]
-  #?(:clj (do (db/rename-topic! id new-title)
-            (commands/bump! user-id :rename-topic)
-            :ok)
-     :cljs nil))
 
 #?(:clj
    (defn extract-roots [items]
@@ -215,7 +201,44 @@
        :done-items (:done-items topic)
        :total-cards (:total-cards topic)
        :synced-cards (:synced-cards topic)
+       :priority (:topics/priority topic)
        :formatted-date (:formatted_date topic)})))
+
+(defn tree-window
+  "The DTOs of the flattened rows at display orders [offset, offset + limit).
+   Post: each DTO carries its display order as :pos, and :fresh? when its
+         topic id is in `arrived`."
+  [flat-rows offset limit arrived]
+  (let [end (min (count flat-rows) (+ offset limit))]
+    (mapv (fn [i]
+            (let [dto (tree-row-dto (nth flat-rows i))]
+              (assoc dto :pos i :fresh? (contains? arrived (:id dto)))))
+      (range (min offset end) end))))
+
+(defn tree-row-ids
+  "The topic ids of the flattened rows, as a set."
+  [flat-rows]
+  (into #{} (map (comp :topics/id :topic)) flat-rows))
+
+(defn tree-row-subject
+  "The context-menu subject for one Library row (plans/custom-context-menu.md
+   4.2). Every fact the row's commands test is stated, never left absent.
+
+   Delete and NeoReader sync are root-only here, as the ⋯ menu offered them
+   before (4.2.3.2): a nested topic is an extract or a page, which its
+   document's viewer deletes."
+  [{:keys [id title kind is-root has-children dismissed? status priority]}]
+  (let [root? (boolean is-root)]
+    {:topic-id id
+     :title (or title "")
+     :topic-kind (or kind "basic")
+     :root? root?
+     :has-children? (boolean has-children)
+     :dismissed? (boolean dismissed?)
+     :status (or status "active")
+     :priority priority
+     :deletable? root?
+     :neoreader-syncable? (boolean (and root? (nrkinds/syncable-kind? kind)))}))
 
 ;; Badge helper — delegated to bibliography-form/topic-badge so wiki sources
 ;; render as "Wikipedia" via container-title even when topic.kind='web'.
@@ -227,15 +250,13 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn DocumentRow [user-id navigate! row-dto i row-height
-                     editing-id
-                     !expansion !editing-id !show-confirm !scroll-node
-                     !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
+                     !expansion !drag-src drag-src forbidden !drop-cmd]
   (e/client
     ;; The caller projects one bounded DTO on the server. Reading it here makes
     ;; one row payload cross instead of one reactive transfer per field.
     (let [{:keys [depth has-children is-root expanded? id title kind
                   source-container status dismissed? total-items done-items
-                  total-cards synced-cards formatted-date]} row-dto
+                  total-cards synced-cards formatted-date fresh?]} row-dto
           title (or title "(empty)")
           kind (or kind "basic")
           is-page (= kind "page")
@@ -243,6 +264,8 @@
           dismissed? (boolean dismissed?)
           [badge-text badge-color] (bibform/topic-badge kind source-container)
           open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
+          ;; The row's context-menu target: the same rows the ⋯ button opens.
+          target (menu-surface/topic-row-target (tree-row-subject row-dto) :library)
           toggle-children! (fn [e]
                              (.stopPropagation e)
                              ;; toggling id flips expansion in either mode: it is an
@@ -259,10 +282,18 @@
         ;; card filled its whole slot and hid the next card's top edge.
         (dom/props {:class (str "library-document-row" (when (even? i) " row-alt"))
                     :role "row"
+                    ;; freememo.row-motion follows the key when rows move, and
+                    ;; slides in a row that an expand or an import just added.
+                    :data-row-key (str id)
+                    :data-enter (when fresh? "1")
                     :style {:opacity (if (or dismissed? (= topic-status "done")) "0.6" "1")
                             ;; 0-based absolute index → per-row translateY (C1c)
                             :--order i}})
         (dom/On "click" open-topic! nil)
+        ;; Right-click, and the focus target for the palette and Shift+F10
+        ;; (plans/custom-context-menu.md 4.2.1). The tr is display:contents,
+        ;; but events from its cells still bubble through it.
+        (menu-surface/RowMenu target)
         ;; Column 1: Document (arrow + badge + title)
         ;; --row-indent carries the depth indent as a custom property.
         ;; `.library-document-main` applies it as padding-left, and the phone
@@ -297,69 +328,13 @@
           (dom/span
             (dom/props {:class "type-badge" :style {:background badge-color}})
             (dom/text badge-text))
-          (if (= editing-id id)
-            (e/for-by identity [_k [id]]
-              ;; Select-all on focus so the autofocus-on-mount lets the user
-              ;; immediately overwrite the whole title (was the .select half
-              ;; of the old rAF focus+select dance). Delegated on "focusin"
-              ;; (bubbles, unlike "focus") because Input! owns the <input>
-              ;; node — we no longer hold a direct ref to it.
-              (dom/On "focusin"
-                (fn [e]
-                  (let [n (.-target e)]
-                    (when (and (instance? js/HTMLInputElement n) (pos? (count (.-value n))))
-                      (.select n))))
-                nil)
-              (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-              ;; Esc cancels without saving. Input! unmounts with the rest of
-              ;; this branch on reset — no manual value-revert/blur needed,
-              ;; unlike the old imperative dance.
-              (dom/On "keydown"
-                (fn [e]
-                  (when (and (= (.-key e) "Escape") (instance? js/HTMLInputElement (.-target e)))
-                    (.preventDefault e)
-                    (reset! !editing-id nil)))
-                nil)
-              ;; Managed Forms5 input, bound to `title` (authoritative): while
-              ;; focused/dirty it holds the user's draft instead of reflecting
-              ;; `title`, so a concurrent rename-and-refresh! elsewhere never
-              ;; clobbers an in-progress edit (A5 fix). Its own per-keystroke
-              ;; token is intentionally left unconsumed — committing on every
-              ;; keystroke would bump :tree-mutations and re-sort/re-fetch the
-              ;; whole tree while typing; see the delegated "change" commit
-              ;; below instead, which fires once on blur like before.
-              (forms/Input! :title title
-                :type "text" :placeholder "Title" :maxlength "500" :autofocus true
-                :style {:flex "1" :min-width "0" :padding "2px 6px"
-                        :font-size (if is-root "13px" "12px")
-                        :border "1px solid var(--color-border)"
-                        :border-radius "3px"
-                        :background "var(--color-bg-card)"})
-              ;; Commit on change/blur — delegated (bubbles from Input!'s
-              ;; node), same policy as before: blank title cancels, otherwise
-              ;; rename + refresh, then close.
-              (let [event (dom/On "change"
-                            #(when (instance? js/HTMLInputElement (.-target %)) (-> % .-target .-value))
-                            nil)
-                    [t _] (e/Token event)]
-                (when t
-                  (let [trimmed (str/trim event)]
-                    (if (str/blank? trimmed)
-                      (case (e/client (reset! !editing-id nil)) (t))
-                      ;; fire-and-forget: rename-and-refresh! has no failure
-                      ;; return (returns :ok, or throws — no {:success ...}
-                      ;; contract to branch on).
-                      (let [ok (e/server (e/Offload #(rename-and-refresh! user-id id trimmed)))]
-                        (case ok
-                          (case (e/client (reset! !editing-id nil))
-                            (t)))))))))
             (dom/span
               (dom/props {:class "library-document-title"
                           :style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                   :font-size (if is-root "13px" "12px")
                                   :font-weight (if is-root "500" "400")
                                   :color "var(--color-text-primary)"}})
-              (dom/text title)))
+              (dom/text title))
           ;; Dismissed tag — the row also greys (opacity above); the label keeps
           ;; Dismissed distinguishable from Done, which greys the same way.
           (when dismissed?
@@ -398,165 +373,119 @@
           (when is-root
             (dom/span
               (dom/text (or formatted-date "")))))
-        ;; Column 5: Actions — all row actions collapsed behind one ⋯ menu.
+        ;; Column 5: Actions — the ⋯ button opens the context menu at the
+        ;; button, with the rows a right-click shows (4.2.3).
         (dom/td
           (dom/props {:class "library-document-actions"})
-          (RowActionsMenu user-id id title is-root has-children kind dismissed?
-            navigate! !editing-id !drop-cmd !show-confirm !scroll-node !dismiss-cmd))))))
-
-;; ---------------------------------------------------------------------------
-;; DeleteConfirmModal — extracted to keep DocumentTreeView lean
-;; ---------------------------------------------------------------------------
-
-;; Pre:  `show-confirm` is the topic-id to delete, or nil (modal hidden).
-;; Post: Esc / backdrop click / Cancel → close (reset! !show-confirm nil).
-;;       Delete click or Cmd/Ctrl+Enter → run delete sequence, then close.
-;; Invariant: Delete button receives focus on mount (rAF via
-;;            modal/focus-on-mount! — HTML :autofocus is inert on dynamically
-;;            inserted elements) so Tab cycles between Delete↔Cancel and the
-;;            keydown shortcut works.
-(e/defn DeleteConfirmModal [user-id show-confirm !show-confirm !scroll-node]
-  (e/client
-    (when (some? show-confirm)
-      (let [!delete-btn (atom nil)]
-        (dom/div
-          (dom/props {:class "modal-backdrop"
-                      :role "dialog" :aria-modal "true"
-                      :aria-label "Confirm delete" :tabindex "-1"})
-          (modal/FocusReturn)
-          (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-          (dom/On "keydown"
-            (fn [e]
-              (cond
-                (= (.-key e) "Escape")
-                (reset! !show-confirm nil)
-
-                (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                (when-some [btn @!delete-btn]
-                  (.preventDefault e)
-                  (.click btn))
-
-                (= (.-key e) "Tab")
-                (modal/trap-tab! (.-currentTarget e) e)))
-            nil)
-          (dom/div
-            (dom/props {:class "modal-content modal-sm"})
-            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-            (dom/div
-              (dom/props {:class "confirm-modal-body"})
-              (dom/p (dom/text "Delete this topic? It and its cards are removed; you can undo for 12 hours.")))
-            (dom/div
-              (dom/props {:class "confirm-modal-actions"})
-              (dom/button
-                (dom/props {:class "btn btn-secondary"})
-                (dom/text "Cancel")
-                (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-              (dom/button
-                (dom/props {:class "btn btn-danger-fill"})
-                (reset! !delete-btn dom/node)
-                ;; rAF focus-on-mount (e/snapshot = once at mount); the defer
-                ;; lets FocusReturn's synchronous opener-capture win.
-                (e/snapshot (modal/focus-on-mount! dom/node))
-                (dom/text "Delete")
-                ;; Thread the pre-delete scrollTop through the confirm event so
-                ;; it's captured in the click callback (not the reactive body).
-                (let [event (dom/On "click"
-                              (fn [_] {:topic show-confirm
-                                       :st (some-> @!scroll-node .-scrollTop)})
-                              nil)
-                      [t _] (e/Token event)]
-                  (when t
-                    (let [topic-to-delete (:topic event)
-                          r (e/server (e/Offload #(staged-delete/stage-deletion! user-id topic-to-delete true)))]
-                      (case r
-                        ;; Anchor scroll across the :tree-mutations re-render —
-                        ;; same reset as expand (util/restore-scroll-after-render!).
-                        (case (e/client (util/restore-scroll-after-render! @!scroll-node (:st event)))
-                          (case (e/client (card-components/try-delete-anki-notes! (:note-ids r)))
-                            (case (e/client (pdf-cache/cache-delete topic-to-delete))
-                              (case (e/client (reset! !show-confirm nil))
-                                (t)))))))))))))))))
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary row-actions-trigger tooltip-right"
+                        :style {:padding "2px 8px" :font-size "14px" :line-height "1"}
+                        :aria-haspopup "menu"
+                        :aria-label (str "Actions for " title)})
+            (tooltip/Tooltip! "Actions")
+            (dom/text "⋯")
+            (dom/On "click"
+              (fn [e]
+                (.stopPropagation e)
+                (menu-surface/open-menu-below! (.-currentTarget e) target))
+              nil)))))))
 
 (e/defn LibraryTableBody
   [request-key user-id navigate! row-height grid-cols
-   editing-id !expansion !editing-id !show-confirm !scroll-node
-   !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
+   !expansion !scroll-node !drag-src drag-src forbidden !drop-cmd]
   (e/client
-    (loading/WithLatestServerRegion request-key
-      ;; Electric let bindings run concurrently. The tree shape and maintained
-      ;; progress summary therefore start as separate database reads.
-      (e/fn []
-        (e/server
-          (let [[requested-revision _user-id filter-text kind-filter status-filter
-                 sort-col sort-dir expansion]
-                request-key
-                _rev (+ (e/watch (us/get-atom _user-id :refresh))
-                       (e/watch (us/get-atom _user-id :tree-mutations)))
-                result-key [_rev _user-id filter-text kind-filter status-filter
-                            sort-col sort-dir expansion]
-                items-result (e/Offload #(assoc
-                                          (get-tree-items-result* _rev _user-id expansion)
-                                          :source-key [_rev _user-id expansion]))
-                stats-result (e/Offload #(assoc
-                                          (get-root-stats-result* _rev _user-id)
-                                          :source-key [_rev _user-id]))]
-            (cond
-              (or (not= requested-revision _rev)
-                  (not= [_rev _user-id expansion] (:source-key items-result))
-                  (not= [_rev _user-id] (:source-key stats-result)))
-              {:pending? true}
+    ;; Row ids of the last window, server-side, for row-motion/arrivals!.
+    ;; Outside the region, so a refresh that remounts it keeps them.
+    (let [!seen (e/server (atom {}))
+          ;; Filter and sort, as requested. A change to them scrolls to the top.
+          view-key (subvec (vec request-key) 2 7)]
+      (loading/WithLatestServerRegion request-key
+        ;; Electric let bindings run concurrently. The tree shape and maintained
+        ;; progress summary therefore start as separate database reads.
+        (e/fn []
+          (e/server
+            (let [[requested-revision _user-id filter-text kind-filter status-filter
+                   sort-col sort-dir expansion]
+                  request-key
+                  _rev (+ (e/watch (us/get-atom _user-id :refresh))
+                         (e/watch (us/get-atom _user-id :tree-mutations)))
+                  result-key [_rev _user-id filter-text kind-filter status-filter
+                              sort-col sort-dir expansion]
+                  items-result (e/Offload #(assoc
+                                            (get-tree-items-result* _rev _user-id expansion)
+                                            :source-key [_rev _user-id expansion]))
+                  stats-result (e/Offload #(assoc
+                                            (get-root-stats-result* _rev _user-id)
+                                            :source-key [_rev _user-id]))]
+              (cond
+                (or (not= requested-revision _rev)
+                    (not= [_rev _user-id expansion] (:source-key items-result))
+                    (not= [_rev _user-id] (:source-key stats-result)))
+                {:pending? true}
 
-              (and (:ok? items-result) (:ok? stats-result))
-              (loading/region-success result-key
-                (build-tree-rows (:value items-result) (:value stats-result)
-                  filter-text kind-filter status-filter sort-col sort-dir expansion))
+                (and (:ok? items-result) (:ok? stats-result))
+                ;; The filters travel with the rows they built, for the
+                ;; row-motion/arrivals! scope: the region keeps the old rows
+                ;; while it refreshes, and the current filters must not be
+                ;; paired with them.
+                (loading/region-success result-key
+                  {:rows (build-tree-rows (:value items-result) (:value stats-result)
+                           filter-text kind-filter status-filter sort-col sort-dir expansion)
+                   :view-key [filter-text kind-filter status-filter sort-col sort-dir]})
 
-              :else
-              (loading/region-failure result-key
-                (or (:error items-result) (:error stats-result) "Unknown error"))))))
-      (e/fn [flat-rows phase error]
-        (let [row-count (e/server (count flat-rows))]
-          (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
-            (dom/div
-              (dom/props {:role "rowgroup"
-                          :class (str "library-document-scroll"
-                                   (when (= phase :refreshing)
-                                     " progressive-region-refreshing"))
-                          :style {:flex "1 1 auto" :overflow-y "auto"
-                                  :min-height (if (zero? row-count) "72px" "0")
-                                  :max-height (str (* 10 row-height) "px")
-                                  :position "relative" :scrollbar-gutter "stable"}})
-              (reset! !scroll-node dom/node)
-              (let [[offset limit] (Scroll-window row-height row-count dom/node
-                                     {:overquery-factor 1.5
-                                      :reset-key (subvec (vec request-key) 2 7)})]
-                (dom/props {:class "tape-scroll"
-                            :style {:--count row-count
-                                    :--row-height (str row-height "px")
-                                    :--grid-cols grid-cols}})
-                (dom/table
-                  (dom/props {:class "library-table library-table-body"
-                              :role "presentation"
-                              :style {:width "100%" :font-size "13px"}})
-                  (e/for [i (Tape offset limit)]
-                    (when-let [row-dto (e/server
-                                         (tree-row-dto (nth flat-rows i nil)))]
-                      (DocumentRow user-id navigate! row-dto i row-height
-                        editing-id
-                        !expansion !editing-id !show-confirm !scroll-node
-                        !drag-src drag-src forbidden !drop-cmd !dismiss-cmd)))))
-              (when (zero? row-count)
-                (dom/div
-                  (dom/props {:class "library-document-empty" :role "status"})
-                  (dom/text "No content yet. Import content from the Import tab.")))
-              (loading/RegionNotice phase error)))))
-      (e/fn [_phase]
-        (dom/div (dom/props {:class "library-document-loading" :role "rowgroup"})
-          (loading/SkeletonRows (if (> row-height 40) 3 6) (str row-height "px"))))
-      (e/fn [error]
-        (dom/div
-          (dom/props {:class "library-document-failed" :role "status"})
-          (dom/text (str "The document list could not load. " error)))))))
+                :else
+                (loading/region-failure result-key
+                  (or (:error items-result) (:error stats-result) "Unknown error"))))))
+        (e/fn [tree phase error]
+          (let [flat-rows (e/server (:rows tree))
+                row-count (e/server (count flat-rows))]
+            (case (e/snapshot (route-timing/mark-first-useful! :library :documents))
+              (dom/div
+                (dom/props {:role "rowgroup"
+                            :class (str "library-document-scroll"
+                                     (when (= phase :refreshing)
+                                       " progressive-region-refreshing"))
+                            :style {:flex "1 1 auto" :overflow-y "auto"
+                                    :min-height (if (zero? row-count) "72px" "0")
+                                    :max-height (str (* 10 row-height) "px")
+                                    :position "relative" :scrollbar-gutter "stable"}})
+                (reset! !scroll-node dom/node)
+                (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                       {:overquery-factor 1.5
+                                        :reset-key view-key})]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--count row-count
+                                      :--row-height (str row-height "px")
+                                      :--grid-cols grid-cols}})
+                  (dom/table
+                    (dom/props {:class "library-table library-table-body"
+                                :role "presentation"
+                                :style {:width "100%" :font-size "13px"}})
+                    ;; Rows slide by key, whichever node paints them.
+                    (e/on-unmount (row-motion/install! dom/node))
+                    ;; The window is diffed by topic id on the server, so a
+                    ;; row's content and its position cross together. Rows new
+                    ;; since the last window slide in. The scroll offset is in
+                    ;; the scope, so a row that scrolls into view is not new.
+                    (let [arrived (e/server (row-motion/arrivals! !seen [(:view-key tree) offset]
+                                              (tree-row-ids flat-rows)))
+                          window (e/server
+                                   (e/diff-by :id (tree-window flat-rows offset limit arrived)))]
+                      (e/for [row-dto window]
+                        (DocumentRow user-id navigate! row-dto (:pos row-dto) row-height
+                          !expansion !drag-src drag-src forbidden !drop-cmd)))))
+                (when (zero? row-count)
+                  (dom/div
+                    (dom/props {:class "library-document-empty" :role "status"})
+                    (dom/text "No content yet. Import content from the Import tab.")))
+                (loading/RegionNotice phase error)))))
+        (e/fn [_phase]
+          (dom/div (dom/props {:class "library-document-loading" :role "rowgroup"})
+            (loading/SkeletonRows (if (> row-height 40) 3 6) (str row-height "px"))))
+        (e/fn [error]
+          (dom/div
+            (dom/props {:class "library-document-failed" :role "status"})
+            (dom/text (str "The document list could not load. " error))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
@@ -574,10 +503,6 @@
           expansion (do expand-cmd (e/watch !expansion))
           request-key [revision user-id filter-text kind-filter status-filter
                        sort-col sort-dir expansion]
-          !show-confirm (atom nil)
-          show-confirm (e/watch !show-confirm)
-          !editing-id (atom nil)
-          editing-id (e/watch !editing-id)
           phone? (e/watch viewport/!phone?)
           row-height (if phone? 88 36)
           grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
@@ -589,13 +514,7 @@
           !forbidden (atom #{})
           forbidden (e/watch !forbidden)
           !drop-cmd (atom nil)
-          drop-cmd (e/watch !drop-cmd)
-          ;; Row-menu Dismiss/Undismiss. Handled here (not in the transient
-          ;; RowActionsMenu) so the server roundtrip runs in a scope that stays
-          ;; mounted while the menu closes; :dismiss/:undismiss bump
-          ;; :tree-mutations so this tree re-queries and the row re-greys.
-          !dismiss-cmd (atom nil)
-          dismiss-cmd (e/watch !dismiss-cmd)]
+          drop-cmd (e/watch !drop-cmd)]
             ;; These server values update client atoms as sibling statements.
             ;; Pending reads cannot suppress the table shell or its controls.
             (let [server-revision
@@ -618,20 +537,6 @@
                       ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
                   (case ok
                     (case (e/client (reset! !drop-cmd nil)) (t))))))
-            (let [[t _] (e/Token dismiss-cmd)]
-              (when t
-                (let [{:keys [id dismissed?]} dismiss-cmd
-                      ok (e/server (e/Offload #(do (if dismissed?
-                                                     (do (db/undismiss-topic! user-id id)
-                                                       (log/audit! {:id ::topic-undismissed :user-id user-id
-                                                                    :action :update :entity :document :entity-id id}))
-                                                     (do (db/dismiss-topic! user-id id)
-                                                       (log/audit! {:id ::topic-dismissed :user-id user-id
-                                                                    :action :update :entity :document :entity-id id})))
-                                                   :ok)))]
-                  (case ok
-                    (case (e/server (commands/bump! user-id (if dismissed? :undismiss :dismiss)))
-                      (case (e/client (reset! !dismiss-cmd nil)) (t)))))))
             ;; ONE ARIA table spans header + virtual-scrolled body (see the
             ;; identical mapping on the Learn table for the rationale).
             (dom/div
@@ -700,10 +605,7 @@
                         (dom/text "Actions"))))))
 
               (LibraryTableBody request-key user-id navigate! row-height grid-cols
-                editing-id !expansion !editing-id !show-confirm !scroll-node
-                !drag-src drag-src forbidden !drop-cmd !dismiss-cmd)
-
-              (DeleteConfirmModal user-id show-confirm !show-confirm !scroll-node)))))
+                !expansion !scroll-node !drag-src drag-src forbidden !drop-cmd)))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference

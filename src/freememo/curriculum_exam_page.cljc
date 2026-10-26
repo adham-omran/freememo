@@ -22,6 +22,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.a11y :as a11y]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    [freememo.page-title :refer [PageTitle]]
    #?(:clj [freememo.curriculum :as curriculum])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
@@ -234,10 +235,10 @@
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (dom/props {:type "button"
                     :class class-name
-                    :data-tooltip credit-notice
                     :disabled (or generation-active? (some? token))
                     :aria-busy (or generation-active? (some? token))
                     :aria-invalid (some? error)})
+        (tooltip/Tooltip! credit-notice)
         (dom/text (if (or generation-active? token) "Generating exam…" label))
         [token error]))))
 
@@ -388,7 +389,8 @@
   (e/client
     (dom/button
       (dom/props {:type "button" :class "curriculum-icon-button"
-                  :disabled disabled? :aria-label label :title label})
+                  :disabled disabled?})
+      (tooltip/Tooltip! label :aria? true)
       (icons/Icon (if (neg? direction) :chevron-up :chevron-down) :size 14)
       (let [node dom/node]
         (dom/On "click"

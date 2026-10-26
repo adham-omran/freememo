@@ -3,7 +3,8 @@
    window shows, where each one sits beside the pending rows, and which rows
    slide in. Needs no database."
   (:require [clojure.test :refer [deftest is testing]]
-            [freememo.content-card-table :as table]))
+            [freememo.content-card-table :as table]
+            [freememo.row-motion :as row-motion]))
 
 (defn- row [id]
   {:flashcards/id id :flashcards/kind "basic" :flashcards/question (str "q" id)
@@ -30,10 +31,10 @@
 (deftest arrivals-names-only-rows-new-since-the-last-call
   (let [!seen (atom {})]
     (testing "the first call for a topic animates nothing"
-      (is (= #{} (table/arrivals! !seen 1 #{[:card 1] [:card 2]}))))
+      (is (= #{} (row-motion/arrivals! !seen 1 #{[:card 1] [:card 2]}))))
     (testing "a row new since the last call has arrived"
-      (is (= #{[:card 3]} (table/arrivals! !seen 1 #{[:card 1] [:card 2] [:card 3]}))))
+      (is (= #{[:card 3]} (row-motion/arrivals! !seen 1 #{[:card 1] [:card 2] [:card 3]}))))
     (testing "a deleted row is not an arrival"
-      (is (= #{} (table/arrivals! !seen 1 #{[:card 1] [:card 3]}))))
+      (is (= #{} (row-motion/arrivals! !seen 1 #{[:card 1] [:card 3]}))))
     (testing "another topic starts again, so opening it animates nothing"
-      (is (= #{} (table/arrivals! !seen 2 #{[:card 9]}))))))
+      (is (= #{} (row-motion/arrivals! !seen 2 #{[:card 9]}))))))

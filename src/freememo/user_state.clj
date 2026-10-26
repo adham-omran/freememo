@@ -44,6 +44,7 @@
           :activity-mutations (atom 0)
           :question-mutations (atom 0)
           :walkthrough-mutations (atom 0)
+          :desktop-mutations (atom 0)
           :card-gen-status  (atom {})
           ;; Card generation cancels QUEUED work only. The processor is an m/ap
           ;; over a mailbox with `m/?> 3`, which hands out no per-item cancel fn,
@@ -106,6 +107,13 @@
           ;; set because the phase moves — cloning or fetching, resolving,
           ;; downloading, creating topics — while one activity row stays open.
           :importing-repos  (atom {})
+          ;; Google Doc Pulls (freememo.google-docs): the `gdoc` root ids with
+          ;; a Pull running. Also the guard against a second Pull of one root.
+          :pulling-gdocs    (atom #{})
+          ;; root id -> error of the last failed Pull, written before
+          ;; membership drops so the reporter closes the row as failed. The
+          ;; next Pull of that root clears it at its start.
+          :gdoc-pull-errors (atom {})
           ;; Commit-range walkthroughs being prepared (freememo.walkthrough,
           ;; plans/commit-range-walkthrough.md §6.5.4): walkthrough id -> phase.
           ;; Errors outlive membership so the reporter reads the outcome; the

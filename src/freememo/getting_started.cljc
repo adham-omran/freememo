@@ -76,7 +76,7 @@
             (spotlight/show! {:anchors [:extract]
                               :route-key (spotlight/route-key :viewer text-topic-id)
                               :title "Extract a passage"
-                              :body "Select a passage in the editor, then press Extract."}))
+                              :body "Select a passage in the editor, then choose Extract in the menu that opens."}))
         pdf-id
         (do (open-topic! pdf-id)
             (spotlight/show! {:anchors [:pdf-copy-text]
@@ -86,7 +86,7 @@
         :else
         (spotlight/show! {:anchors []
                           :title "Extract a passage"
-                          :body "Import a web page or a PDF first. Then select a passage and press Extract."}))
+                          :body "Import a web page or a PDF first. Then select a passage and choose Extract."}))
 
       :cards
       (cond
@@ -101,11 +101,11 @@
             (spotlight/show! {:anchors [:generate]
                               :route-key (spotlight/route-key :viewer (or extract-id text-topic-id))
                               :title "Make flashcards"
-                              :body "Generate flashcards from this text."}))
+                              :body "Select a passage, then choose Generate from selection in the menu that opens."}))
         :else
         (spotlight/show! {:anchors []
                           :title "Make flashcards"
-                          :body "Import a document with text first. Then press Generate in its toolbar."}))
+                          :body "Import a document with text first. Then select a passage and choose Generate from selection."}))
 
       :quiz
       (do (navigate! :quiz)

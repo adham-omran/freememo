@@ -9,6 +9,7 @@
    [freememo.bibliography-form :as bibform]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
+   [freememo.motion :as motion]
    #?(:clj [freememo.db :as db])))
 
 #?(:clj
@@ -99,6 +100,22 @@
                   (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
                     (t)))))))))))
 
+(defn learn-queue-ctx
+  "The queue context TopicPage gets for a Learn topic. A plain fn so that a
+   PDF/text switch changes this map in place. A reactive `if` there shrinks one
+   branch and grows the other, and TopicPage rebuilds its whole viewer on
+   that (see topic-state/topic-facts).
+
+   :origin :learn marks every learn topic so mobile reading-mode (TopicPage)
+   can strip chrome on a phone, PDFs included, since a book PDF is the main
+   thing read in a session. :on-done! (auto-advance on extract-done) is for
+   non-PDF topics only: PDFs have no extract Done button and advance manually
+   via Next."
+  [is-pdf? !queue-idx]
+  (if is-pdf?
+    {:origin :learn}
+    {:origin :learn :on-done! #(swap! !queue-idx inc)}))
+
 (e/defn LearnSession [user-id enc-key queue-vec !queue-idx navigate! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
@@ -142,16 +159,7 @@
                 item-present? (e/server (some? item))
                 kind (e/server (:topics/kind item))
                 topic-id (e/server (:topics/id item))
-                is-pdf? (= kind "pdf")
-                ;; :origin :learn marks every learn topic so mobile reading-mode
-                ;; (TopicPage) can strip chrome on a phone — PDFs included, since
-                ;; a book PDF is the main thing read in a session. on-done!
-                ;; (auto-advance on extract-done) stays non-PDF only: PDFs have no
-                ;; extract Done button and advance manually via Next, as before.
-                queue-ctx (if is-pdf?
-                            {:origin :learn}
-                            {:origin :learn
-                             :on-done! #(swap! !queue-idx inc)})]
+                queue-ctx (learn-queue-ctx (= kind "pdf") !queue-idx)]
 
             (when item-present?
               (dom/div
@@ -161,7 +169,11 @@
                   (TopicPage user-id enc-key topic-id
                     navigate!
                     llm-enabled?
-                    queue-ctx nil))
+                    queue-ctx nil)
+                  ;; TopicPage stays mounted across items, so the next topic is
+                  ;; a new key on this node, not a mount. The bar below stays
+                  ;; still. Last form: an effect gates no frame.
+                  (motion/on-new-key! dom/node topic-id motion/arrive-forward!))
                 (BottomBar user-id topic-id !queue-idx)))
             ;; The session owns the title. TopicPage never writes one.
             (PageTitle user-id [:topic topic-id])))))))

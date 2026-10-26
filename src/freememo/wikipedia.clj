@@ -1,6 +1,7 @@
 (ns freememo.wikipedia
   "Web article fetching — Wikipedia and generic URLs."
   (:require [clj-http.client :as http]
+            [freememo.desktop-link :as link]
             [clojure.string :as str]
             [taoensso.telemere :as tel]
             [freememo.content-type :as ct]
@@ -143,48 +144,50 @@
           3xx     → {:success false :error <msg>};
           non-200 → {:success false :error <msg>}."
   [{:keys [lang title]}]
-  (let [encoded-title (java.net.URLEncoder/encode title "UTF-8")
-        api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/html/" encoded-title)
-        resp (http/get api-url
-               {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
-                          "Accept" "text/html"}
-                :cookie-policy :none
-                :redirect-strategy :none
-                :throw-exceptions false
-                :socket-timeout outbound-timeout-ms
-                :connection-timeout outbound-timeout-ms
-                :max-body outbound-max-bytes})
-        status (:status resp)]
-    (cond
-      (<= 300 status 399)
-      (redirect-error resp api-url)
+  (if-let [offline (link/offline-message "Wikipedia import")]
+    {:success false :error offline}
+    (let [encoded-title (java.net.URLEncoder/encode title "UTF-8")
+          api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/html/" encoded-title)
+          resp (http/get api-url
+                 {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
+                            "Accept" "text/html"}
+                  :cookie-policy :none
+                  :redirect-strategy :none
+                  :throw-exceptions false
+                  :socket-timeout outbound-timeout-ms
+                  :connection-timeout outbound-timeout-ms
+                  :max-body outbound-max-bytes})
+          status (:status resp)]
+      (cond
+        (<= 300 status 399)
+        (redirect-error resp api-url)
 
-      (not= 200 status)
-      {:success false :error (str "Wikipedia fetch failed (HTTP " status ")")}
+        (not= 200 status)
+        {:success false :error (str "Wikipedia fetch failed (HTTP " status ")")}
 
-      :else
-      (let [page-url (str "https://" lang ".wikipedia.org/wiki/" encoded-title)
-            summary  (try (fetch-wikipedia-summary {:lang lang :title title}) (catch Exception _ nil))
-            biblio   {:local (cond-> {:type "webpage"
-                                      :title title
-                                      :URL page-url
-                                      :container-title "Wikipedia"}
-                               (and summary (nil? (:error summary)) (:extract summary))
-                               (assoc :abstract (:extract summary)))
-                      :identifiers {}}]
-        {:title title
-         ;; `doc-html` runs between the wiki preprocess and the sanitizer, for
-         ;; the reason `page-pipeline` records: `clean-html` strips the classes
-         ;; and styles that identify a construct. Without it this path kept
-         ;; every `th`, every `colspan` and every hidden row, and Quill merged
-         ;; the banner and the infobox into one grid on load.
-         :html (-> (:body resp)
-                 (preprocess-wikipedia-html lang)
-                 dh/doc-html->quill-html
-                 cleaner/clean-html)
-         :url page-url
-         :source-type "wikipedia"
-         :biblio biblio}))))
+        :else
+        (let [page-url (str "https://" lang ".wikipedia.org/wiki/" encoded-title)
+              summary  (try (fetch-wikipedia-summary {:lang lang :title title}) (catch Exception _ nil))
+              biblio   {:local (cond-> {:type "webpage"
+                                        :title title
+                                        :URL page-url
+                                        :container-title "Wikipedia"}
+                                 (and summary (nil? (:error summary)) (:extract summary))
+                                 (assoc :abstract (:extract summary)))
+                        :identifiers {}}]
+          {:title title
+           ;; `doc-html` runs between the wiki preprocess and the sanitizer, for
+           ;; the reason `page-pipeline` records: `clean-html` strips the classes
+           ;; and styles that identify a construct. Without it this path kept
+           ;; every `th`, every `colspan` and every hidden row, and Quill merged
+           ;; the banner and the infobox into one grid on load.
+           :html (-> (:body resp)
+                   (preprocess-wikipedia-html lang)
+                   dh/doc-html->quill-html
+                   cleaner/clean-html)
+           :url page-url
+           :source-type "wikipedia"
+           :biblio biblio})))))
 
 (defn- cloudflare-blocked?
   "True when the response is a Cloudflare bot challenge — a status 403
@@ -207,49 +210,51 @@
      - {:success true :dispatch :pdf|:epub :bytes :filename :url} — binary, caller stages
      - {:success false :error <msg>}"
   [url]
-  (let [resp (http/get url
-               {:headers {"User-Agent" "Mozilla/5.0 (compatible; FreeMemo/1.0)"}
-                :as :byte-array
-                :cookie-policy :none
-                :redirect-strategy :none
-                :throw-exceptions false
-                :socket-timeout outbound-timeout-ms
-                :connection-timeout outbound-timeout-ms
-                :max-body outbound-max-bytes})
-        status (:status resp)
-        content-type (get-in resp [:headers "content-type"])
-        content-disp (get-in resp [:headers "content-disposition"])]
-    (cond
-      (<= 300 status 399)
-      (redirect-error resp url)
+  (if-let [offline (link/offline-message "Web import")]
+    {:success false :error offline}
+    (let [resp (http/get url
+                 {:headers {"User-Agent" "Mozilla/5.0 (compatible; FreeMemo/1.0)"}
+                  :as :byte-array
+                  :cookie-policy :none
+                  :redirect-strategy :none
+                  :throw-exceptions false
+                  :socket-timeout outbound-timeout-ms
+                  :connection-timeout outbound-timeout-ms
+                  :max-body outbound-max-bytes})
+          status (:status resp)
+          content-type (get-in resp [:headers "content-type"])
+          content-disp (get-in resp [:headers "content-disposition"])]
+      (cond
+        (<= 300 status 399)
+        (redirect-error resp url)
 
-      (cloudflare-blocked? resp)
-      {:success false
-       :error (str "This site blocks automated fetching (Cloudflare). "
-                "Open the page in your browser, select all (Ctrl/Cmd+A), "
-                "copy, and use \"Paste Article\" instead.")}
+        (cloudflare-blocked? resp)
+        {:success false
+         :error (str "This site blocks automated fetching (Cloudflare). "
+                  "Open the page in your browser, select all (Ctrl/Cmd+A), "
+                  "copy, and use \"Paste Article\" instead.")}
 
-      (not= 200 status)
-      {:success false :error (str "Fetch failed (HTTP " status ")")}
+        (not= 200 status)
+        {:success false :error (str "Fetch failed (HTTP " status ")")}
 
-      :else
-      (let [[kind reject-msg] (ct/classify-http content-type)
-            ^bytes body-bytes (:body resp)]
-        (case kind
-          :html
-          (let [charset (ct/extract-charset content-type)
-                html-str (String. body-bytes ^String charset)]
-            (assoc (pipeline/page->document html-str url) :success true))
+        :else
+        (let [[kind reject-msg] (ct/classify-http content-type)
+              ^bytes body-bytes (:body resp)]
+          (case kind
+            :html
+            (let [charset (ct/extract-charset content-type)
+                  html-str (String. body-bytes ^String charset)]
+              (assoc (pipeline/page->document html-str url) :success true))
 
-          (:pdf :epub)
-          {:success true
-           :dispatch kind
-           :bytes body-bytes
-           :filename (ct/derive-filename content-disp url kind)
-           :url url}
+            (:pdf :epub)
+            {:success true
+             :dispatch kind
+             :bytes body-bytes
+             :filename (ct/derive-filename content-disp url kind)
+             :url url}
 
-          :reject
-          {:success false :error reject-msg})))))
+            :reject
+            {:success false :error reject-msg}))))))
 
 (defn- arxiv-pdf->abs
   "Rewrite arxiv.org/pdf/<id>[.pdf] → arxiv.org/abs/<id> so the HTML meta
@@ -301,25 +306,27 @@
    Post : {:extract :description :thumbnail :pageid :wikibase-item :url}
           on 200; {:error <string>} otherwise."
   [{:keys [lang title]}]
-  (let [api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/summary/"
-                     (java.net.URLEncoder/encode title "UTF-8"))
-        resp (http/get api-url
-               {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
-                          "Accept" "application/json"}
-                :cookie-policy :none
-                :redirect-strategy :default
-                :throw-exceptions false
-                :socket-timeout outbound-timeout-ms
-                :connection-timeout outbound-timeout-ms
-                :max-body outbound-max-bytes
-                :as :json})
-        status (:status resp)]
-    (if (= 200 status)
-      (let [b (:body resp)]
-        {:extract       (:extract b)
-         :description   (:description b)
-         :thumbnail     (get-in b [:thumbnail :source])
-         :pageid        (:pageid b)
-         :wikibase-item (:wikibase_item b)
-         :url           (get-in b [:content_urls :desktop :page])})
-      {:error (str "Wikipedia summary fetch failed (HTTP " status ")")})))
+  (if-let [offline (link/offline-message "Wikipedia lookup")]
+    {:error offline}
+    (let [api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/summary/"
+                       (java.net.URLEncoder/encode title "UTF-8"))
+          resp (http/get api-url
+                 {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
+                            "Accept" "application/json"}
+                  :cookie-policy :none
+                  :redirect-strategy :default
+                  :throw-exceptions false
+                  :socket-timeout outbound-timeout-ms
+                  :connection-timeout outbound-timeout-ms
+                  :max-body outbound-max-bytes
+                  :as :json})
+          status (:status resp)]
+      (if (= 200 status)
+        (let [b (:body resp)]
+          {:extract       (:extract b)
+           :description   (:description b)
+           :thumbnail     (get-in b [:thumbnail :source])
+           :pageid        (:pageid b)
+           :wikibase-item (:wikibase_item b)
+           :url           (get-in b [:content_urls :desktop :page])})
+        {:error (str "Wikipedia summary fetch failed (HTTP " status ")")}))))

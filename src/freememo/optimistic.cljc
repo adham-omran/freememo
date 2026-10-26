@@ -76,12 +76,6 @@
                   (vals deletions))]
      (into [] (keep-indexed (fn [i ids] (when-not (some hidden ids) i))) row-member-ids))))
 
-(e/defn VisibleCardIndexes [row-member-ids query-revision]
-  (e/client
-    ;; Keep confirmed entries for this session. Each view checks its own query revision.
-    ;; A filtered view cannot clear another view's deletion. A newer query can show an Undo result.
-    (visible-card-indexes row-member-ids (e/watch (cs/get-atom :pending-deletions)) query-revision)))
-
 (defn delete-anki-notes! [note-ids]
   #?(:cljs (when (seq note-ids)
              ((anki-call! "deleteNotes" {:notes (vec note-ids)})
@@ -172,13 +166,27 @@
   (swap! (cs/get-atom :pending-cards) dissoc tempid)
   :done)
 
+(defonce ^:private !outcome-handlers (atom {})) ; command type → (fn [command result])
+
+(defn register-outcome-handler!
+  "Run `f` with the command and its result when a command of `type` acks, for
+   the follow-up only the browser can do — removing an Anki note through
+   AnkiConnect, dropping a cached PDF. Last registration wins.
+   Pre : `f` is side-effect-only and does not touch the queue. Returns nil."
+  [type f]
+  (swap! !outcome-handlers assoc type f)
+  nil)
+
 (defn ack-command!
   "Apply a completed command's `result` ({:ok? :real-ids :error}) to this
    session's overlay (if it has an entry for the command) and drop the command
    from the queue. Runs on the client, driven by the dispatcher on effect
-   completion. Idempotent on a missing overlay entry (fire-and-forget commands)."
+   completion. Idempotent on a missing overlay entry (fire-and-forget commands).
+   A registered outcome handler for the command's type runs first."
   [command result]
   (let [id (:id command)]
+    (when-let [f (get @!outcome-handlers (:type command))]
+      (f command result))
     (when (= :delete-card (:type command))
       (if (:ok? result)
         (do

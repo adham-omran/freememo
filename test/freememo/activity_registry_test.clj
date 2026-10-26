@@ -32,6 +32,7 @@
    "page-ocr"             {:member [7 3] :subject-id 7}
    "transcribe"           {:member 42 :subject-id 42}
    "video-process"        {:member 42 :subject-id 42}
+   "gdoc-pull"            {:member 42 :subject-id 42}
    "distill-doc"          {:member 42 :subject-id 42}
    "distill-repo"         {:member 42 :subject-id 42}
    "generate-questions"   {:member 42 :subject-id 42}

@@ -7,6 +7,7 @@
    [contrib.data :refer [clamp-left]]
    [freememo.logging :as log]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -98,10 +99,10 @@
                   (dom/tr
                     (dom/props {:style {:--order i}})
                     (dom/td
-                      (dom/props {:data-tooltip label
-                                  :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
+                      (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                           :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                           :background (when (= i active-idx) "var(--color-highlight)")}})
+                      (tooltip/Tooltip! label)
                       (dom/div (dom/props {:class "typeahead-option-label"}) (dom/text label))
                       (when description
                         (dom/div (dom/props {:class "typeahead-option-description"})

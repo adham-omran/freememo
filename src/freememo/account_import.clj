@@ -63,7 +63,7 @@
     :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings
     :question_maps :walkthroughs})
 
-(def ^:private fk-columns
+(def fk-columns
   "column → id space, per table. The id space is the table whose ledger map
    translates the value.
 
@@ -86,6 +86,7 @@
    :card_versions {:root_topic_id :topics
                    :occlusion_image_media_id :media
                    :score_clip_media_id :media}
+   :topic_versions {:topic_id :topics}
    :topic_repetitions {:topic_id :topics}
    ;; `excluded_pages` is deliberately absent: it holds page NUMBERS, not topic
    ;; ids. An id inside an array is the case this map cannot translate — it
@@ -109,7 +110,8 @@
    :assistant_messages {:chat_id :assistant_chats}
    :assistant_runs {:chat_id :assistant_chats
                     :user_message_id :assistant_messages
-                    :assistant_message_id :assistant_messages}
+                    :assistant_message_id :assistant_messages
+                    :question_map_id :question_maps}
    :assistant_checkpoints {:chat_id :assistant_chats :run_id :assistant_runs
                            :covered_from_message_id :assistant_messages
                            :covered_through_message_id :assistant_messages
@@ -125,7 +127,8 @@
    :kg_question_facts {:question_id :kg_questions :fact_id :kg_facts}
    :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}
    :question_maps {:repo_topic_id :topics}
-   :question_roots {:map_id :question_maps :entity_id :kg_entities}
+   :question_roots {:map_id :question_maps :entity_id :kg_entities
+                    :created_run_id :assistant_runs}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
                    :root_id :question_roots}
    :question_pin_tombstones {:map_id :question_maps}
@@ -152,6 +155,7 @@
    :score_groups #{:clip_media_id}
    :card_schedules #{:flashcard_id}
    :card_versions #{:root_topic_id}
+   :topic_versions #{:topic_id}
    :topic_repetitions #{:topic_id}
    :study_schedules #{:root_topic_id}
    :curriculum_blocks #{:curriculum_id}
@@ -257,7 +261,7 @@
                  :baseline_digest_version
                  :anki_baseline_mod :anki_conflict_at}})
 
-(def ^:private html-columns
+(def html-columns
   "Plain-HTML columns holding `/api/media/<id>` URLs (§5.4.7).
    `assistant_messages.content` has no code path that writes such a URL, but an
    assistant reply can echo one out of injected document context.
@@ -270,6 +274,7 @@
   {:topics [:content]
    :flashcards [:question :answer :cloze]
    :card_versions [:question :answer :cloze]
+   :topic_versions [:content]
    :assistant_messages [:content]})
 
 (def ^:private id-bearing-tables
@@ -308,8 +313,10 @@
    collide, so they still arrive."
   {:settings "ON CONFLICT DO NOTHING"})
 
-(def ^:private settings-key-prefixes
+(def settings-key-prefixes
   "Settings key prefixes whose suffix is a topic id (§5.4.8, settings.clj).
+   `sync-apply/renumber-block!` reads it too (plans/electron-local-db-sync.md
+   15.5.9).
    The panel keys use `pane-scope-id`. It resolves to the document root topic
    id, so one translation serves all pages."
   ["last_page_" "pdf_layout_" "pdf_fit_" "pdf_focus_" "focus_reader_" "extract_style_"
@@ -459,7 +466,7 @@
               {:row (assoc row :scope_id new-id)}
               {:drop (str "scope_id → no imported " (name space) " " old)}))))
 
-(defn- remap-score-geometry
+(defn remap-score-geometry
   "Translate the `:media-id` on every rect inside `score_groups.geometry`
    (§5.4.6, db.clj:469-471). A rect whose media did not import keeps its value,
    which renders as a missing crop rather than another topic's image."
@@ -676,10 +683,10 @@
         (let [freed (or (:s (jdbc/execute-one! tx
                               [(str "SELECT COALESCE(sum(byte_size),0) AS s FROM media"
                                  " WHERE user_id = ? AND id = ANY(?)")
-                               user-id (int-array ids)]
+                               user-id (long-array ids)]
                               {:builder-fn rs/as-unqualified-maps})) 0)]
           (jdbc/execute! tx ["DELETE FROM media WHERE user_id = ? AND id = ANY(?)"
-                             user-id (int-array ids)])
+                             user-id (long-array ids)])
           (jdbc/execute! tx ["UPDATE users SET usage_bytes = GREATEST(0, usage_bytes - ?)
                               WHERE id = ?" (long freed) user-id])))
       (catch Exception e
@@ -687,7 +694,7 @@
 
 ;; ── Phase 1: metadata ──────────────────────────────────────────────
 
-(def ^:private jsonb-html-columns
+(def jsonb-html-columns
   "JSONB columns whose payload holds HTML with media URLs (§5.4.7).
    `io_fields` is a map of six HTML fields; `overlapping` holds `:items` of HTML
    and a materialized `:fields` map."

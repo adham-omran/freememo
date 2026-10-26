@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.modal-shell :as modal]
    [clojure.string :as str]
@@ -16,6 +17,7 @@
    [freememo.command-bus :as bus]
    [freememo.cloze :as cloze]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.toasts :as toasts])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.db :as db])
@@ -525,8 +527,8 @@
                         :source (composed-card kind live-fields)}
           [click-event btn-node]
           (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                        :data-tooltip "Save this card, then start a new one from its content"})
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+            (tooltip/Tooltip! "Save this card, then start a new one from its content")
             (dom/text "Create copy…")
             ;; The palette entry is tab-scoped and cannot say "a card editor is
             ;; open", so this registration IS the modal-scope guard. Retracting
@@ -653,6 +655,10 @@
           (dom/On "pointerdown"
             (fn [e] (modal/drag-modal-by-title! e))
             nil)
+          ;; The card's topic, for the field menus' pin and occlusion rows
+          ;; (plans/custom-context-menu.md 4.1.1).
+          (menu-surface/provide-facts! dom/node
+            {:topic-id (:topic-id editing-card) :root-topic-id (:root-topic-id editing-card)})
           (let [cleanup (attach-modal-tab-nav! dom/node)]
             (e/on-unmount (fn [] (when cleanup (cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
@@ -746,8 +752,8 @@
                                 (t))))
                         (t (:error result))))))))
             (dom/button
-              (dom/props {:class "btn btn-secondary" :style {:order "0"}
-                          :data-tooltip "View previous versions of this card"})
+              (dom/props {:class "btn btn-secondary" :style {:order "0"}})
+              (tooltip/Tooltip! "View previous versions of this card")
               (dom/text "History")
               (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
             ;; Between History and Cancel. Save carries :order "1" and so stays
@@ -890,7 +896,7 @@
 ;; value, the four cannot disagree.
 ;;
 ;; `close!` is a 0-arg thunk rather than a show-atom, because the two callers end
-;; the modal differently: AddCardButton flips its own boolean, while the copy
+;; the modal differently: AddCardInvoker flips its own boolean, while the copy
 ;; host clears !editing-card. Neither should be a concern of this component.
 (e/defn AddCardModal [close! !card-kind !prefill topic-id root-topic-id user-id copy-source]
   (e/client
@@ -989,6 +995,8 @@
           (dom/On "pointerdown"
             (fn [e] (modal/drag-modal-by-title! e))
             nil)
+          ;; The card's topic, for the field menus' pin and occlusion rows.
+          (menu-surface/provide-facts! dom/node {:topic-id topic-id :root-topic-id root-topic-id})
           (let [inner dom/node
                 tab-cleanup (attach-modal-tab-nav! inner)
                 flush-cleanup (attach-submit-flush! inner flush!)]
@@ -1027,9 +1035,8 @@
               (when (= kind "basic")
                 (dom/button
                   (dom/props {:class "btn btn-secondary" :type "button"
-                              :title "Flip question and answer"
-                              :aria-label "Flip question and answer"
                               :style {:padding "4px" :border-radius "999px"}})
+                  (tooltip/Tooltip! "Flip question and answer" :aria? true)
                   (icons/Icon :refresh-cw :size 15)
                   (dom/On "click"
                     (fn [_]

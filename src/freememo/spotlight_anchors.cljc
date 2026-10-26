@@ -16,8 +16,10 @@
    ;; closed drawer hides Import.
    :rail-menu "rail-menu"
    :learn-start "learn-start"
-   :extract "extract"
-   :generate "generate"
+   ;; editor_pane.cljc — the document editor. Extract and Generate have no
+   ;; toolbar buttons: both appear in the popover a selection opens there.
+   :extract "editor-text"
+   :generate "editor-text"
    :quiz-start "quiz-start"
    :pdf-copy-text "pdf-copy-text"
    ;; ai_features_section.cljc — the "Use AI features" row, not the whole tab,

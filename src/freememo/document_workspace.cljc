@@ -4,11 +4,13 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.desktop-section :as desktop-section]
    [freememo.document-view :refer [DocumentColumns]]
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.bottom-panel :refer [BottomPanel]]
    [freememo.command-bus :as bus]
-   [freememo.forge-kinds :as forge-kinds]
+   [freememo.topic-kinds :as topic-kinds]
+   [freememo.tooltip :as tooltip]
    [freememo.util :as util]))
 
 (e/defn DocumentSplitDivider []
@@ -19,10 +21,10 @@
           reset-split! dctx/reset-split!]
       (dom/div
         (dom/props {:class "split-divider-v"
-                    :title "Drag to resize panels (double-click to reset)"
                     :role "separator" :aria-orientation "horizontal"
                     :aria-label "Resize content and card table" :tabindex "0"
                     :aria-valuenow (str (int (or top-pct 0)))})
+        (tooltip/Tooltip! "Drag to resize panels (double-click to reset)")
         (dom/On "pointerdown"
           (fn [event]
             (util/start-drag! event :y !top-pct
@@ -37,9 +39,9 @@
 
 (e/defn DocumentMainColumn [assistant-inside?]
   (e/client
-    (let [;; Forge structure has no cards, so no card table and no toggle
-          ;; for one (plans/repository-home.md §4.1.2).
-          structure? (forge-kinds/structure-kind? dctx/kind)
+    (let [;; Forge structure and a Google Doc root have no cards, so no card
+          ;; table and no toggle for one (plans/repository-home.md §4.1.2).
+          structure? (topic-kinds/home-kind? dctx/kind)
           card-table-open? (and dctx/card-table-open? (not structure?))
           toggle-card-table! (when-not structure? dctx/toggle-card-table!)
           ;; Published only on a document with a source pane, so the palette
@@ -61,7 +63,10 @@
 
 (e/defn DocumentWorkspace [assistant-full-height?]
   (e/client
-    (if assistant-full-height?
+    ;; A desktop local account has no assistant (15.4.4). A poem keeps the
+    ;; panel for its الشرح tab.
+    (if (and assistant-full-height?
+          (or dctx/is-poem? (e/server (desktop-section/account-ai?* dctx/user-id))))
       (dom/div
         (dom/props {:class "document-workspace document-workspace--assistant-full"})
         (DocumentMainColumn false)

@@ -24,10 +24,7 @@
      :cljs 0))
 
 ;; ── Generate action labels ────────────────────────────────────────────────
-;; Pure, both-platform (used client-side in the Generate trigger + tooltip).
-;; Single owner for card-type capitalization + the count/type summary so the
-;; label reads identically wherever it appears (GenerateDropdown trigger,
-;; ToolbarGenerate aria/tooltip).
+;; Pure, both-platform. The pre-prompt dialog's title reads it.
 (defn card-type-label
   "Display label for a card-type string. Capitalizes all three kinds
    (basic / cloze / overlapping); unknown values pass through verbatim."
@@ -37,20 +34,6 @@
     "cloze" "Cloze"
     "overlapping" "Overlapping"
     (str card-type)))
-
-(defn gen-label
-  "Short action label: `Generate <n> <Type>` — no context clause. Shown as the
-   split trigger's primary text."
-  [card-count card-type]
-  (str "Generate " card-count " " (card-type-label card-type)))
-
-(defn gen-summary
-  "Full action summary — `gen-label` plus a context clause when context is on.
-   Used for the trigger tooltip / aria-label (not the visible primary text)."
-  [card-count card-type use-context context-window]
-  (str (gen-label card-count card-type)
-    (when use-context
-      (str " with " context-window " page" (when (not= 1 context-window) "s") " of context"))))
 
 ;; Save generated cards to DB. Routes through cards/save-cards so bake-card-html
 ;; runs and topic pins land in :q / :a (basic) or :c (cloze) per P3d.
@@ -77,7 +60,7 @@
      :cljs nil))
 
 ;; Parent topic content for extract-mode context (moved here from
-;; content_toolbar_generate so build-gen-context* can share it).
+;; the old toolbar Generate so build-gen-context* can share it).
 #?(:clj
    (defn get-parent-content* [topic-id]
      (when-let [pid (:topics/parent_id (db/get-topic topic-id))]

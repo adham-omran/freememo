@@ -14,6 +14,7 @@
    [freememo.modal-shell :as modal]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
+   [freememo.motion :as motion]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
@@ -132,7 +133,8 @@
           ;; Active, or any queue item: show Done
           (let [!done-click (atom nil)
                 done-click (e/watch !done-click)
-                [t _] (e/Token done-click)]
+                [t _] (e/Token done-click)
+                !done-button (atom nil)]
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary done-toggle"
                           :style {:font-weight "500"}
@@ -141,10 +143,16 @@
               (dom/props {:disabled (some? t)})
               (tooltip/Tooltip! "Mark as fully processed (extracted/carded everything useful)")
               (DoneToggleFace false "Done" "Restore")
+              (reset! !done-button dom/node)
               (let [node dom/node]
                 (bus/publish-invoker! :done (fn [] (.click node)))
                 (e/on-unmount (fn [] (bus/retract-invoker! :done))))
-              (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
+              ;; A click while the button shows its done look would mark the
+              ;; same topic again and skip the next one.
+              (dom/On "click" (fn [e]
+                                (when-not (motion/held? (.-currentTarget e))
+                                  (reset! !done-click (str (random-uuid)))))
+                nil))
             ;; on-done! (queue contexts /learn, subset-review) advances !queue-idx
             ;; and unmounts this component, so it rides an e/on-unmount in the
             ;; SUCCESS arm — it fires only after done-topic! commits and (t)
@@ -153,7 +161,10 @@
               (let [r (e/server (e/Offload #(done-topic!* user-id topic-id)))]
                 (case r
                   (if (:success r)
-                    (do (when on-done! (e/on-unmount (fn [] (on-done!))))
+                    ;; The button shows its done look for a moment before the
+                    ;; queue moves on, so the reader sees the Done land.
+                    (do (when on-done!
+                          (e/on-unmount (fn [] (motion/press-then! @!done-button on-done!))))
                         (t))
                     (t (:error r)))))))
 

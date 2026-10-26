@@ -29,6 +29,7 @@
    [freememo.forge-import-modal :refer [ForgeImportModal]]
    [freememo.video-import-modal :refer [VideoImportModal]]
    [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]
+   [freememo.gdoc-import-modal :refer [GdocImportModal]]
    [freememo.client-errors :as ce]))
 
 ;; Palette → Import handoff: the command handler records which entry modal to
@@ -71,14 +72,17 @@
    {:id :poem      :group :secondary :key "9" :icon :book-open :title "Poem"
     :desc "Import a poem package as a .zip file"}
    {:id :live-doc  :group :secondary          :icon :scan-text :title "Live Document"
-    :desc "Photograph pages into a growing PDF"}])
+    :desc "Photograph pages into a growing PDF"}
+   ;; plans/google-docs-pull.md row 4.1. No digit key: the nine are taken.
+   {:id :gdoc      :group :secondary          :icon :cloud-download :title "Google Doc"
+    :desc "Read a Google Doc from any of your Google accounts"}])
 
 (defn sources-in
-  "The cards of one group, in order. Post: 3 cards for :primary, 7 for
+  "The cards of one group, in order. Post: 3 cards for :primary, 8 for
    :secondary. The primary count divides by the three columns §7.3 asks for;
-   the secondary one no longer does, so its last row holds one card. Poem was
-   the seventh (poem-reader-spec row 2.6), and a filler card to square the grid
-   would be a control that does nothing."
+   the secondary one no longer does, so its last row holds two cards. Poem was
+   the seventh (poem-reader-spec row 2.6) and Google Doc the eighth, and a
+   filler card to square the grid would be a control that does nothing."
   [group]
   (filterv #(= group (:group %)) sources))
 
@@ -135,6 +139,7 @@
        (bus/register-handler! :new-topic (open-import! :new-topic))
        (bus/register-handler! :import-zotero (open-import! :zotero))
        (bus/register-handler! :import-poem (open-import! :poem))
+       (bus/register-handler! :import-google-doc (open-import! :gdoc))
        (bus/register-handler! :create-live-doc
          (fn [ctx _payload]
            (when-let [navigate! (:navigate! ctx)]
@@ -500,4 +505,5 @@
           :video     (VideoImportModal !open-source user-id navigate! !intake-files)
           :poem      (ImportModal !open-source user-id :poem navigate! !intake)
           :zotero    (ZoteroPickerModal !open-source user-id navigate!)
+          :gdoc      (GdocImportModal !open-source user-id navigate!)
           nil)))))

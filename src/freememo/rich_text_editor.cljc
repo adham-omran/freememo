@@ -9,6 +9,7 @@
    [freememo.quill-markdown :as quill-markdown]
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
+   [freememo.motion :as motion]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.command-bus :as bus])
    #?(:cljs [freememo.editor-links :as editor-links])
@@ -195,7 +196,7 @@
      (do
        (reset! !editor-ready? false)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown clip-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -208,7 +209,7 @@
            (when format-menu-teardown (format-menu-teardown))
            ;; Remove the custom code-language picker (observer + popup + triggers).
            (when code-lang-teardown (code-lang-teardown))
-           (when clip-menu-teardown (clip-menu-teardown))
+           (when context-menu-teardown (context-menu-teardown))
            (when clip-drag-teardown (clip-drag-teardown))
            ;; Remove the formula click/blur/Escape listeners on the editor root.
            (when formula-teardown (formula-teardown))
@@ -433,13 +434,12 @@
                                                         :!toast !link-toast
                                                         :!base-url !document-base-url
                                                         :!import-status !import-status})
-                              :format-menu-teardown (format-menu/install! editor {:card-gen? true :audio? true})
+                              :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
-                              ;; Right-click an audio clip to toggle its loop
-                              ;; setting. Installed per editor, unlike the image
-                              ;; context menu, which editor-pane installs on this
-                              ;; editor alone — a card field holds clips too.
-                              :clip-menu-teardown (editor-actions/install-clip-menu! editor)
+                              ;; The shared context menu: image, clip and caret
+                              ;; rows (plans/custom-context-menu.md 4.1.1).
+                              ;; Card fields install the same one.
+                              :context-menu-teardown (quill-field/install-context-menu! editor {:document-editor? true})
                               ;; Drag a clip by its grip to another line.
                               :clip-drag-teardown (editor-actions/install-clip-drag! editor)
                               ;; Formula popover + typed-source conversion. Only
@@ -646,6 +646,24 @@
             :text (.getText ed index length)
             :index index
             :length length})))))
+
+(defn flash-range!
+  "Flash a range of the Quill editor once, over the text.
+   Pre:  index and length name a range of the open editor.
+   Post: the document is not changed. The flash is an overlay on
+         document.body, so Quill and auto-save see nothing. Returns nil."
+  [index length]
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [^js bounds (.getBounds ^js editor index length)
+             ^js container (.getBoundingClientRect (.-container ^js editor))]
+         (when (and bounds (pos? (.-width bounds)))
+           (motion/flash-box! {:left (+ (.-left container) (.-left bounds))
+                               :top (+ (.-top container) (.-top bounds))
+                               :width (.-width bounds)
+                               :height (.-height bounds)}))
+         nil))))
 
 (defn highlight-range!
   "Apply highlight formatting to a range in the Quill editor.

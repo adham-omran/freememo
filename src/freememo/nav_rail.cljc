@@ -23,6 +23,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.activity-panel :refer [ActivityNavButton]]
    [freememo.command-bus :as bus]
+   [freememo.motion :as motion]
    [freememo.commands :as commands]
    [freememo.help-content :as help]
    [freememo.icons :as icons]
@@ -418,7 +419,9 @@
       (dom/span
         (dom/props {:class class})
         (dom/text text)
-        (dom/span (dom/props {:class "nav-rail__sr"}) (dom/text " due"))))))
+        (dom/span (dom/props {:class "nav-rail__sr"}) (dom/text " due"))
+        ;; Flashes when Done or Next in this tab changed the count.
+        (motion/flash-own-change! dom/node :user due)))))
 
 (e/defn LearnItem
   "Learn, carrying the count of topics due (W2)."

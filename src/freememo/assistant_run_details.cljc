@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.modal-shell :as modal]
    [freememo.tape-table :as tape]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.user-state :as us])))
 
@@ -65,18 +66,19 @@
         (dom/td
           (if-let [target (:target row)]
             (dom/a
-              (dom/props {:class "tape-cell-text" :href target
-                          :data-tooltip (:label row)})
+              (dom/props {:class "tape-cell-text" :href target})
+              (tooltip/Tooltip! (:label row))
               (dom/text (:label row)))
             (dom/span
-              (dom/props {:class "tape-cell-text tape-cell-absent"
-                          :data-tooltip (:label row)})
+              (dom/props {:class "tape-cell-text tape-cell-absent"})
+              (tooltip/Tooltip! (:label row))
               (dom/text (:label row)))))
         (dom/td
           (dom/props {:class "tape-cell-meta"})
           (if-let [revision (:revision row)]
             (dom/span
-              (dom/props {:class "tape-cell-text" :data-tooltip revision})
+              (dom/props {:class "tape-cell-text"})
+              (tooltip/Tooltip! revision)
               (dom/text revision))
             (dom/span (dom/props {:class "tape-cell-absent"}) (dom/text "—"))))
         (dom/td

@@ -401,3 +401,45 @@
       (is (not (str/includes? out "ql-token")))
       (is (str/includes? out "defn"))
       (is (str/includes? out "ql-align-right")))))
+
+;; ---------------------------------------------------------------------------
+;; Context-menu insertions — divider, formula, image. The right-click menu puts
+;; these into card fields, and a miss here reverts them silently on save.
+;; ---------------------------------------------------------------------------
+
+(deftest divider-survives-both-sanitizers
+  (testing "an <hr> between two paragraphs is stored as an <hr>, in a document
+            and in a card field (the fragment variant is what card saves use)"
+    (doseq [clean [cleaner/clean-html cleaner/clean-html-fragment]]
+      (let [out (clean "<p>a</p><hr><p>b</p>")]
+        (is (= "<p>a</p><hr><p>b</p>" out))))))
+
+(deftest tex-delimiter-text-survives
+  (testing "a formula is stored as `\\(TeX\\)` text, so the sanitizer must keep
+            backslashes, parentheses, braces and carets verbatim"
+    (let [html "<p>a \\(x^2 + \\frac{a}{b}\\) b</p>"]
+      (is (= html (cleaner/clean-html html)))
+      (is (= html (cleaner/clean-html-fragment html)))))
+  (testing "angle brackets and ampersands inside TeX stay escaped, never become tags"
+    (let [html "<p>\\(a &lt; b &amp;&amp; c\\)</p>"]
+      (is (= html (cleaner/clean-html-fragment html))))))
+
+(deftest data-image-src-survives-the-sanitizer
+  (testing "the sanitizer keeps a data: src; image-rehost, not clean-html,
+            is the layer that replaces it with /api/media/"
+    (let [html "<p><img src=\"data:image/png;base64,iVBORw0KGgo=\" width=\"10\"></p>"]
+      (is (= html (cleaner/clean-html-fragment html))))))
+
+(deftest http-and-https-image-src-survive
+  (doseq [src ["https://example.com/a.png" "http://example.com/a.png"]]
+    (let [html (str "<p><img src=\"" src "\" alt=\"x\" width=\"10\"></p>")]
+      (is (= html (cleaner/clean-html-fragment html))
+        (str src " keeps its src, alt and width")))))
+
+(deftest app-media-image-src-survives
+  (is (= "<img src=\"/api/media/7\">"
+        (cleaner/clean-html-fragment "<img src=\"/api/media/7\">"))))
+
+(deftest javascript-image-src-is-stripped
+  (let [out (cleaner/clean-html-fragment "<img src=\"javascript:alert(1)\">")]
+    (is (not (str/includes? out "javascript")))))

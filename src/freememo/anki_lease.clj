@@ -7,10 +7,14 @@
    Activity reporter reads progress from it, and Cancel reaches the driver
    through it from any tab.
 
-   The lease is a per-user atom, `:anki-run`, holding at most one entry under
-   `owner-key`:
+   The lease is a per-user atom, `:anki-run`, holding at most one entry, keyed
+   by the run's work key — `collection`, or `branch-<id>` for a run scoped
+   to one branch (`freememo.anki-subtree-request`). One lease covers BOTH kinds:
+   a branch run and a whole-collection run write the same Anki collection, so
+   they exclude each other like any two runs.
 
      {:run-id       string  ; minted by `claim!`, carried by every later call
+      :root-id      n|nil   ; the branch, or nil for the whole collection
       :phase        string  ; what the row shows
       :done :total  n|nil   ; cards written, cards to write
       :heartbeat-at ms      ; server clock, advanced by every owner call
@@ -26,18 +30,15 @@
    slept past the ttl and woke after another tab claimed — from writing progress
    into, or releasing, the run that replaced it.
 
-   Requires only `freememo.user-state`, so `freememo.activity-registry` can read
-   it without pulling the activity writer into a cycle.
+   Requires only `freememo.user-state` and `freememo.anki-subtree-request`
+   (which requires nothing), so `freememo.activity-registry` can read it without
+   pulling the activity writer into a cycle.
 
    One JVM only. During a blue/green flip two tabs on different colors could
    each hold a lease. Accepted: a flip is short, and a flip mid-sync is rare."
   (:require
+   [freememo.anki-subtree-request :as subtree]
    [freememo.user-state :as us]))
-
-(def owner-key
-  "The one key `:anki-run` uses. A sync spans the whole collection, so there is
-   one per user — and it is also the activity's work_key."
-  "collection")
 
 (def ttl-ms
   "How long a lease outlives its last heartbeat.
@@ -61,10 +62,15 @@
   [lease now]
   (boolean (and lease (< (- now (:heartbeat-at lease)) ttl-ms))))
 
+(defn- entry
+  "The one `[work-key lease]` pair in a lease map, or nil."
+  [lease-map]
+  (first lease-map))
+
 (defn current
   "The lease entry, live or not, or nil."
   [user-id]
-  (get @(lease-atom user-id) owner-key))
+  (some-> (entry @(lease-atom user-id)) val))
 
 (defn busy?
   "Whether a sync is running for `user-id` right now. What every Sync button
@@ -98,10 +104,10 @@
   (let [a (lease-atom user-id)]
     (loop []
       (let [old @a
-            lease (get old owner-key)]
+            [k lease] (entry old)]
         (when (and lease (= run-id (:run-id lease)))
           (let [lease' (f lease)]
-            (if (compare-and-set! a old (assoc old owner-key lease'))
+            (if (compare-and-set! a old (assoc old k lease'))
               lease'
               (recur))))))))
 
@@ -116,7 +122,8 @@
   nil)
 
 (defn claim!
-  "Take the lease for a new run.
+  "Take the lease for a new run over the whole collection, or, with a
+   `root-id`, over that topic and its descendants.
 
    Pre : none. A dead driver's expired lease is replaced, not waited for.
    Post: `{:run-id s}` with the lease published, the canceller installed and the
@@ -125,24 +132,28 @@
          nothing changed.
    Invariant: at most one live lease per user. The compare-and-set, not a
          prior read, is what arbitrates two tabs clicking at once."
-  [user-id]
-  (let [a (lease-atom user-id)
-        run-id (str (random-uuid))]
-    (loop []
-      (let [old @a
-            now (now-ms)]
-        (if (live? (get old owner-key) now)
-          :busy
-          (let [lease {:run-id run-id :phase "scanning" :done nil :total nil
-                       :heartbeat-at now :cancel? false}]
-            (if (compare-and-set! a old (assoc old owner-key lease))
-              (do
-                (swap! (us/get-atom user-id :anki-run-cancellers) assoc owner-key
-                  (fn [] (request-cancel! user-id run-id)))
-                (swap! (us/get-atom user-id :anki-run-errors) dissoc owner-key)
-                (us/work-started! user-id)
-                {:run-id run-id})
-              (recur))))))))
+  ([user-id] (claim! user-id nil))
+  ([user-id root-id]
+   (let [a (lease-atom user-id)
+         run-id (str (random-uuid))
+         k (subtree/work-key root-id)]
+     (loop []
+       (let [old @a
+             now (now-ms)]
+         (if (live? (some-> (entry old) val) now)
+           :busy
+           (let [lease {:run-id run-id :root-id root-id :phase "scanning"
+                        :done nil :total nil :heartbeat-at now :cancel? false}]
+             ;; `{k lease}`, not `assoc`: an expired lease under the OTHER key
+             ;; (a dead branch run, say) must not survive as a second entry.
+             (if (compare-and-set! a old {k lease})
+               (do
+                 (reset! (us/get-atom user-id :anki-run-cancellers)
+                   {k (fn [] (request-cancel! user-id run-id))})
+                 (swap! (us/get-atom user-id :anki-run-errors) dissoc k)
+                 (us/work-started! user-id)
+                 {:run-id run-id})
+               (recur)))))))))
 
 (defn heartbeat!
   "Prove `run-id`'s driver is alive.
@@ -178,17 +189,19 @@
          its outcome unwritten. Returns :released, or :not-owner with nothing
          changed."
   [user-id run-id error]
-  (if (= run-id (:run-id (current user-id)))
-    (do
-      (when error
-        (swap! (us/get-atom user-id :anki-run-errors) assoc owner-key error))
-      (swap! (us/get-atom user-id :anki-run-cancellers) dissoc owner-key)
-      (let [a (lease-atom user-id)]
-        (loop []
-          (let [old @a]
-            (if (= run-id (:run-id (get old owner-key)))
-              (if (compare-and-set! a old (dissoc old owner-key))
-                :released
-                (recur))
-              :not-owner)))))
+  (if-some [[k lease] (entry @(lease-atom user-id))]
+    (if (= run-id (:run-id lease))
+      (do
+        (when error
+          (swap! (us/get-atom user-id :anki-run-errors) assoc k error))
+        (swap! (us/get-atom user-id :anki-run-cancellers) dissoc k)
+        (let [a (lease-atom user-id)]
+          (loop []
+            (let [old @a]
+              (if (= run-id (:run-id (get old k)))
+                (if (compare-and-set! a old (dissoc old k))
+                  :released
+                  (recur))
+                :not-owner)))))
+      :not-owner)
     :not-owner))

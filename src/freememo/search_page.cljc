@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
@@ -67,6 +68,8 @@
     "commit" ["Commit" "var(--color-badge-occlusion)"]
     "dir" ["Folder" "var(--color-badge-occlusion)"]
     "code" ["Code" "var(--color-badge-web)"]
+    "gdoc" ["Google Doc" "var(--color-badge-occlusion)"]
+    "gdoc-snapshot" ["Snapshot" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 (defn encode-query [q]
@@ -115,12 +118,21 @@
   (e/client
     (let [{:keys [title kind snippet source-title]} row
           [badge-text badge-color] (kind-badge kind)
-          open-result! (fn [_] (click-nav! navigate! row))]
+          open-result! (fn [_] (click-nav! navigate! row))
+          ;; Context menu (plans/custom-context-menu.md 4.2.1). A result knows
+          ;; its parent but not its status or children, so the rows that test
+          ;; those stay hidden.
+          target (menu-surface/topic-row-target
+                   {:topic-id (:id row) :title (or title "") :topic-kind kind
+                    :root? (nil? (:parent-id row))
+                    :deletable? (not= "page" kind)}
+                   :search)]
       (dom/tr
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
                             :cursor "pointer"
                             :--order i}})
+        (menu-surface/RowMenu target)
         (dom/On "click" open-result! nil)
         ;; Column 1: kind badge + title
         (dom/td

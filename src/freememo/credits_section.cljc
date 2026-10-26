@@ -15,6 +15,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
+   [freememo.motion :as motion]
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
@@ -79,7 +80,8 @@
               (dom/props {:style {:font-size "16px" :font-weight "600"
                                   :color (if (and balance (> balance 0))
                                            "var(--color-text-primary)" "var(--color-danger)")}})
-              (dom/text (str (or balance 0) " credits"))))
+              (dom/text (str (or balance 0) " credits"))
+              (motion/flash-own-change! dom/node user-id balance)))
 
           ;; What spends credits. Storage is named with its rate because it is the
           ;; one charge that accrues with no user action — an AI charge follows a

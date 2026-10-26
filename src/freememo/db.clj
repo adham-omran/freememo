@@ -26,7 +26,10 @@
    [freememo.occlusion-ordinals :as ord]
    [freememo.page-merge :as page-merge]
    [freememo.priority :as priority]
-   [freememo.text :as text])
+   [freememo.desktop-version :as desktop-version]
+   [freememo.sync-schema :as sync-schema]
+   [freememo.text :as text]
+   [freememo.topic-kinds :as topic-kinds])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
 
@@ -38,8 +41,10 @@
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
 (declare run-once!)
+(declare infer-idea-trails!)
 (declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
+(declare owns-topic?)
 (declare record-anki-tombstones!)
 (declare start-purge-scheduler!)
 (declare unsynced-sql)
@@ -320,6 +325,18 @@
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_path TEXT"])
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS commit_sha TEXT"])
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS repo_url TEXT"])
+
+  ;; Google Doc pull provenance (plans/google-docs-pull.md).
+  ;;
+  ;; drive_file_id and google_account_sub live on the 'gdoc' root: the Drive
+  ;; file a Pull exports, and the connected account it exports through
+  ;; (freememo.google-accounts). The sub is Google's account id, not a FreeMemo
+  ;; id, so account transfer needs no fk-columns entry for it.
+  ;; snapshot_hash lives on each 'gdoc-snapshot': the digest a Pull compares to
+  ;; decide that nothing changed. All three are NULL for every other kind.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS drive_file_id TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS google_account_sub TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS snapshot_hash TEXT"])
 
   ;; Live Document flag — a kind='pdf' root that the user keeps appending
   ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
@@ -1108,7 +1125,7 @@
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-         'delete-assistant-chat')),
+         'bulk-reject-questions','delete-assistant-chat')),
       entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
                     'assistant-chat')),
       entity_refs JSONB NOT NULL,
@@ -1128,7 +1145,7 @@
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
                          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-         'delete-assistant-chat'))"])
+                         'bulk-reject-questions','delete-assistant-chat'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
                       CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
@@ -2376,7 +2393,15 @@
    purged (D7).
 
    `flashcard_entities` links a card made from a known idea to that idea
-   (known-ideas §1.2). Either side's delete removes the link."
+   (known-ideas §1.2). Either side's delete removes the link.
+
+   The idea trail (plans/idea-trail.md §3.1):
+   `assistant_runs.question_map_id` is the map whose message the run's request
+   carried. A request carries at most one. `question_roots.created_run_id` is
+   the run whose map block created the root. Both go NULL with their target.
+   `created_run_inferred` and `known_marks.proof_run_inferred` say that
+   `infer-idea-trails!` found the pointer by time, not that a write recorded
+   it."
   []
   (jdbc/execute! ds ["ALTER TABLE question_roots
                       ADD COLUMN IF NOT EXISTS learned_at TIMESTAMPTZ"])
@@ -2390,7 +2415,20 @@
       PRIMARY KEY (flashcard_id, entity_id)
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcard_entities_entity
-                      ON flashcard_entities(entity_id)"]))
+                      ON flashcard_entities(entity_id)"])
+  (jdbc/execute! ds ["ALTER TABLE assistant_runs
+                      ADD COLUMN IF NOT EXISTS question_map_id BIGINT
+                        REFERENCES question_maps(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_runs_question_map
+                      ON assistant_runs(question_map_id, created_at)
+                      WHERE question_map_id IS NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE question_roots
+                      ADD COLUMN IF NOT EXISTS created_run_id BIGINT
+                        REFERENCES assistant_runs(id) ON DELETE SET NULL,
+                      ADD COLUMN IF NOT EXISTS created_run_inferred BOOLEAN NOT NULL DEFAULT false"])
+  (jdbc/execute! ds ["ALTER TABLE known_marks
+                      ADD COLUMN IF NOT EXISTS proof_run_inferred BOOLEAN NOT NULL DEFAULT false"])
+  (run-once! "2026-10-25-idea-trails" infer-idea-trails!))
 
 (declare retire-legacy-pin-labels!)
 
@@ -2433,7 +2471,7 @@
   []
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS document_summaries (
-      root_topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      root_topic_id BIGINT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       total_items BIGINT NOT NULL DEFAULT 0,
       done_items BIGINT NOT NULL DEFAULT 0,
@@ -2449,8 +2487,8 @@
   ;; Resolve a topic to its current root. Deletes pass the nearest surviving
   ;; parent, so this function never needs deleted rows to reconstruct ancestry.
   (jdbc/execute! ds ["
-    CREATE OR REPLACE FUNCTION freememo_root_topic_id(p_topic_id INTEGER)
-    RETURNS INTEGER
+    CREATE OR REPLACE FUNCTION freememo_root_topic_id(p_topic_id BIGINT)
+    RETURNS BIGINT
     LANGUAGE SQL
     STABLE
     AS $$
@@ -2474,7 +2512,7 @@
   ;; correctness path. Statement triggers keep bulk imports at one refresh per
   ;; affected root rather than one refresh per inserted row.
   (jdbc/execute! ds [(str "
-    CREATE OR REPLACE FUNCTION freememo_refresh_document_summaries(p_root_ids INTEGER[])
+    CREATE OR REPLACE FUNCTION freememo_refresh_document_summaries(p_root_ids BIGINT[])
     RETURNS VOID
     LANGUAGE plpgsql
     AS $$
@@ -2548,17 +2586,61 @@
     END
     $$")])
 
+  ;; A sync apply writes one row per statement, so a refresh per statement
+  ;; walks a root's whole subtree once per row: quadratic in the root's size.
+  ;; A full download of 60838 topics took hours on a laptop. While
+  ;; `freememo.sync_apply` is on, the triggers only record the affected roots
+  ;; in a temporary table, and `sync-apply/with-apply-tx` refreshes each one
+  ;; once before it commits. A savepoint that rolls back a row's write rolls
+  ;; back its record too. Outside a sync apply, nothing changes.
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_summaries_affected(p_root_ids BIGINT[])
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF p_root_ids IS NULL OR cardinality(p_root_ids) = 0 THEN
+        RETURN;
+      END IF;
+      IF coalesce(current_setting('freememo.sync_apply', true), '') <> 'on' THEN
+        PERFORM freememo_refresh_document_summaries(p_root_ids);
+        RETURN;
+      END IF;
+      IF to_regclass('pg_temp.freememo_deferred_summary_roots') IS NULL THEN
+        CREATE TEMP TABLE freememo_deferred_summary_roots (root_id BIGINT PRIMARY KEY)
+          ON COMMIT DELETE ROWS;
+      END IF;
+      INSERT INTO freememo_deferred_summary_roots (root_id)
+      SELECT DISTINCT r FROM unnest(p_root_ids) r WHERE r IS NOT NULL
+      ON CONFLICT DO NOTHING;
+    END
+    $$"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_flush_deferred_summaries()
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE roots BIGINT[];
+    BEGIN
+      IF to_regclass('pg_temp.freememo_deferred_summary_roots') IS NULL THEN
+        RETURN;
+      END IF;
+      SELECT array_agg(root_id) INTO roots FROM freememo_deferred_summary_roots;
+      DELETE FROM freememo_deferred_summary_roots;
+      PERFORM freememo_refresh_document_summaries(roots);
+    END
+    $$"])
   (jdbc/execute! ds ["
     CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_insert()
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       SELECT array_agg(DISTINCT freememo_root_topic_id(inserted.id))
       INTO affected
       FROM inserted;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2567,7 +2649,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       WITH RECURSIVE changed AS (
         SELECT old_rows.id, old_rows.parent_id
@@ -2610,7 +2692,7 @@
         SELECT root_id FROM old_roots
       ) roots
       WHERE root_id IS NOT NULL;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2619,7 +2701,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       SELECT array_agg(DISTINCT root_id)
       INTO affected
@@ -2633,7 +2715,7 @@
         WHERE deleted.parent_id IS NULL
       ) roots
       WHERE root_id IS NOT NULL;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2642,7 +2724,7 @@
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
-    DECLARE affected INTEGER[];
+    DECLARE affected BIGINT[];
     BEGIN
       IF TG_OP = 'INSERT' THEN
         SELECT array_agg(DISTINCT root_topic_id) INTO affected FROM inserted;
@@ -2657,7 +2739,7 @@
           SELECT root_topic_id FROM deleted
         ) roots;
       END IF;
-      PERFORM freememo_refresh_document_summaries(affected);
+      PERFORM freememo_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -2706,6 +2788,15 @@
     REFERENCING OLD TABLE AS deleted
     FOR EACH STATEMENT
     EXECUTE FUNCTION freememo_refresh_summaries_after_card_write()"])
+
+  ;; The INTEGER signatures are gone for good: the BIGINT ones above replace
+  ;; them. A return type cannot change under CREATE OR REPLACE, so the old
+  ;; overloads are dropped by name and argument types. Nothing depends on them
+  ;; in the catalog: the trigger functions call them by name at run time, and
+  ;; they were just replaced to call the BIGINT versions. No CASCADE, so a
+  ;; dependency that does exist fails loudly instead of dropping a trigger.
+  (jdbc/execute! ds ["DROP FUNCTION IF EXISTS freememo_root_topic_id(integer)"])
+  (jdbc/execute! ds ["DROP FUNCTION IF EXISTS freememo_refresh_document_summaries(integer[])"])
 
   ;; Rebuild once at boot. This repairs an interrupted install and applies a
   ;; changed summary definition to rows that an older trigger maintained.
@@ -3081,6 +3172,165 @@
                    :data {:error (.getMessage e)}}
           "Could not install the flashcard uniqueness indexes — card dedupe is OFF")))))
 
+(defn- setup-schema-sync!
+  "Tables for desktop row sync, sign-in and licensing
+   (plans/electron-local-db-sync.md §1, §3, §5, §13), then the sync installer:
+   BIGINT ids, usn/mtime columns and the row triggers.
+
+   Every peer creates every table. A table one peer never writes stays empty
+   there, which keeps one schema for both and one disposition test.
+   Pre:  every other setup-schema step has run, because the installer converts
+         and triggers the tables they create."
+  []
+  ;; A topic version a concurrent sync edit replaced (1.7). Write-behind, like
+  ;; card_versions: it holds the losing rendition, never the current one.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_versions (
+      id BIGSERIAL PRIMARY KEY,
+      topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      title TEXT,
+      content TEXT,
+      superseded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_versions_topic
+                      ON topic_versions(topic_id, superseded_at DESC, id DESC)"])
+
+  ;; One row per deleted synced row (1.4). row_key is the row's primary key as
+  ;; a JSON object, so composite keys need no second table. user_id is the
+  ;; owner on the server and NULL on a desktop, whose one account is implied.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_graves (
+      table_name TEXT NOT NULL,
+      row_key JSONB NOT NULL,
+      user_id BIGINT,
+      usn BIGINT NOT NULL,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (table_name, row_key)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_sync_graves_user_usn
+                      ON sync_graves(user_id, usn)"])
+
+  ;; Rows a sync could not apply, kept whole for Restore (§5).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id BIGSERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      row_key JSONB NOT NULL,
+      row_data JSONB NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolution TEXT
+    )"])
+
+  ;; The desktop's one sync binding. checkpoint is the server xmin the last
+  ;; download reached (2.2); scm is the server's sync epoch (2.8).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sync_state (
+      singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+      user_id BIGINT,
+      server_origin TEXT,
+      checkpoint BIGINT NOT NULL DEFAULT 0,
+      scm TEXT,
+      full_sync_required BOOLEAN NOT NULL DEFAULT true,
+      last_sync_at TIMESTAMPTZ,
+      last_error TEXT,
+      license JSONB
+    )"])
+  ;; A full download in progress: its window, epoch, totals and the cursor of
+  ;; its last committed page. NULL when none runs (2.8.1).
+  (jdbc/execute! ds ["ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS full_download JSONB"])
+
+  ;; One token per desktop install (3.2). Only a SHA-256 of the token is kept.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_tokens (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      device_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_tokens_user
+                      ON desktop_tokens(user_id)"])
+
+  ;; PKCE authorization codes (3.1). Single use, 60 seconds.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_auth_codes (
+      code_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      code_challenge TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    )"])
+
+  ;; The server's ledger of id blocks (1.2). A block is [block_start,
+  ;; block_end), bound to the token it was given to.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS id_blocks (
+      block_start BIGINT PRIMARY KEY,
+      block_end BIGINT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_id BIGINT NOT NULL REFERENCES desktop_tokens(id) ON DELETE CASCADE,
+      allocated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_id_blocks_user ON id_blocks(user_id)"])
+  (jdbc/execute! ds ["CREATE SEQUENCE IF NOT EXISTS id_block_seq AS bigint MINVALUE 0 START 0"])
+
+  ;; The desktop's unspent id ranges; freememo_next_id() draws from them.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS local_id_blocks (
+      block_start BIGINT PRIMARY KEY,
+      block_end BIGINT NOT NULL,
+      next_id BIGINT NOT NULL
+    )"])
+  ;; 15.3.3 — 'offline': a local account picked the block itself, and the
+  ;; server learns of it at sign-in (15.5.7). 'server': the server cut it.
+  (jdbc/execute! ds ["ALTER TABLE local_id_blocks ADD COLUMN IF NOT EXISTS
+                      origin TEXT NOT NULL DEFAULT 'server' CHECK (origin IN ('server', 'offline'))"])
+  ;; 15.5.3 — set by the re-key of a local account, cleared when its merge
+  ;; ends (15.6.1, 15.7.3).
+  (jdbc/execute! ds ["ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS
+                      merge_pending BOOLEAN NOT NULL DEFAULT false"])
+  ;; 15.7.2 — the token's merge window: it may upload with no license from
+  ;; merge_opened_at until merge_closed_at, or 7 days.
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS merge_opened_at TIMESTAMPTZ"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS merge_closed_at TIMESTAMPTZ"])
+
+  ;; Per account on the server: the sync epoch, which a full upload replaces
+  ;; (2.8), and the trial start, set at the first desktop sign-in (13.5).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_accounts (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      scm TEXT NOT NULL,
+      trial_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      grace_started_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_accounts ADD COLUMN IF NOT EXISTS grace_started_at TIMESTAMPTZ"])
+
+  ;; One row per license bought (13.1). order_reference_id is unique, so a
+  ;; replayed Wayl webhook cannot grant twice.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS desktop_licenses (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      major_from INTEGER NOT NULL,
+      major_to INTEGER NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('wayl', 'credits')),
+      order_reference_id TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_licenses_user
+                      ON desktop_licenses(user_id)"])
+  ;; A Wayl order buys credits or a desktop license (13.1.3).
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      kind TEXT NOT NULL DEFAULT 'credits'
+                      CHECK (kind IN ('credits', 'desktop_license'))"])
+
+  (sync-schema/install! ds))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -3111,6 +3361,8 @@
   (setup-schema-pin-numbering!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
+  ;; After every table exists: it converts ids and triggers all of them.
+  (setup-schema-sync!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -3156,8 +3408,9 @@
           FROM documents
           ON CONFLICT (id) DO NOTHING"]))
 
-    ;; Reset sequence past max document ID to avoid conflicts with auto-generated IDs
-    (jdbc/execute! tx ["SELECT setval('topics_id_seq', (SELECT COALESCE(MAX(id), 0) FROM topics))"])
+    ;; Reset sequence past max document ID to avoid conflicts with auto-generated IDs.
+    ;; Ids from 2^40 up belong to desktop clients, so they never move the server sequence.
+    (jdbc/execute! tx ["SELECT setval('topics_id_seq', (SELECT COALESCE(MAX(id), 0) FROM topics WHERE id < 1099511627776))"])
 
     ;; 2. Migrate document files → topic_files
     (let [file-count (:count (jdbc/execute-one! tx
@@ -3363,9 +3616,10 @@
         WHERE kind = 'page'
           AND parent_id IN (SELECT id FROM topics WHERE kind IN ('web', 'wikipedia'))"])
 
-    ;; 6. Reset sequence
+    ;; 6. Reset sequence (ids from 2^40 up belong to desktop clients, so they
+    ;;    never move the server sequence)
     (jdbc/execute! tx
-      ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics), 1))"])
+      ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics WHERE id < 1099511627776), 1))"])
 
     ;; 7. Rename old tables
     (tel/log! :info "Renaming old tables")
@@ -3707,15 +3961,18 @@
   "Create one user turn, its assistant placeholder, and its durable run.
 
    Pre: chat-id exists and the caller already passed the ownership and credit
-   gates. `run` contains :run-uuid, snapshots, provider session, and model.
+   gates. `run` contains :run-uuid, snapshots, provider session, and model,
+   and :question-map-id when the request carried that map's message.
    Post: returns {:created true :run-id :run-uuid :user-message-id
    :assistant-message-id}, {:created false :active-run-uuid}, or
    {:created false :chat-missing? true} when the chat is gone or staged.
+   A created run names :question-map-id when the chat's user owns that map
+   (plans/idea-trail.md §3.1).
    Invariant: one chat has at most one active answer or compaction run. This
    transaction owns the chat lock that enforces the invariant."
   [chat-id user-text client-id
    {:keys [run-uuid retry-of-run-uuid provider-session-id requested-model
-           request-snapshot source-snapshot evidence]}]
+           request-snapshot source-snapshot evidence question-map-id]}]
   (jdbc/with-transaction [tx ds]
     (if-not (jdbc/execute-one! tx [(str "SELECT id FROM assistant_chats WHERE id = ? "
                                        "AND staged_delete_id IS NULL FOR UPDATE")
@@ -3757,6 +4014,12 @@
                                          :source_snapshot (->jsonb (or source-snapshot []))}]
                                :returning [:id]})))]
           (insert-assistant-run-evidence! tx run-id evidence)
+          (when question-map-id
+            (jdbc/execute! tx ["UPDATE assistant_runs r SET question_map_id = m.id
+                                  FROM question_maps m, assistant_chats c
+                                 WHERE r.id = ? AND c.id = r.chat_id
+                                   AND m.id = ? AND m.user_id = c.user_id"
+                               run-id question-map-id]))
           (jdbc/execute! tx ["UPDATE assistant_chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
                              chat-id])
           {:created true :run-id run-id :run-uuid run-uuid
@@ -4174,13 +4437,13 @@
                                  chat-id]
                                 {:builder-fn rs/as-unqualified-maps}))
             _ (jdbc/execute! tx ["SELECT id FROM assistant_chats WHERE id = ANY(?) FOR UPDATE"
-                                 (int-array subtree)])
+                                 (long-array subtree)])
             stopped (mapv #(stop-active-run-in! tx user-id %) subtree)
             entry-id (insert-undo-entry-raw! tx user-id "delete-assistant-chat"
                        "assistant-chat" [chat-id] {:title (:title chat)
                                                    :count (count subtree)})]
         (jdbc/execute! tx ["UPDATE assistant_chats SET staged_delete_id = ? WHERE id = ANY(?)"
-                           entry-id (int-array subtree)])
+                           entry-id (long-array subtree)])
         (prune-undo-log! tx user-id)
         {:entry-id entry-id :title (:title chat)
          :stopped? (boolean (some :stopped stopped))
@@ -4417,13 +4680,32 @@
     new-bal))
 
 (defn insert-credit-order!
-  "Create a pending order. Returns the row."
-  [user-id reference-id amount-iqd]
-  (jdbc/execute-one! ds
-    (sql/format {:insert-into :credit_orders
-                 :values [{:user_id user-id :reference_id reference-id
-                           :amount_iqd amount-iqd :status "pending"}]
-                 :returning [:*]})))
+  "Create a pending order. `kind` is \"credits\" (the default) or
+   \"desktop_license\" (plans/electron-local-db-sync.md 13.1.3). Returns the row."
+  ([user-id reference-id amount-iqd]
+   (insert-credit-order! user-id reference-id amount-iqd "credits"))
+  ([user-id reference-id amount-iqd kind]
+   (jdbc/execute-one! ds
+     (sql/format {:insert-into :credit_orders
+                  :values [{:user_id user-id :reference_id reference-id
+                            :amount_iqd amount-iqd :status "pending" :kind kind}]
+                  :returning [:*]}))))
+
+(defn grant-desktop-license!
+  "Write the license a purchase buys (13.1, 13.2): the current desktop major
+   and the next one.
+   Pre:  `tx` is the purchase's own transaction, so the payment and the
+         license commit together (13.1.1, 13.1.2).
+   Post: one desktop_licenses row per order. A replayed order reference writes
+         nothing. Returns the new row's id, or nil on a replay."
+  [tx user-id source order-reference-id]
+  (:desktop_licenses/id
+   (jdbc/execute-one! tx ["INSERT INTO desktop_licenses
+                             (user_id, major_from, major_to, source, order_reference_id)
+                           VALUES (?, ?, ?, ?, ?)
+                           ON CONFLICT (order_reference_id) DO NOTHING RETURNING id"
+                          user-id desktop-version/desktop-major
+                          (inc desktop-version/desktop-major) source order-reference-id])))
 
 (defn set-order-wayl-fields!
   "Record Wayl's code/link-id on a pending order after link creation."
@@ -4442,8 +4724,10 @@
    the order row; a redelivered webhook (already complete) is a no-op.
    Pre:  reference-id from a verified webhook.
    Post: on first completion the order is 'complete' and balance += amount.
-   Returns {:credited true :amount n :user-id u} or {:credited false :reason
-            :already|:unknown}."
+         A desktop_license order writes its license instead of crediting
+         (plans/electron-local-db-sync.md 13.1.1).
+   Returns {:credited true :amount n :user-id u}, {:licensed true :user-id u}
+            or {:credited false :reason :already|:unknown}."
   [reference-id]
   (jdbc/with-transaction [tx ds]
     (let [order (jdbc/execute-one! tx
@@ -4452,6 +4736,15 @@
       (cond
         (nil? order) {:credited false :reason :unknown}
         (= "complete" (:status order)) {:credited false :reason :already}
+
+        (= "desktop_license" (:kind order))
+        (let [user-id (:user_id order)]
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET status = 'complete', completed_at = CURRENT_TIMESTAMP
+              WHERE reference_id = ?" reference-id])
+          (grant-desktop-license! tx user-id "wayl" reference-id)
+          {:credited false :licensed true :amount 0 :user-id user-id})
+
         :else
         (let [user-id (:user_id order)
               amount (:amount_iqd order)]
@@ -4521,11 +4814,11 @@
          none is given out again."
   ([tx] (retire-legacy-pin-labels! tx nil))
   ([tx map-ids]
-   (let [ids (when map-ids (into-array Integer (map int map-ids)))
+   (let [ids (when map-ids (long-array map-ids))
          seen (jdbc/execute-one! tx
                 ["UPDATE question_pins p SET tutor_seen_at = now()
                    WHERE p.tutor_seen_at IS NULL
-                     AND (?::int[] IS NULL OR p.map_id = ANY(?::int[]))
+                     AND (?::bigint[] IS NULL OR p.map_id = ANY(?::bigint[]))
                      AND EXISTS (SELECT 1 FROM question_roots r WHERE r.map_id = p.map_id)"
                  ids ids])
          retired (jdbc/execute-one! tx
@@ -4533,7 +4826,7 @@
                      SELECT m.id, n, NULL, '', NULL
                        FROM question_maps m
                        CROSS JOIN LATERAL generate_series(1, m.next_label - 1) AS n
-                      WHERE (?::int[] IS NULL OR m.id = ANY(?::int[]))
+                      WHERE (?::bigint[] IS NULL OR m.id = ANY(?::bigint[]))
                         AND NOT EXISTS (SELECT 1 FROM question_pins p
                                          WHERE p.map_id = m.id AND p.label = n)
                      ON CONFLICT (map_id, label) DO NOTHING"
@@ -4542,6 +4835,86 @@
                 :data {:seen (::jdbc/update-count seen)
                        :retired (::jdbc/update-count retired)}}
        "Marked pins seen and retired deleted pin numbers"))))
+
+(defn infer-idea-trails!
+  "The idea-trail inference (plans/idea-trail.md §3.2), over every map, or over
+   `map-ids` only (a test's own maps). Run through run-once!, never directly.
+
+   Steps 2 and 3 rest on one fact: `apply-question-map-plan!` writes a root and
+   a mark in the run worker just before `complete-assistant-answer-run!`. So
+   the run that wrote them completed within moments after their `created_at`.
+   `completed_at` is a `timestamp`, cast in the session time zone. The app JVM
+   runs this at boot, in the zone the writes used.
+   Post: in order, each only where the pointer is NULL —
+         1. an answer run whose request carried a question-map message names
+            the map of the first evidence row that is the map's file;
+         2. a root names the first completed run on its map that completed in
+            the 2 minutes after the root, with `created_run_inferred`;
+         3. a `tutor` mark names the first completed run on a map where a root
+            of its entity is learned, that completed in the 2 minutes after
+            the mark, with `proof_run_inferred`."
+  ([tx] (infer-idea-trails! tx nil))
+  ([tx map-ids]
+   (let [ids (when map-ids (long-array map-ids))
+         runs (jdbc/execute-one! tx
+                ["UPDATE assistant_runs r SET question_map_id = pick.map_id
+                    FROM (SELECT DISTINCT ON (r.id) r.id AS run_id, m.id AS map_id
+                            FROM assistant_runs r
+                            JOIN assistant_chats c ON c.id = r.chat_id
+                            JOIN assistant_evidence e ON e.run_id = r.id
+                            JOIN question_maps m ON m.user_id = c.user_id
+                                                AND m.repo_topic_id = e.document_topic_id
+                                                AND m.repo_path = e.document_title
+                           WHERE r.kind = 'answer' AND r.question_map_id IS NULL
+                             AND jsonb_typeof(r.request_snapshot->'messages') = 'array'
+                             AND EXISTS (SELECT 1
+                                           FROM jsonb_array_elements(r.request_snapshot->'messages') msg
+                                          WHERE msg->>'role' = 'system'
+                                            AND msg->>'content' LIKE '# Question map%')
+                           ORDER BY r.id, e.id) pick
+                   WHERE r.id = pick.run_id
+                     AND (?::bigint[] IS NULL OR pick.map_id = ANY(?::bigint[]))"
+                 ids ids])
+         roots (jdbc/execute-one! tx
+                 ["UPDATE question_roots q SET created_run_id = pick.run_id,
+                                               created_run_inferred = true
+                     FROM (SELECT q.id AS root_id,
+                                  (SELECT r.id FROM assistant_runs r
+                                    WHERE r.question_map_id = q.map_id
+                                      AND r.kind = 'answer' AND r.status = 'completed'
+                                      AND r.completed_at::timestamptz
+                                          BETWEEN q.created_at AND q.created_at + interval '2 minutes'
+                                    ORDER BY r.completed_at, r.id LIMIT 1) AS run_id
+                             FROM question_roots q
+                            WHERE q.created_run_id IS NULL
+                              AND (?::bigint[] IS NULL OR q.map_id = ANY(?::bigint[]))) pick
+                    WHERE q.id = pick.root_id AND pick.run_id IS NOT NULL"
+                  ids ids])
+         marks (jdbc/execute-one! tx
+                 ["UPDATE known_marks k SET proof_run_id = pick.run_id,
+                                            proof_run_inferred = true
+                     FROM (SELECT k.entity_id,
+                                  (SELECT r.id FROM assistant_runs r
+                                     JOIN question_roots q ON q.map_id = r.question_map_id
+                                    WHERE q.entity_id = k.entity_id AND q.status = 'learned'
+                                      AND r.kind = 'answer' AND r.status = 'completed'
+                                      AND r.completed_at::timestamptz
+                                          BETWEEN k.created_at AND k.created_at + interval '2 minutes'
+                                    ORDER BY r.completed_at, r.id LIMIT 1) AS run_id
+                             FROM known_marks k
+                            WHERE k.source = 'tutor' AND k.proof_run_id IS NULL
+                              AND (?::bigint[] IS NULL
+                                   OR EXISTS (SELECT 1 FROM question_roots q
+                                               WHERE q.entity_id = k.entity_id
+                                                 AND q.map_id = ANY(?::bigint[])))) pick
+                    WHERE k.entity_id = pick.entity_id AND k.source = 'tutor'
+                      AND pick.run_id IS NOT NULL"
+                  ids ids])]
+     (tel/log! {:level :info :id ::inferred-idea-trails
+                :data {:runs (::jdbc/update-count runs)
+                       :roots (::jdbc/update-count roots)
+                       :marks (::jdbc/update-count marks)}}
+       "Inferred the map of old runs, the creating run of old roots and the proof of old marks"))))
 
 (defn move-everyone-to-best-level!
   "Set every AI task of every existing user to the Best level (product decision,
@@ -4627,13 +5000,14 @@
 (defn get-mail-addressees
   "Rows needed to address outgoing mail to specific users.
    Pre:  user-ids is a non-empty collection of ints.
-   Post: vector of {:users/id :users/email :users/display_name}, one per
-         existing id, in ascending id order; ids with no row are absent, so
-         callers MUST compare the count against what they asked for."
+   Post: vector of {:users/id :users/email :users/display_name
+         :users/created_at}, one per existing id, in ascending id order; ids
+         with no row are absent, so callers MUST compare the count against
+         what they asked for."
   [user-ids]
   (when (seq user-ids)
     (jdbc/execute! ds
-      (sql/format {:select [:id :email :display_name]
+      (sql/format {:select [:id :email :display_name :created_at]
                    :from [:users]
                    :where [:in :id (vec user-ids)]
                    :order-by [[:id :asc]]}))))
@@ -4854,13 +5228,19 @@
   "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
    Includes file_size (summed across a topic's file rows) or content length,
    plus bibliography fields joined from `sources` (NULL when topic has no
-   source_id)."
+   source_id).
+
+   PostgreSQL measures the content length. This fn read `content` for every
+   root to count its bytes on the JVM, and for a large library that put the
+   text of every document in the heap at once. A title picker wants
+   `get-root-topic-titles` instead."
   [user-id]
   (let [topics (jdbc/execute! ds
                  (sql/format {:select [:t/id :t/title :t/kind
                                        :s/url :s/title :s/csl_type :s/container_title
-                                       :t/status :t/priority :t/created_at :t/content
-                                       [:tf/file_size :file_size]]
+                                       :t/status :t/priority :t/created_at
+                                       [[:coalesce :tf/file_size [:octet_length :t/content]]
+                                        :file_size]]
                               :from [[:topics :t]]
                               :left-join [[topic-file-sizes :tf] [:= :t/id :tf/topic_id]
                                           [:sources :s] [:= :t/source_id :s/id]]
@@ -4868,13 +5248,23 @@
                                       [:is :t/staged_delete_id nil]]
                               :order-by [[:t/created_at :desc]]}))]
     (mapv (fn [t]
-            (let [size (or (:file_size t)
-                         (when-let [c (:topics/content t)]
-                           (count (.getBytes c "UTF-8"))))]
-              (-> t
-                (assoc :topics/file_size size)
-                (dissoc :topics/content :file_size))))
+            (-> t
+              (assoc :topics/file_size (:file_size t))
+              (dissoc :file_size)))
       topics)))
+
+(defn get-root-topic-titles
+  "The user's root topics as three columns, newest first, for a title picker.
+
+   Pre:  `user-id` is a user id.
+   Post: [{:topics/id :topics/title :topics/kind}], staged deletes excluded,
+         in the order `get-root-topics` returns."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT id, title, kind FROM topics
+      WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
+      ORDER BY created_at DESC"
+     user-id]))
 
 (defn get-children
   "Get direct children of a topic, ordered by page_number then created_at."
@@ -4901,11 +5291,16 @@
 (defn update-topic-content!
   "Update the content of a topic. Filter: `stored-content`.
 
-   Pre : callers do not call this for a kind `poem` topic. A poem is read-only
-         material (`plans/poem-reader-spec.md` row 3.2) and mounts no editor,
-         so every caller named in §6 of that spec addresses another kind.
+   Pre : callers do not call this for a kind in
+         `topic-kinds/read-only-content-kinds`. A poem is read-only material
+         (`plans/poem-reader-spec.md` row 3.2), and so is a Google Doc snapshot
+         (plans/google-docs-pull.md). Neither mounts an editor.
    Post: the row's `content` and `content_text` hold the filtered HTML — EXCEPT
-         for a poem, where nothing is written and nil is returned.
+         for a read-only kind, where nothing is written and nil is returned.
+
+   A snapshot's `content` is the Doc as one Pull exported it. A write would make
+   it disagree with the Doc at that time, and the snapshot is the only record
+   of that version.
 
    The poem guard sits here rather than at the four call sites because this is
    the one function every content writer that can reach a poem goes through, and
@@ -4918,11 +5313,13 @@
    a call that arrives is a defect to report, not a failure the caller has a
    branch for. The `:warn` names the topic so the defect is findable."
   [id content]
-  (if (= "poem" (:topics/kind (jdbc/execute-one! ds
-                                (sql/format {:select [:kind] :from :topics
-                                             :where [:= :id id]}))))
-    (do (tel/log! {:level :warn :id ::poem-content-write-refused :data {:topic-id id}}
-          "Refused a content write to a poem topic")
+  (if-let [kind (topic-kinds/read-only-content-kinds
+                  (:topics/kind (jdbc/execute-one! ds
+                                  (sql/format {:select [:kind] :from :topics
+                                               :where [:= :id id]}))))]
+    (do (tel/log! {:level :warn :id ::read-only-content-write-refused
+                   :data {:topic-id id :kind kind}}
+          "Refused a content write to a read-only topic")
         nil)
     (let [sanitized (stored-content content)]
       (jdbc/execute-one! ds
@@ -5019,22 +5416,31 @@
        :pages (mapv first changed)})))
 
 (defn rename-topic!
-  "Rename a topic. Sanitizes and length-checks the new title.
+  "Rename a topic `user-id` owns. Sanitizes and length-checks the new title.
    Throws ::blank-title when input is blank.
    Bumps updated_at on flashcards whose root_topic_id matches so Anki push
-   detects the title change. For non-root ids the bump is a no-op."
-  [id new-title]
+   detects the title change. For non-root ids the bump is a no-op.
+
+   Pre : `user-id` is server-authoritative (the session's).
+   Post: :renamed, or :denied when `user-id` does not own `id` — then nothing
+         is written. The owner check is here, not at the callers, because the
+         context menu makes every topic row a rename target."
+  [user-id id new-title]
   (when (or (nil? new-title) (str/blank? new-title))
     (throw (ex-info "title must not be blank"
              {:type ::blank-title :id id})))
-  (let [clean-title (input/sanitize-title new-title)]
-    (input/check-length! :title clean-title input/title-max)
-    (jdbc/execute-one! ds
-      (sql/format {:update :topics
-                   :set {:title clean-title}
-                   :where [:= :id id]}))
-    (jdbc/execute-one! ds
-      ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id])))
+  (if-not (owns-topic? user-id id)
+    :denied
+    (let [clean-title (input/sanitize-title new-title)]
+      (input/check-length! :title clean-title input/title-max)
+      (jdbc/with-transaction [tx ds]
+        (jdbc/execute-one! tx
+          (sql/format {:update :topics
+                       :set {:title clean-title}
+                       :where [:= :id id]}))
+        (jdbc/execute-one! tx
+          ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id]))
+      :renamed)))
 
 (defn get-root-topic-id
   "Traverse parent_id upward to find the root topic (parent_id IS NULL).
@@ -5060,7 +5466,7 @@
     ["UPDATE users SET usage_bytes = GREATEST(0, usage_bytes + ?) WHERE id = ?"
      (long delta) user-id]))
 
-(defn- subtree-file-bytes
+(defn subtree-file-bytes
   "Sum of stored bytes across the topic subtree rooted at id (including id).
    Returns 0 when nothing is found.
 
@@ -5539,19 +5945,20 @@
    (content-toolbar-helpers/create-extract-topic-safe!), so that test would
    block the nested case it exists to serve.
 
-   The seed list binds as ONE int4[] parameter through `= ANY(?)`, not one
-   placeholder per id. `topics.id` is SERIAL (int4), so every real id fits. An
+   The seed list binds as ONE int8[] parameter through `= ANY(?)`, not one
+   placeholder per id. `topics.id` is BIGINT (int4 on a database the id
+   migration has not reached; `int4 = ANY(int8[])` still works). An
    IN-list would have put the whole card set under the 65 535 bound-parameter
    ceiling this file documents for bulk inserts.
 
    Pre:  topic-ids is a collection of topic ids. nils and duplicates are dropped.
-         Every remaining id fits in an int4 — a wider value is a caller bug and
-         throws here rather than silently missing.
+         Every remaining id is an integer that fits in a long. A value that does
+         not (a string, a double) throws here rather than silently missing.
    Post: {topic-id page-number}, holding ONLY the ids that resolve — an id with
          no PDF page ancestor is absent, never mapped to nil. Exactly one
          statement with exactly one parameter, whatever the collection size."
   [topic-ids]
-  (let [ids (into [] (comp (remove nil?) (distinct) (map int)) topic-ids)]
+  (let [ids (into [] (comp (remove nil?) (distinct) (map long)) topic-ids)]
     (if (empty? ids)
       {}
       (into {}
@@ -5569,7 +5976,7 @@
                AND a.page_number IS NOT NULL
                AND p.kind = 'pdf'
              ORDER BY a.seed, a.depth"
-           (int-array ids)]
+           (long-array ids)]
           {:builder-fn rs/as-unqualified-maps})))))
 
 (defn clone-source!
@@ -6471,7 +6878,7 @@
           (jdbc/execute-one! connectable
             (into [(str "UPDATE flashcards AS f SET local_current_digest = v.digest "
                      "FROM (VALUES "
-                     (str/join "," (repeat (count batch) "(?::int, ?::char(64))"))
+                     (str/join "," (repeat (count batch) "(?::bigint, ?::char(64))"))
                      ") AS v(id, digest) WHERE f.id = v.id")]
               (mapcat identity batch))))
         (count pairs)))))
@@ -6818,7 +7225,7 @@
 ;; an explicit `tx` so a whole collection commits or rolls back as one unit.
 
 (defn reserve-topic-ids!
-  "Draw `n` ids from the topics id sequence without inserting anything.
+  "Draw `n` ids the way an INSERT into topics would, without inserting anything.
 
    Exists so an importer can resolve references BETWEEN rows before writing any
    of them. A documentation build's pages link to each other, so rewriting one
@@ -6826,19 +7233,33 @@
    is inserting every row and then UPDATEing its content, which doubles the
    write for a 2000-page build.
 
-   Pre : `n` >= 0.
-   Post: a vector of `n` ids, in ascending order, none of them in use. Ids are
-         consumed whether or not the caller inserts — a failed import burns
-         them, which is what a sequence is for and why this needs no cleanup.
-   Invariant: reads through `pg_get_serial_sequence`, so the sequence's name is
-         not duplicated here. Runs outside any transaction on purpose: a
-         sequence does not roll back, so holding one open would buy nothing."
+   Pre : `n` >= 0. `topics.id` has a column default.
+   Post: a vector of `n` ids, in the order the default produced them, none of
+         them in use. Ids are consumed whether or not the caller inserts, so a
+         failed import burns them. That is what a sequence is for, and it needs
+         no cleanup.
+   Invariant: evaluates the column DEFAULT of `topics.id`, read from the
+         catalog on each call. On a server that default is `nextval` of the
+         topics sequence. On a desktop client it is a function that draws from
+         the client's own id block. So the ids come from the right range on
+         both, and no sequence name is written here. The expression comes from
+         `pg_get_expr`, never from a caller. Runs outside any transaction on
+         purpose: a sequence does not roll back, so holding one open would buy
+         nothing."
   [n]
   (if (pos? (long n))
-    (mapv (comp val first)
-      (jdbc/execute! ds
-        ["SELECT nextval(pg_get_serial_sequence('topics','id')) AS id
-          FROM generate_series(1, ?)" n]))
+    (let [default-expr (:expr (jdbc/execute-one! ds
+                                ["SELECT pg_get_expr(d.adbin, d.adrelid) AS expr
+                                    FROM pg_attrdef d
+                                    JOIN pg_attribute a
+                                      ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+                                   WHERE d.adrelid = 'topics'::regclass AND a.attname = 'id'"]
+                                {:builder-fn rs/as-unqualified-maps}))]
+      (when-not default-expr
+        (throw (ex-info "topics.id has no column default" {:table "topics"})))
+      (mapv (comp val first)
+        (jdbc/execute! ds
+          [(str "SELECT " default-expr " AS id FROM generate_series(1, ?)") n])))
     []))
 
 (defn insert-topic-rows!
@@ -6992,19 +7413,52 @@
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
+(defn- card-in-subtree-pred
+  "HoneySQL predicate: the card belongs to `root-id` or a descendant of it.
+
+   pre : `topic-col` and `root-col` are the keywords for the card's `topic_id`
+         and `root_topic_id` (aliased, or bare inside an UPDATE). `root-id` is
+         NOT nil. A nil renders `id IS NULL` and matches nothing, so callers
+         guard: a subtree run must never silently become an empty one.
+   post: a predicate over `COALESCE(topic_id, root_topic_id)`, the same key
+         `snapshot-scope-predicate` uses for `[:topics …]`.
+
+   Why `topic_id` and not `root_topic_id`: `root_topic_id` is the TOP of the
+   tree (the `parent_id IS NULL` ancestor that carries `user_id`), so it is the
+   same for every card in a document. A branch rooted at a mid-tree extract or
+   page would match no card by it. `topic_id` is the topic the card sits under,
+   and it moves down the tree with the card. `root_topic_id` stays the
+   ownership key, as everywhere else in reconcile. The COALESCE covers a card
+   with a NULL `topic_id` (the column is nullable)."
+  [topic-col root-col root-id]
+  [:in [:coalesce topic-col root-col]
+   {:with-recursive [[[:subtree {:columns [:id]}]
+                      {:union-all [{:select [:id] :from [:topics]
+                                    :where [:= :id root-id]}
+                                   {:select [:c.id] :from [[:topics :c]]
+                                    :join [[:subtree :s] [:= :c.parent_id :s.id]]}]}]]
+    :select [:id] :from [:subtree]}])
+
 (defn get-pushed-card-manifest
   "Card-id/note-id pairs for every pushed card the user owns (anki_note_id NOT
    NULL). Filter-independent — this is the Anki overlay's fetch set, so it must
-   not narrow with the /library/cards filters. Empty → []."
-  [user-id]
-  (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
-    (jdbc/execute! ds
-      (sql/format {:select [:f.id :f.anki_note_id]
-                   :from [[:flashcards :f]]
-                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
-                   :where [:and
-                           [:= :root.user_id user-id]
-                           [:not= :f.anki_note_id nil]]}))))
+   not narrow with the /library/cards filters. Empty → [].
+
+   The 2-arity narrows to cards under topic `root-id` and its descendants
+   (`card-in-subtree-pred`). A nil `root-id` is the whole collection, as the
+   1-arity."
+  ([user-id] (get-pushed-card-manifest user-id nil))
+  ([user-id root-id]
+   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
+     (jdbc/execute! ds
+       (sql/format {:select [:f.id :f.anki_note_id]
+                    :from [[:flashcards :f]]
+                    :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                    :where (cond-> [:and
+                                    [:= :root.user_id user-id]
+                                    [:not= :f.anki_note_id nil]]
+                             (some? root-id)
+                             (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))})))))
 
 (defn get-flashcards-by-ids
   "Flashcards owned by user-id (via root topic) with ids in card-ids.
@@ -7090,9 +7544,14 @@
    The content columns come from `digest-columns`, so a column the digest starts
    covering cannot be forgotten here. That mattered the moment the digest gained
    `anki_header_text` — a hand-listed select would have digested it as \"\" and
-   quietly stopped detecting header changes, with nothing failing."
-  ([user-id] (get-cards-for-reconcile user-id nil))
-  ([user-id card-ids]
+   quietly stopped detecting header changes, with nothing failing.
+
+   The 3-arity adds `root-id`: only cards under that topic and its descendants
+   (`card-in-subtree-pred`). A nil `card-ids` and a nil `root-id` each mean no
+   narrowing on that axis; both together narrow by both."
+  ([user-id] (get-cards-for-reconcile user-id nil nil))
+  ([user-id card-ids] (get-cards-for-reconcile user-id card-ids nil))
+  ([user-id card-ids root-id]
    (if (and (some? card-ids) (empty? card-ids))
      []
      (mapv parse-digest-jsonb
@@ -7104,33 +7563,63 @@
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
-                               (seq card-ids) (conj [:in :f.id (vec card-ids)]))}))))))
+                               (seq card-ids) (conj [:in :f.id (vec card-ids)])
+                               (some? root-id)
+                               (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
+
+(defn card-ids-in-subtree
+  "The subset of `card-ids` that `user-id` owns and that sit under topic
+   `root-id` or a descendant. Returns a vector; empty `card-ids` → [].
+
+   The server-side gate for a subtree reconcile: the ids in a run's outcome come
+   back from the client, so `finish-run!` narrows them here rather than trust
+   that the plan was the only thing that ever produced them."
+  [user-id root-id card-ids]
+  (if (empty? card-ids)
+    []
+    (mapv :flashcards/id
+      (jdbc/execute! ds
+        (sql/format {:select [:f.id]
+                     :from [[:flashcards :f]]
+                     :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                     :where [:and
+                             [:= :root.user_id user-id]
+                             [:in :f.id (vec card-ids)]
+                             (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)]})))))
 
 (defn set-anki-conflicts!
   "Make `user-id`'s stored conflict set exactly `card-ids`.
 
-   pre : `card-ids` came from one run over the whole collection.
+   pre : `card-ids` came from one run over the whole collection, or, with
+         `root-id`, over the cards under that topic and its descendants.
    post: those cards carry `anki_conflict_at`; every other card of this user
          carries NULL. Clearing the rest is the point — a card that stopped
-         being a conflict must stop reading as one without a second action."
-  [user-id card-ids]
-  (jdbc/with-transaction [tx ds]
-    (let [owned {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
-      (jdbc/execute! tx
-        (sql/format {:update :flashcards
-                     :set {:anki_conflict_at nil}
-                     :where (cond-> [:and
-                                     [:in :root_topic_id owned]
-                                     [:not= :anki_conflict_at nil]]
-                              (seq card-ids) (conj [:not-in :id (vec card-ids)]))}))
-      (when (seq card-ids)
-        (jdbc/execute! tx
-          (sql/format {:update :flashcards
-                       :set {:anki_conflict_at [:now]}
-                       :where [:and
-                               [:in :root_topic_id owned]
-                               [:in :id (vec card-ids)]
-                               [:= :anki_conflict_at nil]]}))))))
+         being a conflict must stop reading as one without a second action.
+
+         With `root-id` the clearing stops at the subtree. A branch run never
+         looked at the other cards, so it knows nothing about their conflicts
+         and must not forget them."
+  ([user-id card-ids] (set-anki-conflicts! user-id card-ids nil))
+  ([user-id card-ids root-id]
+   (jdbc/with-transaction [tx ds]
+     (let [owned {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
+       (jdbc/execute! tx
+         (sql/format {:update :flashcards
+                      :set {:anki_conflict_at nil}
+                      :where (cond-> [:and
+                                      [:in :root_topic_id owned]
+                                      [:not= :anki_conflict_at nil]]
+                               (seq card-ids) (conj [:not-in :id (vec card-ids)])
+                               (some? root-id)
+                               (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))}))
+       (when (seq card-ids)
+         (jdbc/execute! tx
+           (sql/format {:update :flashcards
+                        :set {:anki_conflict_at [:now]}
+                        :where [:and
+                                [:in :root_topic_id owned]
+                                [:in :id (vec card-ids)]
+                                [:= :anki_conflict_at nil]]})))))))
 
 (defn clear-anki-conflicts!
   "Drop the conflict flag from `card-ids` only, leaving every other card's alone.
@@ -8219,8 +8708,10 @@
 ;; ---------------------------------------------------------------------------
 
 ;; Kinds that scaffold a document tree rather than holding something a user
-;; studies: a PDF page stub, plus the repository, commit and folder nodes a git
-;; forge import creates (plans/git-forge-integration.md §4.1).
+;; studies: a PDF page stub, the repository, commit and folder nodes a git
+;; forge import creates (plans/git-forge-integration.md §4.1), and the root of a
+;; pulled Google Doc, whose snapshots are what a user studies
+;; (plans/google-docs-pull.md).
 ;;
 ;; Two readers, and both properties are load-bearing:
 ;;   - every review-queue query below excludes them, so a folder never enters
@@ -8231,10 +8722,10 @@
 ;;
 ;; Invariant: `structural-kinds-sql` is derived from this set and never written
 ;; by hand, so a kind added here reaches all nine readers at once.
-(def ^:private structural-kinds #{"page" "repo" "commit" "dir"})
+(def ^:private structural-kinds #{"page" "repo" "commit" "dir" "gdoc"})
 
 (def ^:private structural-kinds-sql
-  "`structural-kinds` as a SQL IN list: \"('commit', 'dir', 'page', 'repo')\".
+  "`structural-kinds` as a SQL IN list: \"('commit', 'dir', 'gdoc', 'page', 'repo')\".
    Sorted, so the rendered SQL is stable across JVM runs."
   (str "(" (str/join ", " (map #(str "'" % "'") (sort structural-kinds))) ")"))
 
@@ -8615,7 +9106,7 @@
          All mode returns the complete tree.
    Invariant: :has_children reports undisclosed children without fetching them."
   [user-id {:keys [mode ids]}]
-  (let [expanded-ids (int-array (map int ids))]
+  (let [expanded-ids (long-array ids)]
     (jdbc/execute! ds
       ["SELECT t.id, t.parent_id, t.title, t.kind, t.status, t.created_at,
                t.dismissed, t.page_number, t.last_review_at,
@@ -8854,7 +9345,7 @@
   "One-time: move inline data: URIs out of card fields into media rows.
 
    A few production cards predate the editor's upload-and-rewrite paths
-   (the quill-field paste matcher and editor-image-menu, which both produce
+   (the quill-field paste matcher and image-actions, which both produce
    /api/media/<id>) and carry base64 inline. Left there, every version of such
    a card would duplicate the whole payload — measured at 8.86 MB for three
    cards, 2.6x the entire fleet's text history (plans/card-edit-history.md §3).
@@ -9061,8 +9552,10 @@
 
 (def ^:private flashcard-ts-cols
   "Timestamp columns that arrive as ISO strings after a JSONB round-trip and
-   must be CAST back to timestamp on restore."
-  #{:created_at :updated_at :anki_synced_at})
+   must be CAST back to timestamp on restore. `mtime` is the desktop sync
+   clock (freememo.sync-schema): uncast, its string failed every card undo
+   (measured 2026-10-23). The row trigger rewrites it on insert anyway."
+  #{:created_at :updated_at :anki_synced_at :mtime})
 
 (defn- cast-timestamps
   "Wrap present, non-nil timestamp values as CAST(? AS timestamp) for honeysql."
@@ -9238,7 +9731,7 @@
 
 (def ^:private group-ts-cols
   "Timestamp columns shared by occlusion_groups and score_groups."
-  [:created_at :updated_at])
+  [:created_at :updated_at :mtime])
 
 (defn- restore-group-rows-tx!
   "Re-insert deleted occlusion/score group rows on the given connectable,
@@ -10452,6 +10945,135 @@
      repo-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+;; ---------------------------------------------------------------------------
+;; Google Doc pulls (plans/google-docs-pull.md)
+;; ---------------------------------------------------------------------------
+;;
+;; A `gdoc` root names a Drive file and the connected account it is read
+;; through. Each Pull that finds a change adds one `gdoc-snapshot` child. The
+;; newest snapshot is the one under review, and every earlier one is `done`
+;; (decision F2): it keeps its extracts and cards, and leaves the Learn queue.
+
+(defn find-gdoc-root
+  "Post: the id of `user-id`'s live `gdoc` root for `drive-file-id`, or nil."
+  [user-id drive-file-id]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM topics
+           WHERE user_id = ? AND kind = 'gdoc' AND drive_file_id = ? AND staged_delete_id IS NULL
+           ORDER BY id LIMIT 1" user-id drive-file-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn gdoc-root
+  "Post: {:id :title :drive_file_id :google_account_sub} for `user-id`'s live
+   `gdoc` root `root-id`, or nil when it is not one."
+  [user-id root-id]
+  (jdbc/execute-one! ds
+    ["SELECT id, title, drive_file_id, google_account_sub FROM topics
+      WHERE id = ? AND user_id = ? AND kind = 'gdoc' AND staged_delete_id IS NULL"
+     root-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn gdoc-snapshots
+  "Post: [{:id :title :status :created_at}] for the live snapshots under
+   `user-id`'s `gdoc` root `root-id`, newest first."
+  [user-id root-id]
+  (jdbc/execute! ds
+    ["SELECT c.id, c.title, c.status, c.created_at
+        FROM topics c JOIN topics r ON r.id = c.parent_id
+       WHERE r.id = ? AND r.user_id = ? AND r.kind = 'gdoc' AND r.staged_delete_id IS NULL
+         AND c.kind = 'gdoc-snapshot' AND c.staged_delete_id IS NULL
+       ORDER BY c.created_at DESC, c.id DESC"
+     root-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn latest-gdoc-snapshot-hash
+  "Post: the `snapshot_hash` of the newest live snapshot under `root-id`, or nil
+   when it has none. A read outside any transaction: a Pull uses it to skip the
+   image downloads of an unchanged Doc, and `add-gdoc-snapshot!` checks again
+   under the lock."
+  [root-id]
+  (:snapshot_hash (jdbc/execute-one! ds
+                    ["SELECT snapshot_hash FROM topics
+                      WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND staged_delete_id IS NULL
+                      ORDER BY created_at DESC, id DESC LIMIT 1" root-id]
+                    {:builder-fn rs/as-unqualified-maps})))
+
+(defn- insert-gdoc-snapshot!
+  "Add one snapshot under `root-id`, inside the caller's transaction `tx`.
+
+   Pre : `tx` holds a lock on the root row, so no other Pull of this root runs
+         between the hash read and the insert. `content` is stored HTML.
+   Post: {:unchanged? true} when the newest live snapshot already has `hash`,
+         and nothing is written. Otherwise {:topic-id id}: a new active snapshot,
+         and every earlier active snapshot is `done` (F2). Both writes are in
+         `tx`, so a reader never sees two active snapshots or none."
+  [tx {:keys [user-id root-id title content hash]}]
+  (let [newest (jdbc/execute-one! tx
+                 ["SELECT snapshot_hash FROM topics
+                   WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND staged_delete_id IS NULL
+                   ORDER BY created_at DESC, id DESC LIMIT 1" root-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (if (and newest (= hash (:snapshot_hash newest)))
+      {:unchanged? true}
+      (let [clean-title (input/prettify-title (input/sanitize-title title))
+            sanitized (sanitize-utf8 content)
+            id (:topics/id (jdbc/execute-one! tx
+                             (sql/format {:insert-into :topics
+                                          :values [{:user_id user-id :parent_id root-id
+                                                    :kind "gdoc-snapshot" :title clean-title
+                                                    :content sanitized
+                                                    :content_text (text/strip-html sanitized)
+                                                    :snapshot_hash hash :status "active"
+                                                    :priority priority/priority-default}]
+                                          :returning [:id]})))]
+        (jdbc/execute! tx
+          ["UPDATE topics SET status = 'done'
+            WHERE parent_id = ? AND kind = 'gdoc-snapshot' AND id <> ? AND status = 'active'"
+           root-id id])
+        (audit-doc-created! user-id id)
+        {:topic-id id}))))
+
+(defn create-gdoc-document!
+  "Create a `gdoc` root and its first snapshot in one transaction.
+
+   Pre : `drive-file-id` was picked by `user-id` through `account-sub`.
+         `content` is stored HTML. No live root for this file exists — the
+         caller checked `find-gdoc-root` (a race leaves two roots, which is
+         harmless: each pulls on its own).
+   Post: {:root-id id :topic-id snapshot-id}."
+  [{:keys [user-id title drive-file-id account-sub snapshot-title content hash]}]
+  (jdbc/with-transaction [tx ds]
+    (let [root-title (available-import-title tx user-id title)
+          root-id (:topics/id (jdbc/execute-one! tx
+                                (sql/format {:insert-into :topics
+                                             :values [{:user_id user-id :kind "gdoc" :title root-title
+                                                       :drive_file_id drive-file-id
+                                                       :google_account_sub account-sub
+                                                       :status "active"
+                                                       :priority priority/priority-default}]
+                                             :returning [:id]})))
+          {:keys [topic-id]} (insert-gdoc-snapshot! tx {:user-id user-id :root-id root-id
+                                                        :title snapshot-title :content content
+                                                        :hash hash})]
+      (audit-doc-created! user-id root-id)
+      {:root-id root-id :topic-id topic-id})))
+
+(defn add-gdoc-snapshot!
+  "Add a snapshot under `user-id`'s live `gdoc` root `root-id`, unless the
+   newest one already has `hash`.
+
+   Pre : `content` is stored HTML.
+   Post: {:topic-id id}, {:unchanged? true}, or nil when `root-id` is not this
+         user's live root. The root row is locked for the transaction, so two
+         concurrent Pulls of one root cannot both insert."
+  [{:keys [user-id root-id] :as snapshot}]
+  (jdbc/with-transaction [tx ds]
+    (when (jdbc/execute-one! tx
+            ["SELECT id FROM topics
+              WHERE id = ? AND user_id = ? AND kind = 'gdoc' AND staged_delete_id IS NULL
+              FOR UPDATE" root-id user-id])
+      (insert-gdoc-snapshot! tx snapshot))))
+
 (defn commit-node
   "`user-id`'s live commit snapshot `topic-id`, with its repository.
    Post: {:repo-id :sha :ref}, or nil when `topic-id` is not such a node."
@@ -10550,7 +11172,7 @@
         [(str commit-subtree-cte "
           UPDATE topics t SET page_number = NULL
            WHERE t.id = ANY(?) AND t.user_id = ? AND t.id IN (SELECT id FROM sub)")
-         commit-id user-id (into-array Integer (map int ids)) user-id]))))
+         commit-id user-id (long-array ids) user-id]))))
 
 (defn move-repo-rows!
   "Re-place rows of `user-id`'s commit subtree after its selection widened
@@ -10571,12 +11193,12 @@
         [(str commit-subtree-cte "
           UPDATE topics t
              SET parent_id = m.parent_id, title = m.title, page_number = m.ordinal
-            FROM unnest(?::int[], ?::int[], ?::text[], ?::int[]) AS m(id, parent_id, title, ordinal)
+            FROM unnest(?::bigint[], ?::bigint[], ?::text[], ?::int[]) AS m(id, parent_id, title, ordinal)
            WHERE t.id = m.id AND t.user_id = ? AND t.id IN (SELECT id FROM sub)
              AND m.parent_id IN (SELECT id FROM sub)")
          commit-id user-id
-         (into-array Integer (map (comp int :id) moves))
-         (into-array Integer (map (comp int :parent-id) moves))
+         (long-array (map :id moves))
+         (long-array (map :parent-id moves))
          (into-array String (map :title moves))
          (into-array Integer (map (comp int :ordinal) moves))
          user-id]))))
@@ -10853,8 +11475,9 @@
   "§14.3 3.1 — the user's playlists, newest first, for the import modal's picker.
 
    Deliberately NOT `get-root-topics`, which would answer the same question: it
-   also selects `content` and a summed file size per root, and a title picker
-   reads neither. Two columns is the whole contract.
+   also computes a content length, a summed file size and bibliography fields
+   per root, and a title picker reads none of them. Two columns is the whole
+   contract.
 
    Staged-deleted playlists are excluded — offering one as an upload target
    would hang new videos under a subtree already on its way out.
@@ -11542,7 +12165,7 @@
   [user-id extraction-ids]
   (if (empty? extraction-ids)
     0
-    (let [ids (int-array extraction-ids)]
+    (let [ids (long-array extraction-ids)]
       (jdbc/with-transaction [tx ds]
         (let [marked (:next.jdbc/update-count
                       (jdbc/execute-one! tx
@@ -11722,8 +12345,9 @@
 
 (defn kg-documents-with-facts
   "Root topic ids holding at least one approved fact — the scope of the
-   all-documents duplicate sweep. Not get-root-topics: that returns whole rows
-   including :content, and a document with no facts has nothing to sweep.
+   all-documents duplicate sweep. Not get-root-topics: that returns every root
+   with its sizes and bibliography, and a document with no facts has nothing to
+   sweep.
    Post: vector of graph_topic_ids, ascending."
   [user-id]
   (mapv :graph_topic_id
@@ -11732,6 +12356,41 @@
         WHERE user_id = ? AND status = 'approved' ORDER BY 1"
        user-id]
       {:builder-fn rs/as-unqualified-maps})))
+
+(defn owned-root-topic-ids
+  "Which of `topic-ids` are live root documents of `user-id`: owned, parentless
+   and not staged for deletion. The ownership gate for bulk actions that start
+   a run per document. Ids bind as ONE int4[] parameter.
+   Post: vector of ids, ascending; foreign, non-root and staged ids are absent."
+  [user-id topic-ids]
+  (let [ids (vec (distinct topic-ids))]
+    (if (empty? ids)
+      []
+      (mapv :id
+        (jdbc/execute! ds
+          ["SELECT id FROM topics
+            WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
+              AND id = ANY(?)
+            ORDER BY id"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn kg-documents-with-facts-among
+  "Which of `graph-topic-ids` hold at least one approved fact of `user-id`: the
+   documents a question run has something to work on. Ids bind as ONE int4[]
+   parameter.
+   Post: vector of graph_topic_ids, ascending."
+  [user-id graph-topic-ids]
+  (let [ids (vec (distinct graph-topic-ids))]
+    (if (empty? ids)
+      []
+      (mapv :graph_topic_id
+        (jdbc/execute! ds
+          ["SELECT DISTINCT graph_topic_id FROM kg_facts
+            WHERE user_id = ? AND status = 'approved' AND graph_topic_id = ANY(?)
+            ORDER BY 1"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
 
 (def sweep-statuses
   "The `kg_facts.status` values the shipped duplicate sweep compares.
@@ -12030,6 +12689,60 @@
     (jdbc/execute! ds
       ["UPDATE kg_questions SET status = ? WHERE id = ?" prev-status question-id])))
 
+(defn reject-kg-questions!
+  "Reject a selection of questions as ONE operation: one transaction, one undo
+   entry. Not a loop over reject-kg-question!, which would write one undo entry
+   per question into a log hard-capped at 100 rows per user.
+
+   Each question keeps its own prior status in the snapshot, so undo restores
+   an approved question to approved and a retired one to retired.
+   Pre:  question-ids from the user's selection; ownership re-checked in SQL.
+         Ids go in as ONE int4[] parameter, so a large selection stays under
+         PostgreSQL's 65,535 bound-parameter ceiling.
+   Post: {:rejected n :undo-id id-or-nil}. n counts only owned questions that
+         were not already rejected; :undo-id is nil iff n = 0. Foreign ids and
+         already-rejected ids are skipped silently."
+  [user-id question-ids]
+  (let [ids (vec (distinct question-ids))]
+    (if (empty? ids)
+      {:rejected 0 :undo-id nil}
+      (let [{:keys [snaps undo-id]}
+            (jdbc/with-transaction [tx ds]
+              (let [rows (jdbc/execute! tx
+                           ["SELECT id, status FROM kg_questions
+                             WHERE user_id = ? AND id = ANY(?) AND status <> 'rejected'
+                             ORDER BY id FOR UPDATE"
+                            user-id (int-array ids)]
+                           {:builder-fn rs/as-unqualified-maps})]
+                (if (empty? rows)
+                  {:snaps [] :undo-id nil}
+                  (let [hit (mapv :id rows)
+                        snaps (mapv (fn [{:keys [id status]}]
+                                      {:question-id id :prev-status status})
+                                rows)]
+                    (jdbc/execute! tx
+                      ["UPDATE kg_questions SET status = 'rejected'
+                        WHERE user_id = ? AND id = ANY(?)"
+                       user-id (int-array hit)])
+                    {:snaps snaps
+                     :undo-id (insert-undo-entry-raw! tx user-id "bulk-reject-questions"
+                                "question" hit snaps)}))))]
+        ;; Pruning stays outside the transaction, as in withdraw-kg-facts!.
+        (when undo-id (prune-undo-log! ds user-id))
+        {:rejected (count snaps) :undo-id undo-id}))))
+
+(defn restore-rejected-questions!
+  "Undo a bulk-reject-questions: each question gets its OWN prior status back.
+   Pre:  snapshot is the vector of {:question-id :prev-status} written by
+         reject-kg-questions!.
+   Post: one UPDATE per distinct prior status, in one transaction."
+  [snapshot]
+  (jdbc/with-transaction [tx ds]
+    (doseq [[prev-status snaps] (group-by :prev-status snapshot)]
+      (jdbc/execute! tx
+        ["UPDATE kg_questions SET status = ? WHERE id = ANY(?)"
+         prev-status (int-array (map :question-id snaps))]))))
+
 (defn reject-kg-fact!
   "Reject a fact and, like set-kg-fact-status!'s reject path, retire every live
    question that covers it — but snapshot the EXACT question ids retired so undo
@@ -12179,6 +12892,24 @@
               WHERE id = ? AND user_id = ? AND status = 'duplicate'"
              fact-id user-id]))))
 
+(defn unmark-kg-facts-duplicate!
+  "Return many duplicate-marked facts to approved in ONE statement. Same
+   semantics as unmark-kg-fact-duplicate!, including that the questions the mark
+   retired are NOT un-retired.
+   Pre:  fact-ids from the user's selection; ownership and status re-checked in
+         SQL. The ids bind as ONE int4[] parameter.
+   Post: the number of rows that changed. Foreign ids and facts not currently
+         marked duplicate are skipped silently."
+  [user-id fact-ids]
+  (let [ids (vec (distinct fact-ids))]
+    (if (empty? ids)
+      0
+      (::jdbc/update-count
+       (jdbc/execute-one! ds
+         ["UPDATE kg_facts SET status = 'approved', reviewed_at = now()
+           WHERE user_id = ? AND id = ANY(?) AND status = 'duplicate'"
+          user-id (int-array ids)])))))
+
 (defn restore-withdrawn-facts!
   "Undo a bulk-reject-facts or a mark-duplicate-facts: restore every fact's own
    prior status and set exactly the questions that operation retired back to
@@ -12233,16 +12964,12 @@
               WHERE id = ? AND user_id = ?"
              (sanitize-utf8 new-label) (sanitize-utf8 new-label) entity-id user-id]))))
 
-(defn merge-kg-entities!
-  "Merge `absorbed-id` into `target-id`: facts repointed, labels/aliases
-   unioned, absorbed row deleted. Facts whose repoint would collide with the
-   per-document s/p/o unique indexes are deleted (they are duplicates by
-   definition). All-or-nothing transaction.
-   Pre:  both entities belong to user-id and differ (violation = caller bug).
-   Post: no kg_facts row references absorbed-id; absorbed row gone."
-  [user-id target-id absorbed-id]
-  (jdbc/with-transaction [tx ds]
-    (let [owned (jdbc/execute! tx
+(defn- merge-kg-entities-tx!
+  "The body of merge-kg-entities!, on a caller's transaction so several merges
+   can share one. See merge-kg-entities! for the contract.
+   Pre:  `tx` is an open transaction."
+  [tx user-id target-id absorbed-id]
+  (let [owned (jdbc/execute! tx
                   ["SELECT id FROM kg_entities WHERE user_id = ? AND id IN (?, ?)"
                    user-id target-id absorbed-id])]
       (when (or (= target-id absorbed-id) (not= 2 (count owned)))
@@ -12285,7 +13012,77 @@
           FROM kg_entities a
           WHERE t.id = ? AND a.id = ?" target-id absorbed-id])
       (jdbc/execute! tx ["DELETE FROM kg_entities WHERE id = ?" absorbed-id])
-      true)))
+      true))
+
+(defn merge-kg-entities!
+  "Merge `absorbed-id` into `target-id`: facts repointed, labels/aliases
+   unioned, absorbed row deleted. Facts whose repoint would collide with the
+   per-document s/p/o unique indexes are deleted (they are duplicates by
+   definition). All-or-nothing transaction.
+   Pre:  both entities belong to user-id and differ (violation = caller bug).
+   Post: no kg_facts row references absorbed-id; absorbed row gone."
+  [user-id target-id absorbed-id]
+  (jdbc/with-transaction [tx ds]
+    (merge-kg-entities-tx! tx user-id target-id absorbed-id)))
+
+(defn merge-kg-entities-into!
+  "Merge every entity in `absorbed-ids` into `keep-id` as ONE transaction: a
+   failure on any of them leaves all of them unmerged.
+   Pre:  absorbed-ids non-empty, keep-id not among them, every id owned by
+         user-id. A violation throws before anything is written (caller bug,
+         same as merge-kg-entities!).
+   Post: the number of entities absorbed; no kg_facts row references any of
+         them and their rows are gone."
+  [user-id keep-id absorbed-ids]
+  (let [absorbed (vec (distinct absorbed-ids))]
+    (when (or (empty? absorbed) (some #{keep-id} absorbed))
+      (throw (ex-info "merge-kg-entities-into!: need at least one absorbed entity, and not the kept one"
+               {:user-id user-id :keep keep-id :absorbed absorbed})))
+    (jdbc/with-transaction [tx ds]
+      (let [wanted (conj absorbed keep-id)
+            owned (jdbc/execute! tx
+                    ["SELECT id FROM kg_entities WHERE user_id = ? AND id = ANY(?)
+                      FOR UPDATE"
+                     user-id (int-array wanted)])]
+        (when (not= (count wanted) (count owned))
+          (throw (ex-info "merge-kg-entities-into!: every entity must be owned by the user"
+                   {:user-id user-id :keep keep-id :absorbed absorbed}))))
+      (doseq [a absorbed]
+        (merge-kg-entities-tx! tx user-id keep-id a))
+      (count absorbed))))
+
+(defn kg-entity-labels
+  "Label and approved-fact count for the user's entities among `entity-ids`, for
+   the merge step that picks which selected entity to keep. Reads by id, not by
+   the Entities view's filter, so an entity the current search hides is still
+   listed. fact_count uses list-kg-entities' subquery.
+   Pre:  ids bind as ONE int4[] parameter; ownership enforced in SQL.
+   Post: vector of {:id :label :fact_count}, fact_count DESC then label. Foreign
+         and missing ids are absent."
+  [user-id entity-ids]
+  (let [ids (vec (distinct entity-ids))]
+    (if (empty? ids)
+      []
+      (vec
+        (jdbc/execute! ds
+          ["SELECT e.id, e.label,
+              (SELECT COUNT(*) FROM kg_facts f
+               WHERE (f.subject_entity_id = e.id OR f.object_entity_id = e.id)
+                 AND f.status = 'approved') AS fact_count
+            FROM kg_entities e
+            WHERE e.user_id = ? AND e.id = ANY(?)
+            ORDER BY fact_count DESC, e.label"
+           user-id (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn get-kg-entity-label
+  "The label of one entity, ownership enforced in SQL.
+   Post: the label string, or nil when the entity is missing or not owned."
+  [user-id entity-id]
+  (:label
+   (jdbc/execute-one! ds
+     ["SELECT label FROM kg_entities WHERE id = ? AND user_id = ?" entity-id user-id]
+     {:builder-fn rs/as-unqualified-maps})))
 
 (defn get-kg-approved-predicates
   "The user's approved vocabulary, for the extraction prompt."
@@ -12612,6 +13409,27 @@
               WHERE id = ? AND user_id = ?"
              flagged suspended question-id user-id]))))
 
+(defn set-kg-questions-flag!
+  "Set ONE curation flag on many questions in a single UPDATE. Like
+   set-kg-question-flags!, writes NO FSRS column. Scoped to approved questions,
+   the population the Questions bank lists, so a stale selection cannot change
+   a rejected question the user no longer sees.
+   Pre:  flag is :flagged or :suspended; value is a boolean; ownership re-checked
+         in SQL. Ids bind as ONE int4[] parameter.
+   Post: the number of rows whose flag CHANGED. A question already in the target
+         state is not counted, so the toast does not claim work that did not happen."
+  [user-id question-ids flag value]
+  (let [col (case flag :flagged "flagged" :suspended "suspended")
+        ids (vec (distinct question-ids))]
+    (if (empty? ids)
+      0
+      (::jdbc/update-count
+       (jdbc/execute-one! ds
+         [(str "UPDATE kg_questions SET " col " = ?
+                WHERE user_id = ? AND id = ANY(?) AND status = 'approved'
+                  AND " col " IS DISTINCT FROM ?")
+          (boolean value) user-id (int-array ids) (boolean value)])))))
+
 (defn update-kg-question!
   "Edit question text and/or reference answer (nil field = keep current)."
   [user-id question-id question answer]
@@ -12637,10 +13455,17 @@
 ;; nothing — inside an Electric server thunk that kills the session.
 
 (defn- int-array-value
-  "HoneySQL value for an INTEGER[] column.
+  "HoneySQL value for an INTEGER[] column of small numbers (page numbers).
+   Not for ids: use `id-array-value`.
+   Post: an expression valid for both empty and non-empty `ns`."
+  [ns]
+  (if (seq ns) [:array (vec ns)] [:raw "'{}'::integer[]"]))
+
+(defn- id-array-value
+  "HoneySQL value for a BIGINT[] column holding row ids.
    Post: an expression valid for both empty and non-empty `ids`."
   [ids]
-  (if (seq ids) [:array (vec ids)] [:raw "'{}'::integer[]"]))
+  (if (seq ids) [:array (vec ids)] [:raw "'{}'::bigint[]"]))
 
 (defn- text-array-value
   "HoneySQL value for a TEXT[] column; elements are UTF-8 sanitised.
@@ -12838,7 +13663,7 @@
     (sql/format {:update :kg_answers
                  :set {:verdict verdict
                        :explanation (sanitize-utf8 explanation)
-                       :missed_fact_ids (int-array-value missed-fact-ids)
+                       :missed_fact_ids (id-array-value missed-fact-ids)
                        :matched_keywords (text-array-value matched-keywords)
                        :graded_at [:now]}
                  :where [:= :id answer-id]}))
@@ -13058,7 +13883,7 @@
                JOIN topics root ON root.id = f.root_topic_id
                WHERE root.user_id = ? AND f.id = ANY(?) AND " (card-quiz-where "f")
           " ORDER BY f.id")
-         user-id (into-array Integer (map int flashcard-ids))]
+         user-id (long-array flashcard-ids)]
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn- load-question-memory!
@@ -13203,7 +14028,7 @@
                          :user_answer (some-> (:user-answer record) sanitize-utf8)
                          :explanation (some-> (:explanation record) sanitize-utf8)
                          :duration_ms (clamp-duration-ms (:duration-ms record))
-                         :missed_fact_ids (int-array-value (:missed-fact-ids record))
+                         :missed_fact_ids (id-array-value (:missed-fact-ids record))
                          ;; The wording as asked. A cloze card stores its RAW text —
                          ;; with `ord` alongside, history can re-derive the exact
                          ;; prompt, and a later edit cannot rewrite the record.
@@ -14522,7 +15347,8 @@
    Pre:  every label the plan names is a root after :new-roots is applied —
          the planner guarantees it.
    Post: nil when the map is not the user's. Otherwise, in one transaction:
-         new roots exist; each named pin links its root; each learned root is
+         new roots exist and name the run as the one that created them
+         (plans/idea-trail.md §3.1); each named pin links its root; each learned root is
          `learned` with `learned_at` set, its open pins are `closed`, and its entity has a `tutor`
          known mark (§6.4.5) whose `proof_run_id` names the run (known-ideas
          §1.1); the `next` root, when named and not learned, is
@@ -14535,11 +15361,15 @@
                                  map-id user-id])
       (doseq [{:keys [label in-document? citations entity-id]} new-roots]
         (jdbc/execute! tx
-          ["INSERT INTO question_roots (map_id, label, entity_id, in_document, citations)
-            VALUES (?, ?, (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?), ?, ?)
+          ["INSERT INTO question_roots (map_id, label, entity_id, in_document, citations,
+                                        created_run_id)
+            VALUES (?, ?, (SELECT id FROM kg_entities WHERE id = ? AND user_id = ?), ?, ?,
+                    (SELECT ar.id FROM assistant_runs ar
+                       JOIN assistant_chats c ON c.id = ar.chat_id
+                      WHERE ar.run_uuid = ? AND c.user_id = ?))
             ON CONFLICT (map_id, label) DO NOTHING"
            map-id (sanitize-utf8 label) entity-id user-id (boolean in-document?)
-           (->jsonb (vec citations))]))
+           (->jsonb (vec citations)) run-uuid user-id]))
       (doseq [[label entity-id] relinks]
         (jdbc/execute! tx
           ["UPDATE question_roots
@@ -14559,7 +15389,7 @@
                              rid map-id pin-label]))
         (let [learned-ids (vec (keep root-id learned))
               closed (if (seq learned-ids)
-                       (let [ids (into-array Integer (map int learned-ids))]
+                       (let [ids (long-array learned-ids)]
                          ;; `learned_at` keeps the time a root FIRST became
                          ;; learned; a reply that confirms it again moves nothing.
                          (jdbc/execute! tx ["UPDATE question_roots
@@ -14585,7 +15415,9 @@
                                                    as_of_sha = coalesce(excluded.as_of_sha,
                                                                         known_marks.as_of_sha),
                                                    proof_run_id = coalesce(excluded.proof_run_id,
-                                                                           known_marks.proof_run_id)"
+                                                                           known_marks.proof_run_id),
+                                                   proof_run_inferred = excluded.proof_run_id IS NULL
+                                                                        AND known_marks.proof_run_inferred"
                                             as-of-sha run-uuid map-id ids])
                          (::jdbc/update-count
                            (jdbc/execute-one! tx ["UPDATE question_pins SET status = 'closed', updated_at = now()
@@ -14734,7 +15566,7 @@
           FROM known_marks k JOIN kg_entities e ON e.id = k.entity_id
          WHERE e.user_id = ? AND k.entity_id = ANY(?)
          ORDER BY e.label, k.source"
-       user-id (into-array Integer (map int entity-ids))]
+       user-id (long-array entity-ids)]
       {:builder-fn rs/as-unqualified-maps})))
 
 ;; ── Known ideas (plans/known-ideas.md) ─────────────────────────────
@@ -14743,7 +15575,7 @@
   (if a (vec (.getArray a)) []))
 
 (defn- entity-id-array [ids]
-  (into-array Integer (map int ids)))
+  (long-array ids))
 
 (defn known-ideas
   "The known ideas of `user-id` (known-ideas §1.5): each of their entities with
@@ -14832,8 +15664,9 @@
                    :file_topic_id :pins [{:label :question :status :created_at}]}]
           :cards [{:id :kind :question :cloze :synced? :last_review :due}]
           :reviews [{:flashcard_id :rating :reviewed_at}], newest first
-          :proof {:answer :chat_id :root_topic_id} or nil}.
-         `:proof` is the user message of the newest tutor mark's proof run."
+          :proof {:answer :chat_id :root_topic_id :inferred?} or nil}.
+         `:proof` is the user message of the newest tutor mark's proof run.
+         `:inferred?` says `infer-idea-trails!` found that run by time."
   [user-id entity-id]
   (let [opts {:builder-fn rs/as-unqualified-maps}]
     (when-let [entity (jdbc/execute-one! ds
@@ -14841,7 +15674,7 @@
                          entity-id user-id]
                         opts)]
       (let [marks (jdbc/execute! ds
-                    ["SELECT k.source, k.created_at, k.proof_run_id,
+                    ["SELECT k.source, k.created_at, k.proof_run_id, k.proof_run_inferred,
                              k.as_of_repo_topic_id AS repo_topic_id, t.title AS repo_title
                         FROM known_marks k
                         LEFT JOIN topics t ON t.id = k.as_of_repo_topic_id AND t.user_id = ?
@@ -14890,8 +15723,8 @@
                            ORDER BY reviewed_at DESC"
                          user-id (entity-id-array (map :id cards))]
                         opts))
-            proof-run (:proof_run_id (first (filter #(and (= "tutor" (:source %)) (:proof_run_id %))
-                                              marks)))
+            proof-mark (first (filter #(and (= "tutor" (:source %)) (:proof_run_id %)) marks))
+            proof-run (:proof_run_id proof-mark)
             proof (when proof-run
                     (jdbc/execute-one! ds
                       ["SELECT msg.content AS answer, c.id AS chat_id, c.root_topic_id
@@ -14906,7 +15739,53 @@
           :roots (mapv #(assoc % :pins (mapv (fn [p] (dissoc p :root_id)) (pins (:id %)))) roots)
           :cards (mapv #(-> % (assoc :synced? (boolean (:synced %))) (dissoc :synced)) cards)
           :reviews (vec reviews)
-          :proof proof)))))
+          :proof (some-> proof (assoc :inferred? (boolean (:proof_run_inferred proof-mark)))))))))
+
+(defn idea-trail
+  "The turns that led to `user-id`'s idea `entity-id` (plans/idea-trail.md
+   §3.3): the completed answer runs that carried the map of its proof run,
+   from the run that created the idea's root on that map to the proof run.
+   With no creating run, the trail starts at the root's `created_at`.
+   Post: nil when the entity is not the user's, has no proof run, the proof
+         run names no map, or no turn is in a live chat. Otherwise {:turns [{:run_id :created_at :chat_id
+         :chat_title :root_topic_id :question}] :inferred?}, oldest first, from
+         live owned chats only. `:question` is the turn's user message.
+         `:inferred?` is true when the start or the proof was inferred."
+  [user-id entity-id]
+  (let [rows (jdbc/execute! ds
+               ["WITH proof AS (
+                   SELECT ar.question_map_id AS map_id, ar.created_at, k.proof_run_inferred
+                     FROM known_marks k
+                     JOIN kg_entities e ON e.id = k.entity_id AND e.user_id = ?
+                     JOIN assistant_runs ar ON ar.id = k.proof_run_id
+                    WHERE k.entity_id = ? AND k.source = 'tutor'
+                      AND ar.question_map_id IS NOT NULL),
+                 root AS (
+                   SELECT q.created_run_inferred,
+                          coalesce(s.created_at, q.created_at::timestamp) AS from_at
+                     FROM question_roots q
+                     JOIN proof ON proof.map_id = q.map_id
+                     LEFT JOIN assistant_runs s ON s.id = q.created_run_id
+                    WHERE q.entity_id = ?
+                    ORDER BY q.created_at, q.id
+                    LIMIT 1)
+                 SELECT r.id AS run_id, r.created_at, c.id AS chat_id, c.title AS chat_title,
+                        c.root_topic_id, um.content AS question,
+                        root.created_run_inferred OR proof.proof_run_inferred AS inferred
+                   FROM proof
+                  CROSS JOIN root
+                   JOIN assistant_runs r ON r.question_map_id = proof.map_id
+                                        AND r.created_at BETWEEN root.from_at AND proof.created_at
+                   JOIN assistant_chats c ON c.id = r.chat_id AND c.user_id = ?
+                                         AND c.staged_delete_id IS NULL
+                   JOIN assistant_messages um ON um.id = r.user_message_id
+                  WHERE r.kind = 'answer' AND r.status = 'completed'
+                  ORDER BY r.created_at, r.id"
+                user-id entity-id entity-id user-id]
+               {:builder-fn rs/as-unqualified-maps})]
+    (when (seq rows)
+      {:turns (mapv #(dissoc % :inferred) rows)
+       :inferred? (boolean (some :inferred rows))})))
 
 (defn idea-material
   "What cards are made from for `user-id`'s entity (known-ideas §2.1, §2.2).
@@ -15304,7 +16183,7 @@
     (let [rows (jdbc/execute! tx
                  [(str "SELECT id, walkthrough_id, position FROM walkthrough_concepts
                          WHERE id = ANY(?) AND " owned-walkthrough-clause " FOR UPDATE")
-                  (into-array Integer [(int from-id) (int into-id)]) user-id]
+                  (long-array [from-id into-id]) user-id]
                  {:builder-fn rs/as-unqualified-maps})
           by-id (into {} (map (juxt :id identity)) rows)
           from (by-id from-id)

@@ -9,6 +9,7 @@
    [freememo.quiz-feedback :as fb]
    [freememo.scroll :refer [Scroll-window]]
    [freememo.segmented :as seg]
+   [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
@@ -320,8 +321,8 @@
 (e/defn GraphToolButton [label glyph on-click]
   (e/client
     (dom/button
-      (dom/props {:type "button" :class "graph-tool-button"
-                  :aria-label label :data-tooltip label})
+      (dom/props {:type "button" :class "graph-tool-button"})
+      (tooltip/Tooltip! label :aria? true)
       (if (keyword? glyph)
         (icons/Icon glyph :size 16)
         (dom/span (dom/props {:aria-hidden "true"}) (dom/text glyph)))
@@ -496,7 +497,8 @@
               (dom/h2 (dom/props {:dir "auto"}) (dom/text (:label card))))
             (dom/button
               (dom/props {:type "button" :class "icon-btn"
-                          :aria-label "Close concept details" :data-tooltip "Close"})
+                          :aria-label "Close concept details"})
+              (tooltip/Tooltip! "Close")
               (icons/Icon :x :size 17)
               (dom/On "click"
                 (fn [_]

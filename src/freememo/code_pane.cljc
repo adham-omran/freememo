@@ -105,15 +105,21 @@
        (not-empty (str (.toString sel))))
      :clj nil))
 
+(def passage-surface-class
+  "The class of every read-only rendered surface a card action can take a
+   selection from: the rendered Markdown view here, and a Google Doc snapshot
+   (`freememo.gdoc-snapshot-pane`)."
+  "passage-surface")
+
 (defn rendered-selection-html
-  "The HTML the user selected in the rendered Markdown view, or nil.
-   Post: nil unless both ends of the selection sit in the same
-         `.code-pane-rendered`. Formulas are TeX text again. A selection that
-         lies inside one fence keeps that fence, language included, because
-         a range inside a `pre` clones its text only."
+  "The HTML the user selected in a read-only rendered surface, or nil.
+   Post: nil unless both ends of the selection sit in the same element of
+         class `passage-surface-class`. Formulas are TeX text again. A
+         selection that lies inside one fence keeps that fence, language
+         included, because a range inside a `pre` clones its text only."
   []
   #?(:cljs
-     (when-let [[sel root] (selection-root ".code-pane-rendered")]
+     (when-let [[sel root] (selection-root (str "." passage-surface-class))]
        (let [rng (.getRangeAt sel 0)
              holder (.createElement js/document "div")
              common (.-commonAncestorContainer rng)
@@ -170,9 +176,10 @@
   ;; opens at the reader's saved place instead of jumping to the fragment again.
   (atom nil))
 
-(defn- highlight-fences!
+(defn highlight-fences!
   "Highlight each `pre[data-language]` under `root` that highlight.js carries,
-   within `highlight-max-chars` per block, as `render-source!` does for a file."
+   within `highlight-max-chars` per block, as `render-source!` does for a file.
+   Also used by a Google Doc snapshot (`freememo.gdoc-snapshot-pane`)."
   [root]
   #?(:cljs
      (when-let [hljs (gobj/get js/window "hljs")]
@@ -288,7 +295,7 @@
   [rendered user-id pin-list-open? !pin-list-open?]
   (e/client
     (let [[node _] (dom/div
-                     (dom/props {:class "code-pane-rendered" :tabindex "0"})
+                     (dom/props {:class (str "code-pane-rendered " passage-surface-class) :tabindex "0"})
                      (let [node dom/node]
                        (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
                        [node (show-rendered! node rendered)]))]

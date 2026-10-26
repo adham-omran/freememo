@@ -49,6 +49,8 @@
     "move-topic"      (do (db/restore-topic-parent! entry) nil)
     "reject-question" (do (db/restore-rejected-question! (:snapshot entry)) nil)
     "reject-fact"     (do (db/restore-rejected-fact! (:snapshot entry)) nil)
+    ;; One entry covering many questions; each gets its own prior status back.
+    "bulk-reject-questions" (do (db/restore-rejected-questions! (:snapshot entry)) nil)
     ;; One entry covering many facts — the snapshot is per-fact, so each gets its
     ;; own prior status back rather than a shared one. A duplicate sweep writes
     ;; the same snapshot shape through the same db/withdraw-kg-facts!, so it

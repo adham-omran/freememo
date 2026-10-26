@@ -20,7 +20,24 @@
 
    Reading once per frame, not per mutation, is load-bearing. A card that
    lands applies the pending row's removal and the new row as separate DOM
-   writes, and a reader in between would see every row move up and back.")
+   writes, and a reader in between would see every row move up and back.
+
+   A table that uses this diffs its window by row key on the server, so a
+   row's key, content and order cross in one diff. A slot loop that reads
+   each row by a client index empties every slot whose index moved for the
+   round trip of its read, and an empty row has no key to follow.")
+
+(defn arrivals!
+  "The row keys in `row-keys` that the previous call for `scope` did not hold.
+   The first call for a scope answers #{}, so opening a table animates no row.
+   A caller puts in `scope` everything that changes the rows without adding
+   any: a topic, a filter, a scroll offset.
+   Post: !seen holds `row-keys` for `scope` alone."
+  [!seen scope row-keys]
+  (let [[old _] (swap-vals! !seen (constantly {scope row-keys}))]
+    (if-some [prev (get old scope)]
+      (into #{} (remove prev) row-keys)
+      #{})))
 
 #?(:cljs
    (defn- row-height [^js table]
@@ -135,6 +152,73 @@
        (.observe observer table #js {:childList true :subtree true
                                      :attributes true
                                      :attributeFilter #js ["style" "data-row-key"]})
+       (schedule! nil nil)
+       (fn []
+         (.disconnect observer)
+         (some-> @!frame js/cancelAnimationFrame)))
+     :clj nil))
+
+#?(:cljs
+   (defn- list-rows
+     "[[key node top] ...] for the keyed children of `parent`, in DOM order.
+      `top` is from the parent's top edge, so content that grows ABOVE the
+      list in the same frame moves no row: measured, a reorder moved the list
+      73px down and slid the one row that kept its place. offsetTop ignores
+      transforms, so a running slide does not change what is read."
+     [^js parent]
+     (into []
+       (keep (fn [^js el]
+               (when-let [k (.. el -dataset -rowKey)]
+                 [k el (if (identical? (.-offsetParent el) parent)
+                         (.-offsetTop el)
+                         (- (.-offsetTop el) (.-offsetTop parent)))])))
+       (array-seq (.-children parent)))))
+
+(defn install-list!
+  "Animate a reorder of the keyed children of `parent`, a plain list that is
+   not a tape table: each child carries `data-row-key` and takes its place
+   from the layout, not from `--order`.
+   Pre:  every child of one key carries the same `data-row-key` for its life.
+   Post: when the ORDER of the keys changes, each row that moved slides from
+         its old place to its new one. A layout change that keeps the order (a
+         row that grows, a form that opens) moves nothing, and nor does a row
+         that is added or removed. Nothing moves under reduced motion.
+         Returns a teardown fn."
+  [parent]
+  #?(:cljs
+     (let [!last (atom nil)                ; {:order [k ...] :tops {k px}}
+           !moving (atom {})               ; key -> {:node :anim :from}
+           !frame (atom nil)
+           reduced (js/matchMedia "(prefers-reduced-motion: reduce)")
+           step!
+           (fn []
+             (reset! !frame nil)
+             (let [rows (list-rows parent)
+                   order (mapv first rows)
+                   tops (into {} (map (juxt first #(nth % 2))) rows)
+                   {prev-order :order prev-tops :tops} @!last
+                   moving @!moving
+                   offsets (update-vals moving residual)]
+               (when (and prev-order (not= order prev-order) (not (.-matches reduced)))
+                 (reset! !moving
+                   (reduce
+                     (fn [acc [k ^js node top]]
+                       (if-some [old (get prev-tops k)]
+                         (let [from (+ (- old top) (get offsets k 0))]
+                           (some-> (get-in moving [k :anim]) .cancel)
+                           (if (< 0.5 (js/Math.abs from))
+                             (assoc acc k {:node node :from from :anim (slide! node from)})
+                             acc))
+                         acc))
+                     {}
+                     rows)))
+               (reset! !last {:order order :tops tops})))
+           schedule! (fn [_ _]
+                       (when-not @!frame
+                         (reset! !frame (js/requestAnimationFrame step!))))
+           observer (js/MutationObserver. schedule!)]
+       (.observe observer parent #js {:childList true :subtree true :characterData true
+                                      :attributes true :attributeFilter #js ["data-row-key"]})
        (schedule! nil nil)
        (fn []
          (.disconnect observer)

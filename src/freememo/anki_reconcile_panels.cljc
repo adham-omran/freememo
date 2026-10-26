@@ -1,7 +1,8 @@
 (ns freememo.anki-reconcile-panels
   "The reconcile run as an Electric phase machine.
 
-   One run, in batches (plans/anki-sync-lease-batches.md):
+   One run, in batches (plans/anki-sync-lease-batches.md), over the whole
+   collection or over one branch (`anki-subtree-request`):
 
      :claiming → :scanning → :planning → :batch ×N → :finishing → :done
          │                       │            │
@@ -36,17 +37,17 @@
 
 ;; --- server wrappers: keep #?(:clj …) out of every reactive body -------------
 
-(defn scan-targets* [user-id]
-  #?(:clj (recon/scan-targets user-id) :cljs nil))
+(defn scan-targets* [user-id root-id]
+  #?(:clj (recon/scan-targets user-id root-id) :cljs nil))
 
-(defn plan* [user-id digests absent]
-  #?(:clj (recon/plan user-id digests absent) :cljs nil))
+(defn plan* [user-id digests absent root-id]
+  #?(:clj (recon/plan user-id digests absent root-id) :cljs nil))
 
 (defn write-bundles* [user-id card-ids]
   #?(:clj (sync/anki-write-bundles user-id card-ids) :cljs nil))
 
-(defn record-batch!* [user-id run-id entries local-digests progress]
-  #?(:clj (recon/record-batch! user-id run-id entries local-digests progress)
+(defn record-batch!* [user-id run-id root-id entries local-digests progress]
+  #?(:clj (recon/record-batch! user-id run-id root-id entries local-digests progress)
      :cljs nil))
 
 (defn finish-run!* [user-id outcome]
@@ -104,7 +105,7 @@
    Anki-side write errors are surfaced for the same reason. `do-anki-push!`
    returns them per card, and a run in which every `addNote` failed must not
    look identical to one that worked."
-  [phase {:keys [result plan tally error]}]
+  [phase {:keys [result plan tally error branch?]}]
   (let [written (:written tally 0)
         errors (count (:errors tally))
         refused (when (pos? errors)
@@ -118,7 +119,8 @@
         [:success (str "Dry run — nothing applied. " (:report plan))]
         (let [conflicts (get-in result [:counts :conflicts] 0)]
           [(if (or (not (:success result)) (pos? errors)) :warning :success)
-           (str (rec/outcome-text (assoc (:counts result) :writes written))
+           (str (when branch? "This branch: ")
+             (rec/outcome-text (assoc (:counts result) :writes written))
              (when (pos? conflicts)
                (str " — " conflicts
                  (if (= 1 conflicts) " card needs" " cards need")
@@ -128,13 +130,18 @@
 ;; --- phases -----------------------------------------------------------------
 
 (e/defn ReconcileClaim
-  "Phase 0 — take the account's lease, or report that another tab holds it."
+  "Phase 0 — take the account's lease, or report that another tab holds it.
+
+   `root-id` is deref'd, not watched, here and in every phase below: `start!`
+   sets it once before the phase moves, and the value is a plain number (or nil)
+   by the time it is closed over, so no server thunk holds an atom."
   [user-id recon]
   (e/client
     (when (= :claiming (e/watch (:!phase recon)))
       (let [[t _] (e/Token :reconcile-claim)]
         (when t
-          (let [claim (e/server (lc/claim!* user-id))]
+          (let [root-id @(:!root-id recon)
+                claim (e/server (lc/claim!* user-id root-id))]
             (if (= :busy claim)
               (case (e/server (toast!* user-id :info "Sync already in progress"))
                 (do (e/on-unmount #(reset! (:!phase recon) nil))
@@ -152,7 +159,8 @@
     (when (= :scanning (e/watch (:!phase recon)))
       (let [[t _] (e/Token :reconcile-scan)]
         (when t
-          (let [targets (e/server (e/Offload #(scan-targets* user-id)))]
+          (let [root-id @(:!root-id recon)
+                targets (e/server (e/Offload #(scan-targets* user-id root-id)))]
             (case (rc/run-scan! targets recon) (t))))))))
 
 (e/defn ReconcilePlan
@@ -170,13 +178,14 @@
     (when (= :planning (e/watch (:!phase recon)))
       (let [scan (e/watch (:!scan recon))
             run-id (e/watch (:!run-id recon))
+            root-id @(:!root-id recon)
             [t _] (e/Token :reconcile-plan)]
         (when t
           (let [verdict (e/server (lc/report-progress!* user-id run-id {:phase "planning"}))]
             (if (not= :continue verdict)
               (do (e/on-unmount #(halt! recon verdict))
                   (t))
-              (let [p (e/server (e/Offload #(plan* user-id (:digests scan) (:absent scan))))]
+              (let [p (e/server (e/Offload #(plan* user-id (:digests scan) (:absent scan) root-id)))]
                 (if (:aborted? p)
                   (case (e/server
                           (toast!* user-id :error
@@ -222,6 +231,7 @@
       (let [p (e/watch (:!plan recon))
             i (e/watch (:!batch-idx recon))
             run-id (e/watch (:!run-id recon))
+            root-id @(:!root-id recon)
             [t _] (e/Token [:reconcile-batch i])]
         (when t
           (let [ids (rec/batch-at (:write-card-ids p) i)
@@ -235,7 +245,7 @@
                     (let [progress (rec/batch-progress (:write-card-ids p) i)
                           readback (:readback out)
                           r (e/server
-                              (e/Offload #(record-batch!* user-id run-id readback
+                              (e/Offload #(record-batch!* user-id run-id root-id readback
                                             (:local-digests bundles) progress)))
                           last? (= (inc i) (rec/batch-count (:write-card-ids p)))]
                       (if-not (:success (:recorded r))
@@ -259,6 +269,7 @@
       (let [p (e/watch (:!plan recon))
             scan (e/watch (:!scan recon))
             run-id (e/watch (:!run-id recon))
+            root-id @(:!root-id recon)
             [t _] (e/Token :reconcile-finish)]
         (when t
           ;; Display only: the verdict cannot stop anything now, because the
@@ -272,7 +283,8 @@
                                  :digests (:digests scan)
                                  :backfill (:backfill p)
                                  :conflict-card-ids (:conflict-card-ids p)
-                                 :finished-note-ids finished}
+                                 :finished-note-ids finished
+                                 :root-id root-id}
                         result (e/server (e/Offload #(finish-run!* user-id outcome)))]
                     (case (reset! (:!result recon) result)
                       (do (e/on-unmount #(reset! (:!phase recon) :done))
@@ -294,7 +306,10 @@
                             {:result (e/watch (:!result recon))
                              :plan (e/watch (:!plan recon))
                              :tally (e/watch (:!tally recon))
-                             :error err})
+                             :error err
+                             ;; Watched: a deref would read the value from
+                             ;; whenever this branch first mounted.
+                             :branch? (some? (e/watch (:!root-id recon)))})
               [t _] (e/Token [:reconcile-end phase])]
           (when t
             (log/log-info (str "[reconcile] " (name phase) ": " msg))
@@ -351,6 +366,9 @@
    :!result (atom nil)
    :!error (atom nil)
    :!dry-run? (atom false)
+   ;; The topic a branch run is scoped to, or nil for the whole collection.
+   ;; Set by `start!` before the phase moves.
+   :!root-id (atom nil)
    :!task-cancel (atom nil)})
 
 (defn start!
@@ -360,14 +378,22 @@
    post: phase `:claiming`, or unchanged and `:busy`. Whether ANOTHER tab holds
          the lease is decided by the server in `:claiming`, never here.
 
+   The 3-arity takes `root-id`, a topic id: the run then covers that topic and
+   its descendants only, and settles no tombstones (see
+   `anki-reconcile-server/scan-targets`). The shorter arities leave it nil, the
+   whole collection. `:!root-id` is rewritten on every start, so a branch run
+   never leaks its scope into the next full one.
+
    A dry run reads Anki and classifies, then reports and stops. It exists
    because the numbers a first run should produce are knowable in advance, so
    the plan can be checked before anything is written."
-  ([recon] (start! recon false))
-  ([recon dry-run?]
+  ([recon] (start! recon false nil))
+  ([recon dry-run?] (start! recon dry-run? nil))
+  ([recon dry-run? root-id]
    (if (some? @(:!phase recon))
      :busy
-     (do (reset! (:!dry-run? recon) (boolean dry-run?))
+     (do (reset! (:!root-id recon) root-id)
+         (reset! (:!dry-run? recon) (boolean dry-run?))
          (reset! (:!run-id recon) nil)
          (reset! (:!error recon) nil)
          (reset! (:!result recon) nil)

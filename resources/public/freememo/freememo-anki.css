@@ -43,6 +43,48 @@ table {
     margin-right: auto;
 }
 
+/* Cell borders and padding. Quill's table blots store a bare `<table>` with no
+   style, and Anki's default `td` has neither border nor padding, so a pushed
+   table rendered as unseparated text. `border-collapse` draws one line between
+   cells instead of two. The grey is translucent so one value reads on both the
+   light card and `.nightMode`. */
+table {
+    border-collapse: collapse;
+}
+
+td,
+th {
+    border: 1px solid rgba(128, 128, 128, 0.6);
+    padding: 0.25em 0.6em;
+}
+
+/* A divider the user inserted into a field (the context menu's "Divider").
+
+   It must look different from `<hr id=answer>`, the question/answer separator
+   that the Basic, Cloze and Score back templates emit OUTSIDE every field
+   wrapper. Anki draws that one as a full-width rule, so this one is a short,
+   dashed, centered rule. The selectors name the field wrappers rather than
+   using `hr:not(#answer)`, because the `#answer` in a `:not()` adds ID
+   specificity and would beat `.fm-ol-original hr` further down. The wrappers
+   are the ones the templates in anki_sync_helpers.cljc put around a field.
+   Keep this block above `.fm-ol-original hr`: equal specificity, so source
+   order decides which one wins inside the overlapping-cloze answer. */
+.fm-front hr,
+.fm-back hr,
+.fm-extra hr,
+.fm-ol-question hr,
+.fm-ol-extra hr,
+.score-front hr,
+.score-back hr,
+.score-extra hr,
+.io-extra-entry hr {
+    width: 40%;
+    height: 0;
+    margin: 0.8em auto;
+    border: none;
+    border-top: 2px dashed rgba(128, 128, 128, 0.6);
+}
+
 /* The Links paragraph build-links-field emits, on every owned note type.
 
    ALIGNMENT ONLY. The four per-type wrappers (.fm-extra, .fm-ol-extra,

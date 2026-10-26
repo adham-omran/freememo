@@ -7,6 +7,8 @@
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
+   [freememo.row-motion :as row-motion]
    [freememo.modal-shell :as modal]
    [freememo.page-title :refer [PageTitle]]
    [freememo.typeahead :as typeahead]
@@ -365,7 +367,8 @@
   (e/client
     (dom/button
       (dom/props {:type "button" :class "curriculum-icon-button"
-                  :disabled disabled? :aria-label label :title label})
+                  :disabled disabled?})
+      (tooltip/Tooltip! label :aria? true)
       (icons/Icon (if (= label "Move up") :chevron-up :chevron-down) :size 14)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
         (when token
@@ -470,7 +473,8 @@
   (e/client
     (let [material-id (:id material)]
     (dom/div
-      (dom/props {:class "curriculum-material-row"})
+      ;; The key row-motion/install-list! follows when the arrows reorder.
+      (dom/props {:class "curriculum-material-row" :data-row-key (str material-id)})
       (dom/div (dom/props {:class "curriculum-order-controls"})
         (MoveButton "Move up" (zero? index)
           (e/fn [] (e/server (e/Offload #(move-material* user-id material-id -1)))))
@@ -519,8 +523,8 @@
           (dom/h2 (dom/text (:title block)))
           (dom/button
             (dom/props {:type "button" :class "link-button curriculum-rename-block"
-                        :data-tooltip "Rename block"
                         :aria-label (str "Rename " (:title block))})
+            (tooltip/Tooltip! "Rename block")
             (icons/Icon :pen-line :size 13)
             (dom/On "click" (fn [_] (reset! !editing? true)) nil)))
         (let [commits
@@ -563,6 +567,7 @@
           !add-material? (atom false)
           add-material? (e/watch !add-material?)]
       (dom/section
+        (dom/props {:data-row-key (str block-id)})
         (dom/props {:class (str "curriculum-block"
                             (when (:focused_at block) " is-focus")
                             (when-not (:unlocked_at block) " is-locked")
@@ -595,6 +600,8 @@
             (dom/p (dom/props {:class "curriculum-help"})
               (dom/text "Pass the previous block exam or use its unlock override."))
             (dom/div
+              ;; The two rows an arrow swaps trade places.
+              (e/on-unmount (row-motion/install-list! dom/node))
               (if (empty? materials)
                 (dom/p (dom/props {:class "curriculum-help"})
                   (dom/text "Add imported material to this block."))
@@ -769,6 +776,7 @@
             (ScheduleSummary user-id curriculum-id))
           (when edit? (EditCurriculumForm user-id detail !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
+            (e/on-unmount (row-motion/install-list! dom/node))
             (e/for [[index block]
                     (e/diff-by by-id (map-indexed vector blocks))]
               (BlockCard user-id curriculum-id block-count index block navigate!))

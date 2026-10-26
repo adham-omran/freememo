@@ -47,6 +47,9 @@
   #?(:clj (toasts/dismiss! user-id toast-id)
      :cljs nil))
 
+#?(:cljs (defn open-href! [href] (set! (.. js/window -location -href) href))
+   :clj (defn open-href! [_href] nil))
+
 (defn undo-from-toast!* [user-id undo-id]
   #?(:clj (do (undo/undo-entry! user-id undo-id) nil)
      :cljs nil))
@@ -91,21 +94,27 @@
         ;; Action buttons + close button row
         (dom/div
           (dom/props {:class "toast-actions"})
-          (e/for [{:keys [label nav undo-id]} (e/diff-by :label actions)]
+          (e/for [{:keys [label nav undo-id href]} (e/diff-by :label actions)]
             (dom/button
               (dom/props {:class "toast-action-btn" :type "button"})
               (dom/text label)
               (let [click (dom/On "click" identity nil)
                     [t _] (e/Token click)]
+                ;; The undo runs FIRST, and alone. Dismissing removes this
+                ;; toast, which unmounts this frame. With the undo after the
+                ;; dismiss, and beside (t) in a concurrent `do`, it was torn
+                ;; down before it ran: Undo did nothing (measured 2026-10-23).
                 (when t
-                  (case (e/server (dismiss!* user-id id))
-                    (do (when undo-id
-                          (case (e/server (undo-from-toast!* user-id undo-id)) nil))
-                        (when nav
-                          (if (vector? nav)
-                            (apply navigate! nav)
-                            (navigate! nav)))
-                        (t)))))))
+                  (case (e/server (if undo-id (undo-from-toast!* user-id undo-id) ::no-undo))
+                    (case (e/server (dismiss!* user-id id))
+                      (do (when nav
+                            (if (vector? nav)
+                              (apply navigate! nav)
+                              (navigate! nav)))
+                          ;; A page navigation, which the desktop app's window
+                          ;; stops and handles (toasts/error-actions).
+                          (when href (open-href! href))
+                          (t))))))))
 
           ;; Close × — always present
           (dom/button

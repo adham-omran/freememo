@@ -6,12 +6,12 @@
    without a temp file. `freememo.account-transfer-format` owns the paths and the
    manifest keys. This namespace owns the queries and the writing order.
 
-   **PostgreSQL encodes every row.** Each entity query selects `to_jsonb(t)` and
-   the writer emits that text verbatim, one row per line. Nothing is parsed on
-   the way out, and `freememo.account-import` hands the same text back to
-   `jsonb_populate_record`, which reads the target's own column types. A JVM type
-   map between the two would be a third definition of the schema, free to drift
-   from both.
+   **PostgreSQL encodes every row.** Each entity query selects `to_jsonb` of the
+   row's kept columns, and the writer emits that text verbatim, one row per
+   line. Nothing is parsed on the way out, and `freememo.account-import` hands
+   the same text back to `jsonb_populate_record`, which reads the target's own
+   column types. A JVM type map between the two would be a third definition of
+   the schema, free to drift from both.
 
    **The manifest is entry 0, so its counts come from `count(*)` first.** An
    importer must be able to refuse a version it cannot read without downloading
@@ -24,10 +24,12 @@
    string, which would multiply a 100 MB PDF by two inside a JSON line, so the
    three blob-bearing tables drop those keys and their bytes become separate
    archive entries."
-  (:require [freememo.account-transfer-format :as fmt]
+  (:require [clojure.string :as str]
+            [freememo.account-transfer-format :as fmt]
             [freememo.db :as db]
             [freememo.largeobj :as lo]
             [freememo.settings :as settings]
+            [freememo.sync-schema :as schema]
             [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
@@ -59,26 +61,30 @@
              {:type ::missing-entity-scope :table table}))))
 
 (defn- row-json-expr
-  "The `to_jsonb` expression for one row of `table`, minus its blob columns.
+  "The jsonb expression for one row of `table`, aliased `t`, minus its
+   `:drop-keys`.
 
-   The `::text` on each key is required: PostgreSQL has `jsonb - text`,
-   `jsonb - integer` and `jsonb - text[]`, so an untyped literal is ambiguous.
-   The caller must wrap the result in `CAST(… AS text)` — appending `::text`
-   instead would bind to the last key literal, not to the expression, and the
-   query would return a jsonb the writer cannot treat as a string."
-  [table]
-  (reduce (fn [expr k] (str expr " - '" k "'::text"))
-    "to_jsonb(t)"
-    (:drop-keys (scope-of table))))
+   It names the columns it keeps, read from the catalog through `ds`.
+   `to_jsonb(t) - 'col'` would build the whole row first, and `to_jsonb` renders
+   a `bytea` as a hex string of two characters per byte. A jsonb string holds at
+   most 268435455 bytes, so one PDF over 128 MiB in `topic_files.file_data`
+   failed the export of its account, although the column was never written.
+   The caller must wrap the result in `CAST(… AS text)`."
+  [ds table]
+  (let [drop (set (:drop-keys (scope-of table)))
+        kept (remove (comp drop :name) (schema/columns ds table))]
+    (str "(SELECT to_jsonb(s) FROM (SELECT "
+      (str/join ", " (map #(str "t.\"" (:name %) "\"") kept))
+      ") s)")))
 
 (defn- count-query [table user-id]
   (let [{:keys [where params]} (scope-of table)]
     (into [(str "SELECT count(*) AS n FROM " (name table) " t WHERE " where)]
       (repeat params user-id))))
 
-(defn- rows-query [table user-id]
+(defn- rows-query [ds table user-id]
   (let [{:keys [where params order]} (scope-of table)]
-    (into [(str "SELECT CAST(" (row-json-expr table) " AS text) AS row FROM " (name table)
+    (into [(str "SELECT CAST(" (row-json-expr ds table) " AS text) AS row FROM " (name table)
              " t WHERE " where " ORDER BY " order)]
       (repeat params user-id))))
 
@@ -179,7 +185,7 @@
                   (vswap! written inc)
                   nil)
           nil
-          (jdbc/plan ds (rows-query table user-id)
+          (jdbc/plan ds (rows-query ds table user-id)
             {:builder-fn rs/as-unqualified-maps :fetch-size 500 :concurrency :read-only
              :cursors :close :result-type :forward-only}))))
     @written))

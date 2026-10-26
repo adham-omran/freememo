@@ -5,7 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
+   [freememo.context-menu-surface :as menu-surface]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -22,6 +22,8 @@
             score-row-html try-delete-anki-notes!]]
    [freememo.card-rows :as rows]
    [freememo.optimistic :as opt]
+   [freememo.client-state :as cs]
+   [freememo.row-motion :as row-motion]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
    [freememo.quiz-item-stats :as stats]
@@ -411,7 +413,7 @@
                      (read-region/timed-read :library-cards-rows
                        #(db/get-user-flashcards user-id))))
              ;; Read only when the facet is on, so the ordinary view costs no
-             ;; extra query — same rule `overlay-ids-for` follows on the client.
+             ;; extra query — same rule `OverlayIds` follows on the client.
              conflict-ids (when (contains? origins "conflict")
                             (set (db/list-anki-conflicts user-id)))
              filtered (-> all
@@ -422,6 +424,9 @@
              sorted (sort-user-cards filtered sort-col sort-dir)
              states (into [] (mapcat :member-states) sorted)]
          {:success true :card-revision card-revision
+          ;; The filters and sort this result was read with, for the
+          ;; row-motion/arrivals! scope.
+          :view-key [text kinds origins flags sort-col sort-dir]
           ;; Only the trimmed summary crosses the wire; counts/ids/manifest
           ;; below still derive from the full `sorted`/`all` rows.
           :cards (mapv card-list-summary sorted)
@@ -749,12 +754,27 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                                                 :answer answer :cloze cloze
                                                 :anki-flags anki-flags
                                                 :anki-note-id note-id
-                                                :topic-id topic-id :root-topic-id root-topic-id})))]
+                                                :topic-id topic-id :root-topic-id root-topic-id})))
+          ;; Context menu (plans/custom-context-menu.md 4.3.1). With this row in
+          ;; a selection of several, the target is every selected row, and only
+          ;; the rows that take many cards (Delete) apply.
+          target {:kind :card
+                  :subjects (if (and (contains? selected row-key) (> (count selected) 1))
+                              (mapv (fn [[_ mids]] {:member-ids (vec mids)}) selected)
+                              [{:member-ids (vec member-ids)
+                                :topic-id topic-id
+                                :history-scope (when-not group-row? [:card id])}])
+                  :surface {:origin :library :edit-card! edit-card!}}]
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")
                              (review/row-class anki-flags))
+                    ;; The key freememo.row-motion follows when rows move. A
+                    ;; card that comes back, from an undo, slides in.
+                    :data-row-key (pr-str row-key)
+                    :data-enter (when (:fresh? card) "1")
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
+        (menu-surface/RowMenu target)
         (dom/On "click" edit-card! nil)
         (RowSelectCell row-key member-ids !selected selected)
         (RowDiffCell (member-directions member-ids member-states anki-overlay)
@@ -1405,17 +1425,35 @@ bytecode cap in the :prod build, which dev compilation never emits.
             (dom/th (dom/text ""))      ; stats
             (dom/th (dom/text ""))))))))  ; delete
 
+(defn window-cards
+  "The cards that the scroll window shows.
+   Pre:  `visible` holds indexes into `cards`, in display order.
+   Post: one card per display order in [offset, offset + limit), each with
+         its display order as :pos, and :fresh? when its row key is in
+         `arrived`."
+  [cards visible offset limit arrived]
+  (let [end (min (count visible) (+ offset limit))]
+    (mapv (fn [pos]
+            (let [card (nth cards (nth visible pos))]
+              (assoc card :pos pos :fresh? (contains? arrived (:row-key card)))))
+      (range (min offset end) end))))
+
+(defn visible-row-keys
+  "The row keys of the visible cards, as a set."
+  [cards visible]
+  (into #{} (map #(:row-key (nth cards %))) visible))
+
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
 ;; positioned sibling overlay rather than a branch that swaps the table out.
 ;; Mirrors SearchPage's SearchResultsTable: there, unmounting the table (and
 ;; with it Scroll-window + Tape + the per-row server flows) raced the cancelled
 ;; query's e/Offload teardown and crashed the WS with :diff-corruption.
-;; At card-count 0 the Tape still emits its window; every nth returns nil and
-;; the rows render nothing, so the differential stays mounted and empty.
+;; At card-count 0 the window is empty, so the differential stays mounted and
+;; empty.
 ;; position:relative is inline, not on the shared .tape-scroll class — this is
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
-(e/defn CardsTableBody [cards-vec query-revision row-height font-sz filters-active? scroll-reset-key
+(e/defn CardsTableBody [cards-vec query-revision rows-view-key row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
                         user-id anki-overlay !stats]
   (e/client
@@ -1434,10 +1472,21 @@ bytecode cap in the :prod build, which dev compilation never emits.
                           :max-height (str (* 10 row-height) "px")
                           :scrollbar-gutter "stable" :position "relative"}})
       (let [row-member-ids (e/server (mapv :member-ids cards-vec))
-            visible-indexes (opt/VisibleCardIndexes row-member-ids query-revision)
-            row-count (count visible-indexes)
+            ;; The optimistic deletions cross to the server, and the visible
+            ;; rows are computed there, beside the window that reads them.
+            ;; Each view checks its own query revision, so a filtered view
+            ;; cannot clear another view's deletion.
+            deletions (e/watch (cs/get-atom :pending-deletions))
+            visible-indexes (e/server (opt/visible-card-indexes row-member-ids deletions
+                                        query-revision))
+            row-count (e/server (count visible-indexes))
             [offset limit] (Scroll-window row-height row-count dom/node
-                             {:overquery-factor 1.5 :reset-key scroll-reset-key})]
+                             {:overquery-factor 1.5 :reset-key scroll-reset-key})
+            ;; Row keys of the last window, for row-motion/arrivals!. Filters,
+            ;; sort and the offset are in the scope, so they add no row. The
+            ;; filters are the ones the rows were READ with, not the current
+            ;; ones: the query keeps the old rows while it runs again.
+            !seen (e/server (atom {}))]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                     ;; --count → table height (scroll range), --grid-cols → the row grid.
@@ -1447,13 +1496,20 @@ bytecode cap in the :prod build, which dev compilation never emits.
           (dom/props {:class "cards-table-body"
                       ;; display:block + column template live in index.css (C1c).
                       :style {:width "100%" :font-size (str font-sz "px")}})
-          (e/for [i (Tape offset limit)]
-            (let [source-index (nth visible-indexes i nil)
-                  card-result (e/server [source-index (when (some? source-index) (nth cards-vec source-index nil))])
-                  card (second card-result)]
-              (when (and card (= source-index (first card-result)))
-                (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                  selected user-id i anki-overlay !stats)))))
+          ;; Rows slide by key, whichever node paints them.
+          (e/on-unmount (row-motion/install! dom/node))
+          ;; The window is diffed by row key on the server, so a row's card
+          ;; and its position cross together. A slot loop read each card by a
+          ;; client index, and a delete moved every slot below it to another
+          ;; card, so each of those rows went empty for the round trip.
+          (let [arrived (e/server (row-motion/arrivals! !seen [rows-view-key offset]
+                                    (visible-row-keys cards-vec visible-indexes)))
+                window (e/server
+                         (e/diff-by :row-key
+                           (window-cards cards-vec visible-indexes offset limit arrived)))]
+            (e/for [card window]
+              (LibraryCardRow card navigate! !editing-card !diff-card !selected
+                selected user-id (:pos card) anki-overlay !stats))))
         ;; Sibling overlay — never a branch that unmounts the table above.
         (when (zero? row-count)
           (dom/div
@@ -1503,7 +1559,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTableHeader result filtered-count all-filtered-selected? !selected !sort-col !sort-dir)
 
-      (CardsTableBody cards-vec (e/server (:card-revision result)) row-height font-sz filters-active? scroll-reset-key
+      (CardsTableBody cards-vec (e/server (:card-revision result)) (e/server (:view-key result))
+        row-height font-sz filters-active? scroll-reset-key
         navigate! !editing-card !diff-card !selected selected
         user-id anki-overlay !stats))))
 
@@ -1581,14 +1638,26 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; to one JVM method against a 64 KB cap; plain defns get their own methods and
 ;; cost the reactive method nothing. Both operate on values that are already
 ;; client-side, so siting is unchanged.
-(defn- overlay-ids-for
+(def ^:private no-overlay-ids {:anki-changed #{} :marked #{} :suspended #{} :remarked #{}})
+
+(defn- overlay-facet? [origins flags]
+  (boolean (or (contains? origins "anki-changed") (seq flags))))
+
+;; An e/defn, not a plain defn, because the guarantee below is reactive. A plain
+;; fn call runs again whenever ANY argument changes, so it re-ran on every
+;; overlay change and returned an equal map. That map still emitted, the query
+;; opts emitted, and the cards query ran again with the same filters. The `if`
+;; reads `anki-overlay` only in its true branch, so with no Anki facet on, an
+;; overlay change reaches nothing here.
+(e/defn OverlayIds
   "Overlay id-sets enter the query opts ONLY while a facet that needs them is
    active — otherwise the query stays a pure function of the DB filters and
    overlay changes trigger no re-query."
   [origins flags anki-overlay]
-  (if (or (contains? origins "anki-changed") (seq flags))
-    (review/overlay->filter-ids anki-overlay)
-    {:anki-changed #{} :marked #{} :suspended #{} :remarked #{}}))
+  (e/client
+    (if (overlay-facet? origins flags)
+      (review/overlay->filter-ids anki-overlay)
+      no-overlay-ids)))
 
 (defn- build-query-opts [text kinds origins flags overlay-ids sort-col sort-dir]
   {:text text :kinds kinds :origins origins :flags flags
@@ -1631,7 +1700,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (review-overlay/AnkiOverlay
                          user-id manifest !ov-status !ov-payload !check-tick)
-          overlay-ids (overlay-ids-for origins flags anki-overlay)
+          overlay-ids (OverlayIds origins flags anki-overlay)
           opts (build-query-opts text-debounced kinds origins flags overlay-ids sort-col sort-dir)
           ;; URL sync — a side effect during binding evaluation, referenced by
           ;; the (when url-synced nil) below or Electric elides it. Driven by
@@ -1686,7 +1755,12 @@ bytecode cap in the :prod build, which dev compilation never emits.
       ;; arrive — Electric v3 mount bug, triggered by the documents→cards
       ;; branch switch. e/Offload latches the previous result across
       ;; re-queries, so the gate only blanks on first mount, not on
-      ;; filter changes.
+      ;; filter changes. That holds only while every input of the query
+      ;; has a value. An EMPTY input (an e/Offload before its first result)
+      ;; empties `result`, and the gate unmounts the whole view. The
+      ;; overlay did that once per mount — see AnkiOverlay. An input that
+      ;; emits again with an EQUAL value re-runs the query, and that
+      ;; re-mounted the view too — see OverlayIds.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status (:text initial) !text !text-debounced !text-timer
           !kinds !origins !flags !check-tick)

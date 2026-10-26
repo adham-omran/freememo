@@ -13,9 +13,12 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.context-menu-surface :as menu-surface]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [freememo.row-motion :as row-motion]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
+   [freememo.tooltip :as tooltip]
    [freememo.navigation :as nav]
    [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.command-bus :as bus]
@@ -52,6 +55,24 @@
                children-map (set expanded-set) items)))))
      :cljs nil))
 
+;; The scroll window, diffed by topic id on the server, so a row's content and
+;; its place cross together (freememo.row-motion).
+(defn panel-window
+  "The rows at display orders [offset, offset + limit).
+   Post: each row carries its display order as :pos, and :fresh? when its
+         topic id is in `arrived`."
+  [rows offset limit arrived]
+  (let [end (min (count rows) (+ offset limit))]
+    (mapv (fn [i]
+            (let [row (nth rows i)]
+              (assoc row :pos i :fresh? (contains? arrived (:topics/id (:topic row))))))
+      (range (min offset end) end))))
+
+(defn panel-row-ids
+  "The topic ids of the rows, as a set."
+  [rows]
+  (into #{} (map (comp :topics/id :topic)) rows))
+
 (defn side-panel-badge
   "Returns [text color] or nil to skip rendering. Page rows skip the badge
    because the row already shows 'p.<n>' which is more informative."
@@ -70,6 +91,8 @@
     "commit"     ["Commit"  "var(--color-badge-occlusion)"]
     "dir"        ["Folder"  "var(--color-badge-occlusion)"]
     "code"       ["Code"    "var(--color-badge-web)"]
+    "gdoc"       ["Google Doc" "var(--color-badge-occlusion)"]
+    "gdoc-snapshot" ["Snapshot" "var(--color-badge-web)"]
     "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 
@@ -255,10 +278,10 @@
         (when open?
           (dom/div
             (dom/props {:class (str "side-panel__resize side-panel__resize--" (name side))
-                        :title "Drag to resize"
                         :role "separator" :aria-orientation "vertical"
                         :aria-label resize-aria-label :tabindex "0"
                         :aria-valuenow (str (int (or width-px 0)))})
+            (tooltip/Tooltip! "Drag to resize")
             (dom/On "pointerdown"
               (fn [e]
                 (mark-resizing! (.-currentTarget e))
@@ -293,7 +316,7 @@
    !drag-src drag-src forbidden !drop-cmd
    !expanded-set !scroll-node]
   (e/client
-    (let [{:keys [depth topic has-children current? expanded-display?]} row
+    (let [{:keys [depth topic has-children current? expanded-display? fresh?]} row
           id (:topics/id topic)
           title (or (:topics/title topic) "(empty)")
           kind (or (:topics/kind topic) "basic")
@@ -303,6 +326,19 @@
           done? (= topic-status "done")
           expanded? expanded-display?
           badge (side-panel-badge kind)
+          ;; Context menu (plans/custom-context-menu.md 4.2.1). Nothing here is
+          ;; deletable: the panel lists the open topic's own ancestors, and
+          ;; deleting one would delete the topic on screen.
+          target (menu-surface/topic-row-target
+                   {:topic-id id :title title :topic-kind kind
+                    :root? (nil? (:topics/parent_id topic))
+                    :has-children? (boolean has-children)
+                    :dismissed? (boolean (:topics/dismissed topic))
+                    :status topic-status
+                    :priority (:topics/priority topic)
+                    :deletable? false
+                    :neoreader-syncable? false}
+                   nil)
           open-topic! (fn [_]
                         (when-not current?
                           (cond
@@ -320,7 +356,12 @@
                                    (fn [s] (if (contains? s id) (disj s id) (conj s id))))
                                  (util/restore-scroll-after-render! sn st))))]
       (dom/tr
-        (dom/props {:style {:--order i}})
+        ;; freememo.row-motion follows the key when rows move, and slides in
+        ;; a row that an extract or an expand just added.
+        (dom/props {:data-row-key (str id)
+                    :data-enter (when fresh? "1")
+                    :style {:--order i}})
+        (menu-surface/RowMenu target)
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                               ;; Base 20 reserves the fixed left gutter for the
@@ -392,8 +433,13 @@
           expanded-set (e/watch !expanded-set)
           ;; Server-form binding (sited-by-use): the subtree rows stay
           ;; server-side; only row-count and the window rows cross.
-          rows (e/server (e/Offload #(build-hierarchy-rows* tree-rev user-id
-                                       page-topic-id expanded-set)))]
+          ;; The page travels with its rows: the Offload keeps the old rows
+          ;; while it runs again, and row-motion/arrivals! must not pair them
+          ;; with the new page.
+          built (e/server (e/Offload #(when-some [rows (build-hierarchy-rows* tree-rev user-id
+                                                           page-topic-id expanded-set)]
+                                        {:rows rows :page-topic-id page-topic-id})))
+          rows (e/server (:rows built))]
       (when (e/server (some? rows))
         (let [row-count (e/server (count rows))
               row-height 36
@@ -424,20 +470,28 @@
                         :style {:flex "1" :overflow-y "auto" :min-height "0"
                                 :scrollbar-gutter "stable"}})
             (reset! !scroll-node dom/node)
-            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
+            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
+                  ;; Row ids of the last window, for row-motion/arrivals!. The
+                  ;; open page and the offset are in the scope: a page turn or
+                  ;; a scroll shows rows, it does not add them.
+                  !seen (e/server (atom {}))]
               (dom/props {:style {:--count row-count
                                   :--grid-cols "1fr"
                                   :--row-height (str row-height "px")}})
               (dom/table
                 (dom/props {:style {:width "100%"
                                     :font-size "13px"}})
+                (e/on-unmount (row-motion/install! dom/node))
                 (if (pos? row-count)
-                  (e/for [i (Tape offset limit)]
-                    (let [row (e/server (nth rows i nil))]
-                      (when row
-                        (HierarchyRow i row navigate! !nav-target
-                          !drag-src drag-src forbidden !drop-cmd
-                          !expanded-set !scroll-node))))
+                  (let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
+                                            (panel-row-ids rows)))
+                        window (e/server
+                                 (e/diff-by (comp :topics/id :topic)
+                                   (panel-window rows offset limit arrived)))]
+                    (e/for [row window]
+                      (HierarchyRow (:pos row) row navigate! !nav-target
+                        !drag-src drag-src forbidden !drop-cmd
+                        !expanded-set !scroll-node)))
                   (dom/tr
                     (dom/props {:style {:--order 1 :height "auto"}})
                     (dom/td

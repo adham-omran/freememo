@@ -1476,7 +1476,8 @@
                    :requested-model model-id
                    :request-snapshot (:provider-request rendered)
                    :source-snapshot (:source-snapshot rendered)
-                   :evidence (:evidence rendered)})]
+                   :evidence (:evidence rendered)
+                   :question-map-id (get-in rendered [:reply-blocks :question-map :map-id])})]
     (cond
       (:chat-missing? created)
       {:error "Chat not found."}
@@ -2407,7 +2408,7 @@
                               {:id (:topics/id topic)
                                :title (or (:topics/title topic) "Untitled")}))
                        (filter #(str/includes? (str/lower-case (:title %)) needle)))
-                     (db/get-root-topics user-id))]
+                     (db/get-root-topic-titles user-id))]
      (if (str/blank? needle)
        documents
        (into documents

@@ -3,7 +3,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.context-menu-surface :as menu-surface]
    [freememo.a11y :as a11y]
+   [freememo.tooltip :as tooltip]
    [clojure.string :as str]
    [freememo.logging :as log]
    #?(:clj [freememo.toasts :as toasts])
@@ -104,7 +106,8 @@
 (e/defn DeleteCardButton [member-ids user-id]
   (e/client
     (dom/button
-      (dom/props {:class "btn-delete-x" :title "Delete card"})
+      (dom/props {:class "btn-delete-x"})
+      (tooltip/Tooltip! "Delete card" :aria? true)
       (dom/text "\u00D7")
       (let [click-event (dom/On "click" (fn [event] (.stopPropagation event) member-ids) nil)
             [t ?error] (e/Token click-event)]
@@ -335,23 +338,34 @@
                                          :anki-note-id anki-note-id
                                          :topic-id topic-id :root-topic-id root-topic-id})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
-                             (reset! !editing-card data)))]
+                             (reset! !editing-card data)))
+              ;; Context menu (plans/custom-context-menu.md 4.3.2). A score
+              ;; card keeps no edit history.
+              target {:kind :card
+                      :subjects [{:member-ids (vec member-ids)
+                                  :topic-id topic-id
+                                  :history-scope (cond occ? [:occlusion-group group-id]
+                                                   score? nil
+                                                   :else [:card id])}]
+                      :surface {:origin :viewer :edit-card! edit-card!}}]
         (dom/tr
           (dom/props {:class (str (review/row-class anki-flags)
                                (when review-target? " card-review-target"))
                       :data-row-key (pr-str (:row-key view))
                       :data-enter (when fresh? "1")
                       :style {:--order order :cursor "pointer"}})
+          (menu-surface/RowMenu target)
           (dom/On "click" edit-card! nil)
           ;; Sync indicator
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"
-                                :border-bottom "1px solid var(--color-border)" :font-size "10px"}
-                        :title (case sync-st
-                                 :unsynced "Not synced to Anki"
-                                 :synced (str "Synced to Anki")
-                                 :modified "Modified since last sync"
-                                 :mixed "This row's cards are in different sync states")})
+                                :border-bottom "1px solid var(--color-border)" :font-size "10px"}})
+            (tooltip/Tooltip! (case sync-st
+                                :unsynced "Not synced to Anki"
+                                :synced (str "Synced to Anki")
+                                :modified "Modified since last sync"
+                                :mixed "This row's cards are in different sync states")
+              :aria? true)
             (dom/text (case sync-st
                         :unsynced "\u25CB"
                         :synced "\u25CF"
@@ -428,9 +442,9 @@
 (e/defn RetryPendingButton [tempid user-id]
   (e/client
     (dom/button
-      (dom/props {:title "Retry"
-                  :style {:background "transparent" :border "none" :cursor "pointer"
+      (dom/props {:style {:background "transparent" :border "none" :cursor "pointer"
                           :color "var(--color-danger-text)" :font-size "13px"}})
+      (tooltip/Tooltip! "Retry" :aria? true)
       (dom/text "↻")
       (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
             [t _] (e/Token click)]
@@ -445,9 +459,9 @@
 (e/defn DismissPendingButton [tempid user-id]
   (e/client
     (dom/button
-      (dom/props {:title "Dismiss"
-                  :style {:background "transparent" :border "none" :cursor "pointer"
+      (dom/props {:style {:background "transparent" :border "none" :cursor "pointer"
                           :color "var(--color-text-hint)" :font-size "13px"}})
+      (tooltip/Tooltip! "Dismiss" :aria? true)
       (dom/text "×")
       (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
             [t _] (e/Token click)]
@@ -481,12 +495,13 @@
         (dom/td
           (dom/props {:style {:padding "6px 4px" :text-align "center" :font-size "10px"
                               :border-bottom "1px solid var(--color-border)"
-                              :color (if (= :error status) "var(--color-danger)" "var(--color-success)")}
-                      :title (case status
-                               :pending "Saving…"
-                               :confirmed "Saved"
-                               :error (or (:error entry) "Save failed")
-                               "")})
+                              :color (if (= :error status) "var(--color-danger)" "var(--color-success)")}})
+          (tooltip/Tooltip! (case status
+                              :pending "Saving…"
+                              :confirmed "Saved"
+                              :error (or (:error entry) "Save failed")
+                              "")
+            :aria? true)
           (dom/text (case status :pending "…" :confirmed "✓" :error "!" "")))
         ;; Front — cloze spans both content columns
         (dom/td

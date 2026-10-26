@@ -4,7 +4,7 @@
    `.cljc` with NO requires and NO reader conditional, because both peers need
    this and for different reasons: the server gates two HTTP routes on it
    (`api/syncable-topic-for`), and the client gates a Library row action on it
-   (`library-row-actions/RowActionsMenu`).
+   (`knowledge-tree/tree-row-subject`, for the context menu).
 
    Putting it in `neoreader-sync` would not work. That is a `.clj`, so the var
    would not exist on the CLJS peer — and a CLJ-only var read from client scope

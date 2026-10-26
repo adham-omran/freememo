@@ -379,6 +379,33 @@ html:has(> body > .app-shell) > body {
 .modal-md { width: 420px; max-width: 90%; }
 .modal-lg { width: 600px; max-width: 90%; }
 
+/* freememo.card-actions-host: owners with no control of their own. The div
+   only gives their modals an element of their own. */
+.card-actions-host { display: contents; }
+
+/* The right-click "Generate cards…" form (freememo.document-generate-form). */
+.document-generate-form {
+    width: 360px;
+    max-width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.document-generate-form h3 { margin: 0 0 var(--sp-2); font-size: 16px; }
+.document-generate-form__context {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: var(--sp-2);
+}
+.document-generate-form__buttons {
+    display: flex;
+    gap: var(--sp-2);
+    justify-content: flex-end;
+    margin-top: var(--sp-3);
+}
+.document-generate-form__buttons .btn-primary { order: 1; }
+
 /* Card add/edit modal inner panel — viewport-relative.
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
@@ -523,6 +550,26 @@ html:has(> body > .app-shell) > body {
     padding: 10px 0;
 }
 
+/* Quiz dashboard tile number (quiz_dashboard.cljc StatTile). The div is empty
+   while the stats read is pending, so it had no height and the tile shrank to
+   its label. The bar holds the number's line and fades in after 150ms. */
+.quiz-tile-value:empty::before {
+    content: "";
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    vertical-align: middle;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
+    background-size: 200% 100%;
+    animation: fade-in 0.2s ease 150ms both, skeleton-pulse 1.5s ease-in-out 150ms infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .quiz-tile-value:empty::before {
+        animation: fade-in 0.2s ease 150ms both;
+    }
+}
+
 /* ── Quiz dashboard footer (freememo.quiz-heatmap) ────────────────
    A year of review activity plus four numbers. FULL-BLEED past the dashboard's
    760px column: 53 weeks at a legible cell size is about 800px, and shrinking the
@@ -589,10 +636,10 @@ html:has(> body > .app-shell) > body {
        content. Without this, the container expands to fit content and the
        ResizeObserver can never detect overflow (scrollWidth ≡ clientWidth). */
     min-width: 0;
-    /* Establishes a stacking context so tooltips (and the overflow dropdown)
-       paint over later DOM siblings such as .tape-scroll. Without this,
-       sibling elements after .toolbar-container paint on top regardless of
-       the tooltip's z-index, since both live in the same stacking context.
+    /* Establishes a stacking context so the overflow dropdown paints over
+       later DOM siblings such as .tape-scroll. Without this, sibling elements
+       after .toolbar-container paint on top regardless of the dropdown's
+       z-index, since both live in the same stacking context.
        Stacking ladder (descending): main ContentToolbar 3 > PdfToolbar 2 >
        pane resizers/.split-divider-h 1 > pane content 0. The toolbars MUST
        outrank the resizers (z-index:1), else the resizers paint over the
@@ -609,7 +656,9 @@ html:has(> body > .app-shell) > body {
    With z-index:auto its Add-card dropdown (z:50) and tooltips (z:1100)
    escape to root level and paint over the waveform strip / PDF pane, while
    the PdfToolbar's own tooltips (context level 2) still paint over this
-   bar's plain contents (level 0) — a bar-level z-index can't satisfy both. */
+   bar's plain contents (level 0) — a bar-level z-index can't satisfy both.
+   Tooltips have painted in the top layer since plans/tooltip-top-layer.md,
+   so only the dropdown half of this still applies. */
 .toolbar-container.score-toolbar-container {
     z-index: auto;
 }
@@ -631,8 +680,8 @@ html:has(> body > .app-shell) > body {
     border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-subtle);
     /* overflow-x: clip clips horizontal overflow (the content-aware tier
-       system's purpose); overflow-y: visible lets tooltips and dropdowns
-       escape vertically. `clip` is the only overflow value that does NOT
+       system's purpose); overflow-y: visible lets dropdowns escape
+       vertically. `clip` is the only overflow value that does NOT
        coerce a sibling `visible` to `auto`. */
     overflow-x: clip;
     overflow-y: visible;
@@ -763,16 +812,17 @@ html:has(> body > .app-shell) > body {
    is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
    the smallest tier where inline content fits without overflow.
 
-   Tier ladder (cumulative; tier N also implies all of tier <N). Card-type +
-   Context moved into the Generate dropdown menu (C3) and Priority into the
-   Document-Options modal (C5), so their former inline tiers no longer hide
-   anything; tier 3 is now a reserved no-op the detector skips:
+   Tier ladder (cumulative; tier N also implies all of tier <N). Card-type,
+   Context and the card count moved into the selection popover
+   (plans/toolbar-card-actions-fold.md) and Priority into the Document-Options
+   modal (C5), so their former inline tiers no longer hide anything; tiers 3
+   and 4 are reserved no-ops:
    - collapse-0: nothing hidden, all labels visible
    - collapse-1: labels + citation hidden (icon-only buttons), except the
      labels marked `.icon-label--tier-2`
    - collapse-2: + those labels + Document-meta group hidden (.toolbar-collapse-docmeta)
    - collapse-3: (reserved — no additional inline element)
-   - collapse-4: (reserved — CardCount moved into the Generate dropdown menu)
+   - collapse-4: (reserved — no additional inline element)
    - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
    - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
    - collapse-7: + Anki Sync button hidden (.toolbar-collapse-sync) */
@@ -851,20 +901,9 @@ html:has(> body > .app-shell) > body {
     display: flex;
     visibility: visible;
 }
-.toolbar-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 13px;
-}
 .toolbar-sep { color: var(--color-border); }
 /* Card-type segmented control (radiogroup a11y) — replaces the ◉/○ radio-dot
    rows: one connected row of pill segments + a one-line description. */
-.toolbar-generate-menu-settings .toolbar-type-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-}
 .segmented {
     display: inline-flex;
     border: 1px solid var(--color-border);
@@ -1115,7 +1154,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     .ai-task-row { grid-template-columns: minmax(0, 1fr) repeat(3, 60px); }
     .ai-level-head { font-size: 12px; }
 }
-.toolbar-generate-group { margin-left: auto; }
 
 /* Toolbar groups — flat flex runs separated by .toolbar-group-divider
    (Excel/Sheets model). No box: the bar's own tint is the only fill layer. */
@@ -1131,16 +1169,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     align-items: center;
     gap: 8px;
 }
-
-/* Generate group — keeps card-count stepper + Generate buttons together so the
-   parameter clusters with the action that consumes it. Flat (no box); the
-   inner .toolbar-generate-group's margin-left:auto is neutralized here. */
-.toolbar-generate-cluster {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.toolbar-generate-cluster .toolbar-generate-group { margin-left: 0; }
 
 /* ── Ghost toolbar buttons ─────────────────────────────────────────
    Flat (transparent, no border) at rest; square radius-md tinted background on
@@ -1199,7 +1227,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    add 2px in content-box). line-height:1 keeps icon+label vertically centered. */
 .toolbar-group .btn,
 .toolbar-sync-trigger,
-.toolbar-generate-trigger,
 .number-stepper-btn,
 .number-stepper-input {
     height: 28px;
@@ -1271,7 +1298,7 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
 /* ── Icon buttons (Lucide SVG via freememo.icons) ─────────────────
    Foundations: square aspect, ≥32×32 touch target, hover bg, focus ring.
    Per-icon SVGs inherit `currentColor` so button color flows to stroke.
-   Tooltip on hover is driven by [data-tooltip] (see index.css:1303). */
+   A hover tooltip comes from freememo.tooltip/Tooltip!. */
 .icon-btn {
     display: inline-flex;
     align-items: center;
@@ -1357,9 +1384,8 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     display: inline;
 }
 
-/* ── Toolbar dropdowns (Generate / Sync) ──────────────────────────────────
-   Generate + Sync each consolidate multiple buttons into one trigger that
-   opens a menu. The source buttons remain mounted (hidden) so their refs,
+/* ── Toolbar dropdowns (the PDF bar's Copy / Scan, and Sync) ───────────────
+   Each consolidates multiple buttons into one trigger that opens a menu. The source buttons remain mounted (hidden) so their refs,
    modals, and e/Token paths stay live; menu items dispatch via .click() on
    the existing refs (same pattern the overflow proxies use).
 
@@ -1375,21 +1401,11 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
    the layout entirely; the inner direct-child `button` rule hides each source
    button but leaves modal divs (rendered as sibling children inside each
    *Button e/defn) visible — display:none on the wrapper itself would have
-   killed the modals too.
-
-   The `.toolbar-generate-group` rule covers `ToolbarGenerate`'s Generate +
-   Generate-with-Prompt buttons, which are grandchildren of the sources
-   wrapper (nested inside an internal `.toolbar-generate-group` div) and
-   therefore NOT caught by the `> button` direct-child selector. The
-   PromptDialog modal sits as a separate `dom/div` sibling inside the same
-   `ToolbarGenerate` body, so it remains visible when activated. */
+   killed the modals too. */
 .toolbar-dropdown-sources {
     display: contents;
 }
 .toolbar-dropdown-sources > button {
-    display: none !important;
-}
-.toolbar-dropdown-sources .toolbar-generate-group {
     display: none !important;
 }
 
@@ -1406,27 +1422,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     margin-left: 2px;
     opacity: 0.85;
 }
-
-/* Split generate button — primary zone (generate) + caret zone (open menu)
-   share one pill: inner corners squared, a translucent hairline between them.
-   Both zones are .btn.btn-primary with backgrounds set inline by state. */
-.toolbar-generate-split {
-    display: inline-flex;
-    align-items: stretch;
-}
-.toolbar-generate-primary {
-    gap: 6px;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-}
-.toolbar-generate-caret {
-    padding-left: 6px;
-    padding-right: 6px;
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.35);
-}
-.toolbar-generate-caret svg { opacity: 0.85; }
 
 /* Menu — absolutely positioned below trigger. z-index above tooltips/PDF.
    Card background, modal-style shadow to lift it visually off the toolbar. */
@@ -1445,12 +1440,11 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     flex-direction: column;
     gap: 2px;
 }
-/* Copy / Scan / Generate triggers sit toward the right of their bars; right-align
+/* Copy / Scan triggers sit toward the right of their bars; right-align
    their menus so a left-anchored menu can't run past the
    toolbar's right edge and get clipped by `.toolbar`'s `overflow-x: clip`. */
 .toolbar-copy-dropdown .toolbar-dropdown-menu,
-.toolbar-scan-dropdown .toolbar-dropdown-menu,
-.toolbar-generate-dropdown .toolbar-dropdown-menu {
+.toolbar-scan-dropdown .toolbar-dropdown-menu {
     left: auto;
     right: 0;
 }
@@ -1497,26 +1491,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     font-size: 11px;
     color: var(--color-text-hint);
     white-space: nowrap;
-}
-
-/* Generation settings block at the top of the Generate dropdown menu (C3):
-   card-type radios + Context toggle live here as live widgets above the
-   actions. Stacked, padded to align with the menu items below. */
-.toolbar-generate-menu-settings {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px 12px;
-}
-.toolbar-generate-menu-settings .toolbar-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.toolbar-dropdown-separator {
-    height: 1px;
-    background: var(--color-border);
-    margin: 4px 0;
 }
 
 .header-bar {
@@ -2095,18 +2069,6 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     transform: translateY(calc(var(--order, 0) * var(--row-height)));
 }
 .tape-scroll table td { overflow: hidden; }
-.tape-scroll table td:has([data-tooltip]:hover) {
-    overflow: visible;
-}
-/* Paint the tooltip IN FRONT of the rows below it. Each row is transformed
-   (see `transform` above), and `transform` makes every row its own stacking
-   context — so the tooltip's z-index is trapped inside its row and later rows
-   (later in DOM order) paint over it. Rows are position:absolute, so raising
-   the hovered row's z-index reorders it ahead of its auto-z-index siblings,
-   carrying the escaped tooltip above them. */
-.tape-scroll table tr:has([data-tooltip]:hover) {
-    z-index: 1;
-}
 /* Zebra striping (opt-in via .row-alt on the tr). Placed before :hover so hover
    wins on equal specificity. */
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
@@ -2187,9 +2149,8 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
 .tape-table-body td.tape-cell-strong { font-weight: 600; }
 /* Inline "(merging)" state note in an action cell. */
 .tape-table-body .tape-cell-note { font-size: 11px; }
-/* Inner spans. The td owns clipping (see `.tape-scroll table td` above, whose
-   :has([data-tooltip]:hover) escape must win so tooltips render uncut), so the
-   ellipsis lives here. */
+/* Inner spans. The td owns clipping (see `.tape-scroll table td` above), so
+   the ellipsis lives here. */
 .tape-table-body .tape-cell-text {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2236,6 +2197,173 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     color: var(--color-text-secondary);
     pointer-events: none;
 }
+/* Loading rows for every TapeTable. The row count and each row are separate
+   server reads, so the body holds no row twice over: before the count arrives,
+   and after it while the first row reads are in flight. Both showed a blank box.
+   This draws one text bar per row slot until a row or the empty message mounts.
+   Before the count arrives it is a normal-flow ::before: the box has no height
+   of its own then, and the bars are what give it some. After, it overlays. Fallback height
+   is 6 rows; once --count is known the bars match the rows that will fill the
+   box, up to its 10-row cap. 41px is tape-table/row-height. The 150ms delay
+   keeps a fast load free of a flash. */
+.tape-table-scroll:not(:has(.tape-table-body tr, .tape-table-empty))::before {
+    content: "";
+    display: block;
+    box-sizing: border-box;
+    height: calc(min(var(--count, 6), 10) * 41px);
+    padding-inline: 10px;
+    background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%) content-box;
+    background-size: 200% 100%;
+    -webkit-mask: repeating-linear-gradient(to bottom, transparent 0 14px, #000 14px 27px, transparent 27px 41px);
+    mask: repeating-linear-gradient(to bottom, transparent 0 14px, #000 14px 27px, transparent 27px 41px);
+    animation: fade-in 0.2s ease 150ms both, skeleton-pulse 1.5s ease-in-out 150ms infinite;
+}
+/* Once --count is set inline, the table reserves the rows' height itself. In
+   normal flow the bars would sit above that space and add their own height to
+   it, so from then on they overlay the table instead. The inline property is the
+   signal because Electric sets each prop on its own: `.tape-scroll`, from the
+   same map, is present before the count arrives (measured). */
+.tape-table-scroll[style*="--count"]:not(:has(.tape-table-body tr, .tape-table-empty))::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+    .tape-table-scroll::before {
+        animation: fade-in 0.2s ease 150ms both;
+    }
+}
+
+/* Curation tables (plans/knowledge-tables-selection-and-bulk.md): the filter
+   row, active-filter labels, the select column, sortable headers, the batch
+   bar and the row menu. Shared by the five Knowledge views. */
+.knowledge-view {
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 108px - var(--app-top-chrome, 0px));
+}
+.knowledge-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 10px 0;
+}
+.knowledge-search { flex: 1; min-width: 140px; }
+.knowledge-filter-pick { width: 200px; }
+.knowledge-filter-select { max-width: 150px; }
+.knowledge-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+.knowledge-filter-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: -2px 0 10px;
+}
+.filter-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-primary);
+    cursor: pointer;
+}
+.filter-label-x { color: var(--color-text-secondary); }
+.filter-clear {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 0;
+    background: none;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+}
+.tape-table-header th.tape-th-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 4px;
+}
+.tape-table-header th.tape-th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+.tape-table-header th.tape-th-sort:hover { color: var(--color-text-primary); }
+/* The header row is the frame the batch bar lies over (tape-table/BatchBar).
+   The bar starts after the 34px select column, so the select-all checkbox
+   stays reachable, and stops at the header's 10px gutter. It never takes
+   layout space, so opening it moves no row. */
+.tape-table-head-frame { position: relative; flex-shrink: 0; }
+.tape-batch-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 34px;
+    right: 10px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    background: var(--color-primary-tint);
+    color: var(--color-primary-tint-text);
+    font-size: 13px;
+}
+.tape-batch-bar .btn-sm { padding-block: 2px; }
+.tape-batch-count { font-weight: 600; white-space: nowrap; }
+.tape-batch-bar .tape-batch-cancel { margin-left: auto; }
+/* Text of unknown direction fills its cell, so `dir="auto"` can align an
+   Arabic row to the right. A shrink-wrapped span sat at the cell's left edge
+   whatever its direction. */
+.tape-table-body td > .tape-cell-text[dir="auto"] { flex: 1 1 auto; min-width: 0; text-align: start; }
+/* Row actions wait while a selection exists: the batch bar acts instead. */
+.tape-scroll table tr.row-withheld td { opacity: 0.55; }
+/* After .row-withheld and as specific, so a suspended row's actions dim too. */
+.tape-scroll table tr td.tape-cell-actions-inert { opacity: 0.4; pointer-events: none; }
+.type-badge.question-kind-atomic { background: var(--color-badge-pdf); }
+.type-badge.question-kind-synthesis { background: var(--color-badge-epub); }
+/* freememo.row-menu. Fixed and placed by Floating UI; hidden until placed so
+   it never paints at the viewport corner for a frame. */
+.row-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1100;
+    min-width: 180px;
+    padding: 4px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+    visibility: hidden;
+}
+.row-menu[data-placed] { visibility: visible; }
+.row-menu-item {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    text-align: start;
+    cursor: pointer;
+}
+.row-menu-item:hover,
+.row-menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
+.row-menu-item-danger { color: var(--color-danger-text); }
+.merge-choices { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.merge-choice { display: flex; justify-content: space-between; gap: 12px; text-align: start; }
+.merge-choice-facts { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
 
 /* Sticky header for a table inside its scroll box (.tx-head), used by
    schedule_detail. The cost-history table that introduced it now uses
@@ -2956,9 +3084,6 @@ textarea:hover {
        and the dropdown menu at the toolbar's bottom edge so the card-table
        below visually painted over them. */
 
-    /* Remove auto-margin push in dropdown context */
-    .toolbar-generate-group { margin-left: 0; }
-
     /* Card-table min-width intentionally not set here: at narrow viewports the
        table is allowed to shrink so its fixed 40px X-delete column stays
        within the scroll viewport. Question/answer columns ellipsize as needed. */
@@ -3201,7 +3326,7 @@ textarea:hover {
 .format-menu {
     position: fixed;
     /* 1100 (not 1000) so the card clears .modal-backdrop (1000) inside card
-       modals, matching the [data-tooltip] precedent. */
+       modals. */
     z-index: 1100;
     box-sizing: border-box;
     width: 206px;
@@ -3309,6 +3434,29 @@ textarea:hover {
     text-align: center;
     font-size: 13px;
     color: var(--color-text-primary);
+}
+/* Cards row 1: count, the three kind glyphs, and `...`. 20px stepper buttons
+   and 28px glyphs fit the 194px content box with 4px gaps. */
+.format-menu .fmt-cardgen-row {
+    justify-content: space-between;
+    gap: 4px;
+    padding: 0 2px;
+}
+.format-menu .fmt-cardgen-row .number-stepper-btn { width: 20px; }
+.format-menu .fmt-kind-group { display: flex; gap: 0; }
+.format-menu .fmt-kind-group .fmt-btn,
+.format-menu .fmt-cardgen-row > .fmt-dd > .fmt-btn { width: 28px; }
+/* The `...` popup: Include context, its pages, Compare models. */
+.format-menu .fmt-cardgen-popup { left: auto; right: 0; width: 188px; }
+.format-menu .fmt-cardgen-popup .fmt-cardgen-row { justify-content: flex-start; padding: 0 8px; }
+.format-menu .fmt-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 8px;
+    font-size: 13px;
+    cursor: pointer;
 }
 
 /* Popups: block type, colour, overflow. format-menu's popup-group keeps at
@@ -4315,16 +4463,27 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     to { opacity: 1; }
 }
 
-/* ── Tooltip (data-tooltip attribute, instant on hover) ───────── */
+/* ── Tooltip (freememo.tooltip-layer, plans/tooltip-top-layer.md) ─
+   `Tooltip!` writes `data-tooltip` and freememo.tooltip-layer shows its text
+   in ONE bubble in the top layer, placed by Floating UI. The top layer
+   escapes every transform, overflow clip and stacking context, so no
+   container needs a tooltip override. Keep `position: relative` on hosts:
+   the old `::after` bubble needed it, and a host may now rely on it for its
+   own positioned children. */
 [data-tooltip] {
     position: relative;
 }
-[data-tooltip]::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%) translateY(4px);
+/* The UA [popover] rule centres the element with `inset: 0; margin: auto` and
+   draws a border and padding, so this rule resets them. The layer sets `left`
+   and `top`, then `data-placed`: hidden until then, so a bubble never flashes
+   at its previous place. z-index only matters where the Popover API is
+   missing. */
+.tooltip-bubble {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    border: 0;
+    overflow: visible;
     padding: 6px 10px;
     background: var(--color-tooltip-bg);
     backdrop-filter: blur(2px);
@@ -4333,171 +4492,41 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.4;
     border-radius: 4px;
     white-space: pre-wrap;
+    width: max-content;
     max-width: min(40ch, calc(100vw - 2rem));
     overflow-wrap: break-word;
     pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    /* No transition: show and hide are both instant. A fade-OUT would keep a
-       stale bubble painted for its duration, and in a virtual-scroll list the
-       cursor re-enters the next recycled row's trigger before the previous
-       bubble finishes fading — stacking several detached tooltips over the
-       rows. Instant hide guarantees at most one bubble, only while genuinely
-       hovered. */
-    /* Above .modal-backdrop (1000) so a tooltip on a button inside a modal
-       is never painted under the backdrop. */
     z-index: 1100;
 }
-[data-tooltip]:hover::after {
-    opacity: 1;
-    visibility: visible;
-}
-/* Touch devices latch `:hover` after a tap, leaving a stale bubble painted over
-   whatever opens next (e.g. a confirm modal — the bubble is z-index:1100, above
-   the backdrop). No hover intent exists on touch, so drop the affordance. */
-@media (hover: none) {
-    [data-tooltip]::after { content: none; }
-}
-/* Suppress the tooltip while the element's menu is open. The cursor is still
-   over the trigger after a click, so :hover stays true and the tooltip would
-   otherwise paint over the open menu. Specificity (0,3,1) beats the show rule. */
-[data-tooltip][aria-expanded="true"]:hover::after {
-    opacity: 0;
+.tooltip-bubble:not([data-placed]) {
     visibility: hidden;
-}
-[data-tooltip].tooltip-right::after {
-    left: auto;
-    right: 0;
-    transform: translateY(4px);
-}
-
-/* Modern browsers: anchor the tooltip to its trigger and let the engine flip
-   it (above / opposite side) when the default below-centered placement would
-   overflow the viewport, so it never overruns an edge or covers the buttons
-   below it. Non-supporting browsers keep the static below-centered rules above. */
-/* Hover devices only. A touch device shows no tooltip (content: none above),
-   so the anchored path does nothing for it. On an iPhone in Safari, every
-   tooltip host that took this path and no override below was left unpainted,
-   with its space kept: Check Anki, Keep FreeMemo, Keep Anki, and the select-all
-   and sync-direction header cells in /library/cards. The hosts that the
-   .toolbar and .tape-scroll overrides move back to absolute positioning
-   painted. */
-@supports (position-area: bottom) {
-  @media (hover: hover) {
-    [data-tooltip]::after {
-        position: fixed;
-        position-area: bottom;
-        position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
-        position-try-order: most-height;
-        top: auto;
-        left: auto;
-        right: auto;
-        bottom: auto;
-        margin: 4px;
-        transform: none;
-    }
-    [data-tooltip].tooltip-right::after {
-        position-area: bottom span-left;
-    }
-  }
-}
-
-/* Toolbar tooltips: plain absolute positioning relative to the button (which is
-   position:relative via [data-tooltip]). top:100% is always the button's bottom
-   edge, so the tooltip sits directly BELOW — the anchor-positioning engine was
-   resolving `position-area:bottom` to an overlapping spot here. Placed after the
-   @supports block and higher-specificity so it wins in every browser. */
-.toolbar [data-tooltip]::after,
-.toolbar [data-tooltip].tooltip-right::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 0;
-    right: auto;
-    bottom: auto;
-    margin: 6px 0 0 0;
-    transform: none;
-}
-
-/* Quiz curation-bar tooltips (Flag / Suspend & Skip / Edit): same fix as
-   `.toolbar`. These three buttons sit directly above the answer textarea, and
-   `position-try-order: most-height` reads the taller space ABOVE the bar and flips
-   the bubble up over the question text. Pin it below the button instead. */
-.curation-bar [data-tooltip]::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    margin: 6px 0 0 0;
-    transform: translateX(-50%);
-}
-
-/* Virtual-scroll (.tape-scroll) tooltips: the anchor-positioning `position:fixed`
-   path (@supports block above) detaches from its button as the list scrolls — the
-   implicit anchor stops tracking once the trigger moves inside the overflow:auto
-   scroll box, so the tooltip drifts and eventually leaves the viewport. Pin it with
-   plain absolute positioning relative to the button (position:relative via
-   [data-tooltip]); top:100% is the button's bottom edge, so it stays attached
-   directly below on every scroll offset. Mirrors the .toolbar override above;
-   centered to match the base [data-tooltip]::after rule. Placed after @supports and
-   higher-specificity so it wins in every browser. */
-.tape-scroll [data-tooltip]::after {
-    position: absolute;
-    position-area: none;
-    position-try-fallbacks: none;
-    top: 100%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    margin: 4px 0 0 0;
-    transform: translateX(-50%);
-}
-.tape-scroll [data-tooltip].tooltip-right::after {
-    left: auto;
-    right: 0;
-    transform: none;
-}
-/* Right-anchor every tooltip in the LAST cell of a knowledge table, so the bubble
-   cannot leave the scroll box on the inline-end side. Measured: hovering a button
-   in that cell raised the container's scrollWidth from 888 to 897, because
-   `.tape-scroll table td:has([data-tooltip]:hover)` un-clips the cell and the
-   centered bubble then overhangs the right edge. A horizontal scrollbar there
-   shortens clientHeight, which re-runs Scroll-window and re-mounts the rows —
-   hover jitter. One rule rather than a class per button: the last cell is the
-   action cell in all four views, and a button added later cannot forget it.
-   Specificity (0,3,3) beats the rule above at (0,2,1). */
-.tape-table-body td:last-child [data-tooltip]::after {
-    left: auto;
-    right: 0;
-    transform: none;
 }
 
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
-/* Image context menu — right-click on an <img> in the document editor.
-   Owns Copy/Save image plus the pin and occlusion actions
-   (freememo.editor-image-menu). */
-/* The clip menu (editor-actions/install-clip-menu!) shares this chrome. It is a
-   separate menu because it needs the Quill instance and both editors, not the
-   container plus app callbacks the image menu takes. */
-.image-context-menu,
-.clip-context-menu {
+/* The context menu (freememo.context-menu, plans/custom-context-menu.md).
+   One menu on <body>, in the top layer through popover="manual". The UA
+   [popover] rule centres the element with `inset: 0; margin: auto`, so this
+   rule resets both: the script sets `left` and `top`. The z-index matters only
+   where the Popover API is missing. */
+.context-menu {
     position: fixed;
-    z-index: 9999;
+    inset: auto;
+    margin: 0;
+    z-index: 10001;
     background: var(--color-bg-card, #fff);
+    color: var(--color-text-primary, #111827);
     border: 1px solid var(--color-border, #d1d5db);
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
     padding: 4px 0;
     min-width: 200px;
+    max-width: min(360px, calc(100vw - 16px));
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
     font-size: 13px;
     animation: fade-in 0.1s ease;
 }
-.image-context-menu button,
-.clip-context-menu button {
+.context-menu__item {
     display: block;
     width: 100%;
     text-align: left;
@@ -4505,33 +4534,68 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border: none;
     padding: 8px 14px;
     cursor: pointer;
-    color: var(--color-text-primary, #111827);
-    font-size: 13px;
+    color: inherit;
+    font: inherit;
     line-height: 1.4;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.image-context-menu button:hover:not(:disabled),
-.clip-context-menu button:hover:not(:disabled) {
+.context-menu__item:hover:not([aria-disabled="true"]),
+.context-menu__item:focus-visible {
     background: var(--color-bg-hover, #f3f4f6);
+    outline: none;
 }
-.image-context-menu button:disabled,
-.clip-context-menu button:disabled {
+.context-menu__item:focus-visible {
+    box-shadow: inset 2px 0 0 var(--color-primary);
+}
+.context-menu__item[aria-disabled="true"] {
     color: var(--color-text-hint, #9ca3af);
     cursor: not-allowed;
 }
-/* Separates the clipboard/download group from the app actions below it. */
-.image-context-menu__divider {
+.context-menu__item--danger {
+    color: var(--color-danger-text);
+}
+.context-menu__divider {
     height: 1px;
     margin: 4px 0;
     background: var(--color-border, #d1d5db);
 }
-/* Last button is "Cancel" — visually separated */
-.image-context-menu button:last-child,
-.clip-context-menu button:last-child {
-    border-top: 1px solid var(--color-border, #d1d5db);
-    margin-top: 2px;
-    padding-top: 8px;
-    color: var(--color-text-secondary, #6b7280);
+/* The input step (§3.10): one field, or one question, in the same element. */
+.context-menu__form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 8px 12px;
+    min-width: 240px;
+}
+.context-menu__label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-weight: 500;
+}
+.context-menu__input {
+    font: inherit;
+    padding: 5px 8px;
+    border: 1px solid var(--color-border, #d1d5db);
+    border-radius: 4px;
+    background: var(--color-bg-card, #fff);
+    color: inherit;
+}
+.context-menu__input[aria-invalid="true"] {
+    border-color: var(--color-danger);
+}
+.context-menu__prompt {
+    margin: 0;
+    max-width: 300px;
+    white-space: normal;
+    line-height: 1.4;
+}
+.context-menu__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 /* The grip that moves an audio clip, and the line that shows where a drop will
@@ -9273,9 +9337,6 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     border: 1px solid var(--color-warning); background: color-mix(in srgb, var(--color-warning) 10%, transparent);
 }
 .known-ideas__due-text { flex: 1; min-width: 200px; font-size: 13px; }
-.known-ideas__filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
-.known-ideas__search { flex: 1; min-width: 160px; }
-.known-ideas__count { font-size: 12px; color: var(--color-text-secondary); }
 .known-ideas__idea,
 .known-ideas__cards {
     font: inherit; padding: 0; border: 0; background: none; cursor: pointer;
@@ -9321,6 +9382,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .idea-page__sync { font-size: 12px; color: var(--color-text-secondary); }
 .idea-page__sync--pending { color: var(--color-warning-dark); font-weight: 600; }
 .idea-page__actions { display: flex; flex-direction: column; gap: 8px; }
+.idea-page__chats { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.idea-page__chats li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .idea-page__where { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .idea-page__muted { margin: 0; color: var(--color-text-secondary); font-size: 13px; }
 
@@ -9513,6 +9576,11 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .wt-row, .repo-snapshot { cursor: pointer; }
 .wt-row__progress--failed { color: var(--color-danger-text); }
 .commit-card-host { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; }
+/* A Google Doc snapshot (plans/google-docs-pull.md). Its body is rendered
+   Markdown and takes .code-pane-rendered, which owns the scroll, padding and
+   prose styles. */
+.gdoc-snapshot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gdoc-snapshot__body img { max-width: 100%; height: auto; }
 .commit-card { max-width: 820px; display: flex; flex-direction: column; gap: 12px; }
 .commit-card__subject { margin: 0; font-size: 18px; }
 .commit-card__body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px;

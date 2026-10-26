@@ -12,6 +12,7 @@
    imports, so concurrent imports of the same host stay polite."
   (:require
    [clj-http.client :as http]
+   [freememo.desktop-link :as link]
    [clojure.string :as str]
    [freememo.db :as db]
    [freememo.url-validate :as url]
@@ -117,36 +118,38 @@
    present, and Content-Type is image/*. Bounded by per-host + global throttle,
    image-timeout-ms, and max-image-bytes (oversize fetch aborts -> nil)."
   [url]
-  (when (url/safe-url? url)
-    (let [host (try (.getHost (URI. url)) (catch Exception _ nil))]
-      (when (and host (not (str/blank? host)))
-        (with-throttle host
-          (fn []
-            (try
-              (let [resp (http/get url
-                           {:as :byte-array
-                            :throw-exceptions false
-                            :socket-timeout image-timeout-ms
-                            :connection-timeout image-timeout-ms
-                            :max-body max-image-bytes
-                            :redirect-strategy :none
-                            :headers {"User-Agent" user-agent}})
-                    ct (some-> (get-in resp [:headers "content-type"])
-                         (str/split #";") first str/trim)]
-                (when (and (= 200 (:status resp))
-                        (:body resp)
-                        (string? ct)
-                        (str/starts-with? ct "image/"))
-                  {:bytes (:body resp) :mime-type ct}))
-              (catch Exception e
-                (tel/log! {:level :warn :id ::fetch-image-failed
-                           :data {:url url :error (.getMessage e)}}
-                  "Image fetch failed — skipping")
-                nil))))))))
+  (if-let [offline (link/offline-message "Image download")]
+    nil
+    (when (url/safe-url? url)
+      (let [host (try (.getHost (URI. url)) (catch Exception _ nil))]
+        (when (and host (not (str/blank? host)))
+          (with-throttle host
+            (fn []
+              (try
+                (let [resp (http/get url
+                             {:as :byte-array
+                              :throw-exceptions false
+                              :socket-timeout image-timeout-ms
+                              :connection-timeout image-timeout-ms
+                              :max-body max-image-bytes
+                              :redirect-strategy :none
+                              :headers {"User-Agent" user-agent}})
+                      ct (some-> (get-in resp [:headers "content-type"])
+                           (str/split #";") first str/trim)]
+                  (when (and (= 200 (:status resp))
+                          (:body resp)
+                          (string? ct)
+                          (str/starts-with? ct "image/"))
+                    {:bytes (:body resp) :mime-type ct}))
+                (catch Exception e
+                  (tel/log! {:level :warn :id ::fetch-image-failed
+                             :data {:url url :error (.getMessage e)}}
+                    "Image fetch failed — skipping")
+                  nil)))))))))
 
-;; ---------------------------------------------------------------------------
-;; Per-image: fetch/decode, store, charge byte budget
-;; ---------------------------------------------------------------------------
+  ;; ---------------------------------------------------------------------------
+  ;; Per-image: fetch/decode, store, charge byte budget
+  ;; ---------------------------------------------------------------------------
 
 (defn- already-media-url?
   "True when src already points to /api/media/<id>."
@@ -249,7 +252,12 @@
           nothing was lost.)
    Inv  : never throws."
   [{:keys [html user-id]}]
-  (if (str/blank? html)
+  (if (or (str/blank? html)
+        ;; No data: src, so there is nothing to rewrite. Return the caller's
+        ;; bytes untouched: a Jsoup round trip re-serializes the markup, and
+        ;; the card edit path would then see (and version, and re-digest) a
+        ;; change the user never made.
+        (not (re-find #"(?i)src\s*=\s*[\"']?\s*data:" html)))
     {:html html :uploaded 0 :remaining 0 :error nil}
     (try
       (let [doc (Jsoup/parse html)
