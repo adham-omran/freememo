@@ -215,11 +215,9 @@
               #(walk/stringify-keys (import/remap-score-geometry (walk/keywordize-keys %) media-map)))
             r))))))
 
-(defn rewrite-local-references!
+(defn- point-local-references!
   "Desktop: point every local reference to `from` at `to`, in `space` (a
-   table keyword), then delete the `from` row without a grave or a conflict.
-   Pre:  `tx` is an apply transaction, so the rewrites keep each row's usn.
-   Post: no FK column, media URL or score geometry names `from`."
+   table keyword): FK columns, media URLs and score geometry."
   [tx space from to]
   (doseq [[table cols] import/fk-columns
           [col s] cols
@@ -242,9 +240,60 @@
                     rep (if geometry? (str "\"media-id\": " to) replacement)]]
         (jdbc/execute! tx [(format "UPDATE %s SET %s = regexp_replace(%s::text, ?, ?, 'g')::jsonb
                                     WHERE %s::text ~ ?" (name table) (name col) (name col) (name col))
-                           pat rep pat]))))
+                           pat rep pat])))))
+
+(defn rewrite-local-references!
+  "Desktop: point every local reference to `from` at `to`, in `space` (a
+   table keyword), then delete the `from` row without a grave or a conflict.
+   Pre:  `tx` is an apply transaction, so the rewrites keep each row's usn.
+   Post: no FK column, media URL or score geometry names `from`."
+  [tx space from to]
+  (point-local-references! tx space from to)
   (jdbc/execute! tx [(format "UPDATE %s SET usn = 0 WHERE id = ?" (name space)) from])
   (jdbc/execute! tx [(format "DELETE FROM %s WHERE id = ?" (name space)) from]))
+
+(defn- renumber-settings-keys!
+  "15.5.9 — the settings keys and the `last_document` value that name topic
+   `from` name `to` instead."
+  [tx from to]
+  (doseq [prefix import/settings-key-prefixes]
+    (jdbc/execute! tx ["UPDATE settings SET key = ? WHERE key = ?" (str prefix to) (str prefix from)]))
+  (jdbc/execute! tx ["UPDATE settings SET value = ? WHERE key = 'last_document' AND value = ?"
+                     (str to) (str from)]))
+
+(defn renumber-block!
+  "15.5.9 — give every local row with an id in [start, end) a new id from
+   freememo_next_id(), and move every reference with it. The server refused
+   that block, because another account holds an overlapping one.
+   Pre:  `tx` is an apply transaction on the desktop, the offline blocks are
+         closed, so freememo_next_id() answers from a server block, and the
+         database user is a superuser (initdb made it), so replica mode is
+         allowed.
+   Post: no synced row, FK column, media URL, score geometry or per-topic
+         settings key names an id in the range. Every renumbered row is still
+         pending, so the next upload sends it under its new id.
+   Inv:  replica mode turns off FK checks and the sync triggers for this
+         transaction only. A row and its references move in the same
+         transaction, so no reference is left dangling at commit."
+  [tx {:keys [start end]}]
+  (jdbc/execute! tx ["SET LOCAL session_replication_role = replica"])
+  (let [moved (reduce
+                (fn [n table]
+                  (if-not (= ["id"] (:key (table-meta tx table)))
+                    n
+                    (let [ids (mapv :id (jdbc/execute! tx [(format "SELECT id FROM %s WHERE id >= ? AND id < ? ORDER BY id"
+                                                             (name table)) start end]
+                                         {:builder-fn rs/as-unqualified-lower-maps}))]
+                      (doseq [from ids
+                              :let [to (:id (jdbc/execute-one! tx ["SELECT freememo_next_id() AS id"]
+                                              {:builder-fn rs/as-unqualified-lower-maps}))]]
+                        (jdbc/execute! tx [(format "UPDATE %s SET id = ? WHERE id = ?" (name table)) to from])
+                        (point-local-references! tx table from to)
+                        (when (= :topics table) (renumber-settings-keys! tx from to)))
+                      (+ n (count ids)))))
+                0 fmt/synced-tables)]
+    (jdbc/execute! tx ["SET LOCAL session_replication_role = origin"])
+    moved))
 
 ;; ── Upsert ─────────────────────────────────────────────────────────
 

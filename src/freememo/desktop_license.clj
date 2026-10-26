@@ -46,10 +46,14 @@
    :download #{:meta :download :blob :finish :full-download}
    :none #{:meta}})
 
+(def merge-window-days "15.7.2" 7)
+
 (defn allows?
-  "Whether `access` (from `access`) permits `operation`."
+  "Whether `access` (from `access` or `token-access`) permits `operation`.
+   An open merge window permits `:upload` in every state (15.7.1)."
   [access operation]
-  (contains? (operations (:sync access)) operation))
+  (or (contains? (operations (:sync access)) operation)
+      (and (= :upload operation) (boolean (:merge-upload? access)))))
 
 (defn- plus-days ^Instant [^Instant t days]
   (.plus t (Duration/ofDays days)))
@@ -105,6 +109,21 @@
 
        :else
        (assoc base :state :unlicensed :sync :none :ai? false)))))
+
+(defn token-access
+  "`access` for one desktop install, plus its merge window (15.7.2): a local
+   account that signed in may upload its library once, whatever the license.
+   Post: `access`'s answer with `:merge-upload?` true while the token's window
+         is open: opened, not closed, and less than `merge-window-days` old."
+  ([conn user-id token-id client-major] (token-access conn user-id token-id client-major (Instant/now)))
+  ([conn user-id token-id client-major ^Instant now]
+   (let [answer (access conn user-id client-major now)
+         {:keys [merge_opened_at merge_closed_at]}
+         (jdbc/execute-one! conn ["SELECT merge_opened_at, merge_closed_at FROM desktop_tokens WHERE id = ?"
+                                  token-id] {:builder-fn rs/as-unqualified-lower-maps})
+         open? (and merge_opened_at (nil? merge_closed_at)
+                    (.isBefore now (plus-days (->instant merge_opened_at) merge-window-days)))]
+     (cond-> answer open? (assoc :merge-upload? true)))))
 
 (defn reason
   "The refusal code the desktop shows for a state that refuses an operation

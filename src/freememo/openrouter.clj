@@ -31,11 +31,12 @@
    model call in the app reaches OpenRouter through the four requests below.
    Server: openrouter.ai with `api-key` (nil sends no Authorization).
    Desktop: the freememo.net proxy with the desktop token, which bills credits
-   and enforces the model allowlist there (4.10.2). Offline, it throws the
-   message the user sees (4.6, O5)."
+   and enforces the model allowlist there (4.10.2). On a local account, or
+   offline, it throws the message the user sees (15.4.1, 4.6, O5)."
   [api-key path]
   (if (peer/desktop?)
-    (do (link/require-online! "AI")
+    (do (link/require-account! "AI")
+        (link/require-online! "AI")
         [(str (link/origin) "/api/desktop/ai" path)
          {"Authorization" (str "Bearer " (link/token))
           "X-FreeMemo-Major" (str desktop-version/desktop-major)}])
