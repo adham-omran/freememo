@@ -92,33 +92,42 @@
                         VALUES (true, ?, NULL) ON CONFLICT (singleton) DO NOTHING"
                        local-user-id]))
 
+(defn- foreign-keys-to-users
+  "Every column with a foreign key to `users(id)`, as [table column], from
+   the catalog."
+  [conn]
+  (mapv (juxt :tbl :col)
+    (jdbc/execute! conn ["SELECT c.relname AS tbl, a.attname AS col
+                          FROM pg_constraint k
+                          JOIN pg_class c ON c.oid = k.conrelid
+                          JOIN pg_namespace n ON n.oid = c.relnamespace
+                          JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
+                          WHERE n.nspname = 'public' AND k.contype = 'f'
+                            AND k.confrelid = 'users'::regclass"]
+      opts)))
+
 (defn user-columns
   "15.5.4 — every column the re-key changes, as [table column]: each column
    with a foreign key to `users(id)`, and each column named `user_id`, which
    finds the ones with no foreign key, such as `sync_state.user_id`. The list
    comes from the catalog, so a new table needs no entry here."
   [conn]
-  (->> (jdbc/execute! conn ["SELECT c.relname AS tbl, a.attname AS col
-                             FROM pg_constraint k
-                             JOIN pg_class c ON c.oid = k.conrelid
-                             JOIN pg_namespace n ON n.oid = c.relnamespace
-                             JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
-                             WHERE n.nspname = 'public' AND k.contype = 'f'
-                               AND k.confrelid = 'users'::regclass
-                             UNION
-                             SELECT table_name, column_name FROM information_schema.columns
+  (->> (jdbc/execute! conn ["SELECT table_name AS tbl, column_name AS col FROM information_schema.columns
                              WHERE table_schema = 'public' AND column_name = 'user_id'
                                AND table_name IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')"]
          opts)
-    (mapv (juxt :tbl :col))
+    (map (juxt :tbl :col))
+    (into (set (foreign-keys-to-users conn)))
     sort vec))
 
 (defn- references-to-local-user
   "15.5.3 step 3 — the rows that still reference users row 0 through a
-   foreign key, per [table column]. Only the non-zero counts."
+   foreign key, per [table column], with only the non-zero counts. It reads
+   the foreign keys itself, not `user-columns`, so it finds a column that the
+   change missed."
   [conn]
   (into {}
-    (for [[t c] (user-columns conn)
+    (for [[t c] (foreign-keys-to-users conn)
           :let [n (:n (jdbc/execute-one! conn [(format "SELECT count(*) AS n FROM %s WHERE %s = ?" t c)
                                                local-user-id] opts))]
           :when (pos? n)]
