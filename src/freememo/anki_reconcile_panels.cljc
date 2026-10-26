@@ -206,14 +206,19 @@
                                       (if (pos? total)
                                         {:phase "writing" :done 0 :total total}
                                         {:phase "finishing"})))]
+                      ;; The `if` on `verdict` is what makes `(t)` wait for the
+                      ;; server. Read only inside the unmount closure, `verdict`
+                      ;; gated nothing: `(t)` spent the token at once, the frame
+                      ;; unmounted before the closure could be built, and the
+                      ;; phase stayed `:planning` for good (CLAUDE.md, token
+                      ;; lifecycle).
                       (case (reset! (:!plan recon) p)
-                        (do (e/on-unmount
-                              (fn []
-                                (cond
-                                  (not= :continue verdict) (halt! recon verdict)
-                                  (pos? total) (reset! (:!phase recon) :batch)
-                                  :else (reset! (:!phase recon) :finishing))))
-                            (t))))))))))))))
+                        (if (not= :continue verdict)
+                          (do (e/on-unmount #(halt! recon verdict))
+                              (t))
+                          (do (e/on-unmount
+                                #(reset! (:!phase recon) (if (pos? total) :batch :finishing)))
+                              (t)))))))))))))))
 
 (e/defn ReconcileBatch
   "Phase 3, once per batch — build, write, read back, record, report.
