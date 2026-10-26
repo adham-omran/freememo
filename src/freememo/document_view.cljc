@@ -8,6 +8,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.desktop-section :as desktop-section]
    [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
@@ -292,8 +293,10 @@
         ;; MIDDLE: content column.
         (ContentColumn)
 
-        ;; RIGHT: collapsible assistant panel.
-        (when show-assistant?
+        ;; RIGHT: collapsible assistant panel. A desktop local account has no
+        ;; assistant (15.4.4), so only a poem's الشرح keeps the panel there.
+        (when (and show-assistant?
+                (or dctx/is-poem? (e/server (desktop-section/account-ai?* user-id))))
           (RightSidePanel page-topic-id root-topic-id user-id dctx/is-poem?))))))
 
 

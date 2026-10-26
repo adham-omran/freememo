@@ -3286,6 +3286,18 @@
       block_end BIGINT NOT NULL,
       next_id BIGINT NOT NULL
     )"])
+  ;; 15.3.3 — 'offline': a local account picked the block itself, and the
+  ;; server learns of it at sign-in (15.5.7). 'server': the server cut it.
+  (jdbc/execute! ds ["ALTER TABLE local_id_blocks ADD COLUMN IF NOT EXISTS
+                      origin TEXT NOT NULL DEFAULT 'server' CHECK (origin IN ('server', 'offline'))"])
+  ;; 15.5.3 — set by the re-key of a local account, cleared when its merge
+  ;; ends (15.6.1, 15.7.3).
+  (jdbc/execute! ds ["ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS
+                      merge_pending BOOLEAN NOT NULL DEFAULT false"])
+  ;; 15.7.2 — the token's merge window: it may upload with no license from
+  ;; merge_opened_at until merge_closed_at, or 7 days.
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS merge_opened_at TIMESTAMPTZ"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS merge_closed_at TIMESTAMPTZ"])
 
   ;; Per account on the server: the sync epoch, which a full upload replaces
   ;; (2.8), and the trial start, set at the first desktop sign-in (13.5).

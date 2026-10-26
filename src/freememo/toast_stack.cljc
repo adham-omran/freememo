@@ -47,6 +47,9 @@
   #?(:clj (toasts/dismiss! user-id toast-id)
      :cljs nil))
 
+#?(:cljs (defn open-href! [href] (set! (.. js/window -location -href) href))
+   :clj (defn open-href! [_href] nil))
+
 (defn undo-from-toast!* [user-id undo-id]
   #?(:clj (do (undo/undo-entry! user-id undo-id) nil)
      :cljs nil))
@@ -91,7 +94,7 @@
         ;; Action buttons + close button row
         (dom/div
           (dom/props {:class "toast-actions"})
-          (e/for [{:keys [label nav undo-id]} (e/diff-by :label actions)]
+          (e/for [{:keys [label nav undo-id href]} (e/diff-by :label actions)]
             (dom/button
               (dom/props {:class "toast-action-btn" :type "button"})
               (dom/text label)
@@ -108,6 +111,9 @@
                             (if (vector? nav)
                               (apply navigate! nav)
                               (navigate! nav)))
+                          ;; A page navigation, which the desktop app's window
+                          ;; stops and handles (toasts/error-actions).
+                          (when href (open-href! href))
                           (t))))))))
 
           ;; Close × — always present

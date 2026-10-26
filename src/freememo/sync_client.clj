@@ -17,7 +17,11 @@
    apply is idempotent.
 
    Syncs are single-flight. They start at launch, every five minutes, when the
-   connection returns, before quit, and from Sync now (2.11)."
+   connection returns, before quit, and from Sync now (2.11).
+
+   A local account (§15) syncs nothing. It picks its own id blocks. After its
+   sign-in, the first syncs register those blocks and merge the library into
+   the account (15.5.7, 15.6, 15.7)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [cheshire.core :as json]
@@ -56,22 +60,25 @@
    `:library-ready` is true once a download has committed, the first one
    included. Electron keeps the app closed until then, so nobody works in an
    empty library that is about to be replaced.
-   `:progress` holds `:downloaded` rows and `:downloaded-bytes`, and during a
-   full download the totals `:total-rows` and `:total-bytes`.
+   `:progress` holds `:downloaded` rows and `:downloaded-bytes`, `:uploaded`
+   rows, and during a full download or a merge the totals `:total-rows` and
+   `:total-bytes`. A local account reports the state `:local` (15.2.2).
    The license cache is what an offline launch reads; the server stays the
    authority for every operation."
   []
   (let [row (jdbc/execute-one! db/ds ["SELECT checkpoint, last_sync_at, last_error, license,
-                                              full_sync_required FROM sync_state"] opts)]
+                                              full_sync_required, merge_pending FROM sync_state"] opts)]
     (merge {:library-ready (pos? (or (:checkpoint row) 0))
             :last-sync-at (some-> (:last_sync_at row) str)
             :error (:last_error row)
             :full-sync-required (:full_sync_required row)
+            :merge-pending (boolean (:merge_pending row))
             :license (some-> (:license row) str json/parse-string)
             :online (link/online?)
             :pending-conflicts (:n (jdbc/execute-one! db/ds ["SELECT count(*) AS n FROM sync_conflicts
                                                               WHERE resolved_at IS NULL"] opts))}
-      (select-keys @!status [:state :progress]))))
+      (select-keys @!status [:state :progress])
+      (when (link/local-account?) {:state :local}))))
 
 (declare local-user-id)
 
@@ -159,15 +166,26 @@
 ;; ── 0. Id blocks (1.2.5) ───────────────────────────────────────────
 
 (defn ensure-id-blocks!
-  "Ask for a block when less than 20 % of one remains. Offline, the device
-   keeps minting until the block runs out (1.2.4)."
-  []
-  (let [left (:n (jdbc/execute-one! db/ds ["SELECT coalesce(sum(block_end - next_id), 0) AS n
-                                            FROM local_id_blocks"] opts))]
-    (when (< left (quot schema/block-size 5))
-      (let [{:strs [start end]} (ok-body! (call! :post "/api/desktop/id-block" :json-body {}) :id-block)]
-        (jdbc/execute! db/ds ["INSERT INTO local_id_blocks (block_start, block_end, next_id)
-                               VALUES (?, ?, ?) ON CONFLICT (block_start) DO NOTHING" start end start])))))
+  "Add a block while fewer than `needed` ids are left, and at least 20 % of a
+   block. A signed-in desktop asks the server, and offline it keeps minting
+   until the block runs out (1.2.4). A local account picks a random offline
+   block itself (15.3.2).
+   Post: at least `needed` unspent ids, or a thrown ::offline."
+  ([] (ensure-id-blocks! 0))
+  ([needed]
+   (loop []
+     (let [left (:n (jdbc/execute-one! db/ds ["SELECT coalesce(sum(block_end - next_id), 0) AS n
+                                               FROM local_id_blocks"] opts))]
+       (when (< left (max needed (quot schema/block-size 5)))
+         (let [[{:keys [start end]} origin]
+               (if (link/local-account?)
+                 [(schema/random-offline-block) "offline"]
+                 (let [{:strs [start end]} (ok-body! (call! :post "/api/desktop/id-block" :json-body {}) :id-block)]
+                   [{:start start :end end} "server"]))]
+           (jdbc/execute! db/ds ["INSERT INTO local_id_blocks (block_start, block_end, next_id, origin)
+                                  VALUES (?, ?, ?, ?) ON CONFLICT (block_start) DO NOTHING"
+                                 start end start origin])
+           (recur)))))))
 
 ;; ── Local reads ────────────────────────────────────────────────────
 
@@ -524,6 +542,78 @@
       (record! {:checkpoint to :scm scm :full_sync_required false :last_error nil
                 :last_sync_at (java.sql.Timestamp/from (java.time.Instant/now))}))))
 
+;; ── Merge of a local account (15.5.7, 15.6, 15.7) ─────────────────
+
+(defn- pending-count []
+  (reduce + (for [table fmt/synced-tables]
+              (:n (jdbc/execute-one! db/ds [(str "SELECT count(*) AS n FROM " (name table) " WHERE usn = -1")] opts)))))
+
+(defn- register-offline-blocks!
+  "15.5.7 — tell freememo.net which offline blocks this library used, and
+   renumber the rows of each block it refused (15.5.9).
+   Pre:  `merge_pending` is set, so the re-key closed every offline block.
+   Post: every offline block left in `local_id_blocks` is the account's on the
+         server. Safe to rerun: the server accepts a block it already holds."
+  []
+  (let [blocks (jdbc/execute! db/ds ["SELECT block_start, block_end FROM local_id_blocks
+                                      WHERE origin = 'offline' ORDER BY block_start"] opts)]
+    (when (seq blocks)
+      (let [{:strs [refused]} (ok-body! (call! :post "/api/desktop/offline-blocks"
+                                          :json-body {:blocks (mapv (fn [b] {:start (:block_start b) :end (:block_end b)})
+                                                                blocks)})
+                                :offline-blocks)]
+        (doseq [{:strs [start end]} refused]
+          (let [used (reduce + (for [table fmt/synced-tables
+                                     :when (= ["id"] (:key (apply/table-meta db/ds table)))]
+                                 (:n (jdbc/execute-one! db/ds [(format "SELECT count(*) AS n FROM %s WHERE id >= ? AND id < ?"
+                                                                 (name table)) start end] opts))))]
+            (ensure-id-blocks! used)
+            (let [moved (apply/with-apply-tx db/ds
+                          (fn [tx]
+                            (let [n (apply/renumber-block! tx {:start start :end end})]
+                              (jdbc/execute! tx ["DELETE FROM local_id_blocks WHERE block_start = ?" start])
+                              n)))]
+              (tel/log! {:level :warn :id ::offline-block-refused :data {:start start :rows moved}}
+                "freememo.net refused an offline id block; its rows took new ids"))))))))
+
+(defn- close-merge! []
+  (ok-body! (call! :post "/api/desktop/merge-done" :json-body {}) :merge-done)
+  (record! {:merge_pending false}))
+
+(declare incremental-sync!)
+
+(defn- merge-sync!
+  "15.6.1 — the first sync of a re-keyed local account, with a license that
+   allows sync: adopt the account's epoch with no wipe, then sync from 0, so
+   the local rows go up and the account's rows come down. Both keep their ids.
+   Post: `merge_pending` is clear, and the token's merge window is closed."
+  [user-id body]
+  (let [{:strs [rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
+                                         :json-body {:major desktop-version/desktop-major})
+                               :merge-totals)]
+    ;; 15.6.5 — that route only reports the window and the totals. It changes
+    ;; nothing on the server, and this sync wipes nothing here.
+    (swap! !status assoc :progress (cond-> {}
+                                     (number? rows) (assoc :total-rows rows)
+                                     (number? bytes) (assoc :total-bytes bytes))))
+  (record! {:scm (get body "scm") :checkpoint 0 :full_sync_required false})
+  (incremental-sync! user-id body)
+  (close-merge!))
+
+(defn- merge-upload-only!
+  "15.7.3 — the merge of an account that no license lets sync: upload only,
+   inside the token's merge window. No graves and no download, because both
+   apply server data, and no sanity check, which needs a download.
+   Post: once no pending row is left, the window is closed and `merge_pending`
+         is clear. The epoch is recorded, so a later license makes the next
+         sync an incremental one from checkpoint 0 (15.7.4), not a full-sync
+         choice."
+  [user-id body]
+  (record! {:scm (get body "scm") :full_sync_required false})
+  (upload-step! user-id 0)
+  (when (zero? (pending-count))
+    (close-merge!)))
+
 ;; ── One sync ───────────────────────────────────────────────────────
 
 (defn- incremental-sync!
@@ -551,8 +641,10 @@
 
 (defn- run-sync! []
   (let [user-id (local-user-id)
-        state (sync-row)]
+        state (sync-row)
+        merging? (:merge_pending state)]
     (ensure-id-blocks!)
+    (when merging? (register-offline-blocks!))
     (let [{:keys [status body]} (call! :post "/api/sync/meta"
                                   :json-body {:protocol desktop-version/sync-protocol
                                               :major desktop-version/desktop-major})]
@@ -562,6 +654,20 @@
               (record! {:license (json/generate-string license)})
               (swap! !status assoc :license license)
               (cond
+                (and merging? (= "full" (get body "sync")))
+                (do (merge-sync! user-id body)
+                    (record! {:last_sync_at (java.sql.Timestamp/from (java.time.Instant/now))
+                              :last_error nil})
+                    (set-state! :idle))
+
+                (and merging? (get license "merge-upload?"))
+                (do (merge-upload-only! user-id body)
+                    (set-state! :license-refused))
+
+                ;; 15.7.5 — a closed window: the rows wait for a license.
+                merging?
+                (set-state! :license-refused)
+
                 (= "none" (get body "sync"))
                 (set-state! :license-refused)
 
@@ -608,7 +714,8 @@
    Post: returns the status after the sync. Errors are recorded and shown,
          never thrown, because the callers are a timer, Electron and a button."
   []
-  (when (compare-and-set! !running false true)
+  ;; 15.2.2 — a local account has nothing to sync with.
+  (when (and (not (link/local-account?)) (compare-and-set! !running false true))
     (try
       (set-state! :syncing :progress {})
       (locking !lock (run-sync!))
@@ -660,6 +767,23 @@
       (let [run (fn [] (try (sync-now!) (catch Throwable e (tel/error! {:id ::scheduled-sync-failed} e))))]
         (.scheduleWithFixedDelay ex ^Runnable run 2 (* 60 interval-minutes) TimeUnit/SECONDS)
         (link/on-online! #(.execute ex ^Runnable run))))))
+
+(defn start-local-block-timer!
+  "15.2.2, 15.3.2 — a local account syncs nothing, so no sync scheduler runs.
+   This checks its offline id blocks at boot, before the first request, and
+   once a minute after, so an import never finds them spent.
+   Post: at least 20 % of a block is unspent when this returns."
+  []
+  (ensure-id-blocks!)
+  (when-not @!scheduler
+    (let [^ScheduledExecutorService ex (Executors/newSingleThreadScheduledExecutor
+                                         (reify ThreadFactory
+                                           (newThread [_ r] (doto (Thread. r "freememo-id-blocks") (.setDaemon true)))))]
+      (reset! !scheduler ex)
+      (.scheduleWithFixedDelay ex
+        ^Runnable #(try (ensure-id-blocks!)
+                        (catch Exception e (tel/error! {:id ::offline-block-failed} e)))
+        60 60 TimeUnit/SECONDS))))
 
 ;; ── Conflict report (§5) ───────────────────────────────────────────
 

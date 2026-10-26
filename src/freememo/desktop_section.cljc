@@ -20,6 +20,7 @@
    [freememo.typeahead :as typeahead]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
+   #?(:clj [freememo.desktop-link :as link])
    #?(:clj [freememo.desktop-license :as license])
    #?(:clj [freememo.desktop-version :as desktop-version])
    #?(:clj [freememo.db :as db])
@@ -38,6 +39,22 @@
 
 (defn desktop?* [_refresh]
   #?(:clj (peer/desktop?) :cljs false))
+
+(defn account-ai?*
+  "15.4.4 — false on a desktop local account only: it has no account to run
+   AI features. The assistant panel and the transcription option read this,
+   not `llm-enabled?`, so the web app does not change. `_user-id` keys the
+   read: a zero-argument server call diverges between the two compilers."
+  [_user-id]
+  #?(:clj (not (link/local-account?)) :cljs true))
+
+(defn local-account?* [_refresh]
+  #?(:clj (link/local-account?) :cljs false))
+
+(def sign-in-path
+  "15.5.1 — the path the desktop app's window stops, to open the browser
+   sign-in. The same value as `freememo.toasts/sign-in-path`."
+  "/desktop/sign-in")
 
 (defn sync-status* [_refresh]
   #?(:clj (sync-client/status) :cljs nil))
@@ -129,15 +146,19 @@
   (case state
     :syncing (let [{:keys [downloaded downloaded-bytes total-rows total-bytes]} progress
                    mb #(str (quot (or % 0) 1048576) " MB")]
-               (if total-rows
+               (cond
+                 total-rows
                  (str "Downloading your library: " (or downloaded 0) " of " total-rows " items, "
                    (mb downloaded-bytes) " of " (mb total-bytes) ".")
-                 "Syncing now."))
+                 (pos? (or (:uploaded progress) 0))
+                 (str "Uploading your library: " (:uploaded progress) " items so far.")
+                 :else "Syncing now."))
     :offline "Offline. FreeMemo syncs when the connection returns."
     :update-required "This version can no longer sync. Download the new version from freememo.net."
     :license-refused "Sync is off for this account."
     :full-sync-choice "This device and freememo.net need a full sync. Choose which copy to keep."
     :signed-out "This device was signed out. Quit FreeMemo and open it again to sign in."
+    :local "Local account. Nothing syncs."
     :error (str "The last sync failed: " error)
     (if last-sync-at
       (str "Synced at " (subs (str last-sync-at) 0 16) ".")
@@ -273,8 +294,27 @@
                         (when t
                           (case (e/server (e/Offload #(revoke-device!* user-id (:id d)))) (t)))))))))))))))
 
+(e/defn LocalAccountBody
+  "15.4.5 — a local account: what it is, and the way to an account."
+  []
+  (e/client
+    (dom/section
+      (dom/props {:class "settings-group"})
+      (group/GroupHeading "Local account")
+      (dom/p (dom/props {:class "hint"})
+        (dom/text "Your library is on this computer only. Sign in to a FreeMemo account to sync it with freememo.net and to use AI features. Your library moves into the account, and nothing here is lost."))
+      (dom/button
+        (dom/props {:type "button" :class "btn btn-primary"})
+        (dom/text "Sign in to sync")
+        (let [[t _] (e/Token (dom/On "click" identity nil))]
+          (when t
+            (case (navigate-external! sign-in-path) (t))))))))
+
 (e/defn DesktopAppSection [user-id base-url client-country]
   (e/client
-    (if (e/server (desktop?* (e/watch (us/get-atom user-id :desktop-mutations))))
-      (DesktopSyncBody user-id)
-      (LicenseBody user-id base-url client-country))))
+    (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))]
+      (if (e/server (desktop?* refresh))
+        (if (e/server (local-account?* refresh))
+          (LocalAccountBody)
+          (DesktopSyncBody user-id))
+        (LicenseBody user-id base-url client-country)))))

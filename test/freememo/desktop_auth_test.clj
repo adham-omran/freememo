@@ -7,7 +7,8 @@
             [next.jdbc.result-set :as rs]
             [freememo.db :as db]
             [freememo.desktop-auth :as auth]
-            [freememo.desktop-link :as link])
+            [freememo.desktop-link :as link]
+            [freememo.peer :as peer])
   (:import [java.security MessageDigest]
            [java.util Base64]))
 
@@ -73,12 +74,24 @@
     (is (= "/" (auth/return-path {:desktop-return "//evil.example"})) "no open redirect")))
 
 (deftest offline-features-get-a-message-only-on-a-desktop
-  (is (nil? (link/offline-message "X")) "the server peer is never offline")
-  (link/configure! {:origin "https://freememo.net" :token "t" :user-id 1})
   (try
     (link/set-online! false)
-    (is (= "X needs an internet connection. FreeMemo is offline." (link/offline-message "X")))
-    (is (thrown? clojure.lang.ExceptionInfo (link/require-online! "X")))
+    (is (nil? (link/offline-message "X")) "the server peer is never offline")
+    ;; The guard reads the peer, so a desktop is stubbed here (15.2.3).
+    (with-redefs [peer/desktop? (constantly true)]
+      (testing "a signed-in desktop"
+        (link/configure! {:origin "https://freememo.net" :token "t" :user-id 1})
+        (is (= "X needs an internet connection. FreeMemo is offline." (link/offline-message "X")))
+        (is (thrown? clojure.lang.ExceptionInfo (link/require-online! "X"))))
+      (testing "15.2.3: a local account has no origin and is still offline"
+        (link/configure! {:origin nil :token nil :user-id 0})
+        (is (= "X needs an internet connection. FreeMemo is offline." (link/offline-message "X"))))
+      (testing "15.4.1: a local account is refused what needs an account"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Sign in to FreeMemo"
+              (link/require-account! "AI"))))
+      (testing "a signed-in desktop is not"
+        (link/configure! {:origin "https://freememo.net" :token "t" :user-id 1})
+        (is (nil? (link/require-account! "AI")))))
     (finally
       (link/set-online! true)
       (link/configure! {:origin nil :token nil :user-id nil}))))

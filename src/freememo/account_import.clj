@@ -313,8 +313,10 @@
    collide, so they still arrive."
   {:settings "ON CONFLICT DO NOTHING"})
 
-(def ^:private settings-key-prefixes
+(def settings-key-prefixes
   "Settings key prefixes whose suffix is a topic id (§5.4.8, settings.clj).
+   `sync-apply/renumber-block!` reads it too (plans/electron-local-db-sync.md
+   15.5.9).
    The panel keys use `pane-scope-id`. It resolves to the document root topic
    id, so one translation serves all pages."
   ["last_page_" "pdf_layout_" "pdf_fit_" "pdf_focus_" "focus_reader_" "extract_style_"

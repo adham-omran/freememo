@@ -88,7 +88,7 @@
           major (or (some-> (get body "major") long)
                   (some-> (get-in request [:headers "x-freememo-major"]) parse-long)
                   desktop-version/desktop-major)
-          access (license/access db/ds (:user-id holder) major)]
+          access (license/token-access db/ds (:user-id holder) (:token-id holder) major)]
       (if (license/allows? access operation)
         (f holder body access)
         (json-response 403 {:error (license/reason access) :license access})))
