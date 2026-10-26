@@ -9,6 +9,119 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20261026-7667a74
+
+### For users
+
+- **All five Knowledge views can select rows and act on many at once.** Before,
+  only Facts could. Documents, Entities, Questions and Known ideas repeated each
+  action as a button on every row.
+  - **Tick rows, or tick the header to select every row the filter matches.**
+    A bar over the header row shows the actions for the selection. It also says
+    when the current filter hides some selected rows, because a filter change
+    keeps the selection.
+  - **Bulk actions per view.** Documents: Distill, and Generate questions.
+    Entities: Merge. Questions: Delete, Flag and Suspend. Facts: Restore
+    duplicate facts. Known ideas: Check me on several ideas together.
+  - **You can undo a bulk question delete in one step.**
+  - **A bulk Distill or question run checks your credits once**, before any run
+    starts. An empty balance gives one refusal, not one failure per document.
+  - **Column headers sort**, over the whole result and not only the rows you
+    see.
+  - **Each row has one main action and one `⋯` menu.** The menu opens outside
+    the table, so a row cannot clip it.
+  - **A filter row shows each active filter as a label you can remove**, with
+    `Clear filters`. The search, the filters and the sort stay in the address,
+    so a link or a reload keeps them.
+- **An idea's page shows the conversation that led to it.** It shows the first
+  turn, the number of turns, and an `Open` for each chat, because the
+  conversation can span chats. Before, the page showed only the tutor's verdict,
+  and an idea confirmed before 2026-10-14 showed no answer at all.
+- **The Best level now uses GPT-6.1 Sol**, for cards, the assistant, quiz
+  grading and the knowledge graph. Its list price is the same as GPT-6 Sol, and
+  cached input costs half as much. Page scanning keeps GPT-6 Sol.
+  - **DeepSeek V4.1 Flash replaces DeepSeek V4 Flash.** It is not cheaper.
+  - **A saved choice of GPT-6 Sol or DeepSeek V4 Flash moves to its successor**
+    with no action from you.
+- **Every tooltip looks the same and shows at once.** About 80 controls used the
+  browser's own tooltip, which waits about half a second. A tooltip in a table
+  row no longer covers its own button or gets cut off by the table. A disabled
+  button shows its tooltip too.
+- **The desktop app can start without an account.** It is still in testing.
+  On the first launch, `Use offline` gives you a local library with no sign-in
+  and no sync. AI features are hidden until you sign in.
+  - **Sign in later to move the local library into your account.** Your
+    documents keep their links and their Anki links. The launch window says when
+    the move has not finished, and you can continue with the library on your
+    computer.
+  - **Without a license, the library can upload once**, within 7 days of the
+    sign-in.
+- Bug fix: **Known ideas overflowed its page**, so its `More` button was cut off.
+
+### Known issues
+
+- **Card quality on GPT-6.1 Sol and DeepSeek V4.1 Flash is not measured.** No
+  live call to either model was made before release.
+- **For ideas from before this update, FreeMemo found the conversation by
+  matching times.** The app did not record the link then, so it can be wrong.
+  The page says when a link was found this way.
+- **Bulk Distill and bulk question generation spend credits for each selected
+  document.**
+- **Touch devices show no tooltips**, as before. Help explains the occlusion and
+  score modes.
+- **The offline desktop account has not run in the app yet.** Moving a local
+  library into an account is tested only in code, not on a real computer.
+
+### Technical
+
+- **`freememo.knowledge-bulk` holds the bulk operations.** Each one is one
+  transaction with one audit line, one bump and one toast. A bulk question
+  delete writes one undo entry.
+- **`knowledge_page.cljc` is split into one namespace per view**, for the 64 KB
+  method limit. `freememo.knowledge-scope` holds the shared scope, and
+  `freememo.row-menu` places the row menu with Floating UI.
+- **`TapeTable` gains a select column, sortable headers and a `HeadOverlay`
+  slot** in `HeadedTapeTable`. The tables outside Knowledge pass nil and do not
+  change.
+- **The sort is one `[col dir]` atom.** Two atoms reached the URL writer in
+  separate propagations, and a half-written pair crashed the client.
+- **New columns:** `assistant_runs.question_map_id`,
+  `question_roots.created_run_id` and `created_run_inferred`, and
+  `known_marks.proof_run_inferred`. The one-time migration
+  `2026-10-25-idea-trails` infers the links for older rows through `run-once!`.
+- **Account import loads `question_maps` before `assistant_runs`**, so a run can
+  name its map.
+- **`freememo.tooltip-layer` paints one `popover="manual"` bubble in the top
+  layer**, placed by Floating UI. It finds the trigger by hit-testing the
+  pointer and follows the trigger's text while open. The CSS `::after` bubbles
+  and their container overrides are gone. Every site calls `tooltip/Tooltip!`
+  or `tooltip/set-tooltip!`, and a trigger with no visible text passes
+  `:aria? true` to keep its accessible name. `tooltip_construct_test` fails on a
+  direct `data-tooltip` or `title` write.
+- **Card model registry.** `gpt-6-sol` and `deepseek-v4-flash` move to
+  `retired` and point to `gpt-6.1-sol` and `deepseek-v4.1-flash`. The GPT-5.x
+  entries now point straight to `gpt-6.1-sol`, because `effective-id` follows
+  one hop only. The default id and the prod pin use `gpt-6.1-sol`. The OCR
+  registry keeps GPT-6 Sol.
+- **Desktop local account** (`plans/electron-local-db-sync.md` §15). It runs as
+  user id 0 with no token and no sync. It picks its own id blocks at random in
+  [2^50, 2^53), the range where every id is exact as a JavaScript number, and
+  the server cuts its blocks below 2^50. Sign-in restarts the JVM with
+  `link_local`. One transaction moves every `user_id` column to the account,
+  and the guard before the delete of user row 0 reads the foreign keys to
+  `users(id)` from the catalog. The first sync registers the offline blocks,
+  renumbers any block the server refuses, and merges through the normal sync.
+- **Desktop schema and routes.** New columns: `local_id_blocks.origin`,
+  `sync_state.merge_pending`, and `desktop_tokens.merge_opened_at` and
+  `merge_closed_at`. New routes: `POST /api/desktop/offline-blocks` and
+  `POST /api/desktop/merge-done`.
+- **Desktop tests.** `desktop_offline_blocks_test` covers the server peer.
+  `desktop_local_account_test` covers the desktop peer and runs only against a
+  database whose name starts with `fm_desktop`, because it deletes every
+  account in it.
+- `playwright/probe-curation-tables.mjs` drives the Knowledge tables, and
+  `playwright/probe-tooltips.mjs` drives the tooltip layer.
+
 ## v20261024-b17d279
 
 ### For users
