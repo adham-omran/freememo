@@ -6,6 +6,7 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.commands :as commands]
+   [freememo.anki-digest :as digest]
    [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
@@ -417,6 +418,47 @@
                   cards))))
     bundles))
 
+(defn- load-write-cards
+  "The rows a write bundle carries, with every attachment `build-note` reads.
+   Pre : `card-ids` belong to `user-id` (enforced by the lookup)."
+  [user-id card-ids]
+  ;; Page locator resolved ONCE for the whole selection — one statement however
+  ;; many roots the selection spans.
+  (attach-card-pdf-page
+    (attach-score-groups
+      (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids)))))
+
+(defn- root-write-settings
+  "One root's push settings: the per-root preset wins over the user-level
+   `global` prefs."
+  [user-id global root-id]
+  (let [preset (or (load-item-preset user-id root-id) {})
+        pick (fn [k] (let [v (get preset k)] (if (some? v) v (get global k))))
+        header (settings/resolve-anki-header user-id root-id)
+        tags (settings/resolve-anki-tags user-id root-id)
+        root-topic (db/get-topic-for-user user-id root-id)
+        source (when-let [sid (:topics/source_id root-topic)]
+                 (db/get-source sid))
+        bib-html (helpers/format-bibliography-html (:sources/csl source))]
+    {:deck (pick :deck)
+     :allow-dupes (boolean (pick :allow-dupes))
+     :use-header (:use-header header)
+     :header-text (:header-text header)
+     :tags (if (:use-tags tags) (:tags tags) [])
+     :bibliography-html bib-html
+     :topic-title (:topics/title root-topic)
+     :topic-kind (:topics/kind root-topic)
+     :root-topic-id root-id
+     :app-base-url settings/app-base-url}))
+
+(defn local-digests-now
+  "Local digests for `card-ids` as the rows stand now, in one query.
+   Post: {card-id hex}; a card that is gone has no entry."
+  [user-id card-ids]
+  (into {}
+    (map (juxt :flashcards/id digest/local-digest))
+    (db/get-cards-for-reconcile user-id (vec card-ids))))
+
 (defn anki-write-bundles
   "Group `card-ids` by root topic and resolve each root's push settings — the
    per-root preset wins over user-level prefs, mirroring what the sync modal
@@ -424,9 +466,12 @@
 
    pre:  card-ids — a reconcile's `:create` and `:push` decisions together;
          ownership enforced in the lookup.
-   post: {:success true :bundles [{:root-topic-id N :cards [...] :settings {…}}]}
+   post: {:success true
+          :bundles [{:root-topic-id N :cards [...] :settings {…}}]
+          :local-digests {card-id hex}}
          Every card given is in a bundle. Settings carry everything BOTH
-         `build-note` and `build-update-fields` read.
+         `build-note` and `build-update-fields` read. `:local-digests` is what a
+         baseline for each card must record — see the read order below.
 
    Two things this used to get wrong, when it served the bulk Push-updates
    button and was named `get-bulk-push-bundles`:
@@ -452,36 +497,21 @@
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
-          rows (attach-score-groups
-                 (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids)))
-          ;; Page locator resolved ONCE for the whole selection, before the
-          ;; group-by — one statement however many roots the selection spans.
-          with-page (attach-card-pdf-page rows)
-          by-root (group-by :flashcards/root_topic_id with-page)
-          bundles
-          (mapv
-            (fn [[root-id cards]]
-              (let [preset (or (load-item-preset user-id root-id) {})
-                    pick (fn [k] (let [v (get preset k)] (if (some? v) v (get global k))))
-                    header (settings/resolve-anki-header user-id root-id)
-                    tags (settings/resolve-anki-tags user-id root-id)
-                    root-topic (db/get-topic-for-user user-id root-id)
-                    source (when-let [sid (:topics/source_id root-topic)]
-                             (db/get-source sid))
-                    bib-html (helpers/format-bibliography-html (:sources/csl source))]
-                {:root-topic-id root-id
-                 :cards (attach-card-bibliography (vec cards))
-                 :settings {:deck (pick :deck)
-                            :allow-dupes (boolean (pick :allow-dupes))
-                            :use-header (:use-header header)
-                            :header-text (:header-text header)
-                            :tags (if (:use-tags tags) (:tags tags) [])
-                            :bibliography-html bib-html
-                            :topic-title (:topics/title root-topic)
-                            :topic-kind (:topics/kind root-topic)
-                            :root-topic-id root-id
-                            :app-base-url settings/app-base-url}}))
-            by-root)
+          !settings (atom {})
+          ;; Memoized per call: a root's settings are read once however many of
+          ;; the two card reads below name it.
+          settings-for (fn [root-id]
+                         (or (get @!settings root-id)
+                           (get (swap! !settings assoc root-id
+                                  (root-write-settings user-id global root-id))
+                             root-id)))
+          bundles-of (fn [rows]
+                       (mapv (fn [[root-id cards]]
+                               {:root-topic-id root-id
+                                :cards (attach-card-bibliography (vec cards))
+                                :settings (settings-for root-id)})
+                         (group-by :flashcards/root_topic_id rows)))
+          first-bundles (bundles-of (load-write-cards user-id card-ids))
           ;; A create needs a deck; an update does not. Reported once, before
           ;; anything is sent, because the alternative is one AnkiConnect refusal
           ;; per card and a toast that names a count instead of a cause. The
@@ -490,7 +520,7 @@
           deckless (filterv (fn [b]
                               (and (str/blank? (get-in b [:settings :deck]))
                                 (some #(nil? (:flashcards/anki_note_id %)) (:cards b))))
-                     bundles)]
+                     first-bundles)]
       (if (seq deckless)
         {:success false
          :error (str "No Anki deck is set"
@@ -522,8 +552,17 @@
           ;; what this reactive call site needs: `anki-reconcile-panels` runs it
           ;; inside `e/Offload`, whose latest-wins cancellation can abandon a
           ;; half-finished attempt when the plan changes.
-          (db/refresh-anki-settings-snapshot! user-id (snapshot-entries bundles))
-          {:success true :bundles bundles})))
+          (db/refresh-anki-settings-snapshot! user-id (snapshot-entries first-bundles))
+          ;; READ ORDER IS THE GUARANTEE. The local digests are read BEFORE the
+          ;; cards that are sent, so an edit landing between the two reads makes
+          ;; the sent content newer than the recorded baseline — the card reads
+          ;; unsynced and the next run pushes it again. The reverse order (or a
+          ;; digest read at record time, after the Anki round trip) records the
+          ;; edit as synced while Anki holds the older text.
+          (let [local-digests (local-digests-now user-id card-ids)]
+            {:success true
+             :bundles (bundles-of (load-write-cards user-id card-ids))
+             :local-digests local-digests}))))
     (catch Exception e
       (tel/error! {:id ::anki-write-bundles} e)
       {:success false :error (.getMessage e)})))

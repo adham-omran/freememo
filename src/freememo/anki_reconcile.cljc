@@ -319,3 +319,34 @@
                     :when (pos? n)]
                 (str n " " label))]
     (if (seq parts) (str/join ", " parts) "already in sync")))
+
+;; ---------------------------------------------------------------------------
+;; Batches (plans/anki-sync-lease-batches.md §4.3)
+;; ---------------------------------------------------------------------------
+
+(def batch-size
+  "Cards per batch. Each batch is written, read back and recorded before the
+   next starts, so a run that stops keeps every batch it finished — and the
+   Activity row moves once per batch."
+  100)
+
+(defn batch-count
+  "How many batches `card-ids` makes. Post: 0 for no cards."
+  [card-ids]
+  (quot (+ (count card-ids) (dec batch-size)) batch-size))
+
+(defn batch-at
+  "The `i`th batch of `card-ids`, in plan order.
+   Pre : 0 <= i < (batch-count card-ids). Post: a vector of at most `batch-size`."
+  [card-ids i]
+  (let [v (vec card-ids)
+        from (* i batch-size)]
+    (subvec v from (min (count v) (+ from batch-size)))))
+
+(defn batch-progress
+  "Progress after batch `i` is recorded: `{:phase \"writing\" :done :total}`.
+   `:done` counts the cards the run has handed to Anki so far, not the ones Anki
+   accepted — a refusal is reported in the run's closing toast."
+  [card-ids i]
+  (let [total (count card-ids)]
+    {:phase "writing" :done (min total (* (inc i) batch-size)) :total total}))

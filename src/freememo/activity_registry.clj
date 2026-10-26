@@ -3,7 +3,8 @@
    means, how its `work_key` is composed, and — for server-owned work — which
    per-user atom carries its live state (plans/activity-monitor.md).
 
-   Requires only `freememo.user-state`, and that is the point. Every server-owned
+   Requires only `freememo.user-state` (and `freememo.anki-lease`, which itself
+   requires only `user-state`), and that is the point. Every server-owned
    owner already publishes its in-flight state as a per-user atom, so reading it
    needs the ATOM, never the owning namespace. Reading `:distilling-docs` here
    costs nothing; requiring `freememo.kg-extract` would pull missionary, the
@@ -31,8 +32,15 @@
 
    `:pushed` work has no server atom to pull from, so whatever drives it reports
    to `activity/report!` itself. Every member of this tier is driven by a mounted
-   CLIENT component that holds something the server cannot reach — an AnkiConnect
-   connection on localhost, or the file being chunk-uploaded.
+   CLIENT component that holds something the server cannot reach — the file
+   being chunk-uploaded.
+
+   An Anki sync is driven by a client component too — only the browser reaches
+   AnkiConnect — but it is `:server` tier. Its state is a server-held lease that
+   every tab must read (to disable Sync, and to cancel from any tab), so the
+   reporter pulls that lease like any other owner's atom. The driver proves it is
+   alive by heartbeating the lease; a reader returns `:stale? true` once it stops,
+   and the reporter leaves such a row for staleness to interrupt.
 
    Account export and import are `:server` despite looking like the pushed tier:
    an export streams on a Jetty request thread and an import runs in an
@@ -51,6 +59,7 @@
    reporting."
   (:require
    [clojure.string :as str]
+   [freememo.anki-lease :as lease]
    [freememo.anki-subtree-request :as subtree]
    [freememo.user-state :as us]))
 
@@ -315,15 +324,31 @@
     :tier :pushed :subject :none :work-key identity
     :progress-unit :bytes}
 
+   ;; ── Browser-driven, server-held. SERVER tier. ───────────────────────────
+   ;; An Anki sync runs in the one tab that holds the AnkiConnect connection,
+   ;; but its state is the lease in `:anki-run` (freememo.anki-lease), which
+   ;; every tab reads. So the reporter pulls it like any server-owned work, and
+   ;; Cancel works from every tab through `activity/cancel!`. Liveness is the
+   ;; driver's own heartbeat on the lease: a reading with `:stale? true` means
+   ;; the driver stopped proving it is alive, and the reporter leaves that row
+   ;; for the staleness rule to interrupt.
+   ;;
+   ;; One lease per user covers both kinds of run, because both write the same
+   ;; Anki collection. A whole-collection run has no subject and nowhere to
+   ;; navigate. A branch run (`anki-subtree-request`) holds its root topic as
+   ;; the subject, so the row names it and the panel's Open button goes there.
+   ;; The lease's key is the work key, "collection" or "branch-<id>", so
+   ;; discovery derives both the key and the subject from it.
    :anki-reconcile
    {:label "Syncing with Anki"
-    :tier :pushed
-    ;; A reconcile covers the whole collection unless it was started on one
-    ;; branch (`anki-subtree-request`). The whole-collection run has no subject
-    ;; and nowhere to navigate, as before. A branch run holds its root topic as
-    ;; the subject, so the row names it and the panel's Open button goes there.
-    ;; The work key tells the two apart: "collection" or "branch-<id>".
-    :subject :topic :work-key subtree/work-key}
+    :tier :server :subject :topic :work-key subtree/work-key
+    :state-key :anki-run :key-fn identity
+    :owner-key->args (fn [k] [(subtree/root-id k)])
+    :progress-unit :count
+    :canceller-key :anki-run-cancellers
+    :entry->state (fn [entry] (lease/reading entry (System/currentTimeMillis)))
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :anki-run-errors) work-key))}
 
    ;; ── Account transfer. SERVER tier, not pushed. ─────────────────────────
    ;; An export streams on a Jetty request thread and an import runs in an

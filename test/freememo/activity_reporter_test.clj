@@ -61,3 +61,33 @@
       (is (= {:opened 1 :refreshed 0 :closed 1}
             (reporter/tick-once!)))
       (is (= [[8 450 "success" {:error nil}]] @terminations)))))
+
+(def anki-row
+  {:id 451 :user_id 8 :type "anki-reconcile" :work_key "collection"})
+
+(deftest reporter-leaves-a-stale-reading-for-staleness
+  ;; An Anki sync whose driver stopped heartbeating still names its work in the
+  ;; lease. The row must neither be refreshed (that would keep a dead run
+  ;; looking alive) nor closed (that would record it as a success): leaving it
+  ;; is what lets the staleness rule mark it interrupted.
+  (let [reports (atom [])
+        starts (atom [])
+        terminations (atom [])]
+    (swap! (var-get (ns-resolve 'freememo.activity-reporter
+                      'locally-observed-activity-ids))
+      conj 451)
+    (with-redefs [us/users-with-state (constantly #{8})
+                  registry/server-tier-types (constantly #{"anki-reconcile"})
+                  registry/live-work
+                  (fn [_type _user-id] [{:work-key "collection" :subject-id nil}])
+                  registry/read-state
+                  (fn [& _args] {:phase "writing" :stale? true :cancellable true})
+                  activity/start! (fn [& args] (swap! starts conj args) 451)
+                  activity/report! (fn [& args] (swap! reports conj args) :done)
+                  activity/live-rows-for-tick (fn [_types] [anki-row])
+                  registry/work-error (fn [& _args] nil)
+                  activity/terminate! (fn [& args] (swap! terminations conj args))]
+      (is (= {:opened 0 :refreshed 0 :closed 0} (reporter/tick-once!)))
+      (is (empty? @starts) "discovery must not reopen a dead run")
+      (is (empty? @reports) "a stale row must not be refreshed")
+      (is (empty? @terminations) "a stale row must not be closed as a success"))))

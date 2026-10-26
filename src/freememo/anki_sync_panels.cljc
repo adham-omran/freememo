@@ -5,6 +5,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-connect-guide :refer [AnkiConnectGuide]]
+   [freememo.anki-lease-client :as lease-client]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-form :as form]
    [freememo.doc-context :as dctx]
@@ -144,7 +145,8 @@
               (dom/text "Using saved settings for this document")))
 
           (form/AnkiSyncForm user-id root-id conn form)
-          (form/AnkiSyncStatus sync !show-modal conn))))))
+          (form/AnkiSyncStatus sync !show-modal conn
+            (lease-client/SyncBusy user-id)))))))
 
 (e/defn AnkiSyncModalDom
   "Modal overlay + inner dialog; delegates to error/connected/connecting panels.

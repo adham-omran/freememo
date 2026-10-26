@@ -42,7 +42,12 @@
    "account-import"       {:member "account"}
    "url-import"           {:member "https://example.org/"}
    "repo-import"          {:member "github.com/owner/name" :entry "downloading"}
-   "walkthrough-prepare"  {:member 42 :entry "reading diffs"}})
+   "walkthrough-prepare"  {:member 42 :entry "reading diffs"}
+   ;; A live lease: a fresh heartbeat, so the reader does not mark it stale.
+   "anki-reconcile"       {:member "collection"
+                           :entry {:run-id "r" :phase "scanning"
+                                   :heartbeat-at (System/currentTimeMillis)
+                                   :cancel? false}}})
 
 (defn- publish! [a {:keys [member entry]}]
   (if (map? @a)

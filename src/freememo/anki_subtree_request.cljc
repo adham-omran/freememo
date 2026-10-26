@@ -75,3 +75,11 @@
          the whole collection are different pieces of work too."
   ([] "collection")
   ([root-id] (if (some? root-id) (str "branch-" root-id) "collection")))
+
+(defn root-id
+  "The inverse of `work-key`.
+   post: the topic id of a \"branch-<id>\" key, nil for \"collection\" or any
+         other string."
+  [k]
+  (when (and (string? k) (> (count k) 7) (= "branch-" (subs k 0 7)))
+    (parse-long (subs k 7))))

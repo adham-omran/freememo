@@ -24,6 +24,7 @@
    [freememo.anki-reconcile :as rec]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-server :as sync-server]
+   [freememo.anki-lease :as lease]
    [taoensso.telemere :as tel]))
 
 ;; ---------------------------------------------------------------------------
@@ -122,9 +123,7 @@
    trip is a window in which another tab can edit a card, and stamping a
    baseline from a stale row would hide that edit from every later run."
   [user-id card-ids]
-  (into {}
-    (map (juxt :flashcards/id digest/local-digest))
-    (db/get-cards-for-reconcile user-id (vec card-ids))))
+  (sync-server/local-digests-now user-id card-ids))
 
 (defn record-anki-writes!
   "Stamp baselines after the client created or updated notes in Anki.
@@ -132,32 +131,64 @@
    pre : `entries` = [{:card-id n :note-id n :anki-digest hex :anki-mod n?} …],
          where `:anki-digest` was computed from a notesInfo read taken AFTER the
          write — see the namespace invariant.
+         `local-digests` = {card-id hex}, the `:local-digests` that
+         `anki-write-bundles` returned with the bundles these notes were written
+         from. A card missing from it gets no local baseline, so it reads
+         unsynced and the next run retries — the safe direction.
    post: each card holds its note id and both baselines, written together.
          Returns {:success true :count n}.
+
+   The local baseline is the digest of what was SENT, never a re-read. A re-read
+   here, after the Anki round trip, would stamp an edit made during that round
+   trip as synced while Anki holds the older text.
 
    Deliberately NOT in the same transaction as
    `anki-sync-server/anki-write-bundles`' settings-snapshot refresh: that runs
    before the client sends, and a WebSocket round trip to Anki sits between the
    two. The ordering is what carries the guarantee — see the comment there."
-  [user-id entries]
+  [user-id entries local-digests]
   (try
-    (let [locals (fresh-local-digests user-id (map :card-id entries))]
-      (db/set-anki-note-ids user-id
-        (into [] (keep (fn [{:keys [card-id note-id]}]
-                         (when note-id [card-id note-id])))
-          entries))
-      (db/set-card-baselines! user-id
-        (mapv (fn [{:keys [card-id anki-digest anki-mod]}]
-                {:card-id card-id
-                 :anki-digest anki-digest
-                 :local-digest (get locals card-id)
-                 :anki-mod anki-mod})
-          entries))
-      (commands/bump! user-id :anki-sync)
-      {:success true :count (count entries)})
+    (db/set-anki-note-ids user-id
+      (into [] (keep (fn [{:keys [card-id note-id]}]
+                       (when note-id [card-id note-id])))
+        entries))
+    (db/set-card-baselines! user-id
+      (mapv (fn [{:keys [card-id anki-digest anki-mod]}]
+              {:card-id card-id
+               :anki-digest anki-digest
+               :local-digest (get local-digests card-id)
+               :anki-mod anki-mod})
+        entries)
+      {:restamp-current? true})
+    (commands/bump! user-id :anki-sync)
+    {:success true :count (count entries)}
     (catch Exception e
       (tel/error! {:id ::record-anki-writes!} e)
       {:success false :error (.getMessage e)})))
+
+(defn record-batch!
+  "Record one batch of a run, then check in with the lease.
+
+   pre : as `record-anki-writes!`; `progress` is the run's progress AFTER this
+         batch, `{:phase :done :total}`. `root-id` is the branch a branch run is
+         scoped to, or nil for the whole collection.
+   post: {:recorded <record-anki-writes! result>
+          :verdict  :continue | :cancel | :not-owner}. For a branch run, only
+         entries for cards under `root-id` are recorded, for the reason
+         `confine-outcome` gives.
+
+   The batch is recorded whatever the verdict. Its notes are already in Anki,
+   and a driver that lost its lease (it slept past the ttl) still owes them
+   their note ids — skipping the record is exactly what leaves unlinked notes
+   for the next run to duplicate."
+  [user-id run-id root-id entries local-digests progress]
+  (let [entries (if (nil? root-id)
+                  entries
+                  (let [inside (set (db/card-ids-in-subtree user-id root-id
+                                      (map :card-id entries)))]
+                    (filterv (comp inside :card-id) entries)))]
+    {:recorded (record-anki-writes! user-id entries local-digests)
+     :verdict (lease/report-progress! user-id run-id progress)}))
 
 (defn apply-pulls!
   "Write Anki's content into the local cards, then stamp both baselines.
@@ -357,26 +388,28 @@
    the write path: a stale tab, a plan from before a re-parent or a hand-built
    call would otherwise stamp a baseline on a card outside the branch, and a
    baseline is the one thing that hides a change. The tombstone list is emptied
-   because a branch run plans none (see `scan-targets`)."
-  [user-id root-id {:keys [writes pull-card-ids backfill conflict-card-ids] :as outcome}]
+   because a branch run plans none (see `scan-targets`). A batch's writes are
+   confined the same way, by `record-batch!`."
+  [user-id root-id {:keys [pull-card-ids backfill conflict-card-ids] :as outcome}]
   (if (nil? root-id)
     outcome
     (let [inside (set (db/card-ids-in-subtree user-id root-id
-                        (concat (map :card-id writes) pull-card-ids
+                        (concat pull-card-ids
                           (map :card-id backfill) conflict-card-ids)))]
       (assoc outcome
-        :writes            (filterv (comp inside :card-id) writes)
         :pull-card-ids     (filterv inside pull-card-ids)
         :backfill          (filterv (comp inside :card-id) backfill)
         :conflict-card-ids (filterv inside conflict-card-ids)
         :finished-note-ids []))))
 
 (defn finish-run!
-  "Every server write a run makes, in one call and one order.
+  "Every server write a run makes after its batches, in one call and one order.
+
+   The writes themselves are NOT here: each batch records its own through
+   `record-batch!`, so a run that stops partway keeps every batch it finished.
 
    pre : `outcome` =
-           {:writes            [{:card-id :note-id :anki-digest :anki-mod} …]
-            :pull-card-ids     [n …]
+           {:pull-card-ids     [n …]
             :pull-notes        {note-id note}
             :digests           {note-id hex}
             :backfill          [{:card-id :note-id} …]
@@ -400,11 +433,10 @@
    the rest still run. A failure in one phase must not strand the baselines of
    another, or the next run would re-do work it cannot see was done."
   [user-id {:keys [root-id] :as outcome}]
-  (let [{:keys [writes pull-card-ids pull-notes digests backfill
+  (let [{:keys [pull-card-ids pull-notes digests backfill
                 conflict-card-ids finished-note-ids]}
         (confine-outcome user-id root-id outcome)
-        steps [[:writes      #(record-anki-writes! user-id writes)]
-               [:pulls       #(apply-pulls! user-id pull-card-ids pull-notes digests)]
+        steps [[:pulls       #(apply-pulls! user-id pull-card-ids pull-notes digests)]
                [:backfilled  #(backfill-baselines! user-id
                                 (mapv (fn [{:keys [card-id note-id]}]
                                         {:card-id card-id

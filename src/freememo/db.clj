@@ -7671,8 +7671,16 @@
    `record-anki-writes!`, `apply-pulls!`, `backfill-baselines!` and
    `resolve-conflicts!` — reach the columns through it. A caller that wrote a
    baseline without the version would leave a row that re-baselines on every
-   subsequent run, forever."
-  [user-id entries]
+   subsequent run, forever.
+
+   `opts` `{:restamp-current? true}` is for a caller whose `local-digest` is NOT
+   the row as it stands — `record-anki-writes!`, whose digest is of what a push
+   SENT, read before an Anki round trip in which the card may have been edited.
+   Copying that digest into `local_current_digest` would erase the edit; the
+   column is recomputed from the row instead, in the same transaction, so the
+   two disagree exactly when an edit landed during the round trip."
+  ([user-id entries] (set-card-baselines! user-id entries {}))
+  ([user-id entries {:keys [restamp-current?]}]
   (when (seq entries)
     (jdbc/with-transaction [tx ds]
       (doseq [{:keys [card-id anki-digest local-digest anki-mod]} entries]
@@ -7680,16 +7688,18 @@
           (sql/format {:update :flashcards
                        :set (cond-> {:anki_baseline_digest anki-digest
                                      :local_baseline_digest local-digest
-                                     :local_current_digest local-digest
                                      :baseline_digest_version digest/digest-version
                                      :anki_synced_at [:now]}
+                              (not restamp-current?) (assoc :local_current_digest local-digest)
                               anki-mod (assoc :anki_baseline_mod anki-mod))
                        :where [:and
                                [:= :id card-id]
                                [:in :root_topic_id
                                 {:select [:id] :from [:topics]
-                                 :where [:= :user_id user-id]}]]}))))
-    (count entries)))
+                                 :where [:= :user_id user-id]}]]})))
+      (when restamp-current?
+        (restamp-card-digests! tx (mapv :card-id entries))))
+    (count entries))))
 
 (defn list-anki-tombstones
   "Every outstanding tombstone for `user-id`, oldest first.
