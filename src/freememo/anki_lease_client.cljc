@@ -42,8 +42,11 @@
 ;; Server wrappers
 ;; ---------------------------------------------------------------------------
 
-(defn claim!* [user-id]
-  #?(:clj (lease/claim! user-id) :cljs nil))
+(defn claim!*
+  "`root-id` is the branch a branch run is scoped to, or nil for the whole
+   collection."
+  [user-id root-id]
+  #?(:clj (lease/claim! user-id root-id) :cljs nil))
 
 (defn heartbeat!*
   "`_tick` exists only to make each beat a new call; the server's own clock
