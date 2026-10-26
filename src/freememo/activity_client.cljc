@@ -5,8 +5,9 @@
 
    Two things live here that cannot live on the server.
 
-   A pushed-tier driver — a chunked upload, an Anki reconcile — runs in one
-   browser tab, and only that tab can stop it. `!tab-drivers` is how the panel
+   A pushed-tier driver — a chunked upload — runs in one browser tab, and only
+   that tab can stop it. (An Anki sync also runs in one tab, but its state is a
+   server-held lease every tab reads; see `freememo.anki-lease`.) `!tab-drivers` is how the panel
    finds a canceller for work started here. It is per PAGE LOAD, like
    `freememo.client-state`: a driver cannot outlive the document that mounted
    it, so a registry that survived a reload would hand out cancellers for work
@@ -178,7 +179,7 @@
    function call on the other peer is what forces a transfer, so even
    `(some? cancel)` there sends the FUNCTION, and Electric's transit writer
    throws for it — killing the client peer with no server-side trace. That
-   shipped: it stopped every Anki reconcile, because `quick-sync` passes a
+   shipped: it stopped every Anki reconcile, because `quick-sync` then passed a
    canceller for exactly the phases a run spends its life in. The row needs no
    `:cancellable` from here anyway — a pushed row's Cancel comes from
    `tab-owns?` reading `!tab-drivers` on this peer, and writing `true` into the

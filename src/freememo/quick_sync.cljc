@@ -18,7 +18,6 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-reconcile-panels :as recon]
-   [freememo.activity-client :as ac]
    [freememo.command-bus :as bus]
    #?(:clj [freememo.toasts :as toasts])))
 
@@ -28,62 +27,32 @@
   #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
      :cljs nil))
 
-(e/defn QuickSyncStartToasts
-  "Start and busy toasts. One start toast per `!trigger` increment; one busy
-   toast per `!busy-bump` increment (the chord pressed while a run is in flight)."
-  [user-id !trigger !busy-bump]
+(e/defn QuickSyncBusyToast
+  "One toast per `!busy-bump` increment: the chord pressed while THIS tab is
+   already running a sync. A run in ANOTHER tab is refused by the server claim,
+   which toasts for itself (`anki-reconcile-panels/ReconcileClaim`)."
+  [user-id !busy-bump]
   (e/client
-    (let [trigger (e/watch !trigger)
-          busy-bump (e/watch !busy-bump)]
-      (when (pos? trigger)
-        (let [[t _] (e/Token [:qs-start trigger])]
-          (when t
-            (case (e/server (push-toast!* user-id :info "Syncing with Anki…")) (t)))))
+    (let [busy-bump (e/watch !busy-bump)]
       (when (pos? busy-bump)
         (let [[t _] (e/Token [:qs-busy busy-bump])]
           (when t
             (case (e/server (push-toast!* user-id :info "Sync already in progress")) (t))))))))
 
-(e/defn ReconcileActivity
-  "Mirror the run into the Activity monitor.
-
-   Reads the atoms `ReconcileExecutor` already drives, so nothing about the phase
-   machine changes to accommodate this — the same arrangement the server tier has,
-   one peer over.
-
-   Cancellability and the leave warning both track the PHASE, because both are
-   momentary: a run is stoppable while it is scanning or planning and not while
-   it is recording baselines, and it strands Anki-side state only once it starts
-   writing notes."
-  [user-id recon !running?]
-  (e/client
-    (let [running? (e/watch !running?)
-          phase (e/watch (:!phase recon))
-          err (e/watch (:!error recon))]
-      (ac/ActivityMirror user-id "anki-reconcile" "collection"
-        running?
-        (some-> phase name)
-        nil nil
-        (when (contains? recon/cancellable-phases phase)
-          (fn [] (recon/cancel! recon !running?)))
-        (contains? recon/unrecoverable-phases phase)
-        nil
-        ;; `start!` clears `:!error`, so a non-nil error here belongs to THIS run.
-        (if err "failure" "success")
-        err))))
-
 (e/defn QuickSyncButton
   "Hidden host button for the `:quick-sync` command (Cmd-Shift-Opt-X or the
    palette). Invoking starts a background reconcile over the whole collection.
 
-   Mounted once at the app root, so the run outlives any route. It takes only
-   `user-id`: a reconcile has no scope to narrow, and its whole point is that a
-   card deleted in a document nobody has open still gets its Anki note removed."
+   Mounted once at the app root in EVERY tab, so the run outlives any route.
+   Only the tab whose claim wins the account's lease runs phases; the Activity
+   monitor reads that lease, so this component mirrors nothing into it.
+
+   It takes only `user-id`: a reconcile has no scope to narrow, and its whole
+   point is that a card deleted in a document nobody has open still gets its
+   Anki note removed."
   [user-id]
   (e/client
     (let [state (recon/fresh-state)
-          !trigger (atom 0)
-          !running? (atom false)
           !busy-bump (atom 0)]
       (dom/button
         (dom/props {:style {:display "none"} :aria-hidden "true" :tabindex "-1"
@@ -93,10 +62,8 @@
           (e/on-unmount (fn [] (bus/retract-invoker! :quick-sync))))
         (dom/On "click"
           (fn [_]
-            (if (= :busy (recon/start! state !running?))
-              (swap! !busy-bump inc)
-              (swap! !trigger inc)))
+            (when (= :busy (recon/start! state))
+              (swap! !busy-bump inc)))
           nil))
-      (QuickSyncStartToasts user-id !trigger !busy-bump)
-      (recon/ReconcileExecutor user-id state !running?)
-      (ReconcileActivity user-id state !running?))))
+      (QuickSyncBusyToast user-id !busy-bump)
+      (recon/ReconcileExecutor user-id state))))

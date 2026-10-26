@@ -22,9 +22,11 @@
    staleness could never fire. Asking the owner is what makes a quiet row
    evidence of a dead one.
 
-   Browser-owned rows are not ticked here: no server atom describes an Anki
-   reconcile or a chunked upload, so their driver pushes to `activity/report!`
-   itself. `registry/server-tier-types` is the filter.
+   Browser-owned rows are not ticked here: no server atom describes a chunked
+   upload, so its driver pushes to `activity/report!` itself.
+   `registry/server-tier-types` is the filter. An Anki sync is browser-DRIVEN
+   but server-HELD — its lease is a server atom — so it is pulled here like the
+   rest, and its driver's heartbeat on that lease is the evidence of live work.
 
    The interval ordering this namespace sits inside:
 
@@ -87,8 +89,10 @@ an activity reporter bug."}
                   ;; An owner key can outlive its work — card generation leaves
                   ;; its entry behind with nothing pending. The reader is the
                   ;; authority on "in flight"; the atom's keys are only where to
-                  ;; look.
-                  :when (some? state)]
+                  ;; look. A `:stale?` reading is work whose driver stopped
+                  ;; proving it is alive — opening a row for it would revive a
+                  ;; dead run as a live one.
+                  :when (and (some? state) (not (:stale? state)))]
               (let [activity-id
                     (activity/start! user-id type work-key
                       (merge {:phase "starting" :subject-id subject-id} state))]
@@ -135,9 +139,16 @@ an activity reporter bug."}
       (fn [acc {:keys [id user_id type work_key]}]
         (try
           (if-some [state (registry/read-state type user_id work_key)]
-            (do (swap! locally-observed-activity-ids conj id)
-                (activity/report! user_id id state)
-                (update acc :refreshed inc))
+            (if (:stale? state)
+              ;; The owner still names the work, but its driver stopped
+              ;; heartbeating (an Anki sync whose tab died). Neither refresh nor
+              ;; close: leaving `updated_at` alone is what lets the shared
+              ;; staleness rule mark the row interrupted, which is the truth.
+              ;; Closing it here would record a dead run as a success.
+              acc
+              (do (swap! locally-observed-activity-ids conj id)
+                  (activity/report! user_id id state)
+                  (update acc :refreshed inc)))
             (if (contains? @locally-observed-activity-ids id)
               ;; This process saw the owner before it disappeared. The work is
               ;; finished, not stale, and this process can assign its outcome.

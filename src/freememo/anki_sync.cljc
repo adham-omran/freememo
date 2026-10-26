@@ -5,6 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.anki-lease-client :as lease-client]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-panels :as panels]
    [freememo.brand-icons :refer [AnkiMark]]
@@ -53,16 +54,27 @@
 (e/defn AnkiSyncButton [user-id selected-doc card-type unsynced-count]
   (e/client
     (let [!show-modal (atom false)
-          show-modal (e/watch !show-modal)]
+          show-modal (e/watch !show-modal)
+          busy? (lease-client/SyncBusy user-id)]
 
       ;; Toolbar button. The meta+shift+x shortcut and the palette invoke it
       ;; through the :anki-sync command. `toolbar-collapse-sync` hides it at
       ;; viewport-tier 7; the modal below is a sibling, so it stays mounted.
+      ;;
+      ;; Disabled while any tab of the account runs a sync, so the dialog never
+      ;; opens on a run it cannot start. `.click()` on a disabled button does
+      ;; nothing, so the chord and the palette are refused the same way.
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-sync-trigger toolbar-collapse-sync"
                     :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}
                     :data-tour "anki-sync"})
-        (tooltip/Tooltip! (str "Sync with Anki (" (commands/display-chord :anki-sync) ")") :aria? true)
+        ;; A props map of its own: `busy?` is a server read, absent for its
+        ;; round trip, and an absent map nulls every prop in it (CLAUDE.md).
+        (dom/props {:disabled busy?})
+        (tooltip/Tooltip! (if busy?
+                            "A sync is running. See Activity."
+                            (str "Sync with Anki (" (commands/display-chord :anki-sync) ")"))
+          :aria? true)
         (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))

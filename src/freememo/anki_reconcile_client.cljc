@@ -9,10 +9,13 @@
 
      1. `scan!`        one notesInfo over every note the server knows about
      2. (server plans from the digests this produced)
-     3. `write!`       addNote / updateNote for creates and pushes
+     then, per batch of `anki-reconcile/batch-size` cards:
+     3. `write!`       addNote / updateNote for the batch's creates and pushes
      4. `read-back!`   notesInfo again, over ONLY the notes step 3 touched
-     5. `delete!`      deleteNotes for tombstones the plan cleared
-     6. (server records what 4 and 5 observed)
+     5. (server records the batch — note ids and baselines)
+     then once:
+     6. `delete!`      deleteNotes for tombstones the plan cleared
+     7. (server applies pulls, backfill, conflicts and tombstones)
 
    Step 4 is the one that looks redundant and is not. Anki normalises HTML on
    write, so a baseline taken from the payload sent in step 3 would disagree
@@ -145,15 +148,44 @@
 ;; Electric bodies call these through `case`, so the reactive graph holds no
 ;; Missionary and no AnkiConnect. Each is generation-guarded: a second run
 ;; started before the first finished must not have its predecessor's reply
-;; overwrite it. Same shape as `library-cards/run-bulk-push!`.
+;; overwrite it.
 ;; ---------------------------------------------------------------------------
 
 (defonce !run-gen (atom 0))
 
-(defn- fail!
+(defn fail!
+  "End the run as failed with `message`. Post: phase `:error`; returns nil."
   [recon message]
   (reset! (:!error recon) message)
   (reset! (:!phase recon) :error)
+  nil)
+
+(defn- run-task!
+  "Run `task`, landing its result through `on-ok` / `on-err` only while `g` is
+   still the current generation, and keep its canceller in `:!task-cancel` so
+   an unmounting executor can stop it (`cancel-task!`)."
+  [recon task g on-ok on-err]
+  #?(:cljs
+     (let [cancel (task
+                    (fn [v]
+                      (when (= g @!run-gen)
+                        (reset! (:!task-cancel recon) nil)
+                        (on-ok v)))
+                    (fn [err]
+                      (when (= g @!run-gen)
+                        (reset! (:!task-cancel recon) nil)
+                        (on-err err))))]
+       (reset! (:!task-cancel recon) cancel)
+       nil)
+     :clj nil))
+
+(defn cancel-task!
+  "Stop the in-flight AnkiConnect task, if any. A request already sent can still
+   land in Anki; this only stops the ones not sent yet. Post: nil."
+  [recon]
+  (when-some [cancel @(:!task-cancel recon)]
+    (reset! (:!task-cancel recon) nil)
+    (cancel))
   nil)
 
 (defn run-scan!
@@ -162,49 +194,59 @@
   [targets recon]
   #?(:cljs
      (let [g (swap! !run-gen inc)]
-       ((scan! (:note-ids targets) (:kind-by-note targets))
-        (fn [result]
-          (when (= g @!run-gen)
-            (reset! (:!scan recon) result)
-            (reset! (:!phase recon) :planning)))
-        (fn [err]
-          (when (= g @!run-gen)
-            (fail! recon (str "Could not read Anki: " (.-message err))))))
+       (run-task! recon
+         (scan! (:note-ids targets) (:kind-by-note targets))
+         g
+         (fn [result]
+           (reset! (:!scan recon) result)
+           (reset! (:!phase recon) :planning))
+         (fn [err] (fail! recon (str "Could not read Anki: " (.-message err))))))
+     :clj nil))
+
+(defn run-batch!
+  "One batch: create and update its notes, then re-read what was written.
+
+   pre : `bundles` from `anki-write-bundles` for this batch only; `kind-by-card`
+         from the plan.
+   post (async): `:!batch-out` ← {:pairs n :errors [...] :readback [{:card-id
+         :note-id :anki-digest :anki-mod} …]}, or `:!error` and phase `:error`.
+         The phase stays `:batch`: the caller records the batch from
+         `:!batch-out` in the same frame that holds the batch's server values."
+  [bundles kind-by-card recon]
+  #?(:cljs
+     (let [g (swap! !run-gen inc)]
+       (run-task! recon
+         (m/sp
+           (let [writes (m/? (write! bundles))
+                 readback (m/? (read-back! (:pairs writes) kind-by-card))]
+             {:pairs (count (:pairs writes))
+              :errors (:errors writes)
+              :readback readback}))
+         g
+         (fn [out] (reset! (:!batch-out recon) out))
+         (fn [err] (fail! recon (str "Anki write failed: " (.-message err)))))
        nil)
      :clj nil))
 
-(defn run-anki-work!
-  "Phase 3. Create and update notes, re-read what was written, then delete the
-   tombstoned notes. Moves to `:recording`.
-
-   pre : `bundles` from `anki-write-bundles`; `kind-by-card` and the two note
-         id lists from the plan.
-   post (async): !writes ← {:pairs :errors}, !readback ← [{:card-id :note-id
-         :anki-digest :anki-mod} …], !finished-note-ids ← every tombstone this
-         run settled.
+(defn run-deletes!
+  "Remove the tombstoned notes, after every batch.
 
    The deletes run AFTER the writes deliberately. Both touch the same collection,
    and a delete that raced a create could remove a note the same run had just
-   made if Anki reused the id."
-  [bundles kind-by-card note-ids-to-delete note-ids-to-drop recon]
+   made if Anki reused the id.
+
+   post (async): `:!finished-note-ids` ← every tombstone this run settled, or
+         `:!error` and phase `:error`."
+  [note-ids-to-delete note-ids-to-drop recon]
   #?(:cljs
      (let [g (swap! !run-gen inc)]
-       ((m/sp
-          (let [writes (m/? (write! bundles))
-                readback (m/? (read-back! (:pairs writes) kind-by-card))
-                deleted (m/? (delete! note-ids-to-delete))]
-            {:writes writes
-             :readback readback
-             :finished-note-ids (vec (concat deleted note-ids-to-drop))}))
-        (fn [{:keys [writes readback finished-note-ids]}]
-          (when (= g @!run-gen)
-            (reset! (:!writes recon) writes)
-            (reset! (:!readback recon) readback)
-            (reset! (:!finished-note-ids recon) finished-note-ids)
-            (reset! (:!phase recon) :recording)))
-        (fn [err]
-          (when (= g @!run-gen)
-            (fail! recon (str "Anki write failed: " (.-message err))))))
+       (run-task! recon
+         (delete! note-ids-to-delete)
+         g
+         (fn [deleted]
+           (reset! (:!finished-note-ids recon)
+             (vec (concat deleted note-ids-to-drop))))
+         (fn [err] (fail! recon (str "Anki delete failed: " (.-message err)))))
        nil)
      :clj nil))
 

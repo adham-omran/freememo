@@ -340,9 +340,12 @@
    modal closes, and `:quick-sync` runs the reconcile headlessly with toasts.
    A run covers the whole collection and outlives the dialog that started it.
 
+   Sync is disabled while `busy?` — any tab of the account running a sync — so
+   a busy click cannot save settings into a run it does not start.
+
    sync = {:!phase :!result :!error :!push-pairs :!push-btn}
    conn = {:!selected-deck ...} — the deck gate; note types are app-owned."
-  [sync !show-modal conn]
+  [sync !show-modal conn busy?]
   (e/client
     (let [sync-phase (e/watch (:!phase sync))
           sync-error (e/watch (:!error sync))
@@ -377,9 +380,11 @@
             nil))
         (when-not (= :pushing sync-phase)
           (dom/button
-            (dom/props {:class "btn btn-primary" :style {:font-size "15px"}
-                        :disabled (not can-run?)})
-            (dom/text "Sync")
+            (dom/props {:class "btn btn-primary" :style {:font-size "15px"}})
+            ;; Its own props map: `busy?` is a server read, absent for its round
+            ;; trip, and an absent map nulls every prop in it (CLAUDE.md).
+            (dom/props {:disabled (or (not can-run?) busy?)})
+            (dom/text (if busy? "Sync running…" "Sync"))
             (reset! !push-btn dom/node)
             (e/on-unmount (fn [] (reset! !push-btn nil)))
             (dom/On "click"

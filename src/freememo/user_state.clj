@@ -122,6 +122,16 @@
           ;; outside, so cancelling is the mark below, read by the run itself.
           :repo-import-cancellers (atom {})
           :repo-import-cancelled (atom #{})
+          ;; The Anki sync lease (freememo.anki-lease): "collection" -> {:run-id
+          ;; :phase :done :total :heartbeat-at :cancel?}, at most one entry.
+          ;; The browser tab that claimed it drives the sync; every tab reads it.
+          :anki-run         (atom {})
+          ;; "collection" -> fn that marks the running sync cancelled.
+          :anki-run-cancellers (atom {})
+          ;; "collection" -> error of the last sync that failed. Written before
+          ;; the lease drops so the reporter closes the row as failed; cleared
+          ;; by the next claim.
+          :anki-run-errors  (atom {})
           :toasts           (atom []))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;
