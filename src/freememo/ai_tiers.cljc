@@ -57,7 +57,8 @@
    Measured 2026-09-23 on card generation: GLM 5.3 Flash low and high cost the
    same and reasoned 0–13 tokens, so a level boundary cannot sit between them.
    Per 5-card batch, GLM low : Gemini 3.8 Flash low : GPT-6 Sol medium cost
-   1 : 5 : 20. The KG lanes send no reasoning parameter, so :quiz and :kg set
+   1 : 5 : 20. Best moved to GPT-6.1 Sol on 2026-10-26, at the same list price
+   with cheaper cached input; that ratio was not measured again. The KG lanes send no reasoning parameter, so :quiz and :kg set
    models only. Scanning ids are `freememo.ocr-models` ids, which differ from the
    card ids for the same model. Best scanning ran Gemini 3 Flash, the Arabic OCR
    bake-off winner, until that model retired on 2026-09-23; Gemini 3.8 Flash has
@@ -65,7 +66,7 @@
   {:cards
    {"economy"  {"model" "glm-5.3-flash"    "reasoning" "low"}
     "balanced" {"model" "gemini-3.8-flash" "reasoning" "low"}
-    "best"     {"model" "gpt-6-sol"        "reasoning" "medium"}}
+    "best"     {"model" "gpt-6.1-sol"        "reasoning" "medium"}}
    :scan
    {"economy"  {"ocr_model_default" "gemini-3.5-flash-lite" "scan_dpi" "150"}
     "balanced" {"ocr_model_default" "gemini-3.5-flash-lite" "scan_dpi" "300"}
@@ -73,11 +74,11 @@
    :assistant
    {"economy"  {"assistant_model" "glm-5.3-flash"    "assistant_reasoning" "low"}
     "balanced" {"assistant_model" "gemini-3.8-flash" "assistant_reasoning" "low"}
-    "best"     {"assistant_model" "gpt-6-sol"        "assistant_reasoning" "medium"}}
+    "best"     {"assistant_model" "gpt-6.1-sol"        "assistant_reasoning" "medium"}}
    :quiz
    {"economy"  {"kg_grade_model" "glm-5.3-flash"}
     "balanced" {"kg_grade_model" "gemini-3.8-flash"}
-    "best"     {"kg_grade_model" "gpt-6-sol"}}
+    "best"     {"kg_grade_model" "gpt-6.1-sol"}}
    :kg
    {"economy"  {"kg_extract_model" "glm-5.3-flash"
                 "kg_link_model" "glm-5.3-flash"
@@ -89,10 +90,10 @@
                 "kg_atomic_question_model" "gemini-3.8-flash"
                 "kg_synthesis_question_model" "gemini-3.8-flash"
                 "kg_fact_select_model" "gemini-3.8-flash"}
-    "best"     {"kg_extract_model" "gpt-6-sol"
+    "best"     {"kg_extract_model" "gpt-6.1-sol"
                 "kg_link_model" "glm-5.3-flash"
                 "kg_atomic_question_model" "glm-5.3-flash"
-                "kg_synthesis_question_model" "gpt-6-sol"
+                "kg_synthesis_question_model" "gpt-6.1-sol"
                 "kg_fact_select_model" "glm-5.3-flash"}}})
 
 (def level-labels

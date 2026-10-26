@@ -92,7 +92,7 @@
 
 (deftest a-named-level-overrides-an-older-row
   (with-store {"ai_tier_cards" "best" "model" "claude-sonnet-5"}
-    (is (= "gpt-6-sol" (settings/get-model 1)))
+    (is (= "gpt-6.1-sol" (settings/get-model 1)))
     (is (= "medium" (settings/get-reasoning 1)))))
 
 (deftest an-advanced-edit-keeps-the-rest-of-the-level
@@ -100,7 +100,7 @@
                    #(settings/save-reasoning 1 "high"))]
     (is (= "custom" (get rows "ai_tier_cards")))
     (is (= "high" (get rows "reasoning")))
-    (is (= "gpt-6-sol" (get rows "model"))
+    (is (= "gpt-6.1-sol" (get rows "model"))
         "the model the level was giving, not the row from before levels"))
   (testing "an edit to a custom task writes only that key"
     (let [[_ rows] (with-store* {"ai_tier_cards" "custom" "model" "claude-sonnet-5"}
@@ -109,7 +109,7 @@
              (select-keys rows ["ai_tier_cards" "model" "reasoning"])))))
   (testing "a KG step edit makes only its own task custom"
     (let [[_ rows] (with-store* (zipmap (map ai-tiers/level-key ai-tiers/tasks) (repeat "economy"))
-                     #(settings/save-kg-model 1 :grade "gpt-6-sol"))]
+                     #(settings/save-kg-model 1 :grade "gpt-6.1-sol"))]
       (is (= "custom" (get rows "ai_tier_quiz")))
       (is (= "economy" (get rows "ai_tier_kg"))))))
 

@@ -42,7 +42,7 @@
 ;; Prod default card model — a freememo.card-models registry :id, used as the
 ;; default when a user has no allowed saved selection (overridable per-user
 ;; within config.edn `:credits :card-model-allowlist`).
-#?(:clj (reset! config/!prod-model "gpt-6-sol"))
+#?(:clj (reset! config/!prod-model "gpt-6.1-sol"))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
