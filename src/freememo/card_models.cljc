@@ -33,16 +33,20 @@
    the field for these entries. Every other unsupported effort value is clamped
    by OpenRouter instead of refused (measured), so this flag covers the whole
    failure and no per-value table is needed."
-  [;; GPT-6 Sol and Luna, added 2026-09-23. On OpenRouter that day Sol cost
-   ;; $2 / $10 per million tokens, the same as GPT-5.6 Sol, and Luna cost
-   ;; $0.10 / $0.50, half of GPT-5.6 Luna. The GPT-5.x entries in `retired`
-   ;; redirect here by product decision (2026-09-23), not because the vendor
-   ;; names GPT-6 their successor: that statement could not be read (HTTP 403).
-   ;; Both accepted `openrouter:web_search` with engine "native" on 2026-09-23.
-   {:id "gpt-6-sol"
-    :label "GPT-6 Sol (OpenAI)"
-    :openrouter-model "openai/gpt-6-sol"
+  [;; GPT-6.1 Sol replaced GPT-6 Sol on 2026-10-26. On OpenRouter that day both
+   ;; cost $2 / $10 per million tokens, and 6.1 cached input at $0.10 against
+   ;; $0.20. minimaxir.com/2026/10/cheap-llms calls GPT-6 Sol "a dud" and 6.1
+   ;; comparable to GPT-6 Astra, at a fifth of Astra's price. Nobody measured
+   ;; 6.1 on card generation before the switch.
+   {:id "gpt-6.1-sol"
+    :label "GPT-6.1 Sol (OpenAI)"
+    :openrouter-model "openai/gpt-6.1-sol"
     :supported-parameters json-and-reasoning-parameters}
+   ;; GPT-6 Luna, added 2026-09-23 at $0.10 / $0.50, half of GPT-5.6 Luna. The
+   ;; GPT-5.x entries in `retired` redirect to the GPT-6 line by product
+   ;; decision (2026-09-23), not because the vendor names GPT-6 their
+   ;; successor: that statement could not be read (HTTP 403). Luna and GPT-6
+   ;; Sol accepted `openrouter:web_search` with engine "native" on 2026-09-23.
    {:id "gpt-6-luna"
     :label "GPT-6 Luna (OpenAI)"
     :openrouter-model "openai/gpt-6-luna"
@@ -77,9 +81,16 @@
    ;; on every call in every lane that selected it. Verify a slug against
    ;; https://openrouter.ai/api/v1/models before shipping it; this one retires
    ;; when DeepSeek withdraws the snapshot.
-   {:id "deepseek-v4-flash"
-    :label "V4 Flash (DeepSeek)"
-    :openrouter-model "deepseek/deepseek-v4-flash-0731"
+   ;;
+   ;; V4.1 Flash 1017 replaced V4 Flash 0731 on 2026-10-26. Artificial Analysis
+   ;; scores it 45 against 24 for the April V4 Flash. It is NOT cheaper: on
+   ;; 2026-10-26 its ~35 endpoints listed $0.02–0.33 in and $0.15–1.32 out,
+   ;; against $0.05–0.15 and $0.16–0.41 for 0731. DeepSeek's own endpoint is
+   ;; $0.15 / $0.60. No endpoint reported mandatory reasoning. The model reads
+   ;; images too, but the OCR registry has no entry for it yet.
+   {:id "deepseek-v4.1-flash"
+    :label "V4.1 Flash (DeepSeek)"
+    :openrouter-model "deepseek/deepseek-v4.1-flash-1017"
     :supported-parameters json-and-reasoning-parameters}
    ;; Routed fastest-first under a price ceiling, NOT pinned to Z.ai. The
    ;; ceiling says what the pin it replaces was standing in for — never overpay
@@ -166,19 +177,20 @@
     ;; so a retired successor must be followed by hand here.
     :superseded-by "gemini-3.8-flash"}
    ;; Removed from the picker on 2026-09-23 by product decision. Each points
-   ;; at the nearest current model of its vendor and tier.
+   ;; at the nearest current model of its vendor and tier. The Sol-tier ones
+   ;; pointed at gpt-6-sol until it retired; effective-id takes one hop.
    {:id "gpt-5.1"
     :label "GPT-5.1 (OpenAI)"
-    :superseded-by "gpt-6-sol"}
+    :superseded-by "gpt-6.1-sol"}
    {:id "gpt-5.6-luna"
     :label "GPT-5.6 Luna (OpenAI)"
     :superseded-by "gpt-6-luna"}
    {:id "gpt-5.6-terra"
     :label "GPT-5.6 Terra (OpenAI)"
-    :superseded-by "gpt-6-sol"}
+    :superseded-by "gpt-6.1-sol"}
    {:id "gpt-5.6-sol"
     :label "GPT-5.6 Sol (OpenAI)"
-    :superseded-by "gpt-6-sol"}
+    :superseded-by "gpt-6.1-sol"}
    {:id "gemini-3-flash"
     :label "Gemini 3 Flash (Google)"
     :superseded-by "gemini-3.8-flash"}
@@ -187,7 +199,15 @@
     :superseded-by "gemini-3.8-flash"}
    {:id "claude-haiku-4.5"
     :label "Claude Haiku 4.5 (Anthropic)"
-    :superseded-by "claude-sonnet-5"}])
+    :superseded-by "claude-sonnet-5"}
+   ;; Removed from the picker on 2026-10-26: each has a successor of the same
+   ;; vendor that scores higher. See the registry entries.
+   {:id "gpt-6-sol"
+    :label "GPT-6 Sol (OpenAI)"
+    :superseded-by "gpt-6.1-sol"}
+   {:id "deepseek-v4-flash"
+    :label "V4 Flash (DeepSeek)"
+    :superseded-by "deepseek-v4.1-flash"}])
 
 (def ^:private supersessions
   (into {} (map (juxt :id :superseded-by)) retired))
@@ -203,7 +223,7 @@
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod
    pin applies. Matches the current !prod-model value, and the Best level."
-  "gpt-6-sol")
+  "gpt-6.1-sol")
 
 (def ^:private by-id
   (into {} (map (juxt :id identity)) registry))
@@ -221,8 +241,10 @@
 (def ^:private native-web-search-model-ids
   "Assistant models that accept OpenRouter's native web-search tool.
    This is an allow-list because OpenRouter rejects the tool for models that do
-   not support it. Keep it with the user-selectable model catalog."
-  #{"gpt-6-sol"
+   not support it. Keep it with the user-selectable model catalog.
+   gpt-6.1-sol took gpt-6-sol's place here on 2026-10-26 without a measurement:
+   its OpenRouter parameter metadata matches gpt-6-sol's."
+  #{"gpt-6.1-sol"
     "gpt-6-luna"
     "gemini-3.8-flash"
     "gemini-3.5-flash-lite"
