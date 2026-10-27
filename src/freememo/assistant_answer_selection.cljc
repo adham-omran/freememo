@@ -44,7 +44,8 @@
 
    The handlers only write atoms: a menu action is browser state until an
    Electric token in the panel acts on it.
-   - Generate cards resets `!selection-cards` to {:id :message-id :html}.
+   - Generate cards resets `!selection-cards` to
+     {:id :message-id :html :card-count}.
    - Ask aside resets `!side` to {:key :chat-id :message-id :passage}, which
      replaces any open side question.
    - Annotate adds to `!annotations` for the open chat.
@@ -52,11 +53,12 @@
   [node !active !annotations !selection-cards !side]
   #?(:cljs
      (menu/install! node
-       {:on-generate (fn [capture]
+       {:on-generate (fn [capture card-count]
                        (reset! !selection-cards
                          {:id (str (random-uuid))
                           :message-id (:message-id capture)
-                          :html (:html capture)}))
+                          :html (:html capture)
+                          :card-count card-count}))
         :on-ask (fn [capture]
                   (reset! !side
                     {:key (str (random-uuid))
@@ -66,6 +68,13 @@
         :on-annotate (fn [capture note]
                        (swap! !annotations add-annotation @!active
                          (annotation capture note)))})
+     :clj nil))
+
+(defn step-count!
+  "Change the shared card count by `delta` and save it. CLJ no-op.
+   Post: as `answer-selection-menu/step-count!`."
+  [delta]
+  #?(:cljs (menu/step-count! delta)
      :clj nil))
 
 (defn paint!

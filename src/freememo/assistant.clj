@@ -26,6 +26,7 @@
    [freememo.credits :as credits]
    [freememo.commands :as commands]
    [freememo.content-toolbar-helpers :as card-gen]
+   [freememo.gen-settings :as gs]
    [freememo.html-cleaner :as cleaner]
    [freememo.markdown :as markdown]
    [freememo.model-context :as model-context]
@@ -2120,16 +2121,17 @@
 
 (defn- enqueue-assistant-cards!
   "Queue one card job for text taken from the assistant, through the toolbar's
-   Generate queue and with the toolbar's settings: card type, count, use-context
-   and KG fact routing all behave as they do for a toolbar selection.
+   Generate queue and with the toolbar's settings: card type, use-context and
+   KG fact routing all behave as they do for a toolbar selection.
 
    Pre:  `page-topic-id` is the topic the panel is open on. `content-html` is
          the subject. `context-text` is what a toolbar selection's surrounding
-         page would be.
+         page would be. `card-count` is the count the panel showed, or nil for
+         the saved setting. It is clamped to the toolbar's bounds.
    Post: {:ok true} after the job is queued, or {:error}. The cards land on
          `page-topic-id`, with the root the toolbar would use, and a toast
          reports the count. Progress and Cancel are the topic's Activity row."
-  [user-id page-topic-id content-html context-text]
+  [user-id page-topic-id content-html context-text card-count]
   (let [page (db/get-topic-for-user user-id page-topic-id)
         root-id (or (db/get-root-topic-id page-topic-id) page-topic-id)
         root-kind (:topics/kind (if (= root-id page-topic-id) page (db/get-topic root-id)))
@@ -2143,7 +2145,9 @@
              :content content
              :context (when (settings/get-context-enabled user-id) context-text)
              :card-type (settings/get-card-type user-id)
-             :card-count (settings/get-card-count user-id)
+             :card-count (if (int? card-count)
+                           (gs/normalize :count card-count)
+                           (settings/get-card-count user-id))
              :user-id user-id
              :enc-key nil
              :topic-id page-topic-id
@@ -2160,10 +2164,10 @@
    context, as a toolbar selection's page is.
    Pre:  `message-id` is an assistant message in a chat `user-id` owns.
    Post: as `enqueue-assistant-cards!`."
-  [user-id page-topic-id message-id selection-html]
+  [user-id page-topic-id message-id selection-html card-count]
   (if-let [answer (db/get-assistant-message user-id message-id)]
     (enqueue-assistant-cards! user-id page-topic-id selection-html
-      (answer-context-text (:content answer)))
+      (answer-context-text (:content answer)) card-count)
     {:error "Answer not found."}))
 
 ;; ── Side questions ─────────────────────────────────────────────────────────
@@ -2347,7 +2351,7 @@
   "Queue cards from the whole side thread: the passage, each question and each
    answer. The answer the passage came from is the context.
    Post: as `enqueue-assistant-cards!`, or {:error} when no answer has finished."
-  [user-id page-topic-id thread]
+  [user-id page-topic-id thread card-count]
   (tel/log! {:level :info :id ::side-thread-cards-debug
              :data {:user-id user-id :page-topic-id page-topic-id
                     :turns (count (:turns thread))}}
@@ -2365,7 +2369,8 @@
               (str "<p><strong>Question:</strong> " (escape-html content) "</p>")
               (markdown/markdown-with-math->html (answer-context-text content)))))
         (some-> (db/get-assistant-message user-id (:message-id thread))
-          :content answer-context-text)))))
+          :content answer-context-text)
+        card-count))))
 
 (def ^:private max-referenceable-files
   "Most repo files the @ picker lists for one query. A repository can hold

@@ -175,7 +175,7 @@
                   settings/get-card-type (fn [_] "cloze")
                   settings/get-card-count (fn [_] 3)
                   helpers/enqueue-card-gen! (fn [item] (reset! queued item) :enqueued)]
-      (is (:ok (assistant/selection->cards! 7 301 2 "<p>how <b>many</b> items</p>")))
+      (is (:ok (assistant/selection->cards! 7 301 2 "<p>how <b>many</b> items</p>" nil)))
       (is (= {:content "<p>how <b>many</b> items</p>"
               :context "Shape is how many items ."
               :card-type "cloze" :card-count 3 :user-id 7 :enc-key nil
@@ -183,6 +183,32 @@
               :pre-prompt nil :pre-prompt-mode nil :success-toast? true}
             (dissoc @queued :id))
         "a page under a PDF root takes the PDF as its root, as the toolbar does"))))
+
+(deftest selection-cards-take-the-panel-count
+  (let [queued (atom nil)]
+    (with-redefs [db/get-topic-for-user (fn [_ id] {:topics/id id :topics/kind "page"})
+                  db/get-root-topic-id (fn [_] 300)
+                  db/get-topic (fn [_] {:topics/id 300 :topics/kind "pdf"})
+                  db/get-assistant-message (fn [_ _] {:content "Answer."})
+                  settings/get-context-enabled (fn [_] false)
+                  settings/get-card-type (fn [_] "basic")
+                  settings/get-card-count (fn [_] 3)
+                  helpers/enqueue-card-gen! (fn [item] (reset! queued item) :enqueued)]
+      (testing "the count the panel showed replaces the saved one"
+        (assistant/selection->cards! 7 301 2 "<p>text</p>" 7)
+        (is (= 7 (:card-count @queued))))
+      (testing "a count out of bounds is clamped to the toolbar's bounds"
+        (assistant/selection->cards! 7 301 2 "<p>text</p>" 99)
+        (is (= 20 (:card-count @queued)))
+        (assistant/selection->cards! 7 301 2 "<p>text</p>" 0)
+        (is (= 1 (:card-count @queued))))
+      (testing "the side thread takes the count too"
+        (assistant/side-thread->cards! 7 301
+          {:passage "p" :message-id 2
+           :turns [{:id "u" :role "user" :content "q"}
+                   {:id "a" :role "assistant" :content "a" :status "completed"}]}
+          5)
+        (is (= 5 (:card-count @queued)))))))
 
 (deftest selection-cards-follow-the-fact-rule
   (let [generated (atom nil)

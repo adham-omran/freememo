@@ -20,6 +20,8 @@
    [clojure.string :as str]
    [freememo.assistant-message-content :as message-content]
    [freememo.assistant-transcript :as transcript]
+   [freememo.assistant-answer-selection :as answer-selection]
+   [freememo.gen-settings :as gs]
    [freememo.modal-shell :as modal]
    #?(:clj [freememo.assistant :as assistant])))
 
@@ -48,6 +50,30 @@
   [& parts]
   #?(:cljs (apply js/console.log "[side-debug]" parts) :clj nil))
 
+(e/defn CardCountControl
+  "`Cards − N +` over the freememo.gen-settings count, which the selection menu
+   and the selection popover share. Each click changes and saves the count in
+   the browser, so no token is needed."
+  [card-count]
+  (e/client
+    (dom/span
+      (dom/props {:class "number-stepper" :role "group" :aria-label "Cards to generate"})
+      (dom/span (dom/props {:class "number-stepper-label"}) (dom/text "Cards"))
+      (dom/button
+        (dom/props {:class "number-stepper-btn" :type "button"
+                    :aria-label "Fewer cards to generate"
+                    :disabled (<= card-count gs/count-min)})
+        (dom/text "−")
+        (dom/On "click" (fn [_] (answer-selection/step-count! -1)) nil))
+      (dom/span (dom/props {:class "number-stepper-value" :aria-live "polite"})
+        (dom/text card-count))
+      (dom/button
+        (dom/props {:class "number-stepper-btn" :type "button"
+                    :aria-label "More cards to generate"
+                    :disabled (>= card-count gs/count-max)})
+        (dom/text "+")
+        (dom/On "click" (fn [_] (answer-selection/step-count! 1)) nil)))))
+
 (e/defn SideQuestionPanel
   "One side question about `side` = {:chat-id :message-id :passage}.
    `!side` closes the panel when reset to nil. `!evidence` opens the panel's
@@ -75,7 +101,9 @@
             !draft (atom "")
             draft (e/watch !draft)
             !error (atom nil)
-            error (e/watch !error)]
+            error (e/watch !error)
+            ;; The global the toolbar and the selection menu share.
+            card-count (:count (gs/effective (e/watch gs/!gen-settings)))]
         (e/server (e/on-unmount #(assistant/close-side-thread! !thread)))
         (dom/div
           (dom/props {:class "assistant-side-question__header"})
@@ -122,6 +150,7 @@
                   ;; no branch ever spent, and the button stayed busy.
                   (dom/div
                     (dom/props {:class "assistant-side-question__buttons"})
+                    (CardCountControl card-count)
                     (e/amb
                       (forms/Button! [::cards]
                         :class "btn btn-sm btn-secondary"
@@ -156,10 +185,13 @@
 
                 (= [::cards] command)
                 (case (debug-log! "side cards branch mounted" (pr-str command))
-                  (let [result (e/server
+                  ;; Snapshot: a −/+ click while the call runs must not restart
+                  ;; the thunk and queue the cards twice.
+                  (let [job-count (e/snapshot card-count)
+                        result (e/server
                                  (e/Offload
                                    #(assistant/side-thread->cards!
-                                      user-id page-topic-id @!thread)))]
+                                      user-id page-topic-id @!thread job-count)))]
                     (case result
                       (case (reset! !error (:error result))
                         (command-token)))))))))))))

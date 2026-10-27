@@ -5671,7 +5671,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     z-index: 1100;
     display: none;
     box-sizing: border-box;
-    max-width: min(360px, calc(100vw - 16px));
+    max-width: min(460px, calc(100vw - 16px));
     padding: 6px;
     background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
     border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
@@ -5679,7 +5679,16 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     box-shadow: 0 8px 28px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
     color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
 }
-.answer-selection-menu__actions { display: flex; gap: 4px; }
+/* Wraps on a narrow viewport rather than overflowing it. */
+.answer-selection-menu__actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+/* Generate cards and its `− N +` count read as one control. */
+.answer-selection-menu__generate { display: inline-flex; align-items: center; gap: 2px; }
+.answer-selection-menu__count .number-stepper-value,
+.assistant-side-question__buttons .number-stepper-value {
+    min-width: 22px;
+    text-align: center;
+    color: var(--color-text-primary);
+}
 .answer-selection-menu__note { display: none; gap: 4px; align-items: flex-end; }
 .answer-selection-menu__input {
     width: 240px;
@@ -5765,7 +5774,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 13px;
     resize: vertical;
 }
-.assistant-side-question__buttons { display: flex; justify-content: flex-end; gap: 6px; }
+.assistant-side-question__buttons { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
 
 .assistant-evidence-backdrop { z-index: 1600; }
 
