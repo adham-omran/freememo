@@ -2,8 +2,9 @@
   "The menu a selection inside a settled assistant answer opens, and the
    highlights of the panel's annotations.
 
-   The menu offers Generate cards, Ask aside and Annotate. Annotate turns the
-   menu into a note field with ✓. Like freememo.format-menu it is plain DOM on
+   The menu offers Generate cards, Ask aside and Annotate. Generate cards has a
+   `− N +` count beside it, over the freememo.gen-settings count that the
+   selection popover shares. Annotate turns the menu into a note field with ✓. Like freememo.format-menu it is plain DOM on
    `document.body` with `position: fixed`: the panel's ancestors clip their
    overflow, and Electric owns no node here. freememo.selection-placement
    places it so it never covers the selection, with the transcript as the
@@ -24,6 +25,8 @@
    Highlights use the CSS Custom Highlight API, so they change no node of a leaf
    that `math/set-html!` owns. A browser without the API shows none."
   (:require [clojure.string :as str]
+            [freememo.command-bus :as bus]
+            [freememo.gen-settings :as gs]
             [freememo.math :as math]
             [freememo.selection-placement :as sel-place]
             [freememo.tooltip :as tooltip]))
@@ -112,10 +115,56 @@
     (.addEventListener b "mousedown" #(.preventDefault %))
     b))
 
+(defn- current-count [] (:count (gs/current)))
+
+(defn step-count!
+  "Change the card count by `delta`, clamped to [count-min, count-max], and
+   save it through the :persist-gen-settings invoker when one is mounted."
+  [delta]
+  (gs/assoc-setting! :count (+ (current-count) delta))
+  (bus/run-invoker! :persist-gen-settings)
+  nil)
+
+(defn- count-stepper
+  "The `− N +` card count beside Generate cards.
+   Returns {:root :sync}, where `sync` repaints the number and the −/+ disabled
+   state from freememo.gen-settings.
+   Post: −/+ go through `step-count!`. The count also goes with each Generate
+         cards request, so an unsaved count still applies."
+  []
+  (let [root (el "span" "number-stepper answer-selection-menu__count")
+        dec-btn (el "button" "number-stepper-btn")
+        value (el "span" "number-stepper-value")
+        inc-btn (el "button" "number-stepper-btn")
+        sync! (fn []
+                (let [v (current-count)]
+                  (set! (.-textContent value) (str v))
+                  (set! (.-disabled dec-btn) (<= v gs/count-min))
+                  (set! (.-disabled inc-btn) (>= v gs/count-max))))]
+    (.setAttribute root "role" "group")
+    (.setAttribute root "aria-label" "Cards to generate")
+    (.setAttribute value "aria-live" "polite")
+    (doseq [[b label title delta] [[dec-btn "−" "Fewer cards to generate" -1]
+                                   [inc-btn "+" "More cards to generate" 1]]]
+      (set! (.-type b) "button")
+      (set! (.-textContent b) label)
+      (.setAttribute b "title" title)
+      (.setAttribute b "aria-label" title)
+      ;; Keep the selection, as action-button does.
+      (.addEventListener b "mousedown" #(.preventDefault %))
+      (.addEventListener b "click" (fn [_] (step-count! delta))))
+    (.appendChild root dec-btn)
+    (.appendChild root value)
+    (.appendChild root inc-btn)
+    (sync!)
+    {:root root :sync sync!}))
+
 (defn- build-menu []
   (let [root (el "div" "answer-selection-menu")
         actions (el "div" "answer-selection-menu__actions")
+        generate-group (el "span" "answer-selection-menu__generate")
         generate (action-button "Generate cards" "Make cards from the selected text")
+        stepper (count-stepper)
         ask (action-button "Ask aside" "Ask a side question about the selected text")
         annotate (action-button "Annotate" "Mark this text and add a note to your next message")
         note (el "div" "answer-selection-menu__note")
@@ -135,12 +184,14 @@
     (set! (.-textContent cancel) "✕")
     (tooltip/set-tooltip! cancel "Cancel")
     (.setAttribute cancel "aria-label" "Cancel")
-    (doseq [c [generate ask annotate]] (.appendChild actions c))
+    (.appendChild generate-group generate)
+    (.appendChild generate-group (:root stepper))
+    (doseq [c [generate-group ask annotate]] (.appendChild actions c))
     (doseq [c [input save cancel]] (.appendChild note c))
     (.appendChild root actions)
     (.appendChild root note)
     {:root root :actions actions :note note :input input :save save :cancel cancel
-     :generate generate :ask ask :annotate annotate}))
+     :generate generate :ask ask :annotate annotate :sync-count (:sync stepper)}))
 
 (defn- place!
   "Position `root` where it covers no part of the captured range, or hide it
@@ -194,16 +245,19 @@
 (defn install!
   "Open the selection menu for settled answers in `transcript`.
 
-   `handlers` = {:on-generate (fn [capture]) :on-ask (fn [capture])
+   `handlers` = {:on-generate (fn [capture card-count]) :on-ask (fn [capture])
                  :on-annotate (fn [capture note])}, where `capture` is
-   {:message-id :html :quote :start :end} and `note` is a string, possibly blank.
+   {:message-id :html :quote :start :end}, `card-count` is the count the menu
+   showed, and `note` is a string, possibly blank.
 
    Post: a mouse or keyboard selection inside one settled answer shows the
          menu. A collapsed selection, an outside mousedown, or Escape hides it.
          A scroll or resize re-places it. Returns a teardown fn that removes
          every listener, the menu node and the highlights."
   [^js transcript {:keys [on-generate on-ask on-annotate]}]
-  (let [{:keys [root actions note input save cancel generate ask annotate]} (build-menu)
+  (let [{:keys [root actions note input save cancel generate ask annotate sync-count]}
+        (build-menu)
+        watch-key (keyword (gensym "answer-selection-count"))
         !capture (atom nil)
         ;; nil while hidden, :actions for the three buttons, :note for the field.
         !mode (atom nil)
@@ -250,7 +304,8 @@
         reposition (fn [_] (when @!mode (place-now!)))
         repaint (fn [_] (when-let [items (.get painted transcript)]
                           (paint! transcript items)))]
-    (.addEventListener generate "click" (fn [_] (when @!capture (on-generate (take!)))))
+    (.addEventListener generate "click"
+      (fn [_] (when @!capture (on-generate (take!) (current-count)))))
     (.addEventListener ask "click" (fn [_] (when @!capture (on-ask (take!)))))
     (.addEventListener annotate "click"
       (fn [_]
@@ -268,6 +323,7 @@
           (.preventDefault e)
           (save-note!))))
     (set! (.. root -style -display) "none")
+    (add-watch gs/!gen-settings watch-key (fn [_ _ _ _] (sync-count)))
     (.appendChild js/document.body root)
     (.addEventListener transcript "mouseup" on-up)
     (.addEventListener transcript "keyup" on-up)
@@ -286,6 +342,7 @@
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
       (.removeEventListener js/window "resize" reposition)
+      (remove-watch gs/!gen-settings watch-key)
       (.delete painted transcript)
       (some-> js/CSS .-highlights (.delete highlight-name))
       (when (.-parentNode root) (.remove root)))))
