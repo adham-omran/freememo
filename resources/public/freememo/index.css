@@ -5211,6 +5211,51 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     text-decoration: underline;
     text-underline-offset: 2px;
 }
+/* A citation is a number pill (plans/assistant-citation-pills.md §5.5). The
+   attribute selector outranks the rule above, so every other answer link keeps
+   its underline. `assistant-evidence/decorate-citations!` sets the attribute. */
+.assistant-msg--assistant a[data-citation-key] {
+    display: inline-block;
+    min-width: 16px;
+    padding: 0 4px;
+    margin: 0 1px;
+    border-radius: 8px;
+    background: var(--color-primary-tint);
+    color: var(--color-primary-tint-text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    text-decoration: none;
+    vertical-align: 1px;
+    white-space: nowrap;
+}
+.assistant-msg--assistant a[data-citation-key]:hover {
+    background: var(--color-primary);
+    color: #fff;
+}
+.assistant-msg--assistant a[data-citation-key]:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+/* The pill's label. Fixed on document.body, because the panel clips overflow
+   and a [data-tooltip] ::after on the last line would be cut off. Same look as
+   [data-tooltip]. freememo.citation-tooltip places it. */
+.citation-tooltip {
+    position: fixed;
+    padding: 6px 10px;
+    background: var(--color-tooltip-bg);
+    backdrop-filter: blur(2px);
+    color: var(--color-tooltip-text);
+    font-size: 12px;
+    line-height: 1.4;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    max-width: min(40ch, calc(100vw - 2rem));
+    overflow-wrap: break-word;
+    pointer-events: none;
+    z-index: 1100;
+}
 
 .assistant-compact-event {
     align-self: stretch;

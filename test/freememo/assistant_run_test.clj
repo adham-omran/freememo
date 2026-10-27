@@ -1,12 +1,14 @@
 (ns freememo.assistant-run-test
   "Durable assistant-run transition and ownership contracts."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
             [freememo.assistant-evidence :as evidence]
             [freememo.assistant-panel :as panel]
             [freememo.assistant-panel-data :as panel-data]
             [freememo.card-modals :as card-modals]
             [freememo.db :as db]
+            [freememo.markdown :as markdown]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
 
@@ -127,7 +129,7 @@
         (jdbc/execute! db/ds ["DELETE FROM users WHERE id IN (?, ?)" owner stranger])))))
 
 (deftest citations-render-only-retained-evidence
-  (is (= "Claim [document-level evidence](/viewer/topic/7/3). Missing ."
+  (is (= "Claim [1](/viewer/topic/7/3 \"evidence:E1\"). Missing ."
         (assistant/render-evidence-citations
           "Claim [evidence:E1]. Missing [evidence:E9]."
           [{:citation_key "E1" :document_topic_id 7 :page_number 3
@@ -138,10 +140,11 @@
                    :display_label "block 4"}
                   {:citation_key "E361" :document_topic_id 7 :page_number 5
                    :display_label "block 9"}]]
-    (is (= "Claim [block 4](/viewer/topic/7/3); [block 9](/viewer/topic/7/5)."
+    (is (= (str "Claim [1](/viewer/topic/7/3 \"evidence:E274\") "
+             "[2](/viewer/topic/7/5 \"evidence:E361\").")
           (assistant/render-evidence-citations
             "Claim [evidence:E274, E361]." evidence)))
-    (is (= "Claim [block 9](/viewer/topic/7/5)."
+    (is (= "Claim [1](/viewer/topic/7/5 \"evidence:E361\")."
           (assistant/render-evidence-citations
             "Claim [evidence:E9; evidence:E361]." evidence)))
     (testing "the transcript keeps the rows of every key in the token"
@@ -152,6 +155,32 @@
                       {:assistant_messages/role "user"
                        :assistant_messages/content "[evidence:E274, E361]"
                        :assistant_run/evidence evidence})))))))))
+
+(deftest citations-are-numbered-by-first-appearance
+  (let [evidence (for [k ["E2" "E5" "E7"]]
+                   {:citation_key k :document_topic_id 7 :page_number 3
+                    :display_label (str "Label " k)})
+        numbers #(map second (re-seq #"\[(\d+)\]" %))
+        render #(assistant/render-evidence-citations % evidence)]
+    (testing "a repeated key keeps its number"
+      (is (= ["1" "2" "1"]
+            (numbers (render "a [evidence:E5] b [evidence:E2] c [evidence:E5]")))))
+    (testing "a key with no retained row takes no number"
+      (is (= ["1" "2"]
+            (numbers (render "a [evidence:E2] b [evidence:E9] c [evidence:E7]")))))
+    (testing "two excerpts with one target keep their own keys"
+      (is (= ["E2" "E5"]
+            (map second (re-seq #"\"evidence:(E\d+)\"" (render "[evidence:E2] [evidence:E5]"))))))
+    (testing "every prefix numbers its citations as the whole answer does"
+      (let [answer "a [evidence:E7] b [evidence:E2, E7] c [evidence:E5] d"
+            whole (numbers (render answer))]
+        (doseq [n (range (inc (count answer)))
+                :let [part (numbers (render (subs answer 0 n)))]]
+          (is (= part (take (count part) whole)) (subs answer 0 n)))))
+    (testing "the rendered link carries its key as the title"
+      (is (str/includes?
+            (markdown/markdown-with-math->html (render "Claim [evidence:E2]."))
+            "<a href=\"/viewer/topic/7/3\" title=\"evidence:E2\">1</a>")))))
 
 (deftest add-card-draft-transitions-keep-the-raw-fields
   (let [!kind (atom "basic")
@@ -240,7 +269,10 @@
     (is (= source (evidence/source-for-target [source] "/viewer/topic/7/3")))
     (is (= same-target
           (evidence/source-for-citation [source same-target]
-            {:label "Source excerpt 2" :target "/viewer/topic/7/3"})))
+            {:citation-key "E2" :target "/viewer/topic/7/3"})))
+    (is (= source
+          (evidence/source-for-citation [source same-target]
+            {:target "/viewer/topic/7/3"})))
     (is (nil? (evidence/source-for-target [source] "/viewer/topic/8")))
     (is (false? (evidence/other-document? source "7")))
     (is (true? (evidence/other-document? source 8)))))

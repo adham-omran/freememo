@@ -25,6 +25,7 @@
    Highlights use the CSS Custom Highlight API, so they change no node of a leaf
    that `math/set-html!` owns. A browser without the API shows none."
   (:require [clojure.string :as str]
+            [freememo.assistant-evidence :as evidence]
             [freememo.command-bus :as bus]
             [freememo.gen-settings :as gs]
             [freememo.math :as math]
@@ -72,12 +73,24 @@
             (do (.setEnd r node (- end seen)) r)
             (recur next-seen started?)))))))
 
+(defn- spell-out-citations!
+  "Replace the number of each citation pill in `holder` with its full label,
+   so a quote names its source as it did before citations became pills
+   (plans/assistant-citation-pills.md §5.4.2). `holder` is a detached clone,
+   so the live leaf and its text offsets are untouched."
+  [^js holder]
+  (doseq [^js pill (array-seq (.querySelectorAll holder evidence/citation-selector))
+          :let [label (.getAttribute pill "aria-label")]
+          :when (seq label)]
+    (set! (.-textContent pill) label)))
+
 (defn- capture
   "The live selection, when both its ends lie in ONE settled answer of
    `transcript`, else nil.
    Post: {:message-id :html :quote :start :end :range}. :html and :quote hold
-         formulas as `\\(TeX\\)`. :start and :end are `text-offset`s into the
-         leaf. :range is a copy of the live range, for placement."
+         formulas as `\\(TeX\\)` and citations as their full labels. :start and
+         :end are `text-offset`s into the leaf. :range is a copy of the live
+         range, for placement."
   [^js transcript]
   (let [^js sel (.getSelection js/window)]
     (when (and sel (pos? (.-rangeCount sel)) (not (.-isCollapsed sel)))
@@ -90,6 +103,7 @@
                 holder (.createElement js/document "div")]
             (.appendChild holder (.cloneContents rng))
             (math/katex->tex! holder)
+            (spell-out-citations! holder)
             (let [quoted (-> (.-textContent holder) (str/replace #"\s+" " ") str/trim)
                   start (text-offset leaf (.-startContainer rng) (.-startOffset rng))]
               (when-not (str/blank? quoted)

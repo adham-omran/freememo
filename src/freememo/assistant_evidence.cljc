@@ -39,22 +39,52 @@
   (not= (str current-document-id)
     (str (or (:document_topic_id source) (:document-topic-id source)))))
 
+(def citation-selector
+  "A citation link after `decorate-citations!`. index.css styles it as a pill."
+  "a[data-citation-key]")
+
+(def ^:private key-title-prefix
+  "The title prefix that carries a citation key out of the sanitizer.
+   `assistant/render-evidence-citations` writes it, and `clean-html` keeps
+   `title` on `<a>` while it strips data attributes."
+  "evidence:")
+
+#?(:cljs
+   (defn decorate-citations!
+     "Turn the citation links that `node` holds into pills.
+      Pre:  `node` holds answer HTML that `render-evidence-citations` wrote, and
+            `sources` is the evidence of that answer.
+      Post: each citation link carries its key as `data-citation-key` and no
+            `title`, so the browser shows no native tooltip, and its
+            `aria-label` is the full display label. No text node changed:
+            annotations hold text offsets into the leaf. Returns nil."
+     [node sources]
+     (doseq [anchor (array-seq (.querySelectorAll node "a[title]"))
+             :let [title (.getAttribute anchor "title")]
+             :when (str/starts-with? title key-title-prefix)]
+       (.setAttribute anchor "data-citation-key" (subs title (count key-title-prefix)))
+       (.removeAttribute anchor "title"))
+     (doseq [anchor (array-seq (.querySelectorAll node citation-selector))
+             :let [source (source-for-key sources (.getAttribute anchor "data-citation-key"))]
+             :when source]
+       (.setAttribute anchor "aria-label"
+         (or (:display_label source) (:display-label source)))))
+   :clj (defn decorate-citations! [_node _sources] nil))
+
 #?(:cljs
    (defn clicked-citation [event]
      (when-let [anchor (.closest (.-target event) "a[href]")]
-       (let [title (.getAttribute anchor "title")]
-         {:target (.getAttribute anchor "href")
-          :label (str/trim (.-textContent anchor))
-          :citation-key (when (and title (str/starts-with? title "evidence:"))
-                          (subs title (count "evidence:")))}))))
+       {:target (.getAttribute anchor "href")
+        :citation-key (.getAttribute anchor "data-citation-key")})))
 #?(:clj (defn clicked-citation [_event] nil))
 
-(defn source-for-citation [sources {:keys [citation-key target label]}]
-  (or (when citation-key (source-for-key sources citation-key))
-    (some #(when (and (= target (citation-target %))
-                   (= label (or (:display_label %) (:display-label %))))
-             %)
-      sources)
+(defn source-for-citation
+  "The evidence a clicked link cites: by its key, else by its target.
+   A link with a key always resolves by key, because two excerpts can share a
+   target (plans/assistant-citation-pills.md §5.2.4)."
+  [sources {:keys [citation-key target]}]
+  (if citation-key
+    (source-for-key sources citation-key)
     (source-for-target sources target)))
 
 (defn set-highlighted-html! [node html]
