@@ -2291,6 +2291,29 @@
       PRIMARY KEY (entity_id, source)
     )"]))
 
+(defn- setup-schema-document-question-maps!
+  "Question maps keyed by a document topic (plans/document-question-pins.md
+   §1.1). A map is keyed by EXACTLY one of a repository file,
+   (`repo_topic_id`, `repo_path`), or a document topic, `topic_id`: the root
+   PDF for a page, else the topic itself. Must run after
+   setup-schema-question-pins!.
+   Post: existing repository maps are unchanged, and a row with both keys or
+         neither is refused."
+  []
+  (jdbc/execute! ds ["ALTER TABLE question_maps
+                      ADD COLUMN IF NOT EXISTS topic_id BIGINT
+                        REFERENCES topics(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE question_maps ALTER COLUMN repo_topic_id DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE question_maps ALTER COLUMN repo_path DROP NOT NULL"])
+  (jdbc/execute! ds ["DO $$ BEGIN
+                        ALTER TABLE question_maps ADD CONSTRAINT question_maps_one_key CHECK
+                          ((topic_id IS NOT NULL AND repo_topic_id IS NULL AND repo_path IS NULL)
+                           OR (topic_id IS NULL AND repo_topic_id IS NOT NULL
+                               AND repo_path IS NOT NULL));
+                      EXCEPTION WHEN duplicate_object THEN NULL; END $$"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_question_maps_document
+                      ON question_maps(user_id, topic_id) WHERE topic_id IS NOT NULL"]))
+
 (defn- setup-schema-walkthroughs!
   "Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.4, §6.8),
    and the columns they add to feature 1's tables. Must run after
@@ -3359,6 +3382,7 @@
   (setup-schema-walkthroughs!)
   (setup-schema-known-ideas!)
   (setup-schema-pin-numbering!)
+  (setup-schema-document-question-maps!)
   ;; Last: it re-points tables that the steps above create.
   (setup-schema-flashcard-uniqueness!)
   ;; After every table exists: it converts ids and triggers all of them.
@@ -15173,6 +15197,50 @@
      user-id repo-path repo-topic-id user-id])
   (question-map-id user-id repo-topic-id repo-path))
 
+(defn question-document-topic
+  "The facts `document-ref/for-topic` keys a document map by, for `user-id`'s
+   live topic `topic-id` (plans/document-question-pins.md §7.1).
+   Post: {:id :kind :parent_id :parent_kind}, or nil when the topic is not the
+         user's or is staged for deletion."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT t.id, t.kind, t.parent_id, p.kind AS parent_kind
+        FROM topics t LEFT JOIN topics p ON p.id = t.parent_id
+       WHERE t.id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn question-document-map-id
+  "The id of `user-id`'s question map keyed by document topic `doc-topic-id`,
+   or nil when none exists."
+  [user-id doc-topic-id]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM question_maps WHERE user_id = ? AND topic_id = ?"
+          user-id doc-topic-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn ensure-question-document-map!
+  "The id of the question map keyed by document topic `doc-topic-id`, created
+   when absent.
+   Pre:  `doc-topic-id` is a topic `user-id` owns, else nil.
+   Post: one row per (user, topic), whatever the concurrency."
+  [user-id doc-topic-id]
+  (jdbc/execute-one! ds
+    ["INSERT INTO question_maps (user_id, topic_id)
+      SELECT ?, t.id FROM topics t WHERE t.id = ? AND t.user_id = ?
+      ON CONFLICT (user_id, topic_id) WHERE topic_id IS NOT NULL DO NOTHING"
+     user-id doc-topic-id user-id])
+  (question-document-map-id user-id doc-topic-id))
+
+(defn page-topic-id-at
+  "The id of page `page-number` of `user-id`'s PDF `root-id`, or nil."
+  [user-id root-id page-number]
+  (:id (jdbc/execute-one! ds
+         ["SELECT id FROM topics
+            WHERE parent_id = ? AND page_number = ? AND user_id = ? AND kind = 'page'"
+          root-id page-number user-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
 (defn create-question-pin!
   "Create one open pin in map `map-id` and give it the lowest free label.
    Pre:  `quote` is non-blank. `snapshot-topic-id` is the file topic it was
@@ -15263,9 +15331,14 @@
   "Every live pin of `user-id`'s map `map-id`, in label order."
   [user-id map-id]
   (jdbc/execute! ds
-    [(str "SELECT id, label, quote, heading_anchor, offset_hint, question, status, root_id
-             FROM question_pins WHERE map_id = ? AND " owned-pin-clause
-          " ORDER BY label")
+    ;; `hint_page` is the page number of the pin's hint, for a pin on a PDF
+    ;; page (plans/document-question-pins.md §3.3.3).
+    [(str "SELECT p.id, p.label, p.quote, p.heading_anchor, p.offset_hint, p.question,
+                  p.status, p.root_id, p.snapshot_topic_id, st.page_number AS hint_page
+             FROM question_pins p
+             LEFT JOIN topics st ON st.id = p.snapshot_topic_id AND st.kind = 'page'
+            WHERE p.map_id = ? AND p." owned-pin-clause
+          " ORDER BY p.label")
      map-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
@@ -15284,6 +15357,20 @@
          {:builder-fn rs/as-unqualified-maps})
     (sort-by :label)
     vec))
+
+(defn question-pin-for-tutor!
+  "`user-id`'s pin `pin-id`, marked as seen by the tutor, for an Ask about
+   that one pin (plans/document-question-pins.md §7.2.2). The stamp and the
+   read are one statement, as `open-question-pins-for-tutor!`'s are. The pin's
+   status is not changed (§7.2.1).
+   Post: the row with `map_id`, or nil when the pin is not the user's."
+  [user-id pin-id]
+  (jdbc/execute-one! ds
+    [(str "UPDATE question_pins SET tutor_seen_at = coalesce(tutor_seen_at, now())
+            WHERE id = ? AND " owned-pin-clause "
+           RETURNING id, map_id, label, quote, heading_anchor, question, status")
+     pin-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
 
 (defn question-pin-tombstones
   "The tombstones of `user-id`'s map `map-id`, in label order
@@ -15604,16 +15691,20 @@
         ids (entity-id-array (map :entity_id ideas))
         files (group-by :entity_id
                 (jdbc/execute! ds
-                  ["SELECT DISTINCT r.entity_id, m.repo_topic_id, rt.title AS repo_title,
-                           m.repo_path,
+                  ;; A document map (plans/document-question-pins.md §1.1) has no
+                  ;; repository: its topic's title stands where a path would.
+                  ["SELECT DISTINCT r.entity_id, m.repo_topic_id,
+                           CASE WHEN m.repo_topic_id IS NULL THEN NULL ELSE rt.title END
+                             AS repo_title,
+                           coalesce(m.repo_path, rt.title) AS repo_path,
                            (jsonb_array_length(r.citations) > 0
                             OR EXISTS (SELECT 1 FROM question_pins p WHERE p.root_id = r.id))
                              AS material
                       FROM question_roots r
                       JOIN question_maps m ON m.id = r.map_id
-                      JOIN topics rt ON rt.id = m.repo_topic_id
+                      JOIN topics rt ON rt.id = coalesce(m.repo_topic_id, m.topic_id)
                      WHERE m.user_id = ? AND r.entity_id = ANY(?)
-                     ORDER BY m.repo_path"
+                     ORDER BY repo_path"
                    user-id ids]
                   opts))
         cards (into {} (map (juxt :entity_id identity))
@@ -15684,16 +15775,18 @@
                     opts)
             roots (jdbc/execute! ds
                     ["SELECT r.id, r.status, r.learned_at, m.repo_topic_id,
-                             rt.title AS repo_title, m.repo_path,
+                             CASE WHEN m.repo_topic_id IS NULL THEN NULL ELSE rt.title END
+                               AS repo_title,
+                             coalesce(m.repo_path, rt.title) AS repo_path,
                              (SELECT p.snapshot_topic_id FROM question_pins p
                                 JOIN topics st ON st.id = p.snapshot_topic_id AND st.user_id = ?
                                WHERE p.map_id = m.id
                                ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS file_topic_id
                         FROM question_roots r
                         JOIN question_maps m ON m.id = r.map_id
-                        JOIN topics rt ON rt.id = m.repo_topic_id
+                        JOIN topics rt ON rt.id = coalesce(m.repo_topic_id, m.topic_id)
                        WHERE m.user_id = ? AND r.entity_id = ?
-                       ORDER BY m.repo_path, r.id"
+                       ORDER BY repo_path, r.id"
                      user-id user-id entity-id]
                     opts)
             pins (group-by :root_id
@@ -15826,7 +15919,10 @@
        :quotes quotes
        :questions (into [] (comp (map :question) (remove str/blank?) (distinct)) pins)
        :topic-id (:snapshot_topic_id target)
-       :root-topic-id (root-of (:root_id target))})))
+       :root-topic-id (or (root-of (:root_id target))
+                         ;; A document map names no repository node; the pin's
+                         ;; own document root is the target's root.
+                         (get-root-topic-id (:snapshot_topic_id target)))})))
 
 (defn entity-card-ids
   "The ids of the cards linked to `user-id`'s entities `entity-ids`, for a

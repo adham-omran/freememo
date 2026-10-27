@@ -15,11 +15,12 @@
   "What the optimistic echo of a send shows: the text the server will store.
    nil for `/compact`, which stores no turn. A `/fork` stores its question
    (plans/assistant-chat-forks.md §4.3.2)."
-  [text wire-annotations question-pins?]
-  (let [command (when-not (or (seq wire-annotations) question-pins?)
+  [text wire-annotations question-pins? pin-id]
+  (let [command (when-not (or (seq wire-annotations) question-pins? pin-id)
                   (slash/parse text))]
     (cond
       question-pins? "Asking about my open pins…"
+      pin-id "Asking about my pinned passage…"
       (seq wire-annotations) (annotations/user-message wire-annotations text)
       (= :compact (:command command)) nil
       (= :fork (:command command)) (:question command)
@@ -34,15 +35,17 @@
    token !draft !refs !echo !active !error !annotations !pending-fork]
   (e/client
     (when token
-      (let [{:keys [id text chat mode web-search? question-pins? fork] ref-ids :refs
+      (let [{:keys [id text chat mode web-search? question-pins? pin-id fork] ref-ids :refs
              wire-annotations :annotations} submit
             refs-snapshot (e/snapshot refs)
             annotation-snapshot (e/snapshot annotation-state)
             annotated? (boolean (seq wire-annotations))
             ;; An Ask over pins carries no text: the server builds the turn
-            ;; from the open pins (plans/anchored-questions.md §6.2.5.1).
-            question-pins? (boolean question-pins?)
-            echo (echo-text text wire-annotations question-pins?)
+            ;; from the open pins (plans/anchored-questions.md §6.2.5.1), or
+            ;; from the one pin (plans/document-question-pins.md §4.4). Either
+            ;; leaves the composer as it is.
+            question-pins? (or (boolean question-pins?) (some? pin-id))
+            echo (echo-text text wire-annotations question-pins? pin-id)
             compact? (and (nil? echo) (not question-pins?))]
         (if (and (str/blank? text) (not annotated?) (not question-pins?))
           (token)
@@ -64,9 +67,14 @@
               (let [result
                     (e/server
                       (e/Offload
-                        #(if question-pins?
+                        #(cond
+                           pin-id
+                           (assistant/submit-pin-question!
+                             user-id root-topic-id page-topic-id chat mode web-search? id pin-id)
+                           question-pins?
                            (assistant/submit-question-pins!
                              user-id root-topic-id page-topic-id chat mode web-search? id)
+                           :else
                            (assistant/submit-chat-input!
                              user-id root-topic-id page-topic-id chat mode web-search?
                              text ref-ids id wire-annotations fork))))]

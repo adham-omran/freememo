@@ -30,11 +30,13 @@
 ;; Called from Electric bodies, so each var exists on both peers.
 
 (defn- install-layer!
-  "Attach the pin layer to `node`, whose text model is `model` (:blocks or
-   :source). Post: the layer handle."
-  [node model !popover]
+  "Attach the pin layer to `node`, whose text model is `model` (:blocks,
+   :source or :quill). `scope` is the :quill view, {:merged? :topic-id}
+   (plans/document-question-pins.md §3.3), and nil otherwise.
+   Post: the layer handle."
+  [node model scope !popover]
   #?(:cljs (pin-dom/install! node
-             {:model model
+             {:model model :scope scope
               :on-ask (fn [{:keys [quote anchor offset rect]}]
                         (reset! !popover {:id (random-uuid) :mode :new :quote quote
                                           :anchor anchor :offset offset :rect rect}))
@@ -48,6 +50,24 @@
 
 (defn- show-pins! [handle pins]
   #?(:cljs (when handle (pin-dom/set-pins! handle pins)) :clj nil))
+
+(defn- located-atom
+  "The layer's {pin-id {:range :placement}}, found in the browser on a :quill
+   layer and empty on the others."
+  [handle]
+  #?(:cljs (if handle (pin-dom/located handle) (atom {})) :clj nil))
+
+(defn- with-located
+  "`pins` with the browser's locations over the server's."
+  [pins located]
+  (if (seq located) (mapv #(merge % (get located (:id %))) pins) pins))
+
+(defn- ask-pin!
+  "Ask the tutor about pin `pin-id` (plans/document-question-pins.md §4.4).
+   The assistant panel takes the command, and the right panel opens it when
+   it is closed. Post: the dispatch outcome."
+  [pin-id]
+  (bus/dispatch! :ask-question-pin {:pin-id pin-id} :button))
 
 (defn- show-finger! [handle location scroll?]
   #?(:cljs (when handle (pin-dom/set-finger! handle location scroll?)) :clj nil))
@@ -192,8 +212,14 @@
                     (dom/props {:class "question-pin-popover__buttons"})
                     (e/amb
                       (if edit?
-                        (forms/Button! [::delete]
-                          :class "btn btn-sm btn-secondary" :label "Delete")
+                        (e/amb
+                          (forms/Button! [::delete]
+                            :class "btn btn-sm btn-secondary" :label "Delete")
+                          ;; Saves the question first, so the tutor reads
+                          ;; what the field shows (§4.4).
+                          (forms/Button! [::ask]
+                            :class "btn btn-sm btn-secondary"
+                            :label "Ask"))
                         (e/amb))
                       (forms/Button! [::save]
                         :class "btn btn-sm btn-primary question-pin-popover__save"
@@ -218,6 +244,19 @@
                       (do (e/on-unmount #(reset! !popover nil))
                           (t)))))
 
+                (= [::ask] command)
+                (let [question (e/snapshot (or (input-value node) ""))
+                      result (e/server
+                               (e/Offload
+                                 #(edit-pin!* user-id (:id pin)
+                                    {:op :question :text question})))]
+                  (case result
+                    (if (:error result)
+                      (case (reset! !error (:error result)) (t))
+                      (case (ask-pin! (:id pin))
+                        (do (e/on-unmount #(reset! !popover nil))
+                            (t))))))
+
                 (= [::delete] command)
                 (let [result (e/server
                                (e/Offload #(edit-pin!* user-id (:id pin) {:op :delete})))]
@@ -238,6 +277,13 @@
       (e/for-by identity [_k (if popover [(:id popover)] [])]
         (PinPopover user-id spec popover !popover)))))
 
+(defn row-text
+  "What a pin's row shows: its question, else its quote. A pin that starts on
+   another page says which (plans/document-question-pins.md §3.3.3)."
+  [{:keys [question quote group hint_page]}]
+  (str (when (and (= "elsewhere" group) hint_page) (str "On page " hint_page ": "))
+    (if (seq question) (excerpt question 80) (str "“" (excerpt quote 80) "”"))))
+
 (e/defn PinRow
   "One row of the pin list. Post: its button commands."
   [pin handle]
@@ -249,9 +295,7 @@
         (dom/text (str (:label pin))))
       (dom/span
         (dom/props {:class "question-pin-list__text" :dir "auto"})
-        (dom/text (if (seq (:question pin))
-                    (excerpt (:question pin) 80)
-                    (str "“" (excerpt (:quote pin) 80) "”"))))
+        (dom/text (row-text pin)))
       (when (:range pin)
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary" :type "button"
@@ -267,16 +311,19 @@
           (forms/Button! [::delete-row (:id pin)]
             :class "btn btn-sm btn-secondary" :label "Delete"))))))
 
-(defn- grouped
-  "Pins with their list group: `open` and `closed` when anchored here, and
-   `unmatched` when the quote does not match this snapshot (§6.1.3), whatever
-   the lifecycle. Order: open, closed, unmatched, each by label."
+(defn grouped
+  "Pins with their list group: `open` and `closed` when anchored here,
+   `elsewhere` when a document pin starts on another page
+   (plans/document-question-pins.md §3.3.2), and `unmatched` when the quote
+   does not match this snapshot (§6.1.3), whatever the lifecycle. Order: open,
+   closed, elsewhere, unmatched, each by label."
   [pins]
   (->> pins
-    (map #(assoc % :group (cond (nil? (:range %)) "unmatched"
+    (map #(assoc % :group (cond (= :elsewhere (:placement %)) "elsewhere"
+                                (nil? (:range %)) "unmatched"
                                 (= "open" (:status %)) "open"
                                 :else "closed")))
-    (sort-by (juxt #({"open" 0 "closed" 1 "unmatched" 2} (:group %)) :label))
+    (sort-by (juxt #({"open" 0 "closed" 1 "elsewhere" 2 "unmatched" 3} (:group %)) :label))
     vec))
 
 (defn deleted-header
@@ -364,12 +411,14 @@
   "Make the pin commands available while this pane is mounted (§6.6.2), and
    tell the assistant panel which file the pane shows: its document key, so a
    citation of that document scrolls to its passage (§6.5.4), and its ref
-   spec, so the map card reads the same file."
-  [handle spec doc-key open-count]
+   spec, so the map card reads the same file. The invoker is keyed by the
+   pane's node, because a code pane and a document editor can both publish it
+   (plans/document-question-pins.md §2.2)."
+  [handle node spec doc-key open-count]
   (e/client
-    (bus/publish-invoker! :ask-about-selection (fn [] (ask-current! handle)))
+    (bus/publish-invoker! :ask-about-selection node (fn [] (ask-current! handle)))
     (e/on-unmount (fn []
-                    (bus/retract-invoker! :ask-about-selection)
+                    (bus/retract-invoker! :ask-about-selection node)
                     (bus/retract-ctx! [:question-open-pins :question-pane-doc :question-pane-ref])))
     (bus/publish-ctx! {:question-open-pins open-count :question-pane-doc doc-key
                        :question-pane-ref spec})))
@@ -386,18 +435,20 @@
 (e/defn PinLayer
   "Pins, the popover, the pin list and the finger for pane `node` showing the
    file `spec` names. `model` is the pane's text model, :blocks for rendered
-   Markdown and :source for code. Mounted BESIDE the pane's element, never
-   inside it: the layer adds no node to the pane."
-  [user-id spec node model list-open? !list-open?]
+   Markdown, :source for code and :quill for the document editor, whose
+   `scope` is {:merged? :topic-id} (nil for the others). Mounted BESIDE the
+   pane's element, never inside it: the layer adds no node to the pane."
+  [user-id spec node model scope list-open? !list-open?]
   (e/client
     ;; Keyed by pane AND file at a commit (§6.3.6 of
     ;; plans/commit-range-walkthrough.md): a pane stays mounted when the route
     ;; or the step moves to another file, and the layer, its popover and its
     ;; pins belong to one.
-    (e/for-by identity [_k [[node spec model]]]
+    (e/for-by identity [_k [[node spec model scope]]]
       (let [!popover (atom nil)
             popover (e/watch !popover)
-            handle (install-layer! node model !popover)
+            handle (install-layer! node model scope !popover)
+            located (e/watch (located-atom handle))
             rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
             ;; SERVER-FORM binding: the view stays on the server, and only the
             ;; pins cross, with their locations in this file.
@@ -407,10 +458,10 @@
             open-count (e/server (or (:open-count view) 0))
             doc-key (e/server (e/Offload #(doc-key* user-id spec)))]
         (e/on-unmount #(teardown-layer! handle))
-        (PublishPinCommands handle spec doc-key open-count)
+        (PublishPinCommands handle node spec doc-key open-count)
         (Finger user-id spec handle)
         (PinPopoverHost user-id spec popover !popover)
-        (PinList user-id pins tombstones list-open? !list-open? handle)
+        (PinList user-id (with-located pins located) tombstones list-open? !list-open? handle)
         (show-pins! handle pins)))))
 
 (e/defn PinHeaderControls

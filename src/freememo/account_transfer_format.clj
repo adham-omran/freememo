@@ -487,26 +487,29 @@
    :kg_entities {:where "t.user_id = ?" :params 1 :order "t.id"}
 
    ;; Question maps (plans/anchored-questions.md §6.1.6). A map is scoped
-   ;; through its repository node as well as its user, so a map whose
-   ;; repository is staged for deletion stays behind with it. Roots and pins
+   ;; through its repository node, or its document topic
+   ;; (plans/document-question-pins.md §1.3.1), as well as its user, so a map
+   ;; whose topic is staged for deletion stays behind with it. Exactly one of
+   ;; the two keys is set, so `coalesce` names the one there is. Roots and pins
    ;; follow their map. `question_roots.citations` holds quotes and heading
    ;; anchors only, never an id or HTML, so it needs no remap.
-   :question_maps {:where (str "t.user_id = ? AND t.repo_topic_id IN (" owned-topics ")")
+   :question_maps {:where (str "t.user_id = ? AND coalesce(t.repo_topic_id, t.topic_id) IN ("
+                            owned-topics ")")
                    :params 2 :order "t.id"}
 
    :question_roots {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
-                             " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                             " WHERE m.user_id = ? AND coalesce(m.repo_topic_id, m.topic_id) IN (" owned-topics "))")
                     :params 2 :order "t.id"}
 
    :question_pins {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
-                            " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                            " WHERE m.user_id = ? AND coalesce(m.repo_topic_id, m.topic_id) IN (" owned-topics "))")
                    :params 2 :order "t.id"}
 
    ;; A deleted seen pin's number (plans/pin-numbering-reuse-and-tombstones.md
    ;; §6). It holds the number on the target too, so an imported chat that
    ;; names it never meets a new pin with the same number. No id column.
    :question_pin_tombstones {:where (str "t.map_id IN (SELECT m.id FROM question_maps m"
-                                      " WHERE m.user_id = ? AND m.repo_topic_id IN (" owned-topics "))")
+                                      " WHERE m.user_id = ? AND coalesce(m.repo_topic_id, m.topic_id) IN (" owned-topics "))")
                              :params 2 :order "t.map_id, t.label"}
 
    ;; Commit-range walkthroughs (plans/commit-range-walkthrough.md §6.9.2),

@@ -111,6 +111,12 @@
 
 ;; ── Components ─────────────────────────────────────────────────────
 
+(defn- where-label
+  "A map's file and its repository, or a document map's title alone
+   (plans/document-question-pins.md §1.1)."
+  [{:keys [repo_path repo_title]}]
+  (str repo_path (when repo_title (str " (" repo_title ")"))))
+
 (e/defn IdeaAction
   "One button that runs one idea command (§3.8, §5.3) and handles its own
    result, as the map view's rows do: the command never leaves this frame.
@@ -479,9 +485,9 @@
                   (if-let [file-id (:file_topic_id root)]
                     (dom/button
                       (dom/props {:type "button" :class "known-ideas__idea"})
-                      (dom/text (str (:repo_path root) " (" (:repo_title root) ")"))
+                      (dom/text (where-label root))
                       (dom/On "click" (fn [_] (open-file-on-map! navigate! file-id)) nil))
-                    (dom/span (dom/text (str (:repo_path root) " (" (:repo_title root) ")"))))
+                    (dom/span (dom/text (where-label root))))
                   (dom/span (dom/props {:class "idea-page__muted"})
                     (dom/text (str " " (root-text root)))))))
             (when (empty? roots)

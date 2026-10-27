@@ -43,3 +43,18 @@
     (is (= [{:quote "a" :anchor "h"} {:quote "b" :anchor "h"}]
           (view/distinct-citations [{:quote "a" :anchor "h"} {:quote "b" :anchor "h"}
                                     {:quote "a" :anchor "other"}])))))
+
+(deftest document-pin-placement
+  (let [place view/document-pin-placement
+        on-3 {:snapshot_topic_id 3 :hint_page 3}
+        page-3 {:merged? false :topic-id 3}
+        page-5 {:merged? false :topic-id 5}]
+    (testing "3.3.1: the merged view paints what it finds and marks the rest stale"
+      (is (= :painted (place on-3 true {:merged? true})))
+      (is (= :stale (place on-3 false {:merged? true}))))
+    (testing "3.3.1: a topic with no pages behaves as the merged view"
+      (is (= :stale (place {:snapshot_topic_id 9 :hint_page nil} false {:merged? false :topic-id 9}))))
+    (testing "3.3.2: a page view"
+      (is (= :painted (place on-3 true page-5)) "found here, whatever its hint")
+      (is (= :stale (place on-3 false page-3)) "its own page, not found")
+      (is (= :elsewhere (place on-3 false page-5)) "made on page 3, page 5 open"))))

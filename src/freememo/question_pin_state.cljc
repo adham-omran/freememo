@@ -44,3 +44,11 @@
   {:pre [(#{:chat :map} view)]}
   (reset! !panel-view view)
   nil)
+
+(defonce !document-pin-list-open?
+  ;; Whether the document editor's pin list shows
+  ;; (plans/document-question-pins.md §3.4.2). The content toolbar's Pins
+  ;; toggle writes it and the editor's pin layer shows the list. The two are
+  ;; separate Electric subtrees, so the state is namespace level. The layer
+  ;; sets it false when its document changes.
+  (atom false))

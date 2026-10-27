@@ -26,6 +26,7 @@
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
+   [freememo.editor-pin-layer :refer [EditorPinControls]]
    [freememo.tooltip :as tooltip]
    [freememo.focus-reader :refer [FocusReaderToggle]]))
 
@@ -221,6 +222,10 @@
               (dom/div
                 (dom/props {:class "toolbar-group"})
                 (ExtractActions))
+
+          ;; Question pins on the document in the editor, with their own
+          ;; divider, or nothing (plans/document-question-pins.md §3.4.2).
+              (EditorPinControls)
 
           ;; Divider hides with the doc-context group at tier 5.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))

@@ -75,3 +75,20 @@
   "The Map tab's label, for example `Map 2 of 4`."
   [roots]
   (str "Map " (done-count roots) " of " (count roots)))
+
+(defn document-pin-placement
+  "Where a document pin shows in the open editor (plans/document-question-pins.md
+   §3.3). `found?` says whether its quote was found in the editor's text.
+   `scope` is {:merged? :topic-id}: the merged view of a PDF, or one page or
+   topic, `topic-id` being the open topic.
+   Post: :painted, :stale, or :elsewhere.
+     - In the merged view, or a topic with no pages, a pin found anywhere is
+       painted and a pin found nowhere is stale (§3.3.1).
+     - In a page view, a pin found on this page is painted whatever its hint.
+       A pin whose hint is this page and that is not found is stale. Any other
+       pin starts on another page and does not show here (§3.3.2)."
+  [{:keys [snapshot_topic_id hint_page]} found? {:keys [merged? topic-id]}]
+  (cond
+    found? :painted
+    (or merged? (nil? hint_page) (= snapshot_topic_id topic-id)) :stale
+    :else :elsewhere))

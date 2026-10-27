@@ -10,7 +10,7 @@
    label badges, the virtual finger and the Ask button live in one layer
    appended to `document.body`, positioned from range rects.
 
-   Two text models, one per surface:
+   Three text models, one per surface:
      :blocks  rendered Markdown. A location is {:start [block offset]
               :end [block offset]}. `offset` counts the characters of the
               block's text nodes, as the server's Jsoup parse of the same HTML
@@ -18,7 +18,16 @@
      :source  code. Every text node under the container, in order, is the
               file's source exactly, so a location is {:offsets [start end]},
               character offsets into the whole source. A folded run keeps its
-              text nodes, hidden, so folding moves no offset. KaTeX rewrites a formula after the HTML lands, so a typeset
+              text nodes, hidden, so folding moves no offset.
+     :quill   the Quill document editor (plans/document-question-pins.md §3).
+              A location is the :blocks shape over `.ql-editor`'s children,
+              but the SERVER never computes one: it cannot see unsaved text.
+              The layer finds each pin's quote in the live editor itself, with
+              `freememo.quote-fold`, the fold the server uses, and finds them
+              again after every edit. A merged view's page markers,
+              `h6[id^=fm-page-]`, are no part of any quote.
+
+   KaTeX rewrites a formula after the HTML lands, so a typeset
    `.katex` or `.katex-display` counts as its TeX plus its two delimiters — the
    text the server saw — and a range never starts or ends inside one.
 
@@ -27,6 +36,9 @@
    (CLAUDE.md, \"JS Library Init Side Effects in e/defn\")."
   (:require [clojure.string :as str]
             [freememo.line-bands :as line-bands]
+            [freememo.page-merge :as page-merge]
+            [freememo.question-map-view :as qmv]
+            [freememo.quote-fold :as quote-fold]
             [freememo.selection-placement :as sel-place]))
 
 ;; ── Text model ─────────────────────────────────────────────────────
@@ -44,6 +56,19 @@
       (and (.contains cl "katex")
         (not (some-> (.-parentElement el) (.closest ".katex-display")))))))
 
+(defn- editor-ui?
+  "Quill's own controls inside the text, such as a code block's language
+   `select.ql-ui`. They are no part of the document's text."
+  [^js el]
+  (.contains (.-classList el) "ql-ui"))
+
+(defn- marker?
+  "A merged view's page marker, `<h6 id=\"fm-page-N\">Page N</h6>`. Its text
+   is presentation, never part of a quote (plans/document-question-pins.md
+   §2.3)."
+  [^js el]
+  (and (= 1 (.-nodeType el)) (str/starts-with? (str (.-id el)) page-merge/marker-id-prefix)))
+
 (defn- segments
   "The text units of `block` in document order: {:text node :len n} for a text
    node, {:formula el :len n} for a typeset formula."
@@ -54,6 +79,7 @@
                 (= 3 (.-nodeType n)) (.push out {:text n :len (.-length n)})
                 (and (= 1 (.-nodeType n)) (formula? n))
                 (.push out {:formula n :len (+ 4 (count (tex-of n)))})
+                (and (= 1 (.-nodeType n)) (editor-ui? n)) nil
                 :else (doseq [c (array-seq (.-childNodes n))] (walk c))))]
       (walk block))
     (vec out)))
@@ -123,6 +149,89 @@
       (let [rng (.createRange js/document)]
         (when (and (set-boundary! rng b1 so true) (set-boundary! rng b2 eo false))
           rng)))))
+
+;; ── Locating in the editor (:quill) ────────────────────────────────
+
+(defn- formula-text
+  "A typeset formula as the stored text names it: its TeX in the delimiters
+   `formulas->tex!` writes. Its length is the formula's `segments` length."
+  [^js el]
+  (let [tex (tex-of el)]
+    (if (.contains (.-classList el) "katex-display")
+      (str "\\[" tex "\\]")
+      (str "\\(" tex "\\)"))))
+
+(defn- text-index
+  "The folded text of `container`'s blocks and, per character, where it came
+   from, the way `quote-anchor/block-positions` indexes stored HTML.
+   Post: {:text s :positions #js [block offset …] :heading-at {id index}}, two
+         entries of `positions` per character of `s`. `block` indexes the
+         container's element children, page markers included, so a location
+         is the :blocks shape `range-for` reads. `offset` counts `segments`
+         units. A page marker's text is skipped, and its id is recorded in
+         `heading-at`, so a pin made in the merged view prefers its page."
+  [^js container]
+  (let [parts (array)
+        positions (array)
+        heading-at (volatile! {})]
+    (doseq [[b ^js block] (map-indexed vector (array-seq (.-children container)))]
+      (when (and (re-matches #"H[1-6]" (.-tagName block)) (seq (.-id block)))
+        (vswap! heading-at assoc (.-id block) (.-length parts)))
+      (when-not (marker? block)
+        (loop [[seg & more] (segments block) acc 0]
+          (when seg
+            (let [t (if-let [^js n (:text seg)] (.-data n) (formula-text (:formula seg)))]
+              (dotimes [i (.-length t)]
+                (when-let [c (quote-fold/fold-char (.charAt t i))]
+                  (.push parts c)
+                  (.push positions b)
+                  (.push positions (+ acc i))))
+              (recur more (+ acc (:len seg))))))))
+    {:text (.join parts "") :positions positions :heading-at @heading-at}))
+
+(defn- locate-in-index
+  "Where `quote` sits in `index` (`text-index`), as `quote-anchor/locate`
+   answers for stored HTML: an exact match in the folded space, the first at
+   or after heading `anchor`, else the first in the document.
+   Post: {:start [block offset] :end [block offset]}, `:end` exclusive, or nil."
+  [{:keys [^js text ^js positions heading-at]} quote anchor]
+  (let [needle (quote-fold/normalize quote)]
+    (when (seq needle)
+      (let [from (get heading-at anchor 0)
+            j (.indexOf text needle from)
+            i (if (neg? j) (.indexOf text needle 0) j)]
+        (when-not (neg? i)
+          (let [e (+ i (count needle) -1)]
+            {:start [(aget positions (* 2 i)) (aget positions (inc (* 2 i)))]
+             :end [(aget positions (* 2 e)) (inc (aget positions (inc (* 2 e))))]}))))))
+
+(defn- relocate!
+  "Find each pin's quote in the live editor, and decide where it shows
+   (`question-map-view/document-pin-placement`). A painted pin gets its
+   `:range`; any other gets none. Publishes {pin-id {:range :placement}} on
+   the handle's `!located`, which the pin list reads, only when it changed."
+  [{:keys [^js container !state !located]}]
+  (let [{:keys [source-pins scope]} @!state
+        index (when (seq source-pins) (text-index container))
+        placed (mapv (fn [pin]
+                       (let [loc (when index
+                                   (locate-in-index index (:quote pin) (:heading_anchor pin)))
+                             placement (qmv/document-pin-placement pin (some? loc) scope)]
+                         (assoc pin :range (when (= :painted placement) loc)
+                                    :placement placement)))
+                 source-pins)
+        located (into {} (map (juxt :id #(select-keys % [:range :placement]))) placed)]
+    (swap! !state assoc :pins placed)
+    (when (not= located @!located) (reset! !located located))))
+
+(defn- resolve-location
+  "`location` as a range location. A {:quote :anchor} location, which the
+   server gives on a document (`question-map/locate-for-finger`), is found in
+   the live editor here."
+  [^js container location]
+  (if-let [q (:quote location)]
+    (locate-in-index (text-index container) q (:anchor location))
+    location))
 
 ;; ── Capturing a selection ──────────────────────────────────────────
 
@@ -216,6 +325,9 @@
   (do
     (let [holder (.createElement js/document "div")]
       (.appendChild holder (.cloneContents rng))
+      (doseq [^js n (js/Array.from (.querySelectorAll holder
+                                     (str "[id^=\"" page-merge/marker-id-prefix "\"], .ql-ui")))]
+        (.remove n))
       (formulas->tex! holder)
       (let [quote (str/trim (str/replace (.-textContent holder) #"\s+" " "))
             box (.getBoundingClientRect rng)]
@@ -228,6 +340,17 @@
 ;; ── The layer ──────────────────────────────────────────────────────
 
 (def ^:private highlight-name "question-pin")
+
+(defonce ^:private !layers
+  ;; container → handle, for the one layer installed on each container. The
+  ;; format menu reads it to reach the layer of ITS editor, never another
+  ;; one's (plans/document-question-pins.md §2.2).
+  (js/WeakMap.))
+
+(defn layer-for
+  "The handle of the pin layer installed on `container`, or nil."
+  [^js container]
+  (when container (.get !layers container)))
 
 (defn- el [tag cls]
   (doto (.createElement js/document tag) (.setAttribute "class" cls)))
@@ -360,19 +483,34 @@
         badges (el "div" "question-pin-layer__badges")
         finger (el "div" "question-pin-layer__finger")
         ask (el "button" "btn btn-sm btn-primary question-pin-ask")
-        !state (atom (merge callbacks {:pins [] :finger nil}))
+        !state (atom (merge callbacks {:pins [] :source-pins [] :finger nil}))
+        ;; The editor's own format menu is its Ask (§2.1), so a :quill layer
+        ;; shows no Ask button.
+        quill? (= :quill (:model callbacks))
         handle {:container container :layer layer :badges badges :finger finger
-                :ask ask :!state !state}
+                :ask ask :!state !state :!located (atom {})}
         !frame (atom nil)
         schedule! (fn []
                     (when-not @!frame
                       (reset! !frame (js/requestAnimationFrame
                                        (fn [] (reset! !frame nil)
-                                         (repaint! handle) (place-ask! handle))))))
+                                         (repaint! handle)
+                                         (when-not quill? (place-ask! handle)))))))
+        ;; Quill rebuilds a line when it is edited, so a pin is found again
+        ;; once the edits pause (§3.2.3). 300 ms is chosen, not measured.
+        !relocate-timer (atom nil)
+        relocate-soon! (fn []
+                         (some-> @!relocate-timer js/clearTimeout)
+                         (reset! !relocate-timer
+                           (js/setTimeout (fn [] (reset! !relocate-timer nil)
+                                            (relocate! handle) (schedule!))
+                             300)))
         on-up (fn [_] (js/setTimeout #(place-ask! handle) 0))
         on-selection (fn [_] (when-not (live-range container)
                                (set! (.. ask -style -display) "none")))
-        observer (js/MutationObserver. (fn [_ _] (schedule!)))]
+        observer (js/MutationObserver. (fn [_ _]
+                                         (schedule!)
+                                         (when quill? (relocate-soon!))))]
     (set! (.-type ask) "button")
     (set! (.-textContent ask) "Ask")
     (.setAttribute ask "aria-label" "Ask about the selected passage")
@@ -385,40 +523,66 @@
     (.appendChild layer finger)
     (.appendChild layer ask)
     (.appendChild (.-body js/document) layer)
-    (.addEventListener container "mouseup" on-up)
-    (.addEventListener container "keyup" on-up)
+    (when-not quill?
+      (.addEventListener container "mouseup" on-up)
+      (.addEventListener container "keyup" on-up))
     (.addEventListener container "scroll" schedule!)
     (.addEventListener js/window "resize" schedule!)
     (.addEventListener js/document "selectionchange" on-selection)
     (.observe observer container #js {:childList true :subtree true :characterData true})
-    (assoc handle
-      :teardown! (fn []
-                   (.disconnect observer)
-                   (.removeEventListener container "mouseup" on-up)
-                   (.removeEventListener container "keyup" on-up)
-                   (.removeEventListener container "scroll" schedule!)
-                   (.removeEventListener js/window "resize" schedule!)
-                   (.removeEventListener js/document "selectionchange" on-selection)
-                   (when (exists? js/Highlight) (.delete (.-highlights js/CSS) highlight-name))
-                   (.remove layer))
-      :schedule! schedule!)))
+    (let [;; Electric may mount a re-keyed layer before it unmounts the old
+          ;; one, so a teardown removes the registry entry only when it is
+          ;; still its own.
+          token (js-obj)
+          handle (assoc handle
+                   :token token
+                   :schedule! schedule!
+                   :relocate! #(relocate! handle)
+                   :teardown!
+                   (fn []
+                     (.disconnect observer)
+                     (some-> @!relocate-timer js/clearTimeout)
+                     (when (identical? token (:token (.get !layers container)))
+                       (.delete !layers container))
+                     (.removeEventListener container "mouseup" on-up)
+                     (.removeEventListener container "keyup" on-up)
+                     (.removeEventListener container "scroll" schedule!)
+                     (.removeEventListener js/window "resize" schedule!)
+                     (.removeEventListener js/document "selectionchange" on-selection)
+                     (when (exists? js/Highlight)
+                       (.delete (.-highlights js/CSS) highlight-name))
+                     (.remove layer)))]
+      (.set !layers container handle)
+      handle)))
 
 (defn set-pins!
-  "Show `pins` ([{:id :label :question :status :range}]) in the pane."
-  [{:keys [!state schedule!]} pins]
-  (swap! !state assoc :pins (vec pins))
+  "Show `pins` ([{:id :label :question :status :range}]) in the pane. On a
+   :quill layer the server's `:range` is ignored: each pin is found in the
+   live editor by its quote (`relocate!`)."
+  [{:keys [!state schedule! relocate!]} pins]
+  (if (= :quill (:model @!state))
+    (do (swap! !state assoc :source-pins (vec pins))
+        (relocate!))
+    (swap! !state assoc :pins (vec pins)))
   (schedule!)
   nil)
+
+(defn located
+  "The atom of a :quill layer's {pin-id {:range :placement}}, which changes
+   each time the pins are found again. Empty on other layers."
+  [{:keys [!located]}]
+  !located)
 
 (defn set-finger!
   "Point at `location` in the pane, or stop pointing when it is nil. With
    `scroll?`, also scroll the pane so the passage is in view (§6.5.4)."
   [{:keys [container !state schedule!]} location scroll?]
-  (swap! !state assoc :finger location)
-  (when-let [^js rng (when (and scroll? location) (range-for container location))]
-    (let [^js node (.-startContainer rng)
-          ^js target (if (= 1 (.-nodeType node)) node (.-parentElement node))]
-      (.scrollIntoView target #js {:behavior "smooth" :block "center"})))
+  (let [location (some->> location (resolve-location container))]
+    (swap! !state assoc :finger location)
+    (when-let [^js rng (when (and scroll? location) (range-for container location))]
+      (let [^js node (.-startContainer rng)
+            ^js target (if (= 1 (.-nodeType node)) node (.-parentElement node))]
+        (.scrollIntoView target #js {:behavior "smooth" :block "center"}))))
   (schedule!)
   nil)
 

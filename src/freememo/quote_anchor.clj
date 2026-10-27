@@ -58,7 +58,8 @@
    here rather than beside the caller for one reason: the writer and the eraser
    must agree on the tint colour, the marker shape and the heading text, and one
    namespace is the only place they cannot drift."
-  (:require [clojure.string :as str])
+  (:require [clojure.string :as str]
+            [freememo.quote-fold :as quote-fold])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document Element Node TextNode]))
 
@@ -109,41 +110,16 @@
   #"\s*\[\d+\]\s*")
 
 ;; ── Normalization ──────────────────────────────────────────────────
+;;
+;; The fold is `freememo.quote-fold`'s, the one definition both peers share: a
+;; pin in a live Quill editor is matched in the browser with the same fold
+;; (plans/document-question-pins.md §3.1.1). No copy lives here.
 
-(def ^:private quote-folds
-  "Curly punctuation folded to its ASCII form. Every entry is one character to
-   one character, per the namespace docstring's 1:1 invariant.
+(def ^:private fold-char quote-fold/fold-char)
 
-   Written as escapes on purpose: a bare curly quote in source is a reader
-   hazard, and an editor that normalizes punctuation would silently empty this
-   map."
-  {\u2018 \' \u2019 \'      ; single quotation marks
-   \u201c \" \u201d \"      ; double quotation marks
-   \u2032 \' \u2033 \"})    ; prime, double prime
-
-(defn- fold-char
-  "Pre : `c` is a character.
-   Post: nil when `c` is whitespace, otherwise the folded character."
-  [^Character c]
-  (when-not (Character/isWhitespace c)
-    (get quote-folds c c)))
-
-(defn normalize
-  "Fold `s` into the comparison space.
-
-   Pre : `s` is a string or nil.
-   Post: a string holding no whitespace and no curly quotation mark. nil yields
-         \"\".
-   Inv : the result's length is at most the input's. Each output character
-         comes from exactly one input character."
-  [s]
-  (if (nil? s)
-    ""
-    (let [sb (StringBuilder.)]
-      (dotimes [i (count s)]
-        (when-let [c (fold-char (.charAt ^String s i))]
-          (.append sb c)))
-      (.toString sb))))
+(def normalize
+  "Fold `s` into the comparison space (`quote-fold/normalize`)."
+  quote-fold/normalize)
 
 ;; ── Chapter text ───────────────────────────────────────────────────
 ;;

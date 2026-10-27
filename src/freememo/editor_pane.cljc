@@ -13,6 +13,7 @@
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.merged-page-bridge :refer [MergedPageBridge]]
+   [freememo.editor-pin-layer :refer [EditorPinLayer]]
    [freememo.reading-anchor :as reading-anchor]
    [freememo.reading-position-view :refer [ReadingPosition]]
    [freememo.context-menu-surface :as menu-surface]
@@ -370,6 +371,9 @@
                             :data-role "editor-host"})
                 (binding [dctx/initial-html static-content]
                   (RichTextEditorComponent))
+                ;; Question pins on the text (plans/document-question-pins.md
+                ;; §3.4). Beside the editor, never inside it.
+                (EditorPinLayer)
                 ;; Lend the topic to the context menu's image rows (pin, image
                 ;; occlusion). The editor is plain JS and knows no topic; the
                 ;; Quill installer reads these facts at right-click time

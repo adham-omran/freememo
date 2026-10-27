@@ -126,7 +126,7 @@
    :kg_page_extractions {:graph_topic_id :topics :page_topic_id :topics}
    :kg_question_facts {:question_id :kg_questions :fact_id :kg_facts}
    :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}
-   :question_maps {:repo_topic_id :topics}
+   :question_maps {:repo_topic_id :topics :topic_id :topics}
    :question_roots {:map_id :question_maps :entity_id :kg_entities
                     :created_run_id :assistant_runs}
    :question_pins {:map_id :question_maps :snapshot_topic_id :topics
@@ -183,7 +183,9 @@
    ;; map. `entity_id`, `snapshot_topic_id` and `root_id` are nullable with ON
    ;; DELETE SET NULL, so an untranslatable value arrives as null, the same
    ;; outcome the source schema produces.
-   :question_maps #{:repo_topic_id}
+   ;; Exactly one of the two keys is set; the other arrives as null and is
+   ;; left alone (plans/document-question-pins.md §1.3.3).
+   :question_maps #{:repo_topic_id :topic_id}
    :question_roots #{:map_id}
    :question_pins #{:map_id}
    :question_pin_tombstones #{:map_id}

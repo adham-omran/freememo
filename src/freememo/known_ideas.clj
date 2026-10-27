@@ -30,7 +30,10 @@
   "The files an idea came from, joined with commas, else its repositories."
   [{:keys [origin-files origin-repos]}]
   (if (seq origin-files)
-    (str/join ", " (map #(str (:repo_path %) " (" (:repo_title %) ")") origin-files))
+    (str/join ", " (map (fn [{:keys [repo_path repo_title]}]
+                           ;; A document map has a title and no repository.
+                           (str repo_path (when repo_title (str " (" repo_title ")"))))
+                      origin-files))
     (str/join ", " (map :repo_title origin-repos))))
 
 (defn- check-text
