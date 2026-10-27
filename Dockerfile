@@ -9,18 +9,25 @@ WORKDIR /app
 # commits built fine on a 16 GB machine whose quarter is 3996 MB. A build that
 # fails or passes according to the builder's RAM.
 #
-# 3g sits above the measured need — 2560 MB produces a complete 64.6 MB jar,
-# 1982 MB does not — and inside the deploy box's headroom: 7.9 GB total, less
-# the live color's 3 GiB mem_limit and ~0.3 GB of postgres/ontop/caddy.
-# RAISING THIS WITHOUT RAISING THAT HEADROOM risks the kernel OOM killer
-# choosing the LIVE container, which is an outage rather than a failed build.
+# 3g sat above the measured need — 2560 MB produced a complete 64.6 MB jar,
+# 1982 MB did not — and inside the old fedora box's headroom: 7.9 GB total,
+# less the live color's 3 GiB mem_limit and ~0.3 GB of postgres/ontop/caddy.
+#
+# 4g since 2026-10-27. Run 414 (afc4005, 584 files) died with
+# `OutOfMemoryError: Java heap space` at 242 s of the `:prod` compile under
+# 3g, where run 413 (581 files) had completed at 241 s. The same tree built
+# under 3g on a workstation, so the need sits at the 3g edge.
+# The build now runs on truenas (deploy-truenas.sh), which evicts the resident
+# model before building to free the memory. RAISING THIS WITHOUT THAT HEADROOM
+# risks the kernel OOM killer choosing the LIVE container, which is an outage
+# rather than a failed build.
 #
 # Absolute, not MaxRAMPercentage. docker-compose.prod.yml uses a percentage for
 # the RUNTIME and is right to: that container has a `mem_limit` for the
 # percentage to be a percentage OF. This stage has no limit, so a percentage is
 # a share of the host — the accident being fixed. What the compile needs is a
 # property of the codebase, not of the machine that happens to build it.
-ENV JAVA_TOOL_OPTIONS="-Xmx3g"
+ENV JAVA_TOOL_OPTIONS="-Xmx4g"
 
 COPY deps.edn deps.edn
 ARG VERSION
