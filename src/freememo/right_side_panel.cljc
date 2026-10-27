@@ -24,8 +24,8 @@
    [freememo.assistant-panel :refer [AssistantPanel]]
    [freememo.assistant-chat-history :as history]
    [freememo.poem-panel :as poem :refer [PoemPanel]]
+   [freememo.assistant-pane-requests :as pane-requests]
    [freememo.command-bus :as bus]
-   [freememo.question-pin-state :as pin-state]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])))
@@ -163,24 +163,10 @@
         (history/AssistantChatEffects user-id root-topic-id show-right-pane!
           !active !history-open? !renaming-active? !chat-action !seeded? !pending-fork)
 
-        ;; An Ask over pins is consumed by the AssistantPanel, which is not
-        ;; mounted while this panel is closed or on another tab. Opening the
-        ;; assistant tab mounts it, and it takes the waiting invocation
-        ;; (plans/anchored-questions.md §6.2.5).
-        (e/for [_request (bus/Requests :ask-question-pins)]
-          (show-right-pane! "assistant"))
-        (e/for [_request (bus/Requests :ask-walkthrough-tutor)]
-          (show-right-pane! "assistant"))
-        ;; Show question map: open the pane on the Map view
-        ;; (plans/question-map-tab.md §4.6.1). With no map, the panel falls
-        ;; back to Chat once its read returns (§4.2.4).
-        (e/for [{:keys [invocation-id]} (bus/Requests :show-question-map)]
-          (let [[t _] (e/Token invocation-id)]
-            (when t
-              (case (show-right-pane! "assistant")
-                (case (pin-state/show-view! :map)
-                  (case (bus/consume! invocation-id)
-                    (t)))))))
+        ;; Asks, walkthrough openers and Show question map open the pane
+        ;; for the AssistantPanel to take. Its own namespace, for this
+        ;; component's 64KB method cap.
+        (pane-requests/OpenForRequests show-right-pane!)
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-assistant-open user-id root-topic-id save-val)))]

@@ -61,6 +61,7 @@
             [freememo.commands :as commands]
             [freememo.editor-popovers :as editor-popovers]
             [freememo.icon-paths :as icon-paths]
+            [freememo.question-pin-dom :as pin-dom]
             [freememo.selection-placement :as sel-place]
             [freememo.tooltip :as tooltip]))
 
@@ -399,6 +400,27 @@
   (bus/dispatch! command-id)
   (set! (.. card -style -display) "none"))
 
+(defn- pin-question!
+  "Open the pin popover for the cached range, through the pin layer of THIS
+   menu's editor (plans/document-question-pins.md §2.2). Never through the
+   command bus: with two editors mounted, the bus could reach the other one."
+  [^js q get-rng ^js card]
+  (when-let [layer (pin-dom/layer-for (.-root q))]
+    (reselect! q (get-rng))
+    (set! (.. card -style -display) "none")
+    (pin-dom/ask-current! layer)))
+
+(defn- pin-section
+  "The \"Pin a question…\" row (§2.1). Built for every editor and shown by
+   `refresh` only while the editor has a pin layer, so a card field never
+   shows it. Returns {:section :button}."
+  [^js q get-rng ^js card]
+  (let [sec (section)]
+    (.appendChild sec
+      (item-button :circle-help "Pin a question…" #(pin-question! q get-rng card)
+        :tooltip "Pin this passage, with a question for the tutor if you have one"))
+    sec))
+
 (defn- extract-section
   "The document editor's Extract section: one row that dispatches :extract.
    Extract is not a card action, so it is not in Cards."
@@ -592,6 +614,7 @@
         insert-sec (section)
         media?     (or (:image? opts) (:audio? opts))
         cardgen    (when (:card-gen? opts) (card-gen-section q get-rng card group))
+        pin-sec    (pin-section q get-rng card)
         page-break-btn (item-button :page-boundary "Restore page boundary"
                          (after #(editor-actions/insert-page-break! q (:index (get-rng)))))
         block-sec  (section)]
@@ -639,6 +662,7 @@
     (.appendChild card block-sec)
     (.appendChild card format-sec)
     (.appendChild card insert-sec)
+    (.appendChild card pin-sec)
     (when (:cloze? opts)
       (.appendChild card (cloze-section q get-rng after)))
     (when cardgen
@@ -658,6 +682,10 @@
              (if on? (.add (.-classList el) "active") (.remove (.-classList el) "active"))
              (.setAttribute el "aria-pressed" (str on?))))
          (set! (.-textContent (:label block-menu)) type-label)
+         ;; The pin row follows the editor's pin layer, which mounts only on a
+         ;; document that can hold pins (§2.1).
+         (set! (.. pin-sec -style -display)
+           (if (pin-dom/layer-for (.-root q)) "" "none"))
          (set! (.-innerHTML (:icon block-menu)) (icon type-icon))
          ;; The page-break control's visibility, per selection. It is present
          ;; only in focus reader's merged mode, and disabled there when every

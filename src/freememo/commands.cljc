@@ -148,6 +148,16 @@
                            :table #{:assistant_chats :assistant_messages :assistant_runs
                                     :question_pins}
                            :views #{:assistant-mutations}}
+     ;; An Ask about one pin, from the pin popover
+     ;; (plans/document-question-pins.md §4.4). Hidden: it needs a pin as its
+     ;; target, which only the popover holds (§5.2). Consumed like
+     ;; :ask-question-pins: the AssistantPanel submits, RightSidePanel opens it.
+     :ask-question-pin    {:label "Ask about a question pin" :class :mutation :exec :electric
+                           :palette-hidden true
+                           :data {:pin-id :payload}
+                           :table #{:assistant_chats :assistant_messages :assistant_runs
+                                    :question_pins}
+                           :views #{:assistant-mutations}}
      :save-question-pin   {:label "Save a question pin" :class :mutation :palette-hidden true
                            :data {:pin-id :payload :question :payload :status :payload}
                            :table #{:question_maps :question_pins}

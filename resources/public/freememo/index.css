@@ -9244,6 +9244,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .question-pin-list__row--unmatched .question-pin-list__label::after {
     content: " stale"; font-weight: 400; color: var(--color-text-secondary);
 }
+/* A document pin that starts on another page (plans/document-question-pins.md §3.3.3). */
+.question-pin-list__row--elsewhere .question-pin-list__text { color: var(--color-text-secondary); }
 .question-pin-list__label { font-weight: 600; white-space: nowrap; }
 .question-pin-list__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .question-pin-list__actions { display: inline-flex; gap: 4px; }

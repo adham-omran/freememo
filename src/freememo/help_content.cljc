@@ -428,6 +428,9 @@
             {:label "Pin questions on a repository file"
              :detail "On a file from a repository, in the rendered view of a Markdown file or in the source of any file, select a passage and choose Ask. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. Each pin keeps its number once the tutor has seen it. A deleted pin that the tutor saw stays in the list as Deleted. Pins in the file list, under the code pane's Pins button, can be closed, reopened or deleted. A pin whose passage changed in a newer commit shows there as stale."
              :commands #{:ask-about-selection :save-question-pin :delete-question-pin}}
+            {:label "Pin questions on a document"
+             :detail "In the document editor, on a PDF page, in the merged view of a PDF, or on a web page, an article, a chapter or an extract, select a passage and choose Pin a question in the format menu. Type a question and press Enter, or press Enter with no text to say you do not understand the passage. A PDF keeps one set of pins for all its pages. An extract keeps its own. Select a pin's number to edit it. Choose Ask in a pin to send that one passage to the tutor, which answers it directly. The pin stays open."
+             :commands #{:ask-question-pin}}
             {:label "Ask your pins together"
              :detail "Choose Ask N pins in the code pane or in the composer. The tutor reads every open pin together and replies with a map of the ideas they depend on, then asks its first question about the idea it is teaching now. Point at a citation to light up its passage in the file."
              :commands #{:ask-question-pins :apply-question-map}}

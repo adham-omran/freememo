@@ -93,7 +93,7 @@
                     (str "FreeMemo could not tell which change wrote each line of this "
                       "file, so it shows the file plainly."))))
       (when spec
-        (pin-pane/PinLayer user-id spec node (if markdown? :blocks :source)
+        (pin-pane/PinLayer user-id spec node (if markdown? :blocks :source) nil
           list-open? !list-open?)))))
 
 ;; ── Rail ───────────────────────────────────────────────────────────

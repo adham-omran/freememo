@@ -299,7 +299,7 @@
                      (let [node dom/node]
                        (dom/On "click" (fn [e] (follow-rendered-link! e node)) nil)
                        [node (show-rendered! node rendered)]))]
-      (pin-pane/PinLayer user-id {:topic-id (:topic-id rendered)} node :blocks
+      (pin-pane/PinLayer user-id {:topic-id (:topic-id rendered)} node :blocks nil
         pin-list-open? !pin-list-open?))))
 
 (e/defn SourceView
@@ -316,7 +316,7 @@
                    (dom/props {:class "hljs"})
                    (render-source! dom/node body lang)
                    dom/node))]
-      (pin-pane/PinLayer user-id {:topic-id (:topic-id body)} node :source
+      (pin-pane/PinLayer user-id {:topic-id (:topic-id body)} node :source nil
         pin-list-open? !pin-list-open?))))
 
 (e/defn CodePane

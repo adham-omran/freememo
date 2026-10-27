@@ -310,9 +310,26 @@
               (case (bus/consume! invocation-id)
                 (t)))))))))
 
+(e/defn AskPinEffect
+  "Turn each :ask-question-pin invocation into a submit of the panel
+   (plans/document-question-pins.md §4.4). Like an Ask over every pin, it
+   carries no text: the server builds the turn from the pin."
+  [!submit !active mode-id web-search?]
+  (e/client
+    (e/for [{:keys [invocation-id payload]} (bus/Requests :ask-question-pin)]
+      (let [[t _] (e/Token invocation-id)]
+        (when t
+          (case (pin-state/show-view! :chat)
+            (case (reset! !submit {:id (str (random-uuid)) :text "" :pin-id (:pin-id payload)
+                                   :chat @!active :refs [] :mode mode-id
+                                   :web-search? web-search?})
+              (case (bus/consume! invocation-id)
+                (t)))))))))
+
 (e/defn AskEffects
-  "Both command-to-submit effects of the assistant panel, in one call."
+  "The command-to-submit effects of the assistant panel, in one call."
   [!submit !active mode-id web-search?]
   (e/client
     (AskPinsEffect !submit !active mode-id web-search?)
+    (AskPinEffect !submit !active mode-id web-search?)
     (WalkthroughAskEffect !submit !active mode-id web-search?)))

@@ -7,6 +7,13 @@
    (plans/commit-range-walkthrough.md §6.3). A caller holding a topic converts
    it with `document-ref/for-topic` at its boundary.
 
+   A ref is a repository file or a document read in the Quill editor
+   (plans/document-question-pins.md §1.2). The two differ in three places
+   only, and each one asks `docref/document?`: which map key a ref has
+   (`map-id-for-ref`, `ensure-map-id!`), where a pin is located (the server,
+   or the browser for a document), and which evidence is this document's
+   (`citations`).
+
    This namespace owns three things and nothing else touches them:
      - where a pin or a citation sits in a file at a commit (`locate`),
      - what a run about a document with a map is told (`request-tail`), and
@@ -23,6 +30,7 @@
    [freememo.document-ref :as docref]
    [freememo.kg-extract :as kg-extract]
    [freememo.kg-llm :as llm]
+   [freememo.page-merge :as page-merge]
    [freememo.question-map-block :as block]
    [freememo.question-map-view :as view]
    [freememo.quote-anchor :as quote-anchor]
@@ -69,12 +77,22 @@
   ;; the next paint refills what is in view.
   (atom {}))
 
+(declare locate-file)
+
 (defn locate
   "Where each of `passages` sits in `user-id`'s file at `ref`.
    `passages` is [{:quote :anchor :offset}]. Post: a vector in the same order,
    each a `quote-anchor/locate` result for Markdown, a `locate-in-source`
    result for code, or nil. The file is read and rendered at most once, and
    not at all when every passage is cached."
+  [user-id ref passages]
+  (if (docref/document? ref)
+    ;; A document's pins are located in the live editor (§6.3 of
+    ;; plans/document-question-pins.md): the server never sees unsaved text.
+    (mapv (constantly nil) passages)
+    (locate-file user-id ref passages)))
+
+(defn- locate-file
   [user-id {:keys [repo-id path sha topic-id] :as ref} passages]
   (let [;; A commit node always has its sha; one seeded without it falls back
         ;; to its file topic, so two such snapshots never share an entry.
@@ -104,8 +122,19 @@
 
 (defn map-id-for-ref
   "The question map of the ref's document key, or nil when it has none."
-  [user-id {:keys [repo-id path] :as ref}]
-  (when ref (db/question-map-id user-id repo-id path)))
+  [user-id {:keys [repo-id path doc-topic-id] :as ref}]
+  (when ref
+    (if (docref/document? ref)
+      (db/question-document-map-id user-id doc-topic-id)
+      (db/question-map-id user-id repo-id path))))
+
+(defn- ensure-map-id!
+  "The question map of the ref's document key, created when absent.
+   Post: its id, or nil when the user may not key a map by it."
+  [user-id {:keys [repo-id path doc-topic-id] :as ref}]
+  (if (docref/document? ref)
+    (db/ensure-question-document-map! user-id doc-topic-id)
+    (db/ensure-question-map! user-id repo-id path)))
 
 (defn- pin-passage [p]
   {:quote (:quote p) :anchor (:heading_anchor p) :offset (:offset_hint p)})
@@ -114,9 +143,12 @@
   "Everything a pane and the map panel show for `user-id`'s file at `ref`.
    Post: nil when there is no ref. Otherwise
          {:map-id (or nil) :pins [...] :tombstones [...] :roots [...]
-          :open-count n}, where each pin carries `:range`, its location in
-         THIS file at this commit, or nil when its quote no longer matches
-         here (§6.1.3). `:tombstones` are the map's deleted seen pins, for the
+          :open-count n :locate :server|:client}, where each pin carries
+         `:range`, its location in THIS file at this commit, or nil when its
+         quote no longer matches here (§6.1.3). With `:locate :client`, a
+         document ref, every `:range` is nil and means nothing: the browser
+         locates each pin by its quote (plans/document-question-pins.md
+         §1.2.3). `:tombstones` are the map's deleted seen pins, for the
          pin list only (plans/pin-numbering-reuse-and-tombstones.md §9).
          Nothing is written."
   [user-id ref]
@@ -127,12 +159,14 @@
             roots (db/question-roots user-id map-id)
             root-label (into {} (map (juxt :id :label)) roots)]
         {:map-id map-id
+         :locate (if (docref/document? ref) :client :server)
          :pins (mapv (fn [p r] (assoc p :range r :root_label (root-label (:root_id p))))
                  pins ranges)
          :tombstones (db/question-pin-tombstones user-id map-id)
          :roots roots
          :open-count (count (filter #(= "open" (:status %)) pins))})
-      {:map-id nil :pins [] :tombstones [] :roots [] :open-count 0})))
+      {:map-id nil :pins [] :tombstones [] :roots [] :open-count 0
+       :locate (if (docref/document? ref) :client :server)})))
 
 (defn pin-counts
   "{:open n :total m} for the pins of `user-id`'s file at `ref`. No match is
@@ -143,14 +177,18 @@
 
 (defn locate-for-finger
   "Where the reader's pointed-at passage sits in `user-id`'s file at `ref`,
-   or nil (§6.5.1). `source-doc` is the document key [repo-id path] the quote
-   came from, nil for a map citation. A quote from another document is never
-   located, because a passage of another document would light up text that
-   merely matches it."
+   or nil (§6.5.1). `source-doc` is the document key the quote came from, nil
+   for a map citation. A quote from another document is never located,
+   because a passage of another document would light up text that merely
+   matches it. On a document ref the location is the passage itself,
+   {:quote :anchor}, which the browser locates in the live editor
+   (plans/document-question-pins.md §3)."
   [user-id ref source-doc quote anchor]
   (when (and ref (seq quote)
           (or (nil? source-doc) (= source-doc (docref/doc-key ref))))
-    (first (locate user-id ref [{:quote quote :anchor anchor}]))))
+    (if (docref/document? ref)
+      {:quote quote :anchor anchor}
+      (first (locate user-id ref [{:quote quote :anchor anchor}])))))
 
 (defn- map-root
   "One root of `map-card`: its state, its pin labels, and its done time as a
@@ -189,14 +227,30 @@
 (def max-quote-chars 4000)
 (def max-question-chars 2000)
 
+(defn- code-ref?
+  "True for a repository file that is not Markdown: its quote is exact."
+  [ref]
+  (and ref (not (docref/document? ref)) (not (docref/markdown? ref))))
+
+(defn- hint-topic-id
+  "The page or topic a pin on `ref` starts on (plans/document-question-pins.md
+   §1.1.3, §2.4). In the merged view the anchor is the nearest page marker,
+   `fm-page-N`, and names the page. Otherwise the pin starts on the open
+   topic. A repository pin's hint is its file topic, as before."
+  [user-id {:keys [doc-topic-id topic-id] :as ref} anchor]
+  (or (when (docref/document? ref)
+        (some->> (page-merge/parse-marker-id anchor)
+          (db/page-topic-id-at user-id doc-topic-id)))
+    topic-id))
+
 (defn create-pin!
   "Pin `quote` on `user-id`'s file at `ref`, under heading `anchor` on
-   Markdown, or at character `offset` on code (§6.3.7 of
+   Markdown or a document, or at character `offset` on code (§6.3.7 of
    plans/commit-range-walkthrough.md). A code quote is kept exactly, because
    it anchors by an exact match.
    Pre:  `quote` is non-blank. Post: {:ok pin} or {:error message}."
   [user-id ref {:keys [quote anchor offset question]}]
-  (let [quote (if (and ref (not (docref/markdown? ref))) (str quote) (str/trim (str quote)))
+  (let [quote (if (code-ref? ref) (str quote) (str/trim (str quote)))
         question (str/trim (str question))]
     (cond
       (str/blank? quote) {:error "Select some text first."}
@@ -204,14 +258,18 @@
       (> (count question) max-question-chars) {:error "That question is too long."}
       :else
       (if ref
-        (let [map-id (db/ensure-question-map! user-id (:repo-id ref) (:path ref))
-              pin (db/create-question-pin! user-id map-id
-                    {:snapshot-topic-id (:topic-id ref) :snapshot-sha (:sha ref) :quote quote
-                     :heading-anchor anchor :offset-hint (when (integer? offset) offset)
-                     :question question})]
-          (commands/bump! user-id :save-question-pin)
-          {:ok pin})
-        {:error "Questions can be pinned only on a file from a repository."}))))
+        (let [map-id (ensure-map-id! user-id ref)
+              pin (when map-id
+                    (db/create-question-pin! user-id map-id
+                      {:snapshot-topic-id (hint-topic-id user-id ref anchor)
+                       :snapshot-sha (:sha ref) :quote quote
+                       :heading-anchor anchor :offset-hint (when (integer? offset) offset)
+                       :question question}))]
+          (if pin
+            (do (commands/bump! user-id :save-question-pin)
+                {:ok pin})
+            {:error "That pin could not be saved."}))
+        {:error "Questions cannot be pinned on this page."}))))
 
 (defn edit-pin!
   "Apply one edit to `user-id`'s pin. `edit` is {:op :question :text},
@@ -246,8 +304,11 @@
   [user-id root-id known? ref]
   (if-let [entity-id (db/ensure-question-root-entity! user-id root-id)]
     (do (if known?
+          ;; A document has no version: its mark records none (§1.2.4 of
+          ;; plans/document-question-pins.md).
           (db/mark-root-known! user-id root-id entity-id
-            (when ref {:repo-id (:repo-id ref) :sha (:sha ref)}))
+            (when (and ref (not (docref/document? ref)))
+              {:repo-id (:repo-id ref) :sha (:sha ref)}))
           (db/delete-known-mark! user-id entity-id "self"))
         (commands/bump! user-id :mark-question-root-known)
         {:ok true})
@@ -278,6 +339,36 @@
     (if (seq open)
       {:map-id map-id :text (diagnosis-user-message open)}
       {:error "There are no open pins to ask about."})))
+
+(defn pin-question-text
+  "The user turn of an Ask about one pin (plans/document-question-pins.md
+   §4.2, §4.3): the quote, then the question. The quote is in the message
+   itself, because the sources a run carries may not hold the pinned passage:
+   a PDF's packet is a window around the page the reader is on. A pin with no
+   question asks for an explanation."
+  [{:keys [quote question]}]
+  (str "About this passage:\n\n"
+    (str/join "\n" (map #(str "> " %) (str/split-lines (str/trim (str quote)))))
+    "\n\n"
+    (if (str/blank? question) "Explain this passage." (str/trim question))))
+
+(defn pin-question-message
+  "The Ask turn for `user-id`'s pin `pin-id`: {:map-id :label :text}, or
+   {:error} when the pin is not theirs. The pin is marked seen by the tutor,
+   as a diagnosis that names it is, and stays open (§7.2)."
+  [user-id pin-id]
+  (if-let [pin (when (integer? pin-id) (db/question-pin-for-tutor! user-id pin-id))]
+    {:map-id (:map_id pin) :label (:label pin) :text (pin-question-text pin)}
+    {:error "That pin could not be found."}))
+
+(def pin-question-instructions
+  "The system message of an Ask about one pin (§4.2). It replaces the
+   diagnosis rule \"Do not answer the pins directly\" for this one turn."
+  (str "## This reply answers one pinned passage\n\n"
+    "The reader pinned the passage in their message and asked about it. "
+    "Answer their question directly, using this document. "
+    "When they asked no question, explain the passage: what it says, "
+    "and the idea it rests on.\n"))
 
 (def ^:private block-instructions
   (str "## The map block\n\n"
@@ -385,12 +476,18 @@
    light up in it. Evidence of a repository file, a topic or not, names the
    repository node as its document and the path as its title
    (`assistant/topic-parts`, plans/commit-range-walkthrough.md §6.3.5), so
-   that pair is what is compared."
-  [evidence keys {:keys [repo-id path]}]
+   that pair is what is compared. Evidence of a document names its root as
+   the document and its page as the page, so a document ref's key matches
+   either (plans/document-question-pins.md §1.2)."
+  [evidence keys {:keys [repo-id path doc-topic-id] :as ref}]
   (into []
     (keep (fn [k]
-            (let [{:keys [quoted_text anchor document_topic_id document_title]} (get evidence k)]
-              (when (and (seq quoted_text) (= document_topic_id repo-id) (= document_title path))
+            (let [{:keys [quoted_text anchor document_topic_id page_topic_id document_title]}
+                  (get evidence k)]
+              (when (and (seq quoted_text)
+                      (if (docref/document? ref)
+                        (or (= document_topic_id doc-topic-id) (= page_topic_id doc-topic-id))
+                        (and (= document_topic_id repo-id) (= document_title path))))
                 {:quote quoted_text :anchor anchor}))))
     keys))
 

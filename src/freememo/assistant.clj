@@ -744,8 +744,10 @@
   "What kind of turn a user message is. nil is an ordinary turn. `:annotated`
    quotes numbered segments of earlier answers (`annotations/user-message`).
    `:question-pins` is an Ask over a file's open pins
-   (`question-map/open-pins-message`, plans/anchored-questions.md §6.2.5)."
-  #{nil :annotated :question-pins})
+   (`question-map/open-pins-message`, plans/anchored-questions.md §6.2.5).
+   `:pin-question` is an Ask about one pin, answered directly
+   (`question-map/pin-question-message`, plans/document-question-pins.md §4.2)."
+  #{nil :annotated :question-pins :pin-question})
 
 (defn document-ref-for
   "The repository file a run about `page-topic-id` is about: the file a
@@ -825,6 +827,9 @@
                     (into (:reference-messages head))
                     (cond-> (= :annotated turn)
                       (conj {:role "system" :content annotation-instructions}))
+                    (cond-> (= :pin-question turn)
+                      (conj {:role "system"
+                             :content question-map/pin-question-instructions}))
                     (cond-> walk-tail
                       (conj {:role "system" :content (:content walk-tail)}))
                     (cond-> map-tail
@@ -1727,7 +1732,8 @@
 
    Pre: user-text is non-blank. `turn` is one of `turn-kinds`: `:annotated`
    exactly when user-text is an `annotations/user-message`, `:question-pins`
-   exactly when it is `question-map/open-pins-message` text."
+   exactly when it is `question-map/open-pins-message` text, `:pin-question`
+   exactly when it is `question-map/pin-question-message` text."
   ([user-id chat-id page-topic-id user-text ref-topic-ids client-id]
    (start-answer-run! user-id chat-id page-topic-id user-text ref-topic-ids
      client-id nil))
@@ -1756,7 +1762,10 @@
   (if (str/blank? user-text)
     {:error "Message is empty." :chat-id nil}
     (let [chat-id (start-chat! user-id root-topic-id mode-id web-search?
-                    (if (= :question-pins turn) "Pinned questions" (title-from user-text)))
+                    (case turn
+                      :question-pins "Pinned questions"
+                      :pin-question "Pinned passage"
+                      (title-from user-text)))
           result (try
                    (start-answer-run! user-id chat-id page-topic-id user-text
                      ref-topic-ids client-id turn)
@@ -1861,6 +1870,21 @@
       {:error error :chat-id chat-id :command :answer}
       (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
                chat-id mode-id web-search? text [] client-id :question-pins)
+        :command :answer))))
+
+(defn submit-pin-question!
+  "Ask the tutor about the one pin `pin-id` (plans/document-question-pins.md
+   §4.2, §4.4). The pin popover's Ask reaches this through the
+   :ask-question-pin command. The pin is the target, so a pin of any map,
+   a repository file's or a document's, takes the same path (§4.5).
+   Post: as `ensure-and-start-answer-run!`, plus :command :answer. For a pin
+         that is not the user's, {:error} and no run."
+  [user-id root-topic-id page-topic-id chat-id mode-id web-search? client-id pin-id]
+  (let [{:keys [text error]} (question-map/pin-question-message user-id pin-id)]
+    (if error
+      {:error error :chat-id chat-id :command :answer}
+      (assoc (ensure-and-start-answer-run! user-id root-topic-id page-topic-id
+               chat-id mode-id web-search? text [] client-id :pin-question)
         :command :answer))))
 
 (defn submit-chat-input!
