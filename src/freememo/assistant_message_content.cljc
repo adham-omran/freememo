@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.assistant-evidence :as evidence]
+   #?(:cljs [freememo.citation-tooltip :as citation-tooltip])
    [freememo.command-bus :as bus]
    [freememo.math :as math]
    [freememo.question-pin-state :as pin-state]))
@@ -81,14 +82,39 @@
       (do (pin-state/open-in-canvas! (assoc passage :scroll? true)) true)
       :else false)))
 
-(e/defn AssistantRichTextLeaf [safe-html]
+(defn- show-citation-label!
+  "Show the label of the citation pill under `event`, or hide the label when
+   the event is on none. CLJ no-op."
+  [event]
+  #?(:cljs (if-let [pill (.closest (.-target event) evidence/citation-selector)]
+             (citation-tooltip/show! pill)
+             (citation-tooltip/hide!))
+     :clj nil))
+
+(defn- hide-citation-label!
+  "Hide the citation label bubble. CLJ no-op."
+  []
+  #?(:cljs (citation-tooltip/hide!)
+     :clj nil))
+
+(defn- render-answer-html!
+  "Write `safe-html` into `node`, then make its citation links pills.
+   One fn, because the decoration must follow the write, and two sibling
+   forms in an Electric body run in no fixed order. CLJ no-op."
+  [node safe-html sources]
+  (math/set-html! node safe-html
+    #(do (pin-transcript! node) (announce-rendered! node)))
+  (evidence/decorate-citations! node sources))
+
+(e/defn AssistantRichTextLeaf [safe-html sources]
   (e/client
     (dom/div
       (dom/props {:class "assistant-msg__rich-text"})
-      ;; Contract: Electric owns this div. math/set-html! owns every descendant.
+      ;; Contract: Electric owns this div. render-answer-html! owns every
+      ;; descendant.
       (let [node dom/node]
-        (math/set-html! node safe-html
-          #(do (pin-transcript! node) (announce-rendered! node)))))))
+        (e/on-unmount hide-citation-label!)
+        (render-answer-html! node safe-html sources)))))
 
 (e/defn AssistantAnswerContent [message !evidence]
   (e/client
@@ -112,16 +138,23 @@
                   (reset! !evidence source)))))
           nil)
         (dom/On "mouseover"
-          (fn [event] (point-at-citation! event (:assistant_run/evidence message)))
+          (fn [event]
+            (point-at-citation! event (:assistant_run/evidence message))
+            (show-citation-label! event))
           nil)
-        (dom/On "mouseleave" (fn [_] (pin-state/point! nil)) nil)
+        (dom/On "mouseleave"
+          (fn [_] (pin-state/point! nil) (hide-citation-label!))
+          nil)
+        (dom/On "focusin" show-citation-label! nil)
+        (dom/On "focusout" (fn [_] (hide-citation-label!)) nil)
         (if (str/blank? content)
           (when-not (or (= "failed" status) (= "stopped" status))
             (dom/span
               (dom/props {:class "assistant-msg-status"})
               (dom/text "Thinking…")))
           (if (= "rich-html" render-mode)
-            (AssistantRichTextLeaf (:assistant_messages/safe-html message))
+            (AssistantRichTextLeaf (:assistant_messages/safe-html message)
+              (:assistant_run/evidence message))
             (dom/span
               (dom/props {:class "assistant-msg__plain-text"})
               (dom/text content))))

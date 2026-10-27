@@ -883,20 +883,37 @@
                (str "- [" (markdown-link-label title) "](" url ")"))
           sources)))))
 
+(defn- citation-numbers
+  "The number each citable key of `answer` shows, from 1, in order of first
+   appearance. A key is citable when `target-of` gives it a target.
+   inv: a prefix of `answer` numbers its keys as `answer` does, so a streaming
+        answer never renumbers a citation it already shows."
+  [answer target-of]
+  (let [citable (->> (re-seq evidence-token-pattern answer)
+                  (mapcat (comp token-keys second))
+                  (filter target-of)
+                  distinct)]
+    (zipmap citable (iterate inc 1))))
+
 (defn render-evidence-citations
-  "Replace valid evidence tokens with Markdown links and remove invalid tokens.
+  "Replace valid evidence tokens with numbered Markdown links and remove
+   invalid tokens. Each link's title carries its key, as `evidence:<key>`,
+   because two excerpts can share a target and the number tells them apart in
+   no way the click can read (plans/assistant-citation-pills.md §5.1).
    Pre: evidence belongs to the answer run. Post: every rendered citation has a
    retained target. The assistant panel opens retained evidence in a dialog."
   [answer evidence]
-  (let [by-key (into {} (map (juxt :citation_key identity)) evidence)]
-    (str/replace (or answer "") evidence-token-pattern
+  (let [answer (or answer "")
+        by-key (into {} (map (juxt :citation_key identity)) evidence)
+        target-of #(some-> (get by-key %) citation-target)
+        number-of (citation-numbers answer target-of)]
+    (str/replace answer evidence-token-pattern
       (fn [[_ key-list]]
-        (str/join "; "
+        (str/join " "
           (keep (fn [citation-key]
-                  (when-let [source (get by-key citation-key)]
-                    (when-let [target (citation-target source)]
-                      (str "[" (markdown-link-label (:display_label source))
-                        "](" target ")"))))
+                  (when-let [target (target-of citation-key)]
+                    (str "[" (number-of citation-key) "](" target
+                      " \"evidence:" citation-key "\")")))
             (token-keys key-list)))))))
 
 ;; ── Commands ───────────────────────────────────────────────────────────────
