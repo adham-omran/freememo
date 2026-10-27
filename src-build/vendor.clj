@@ -232,7 +232,7 @@
   []
   (let [kx (v :katex)
         css (slurp (io/file vendor-root (str "katex@" kx "/katex.min.css")))
-        rels (distinct (map second (re-seq #"url\((fonts/[A-Za-z_-]+\.woff2)\)" css)))]
+        rels (distinct (map second (re-seq #"url\((fonts/[A-Za-z0-9_-]+\.woff2)\)" css)))]
     (for [rel rels]
       [(str "katex@" kx "/" rel) (str jsd "/katex@" kx "/dist/" rel)])))
 

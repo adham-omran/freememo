@@ -7,10 +7,12 @@
             [freememo.content-type :as ct]
             [freememo.doc-html :as dh]
             [freememo.html-cleaner :as cleaner]
+            [freememo.math :as math]
             [freememo.page-pipeline :as pipeline]
             [freememo.table-lowering :as tl]
             [freememo.url-validate :as url])
-  (:import [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]
+           [org.jsoup.nodes Element TextNode]))
 
 ;; Forward decl — fetch-wikipedia-summary is defined after fetch-wikipedia-article.
 (declare fetch-wikipedia-summary)
@@ -71,23 +73,75 @@
    every later source pay the same cost again."
   "table.ambox, table.metadata")
 
+(defn- separate-formula-paragraph!
+  "Replace one display formula with its own paragraph.
+   Pre: `formula` is attached. `text-node` contains stored TeX.
+   Post: the formula occupies a separate paragraph.
+         Surrounding content retains its order and inline markup.
+   Invariant: splitting a paragraph never duplicates its anchor id."
+  [^Element formula ^TextNode text-node]
+  (let [equation (doto (Element. "p") (.appendChild text-node))]
+    (when-let [paragraph (some-> (.parent formula) (.closest "p"))]
+      (loop []
+        (let [parent (.parent formula)
+              following (drop (inc (.siblingIndex formula)) (vec (.childNodes parent)))
+              tail (doto (.shallowClone parent) (.removeAttr "id"))]
+          (doseq [node following] (.appendChild tail node))
+          (.after parent formula)
+          (when (pos? (.childNodeSize tail)) (.after formula tail))
+          (when (zero? (.childNodeSize parent))
+            (when (.hasAttr parent "id") (.attr equation "id" (.id parent)))
+            (.remove parent))
+          (when-not (identical? parent paragraph) (recur)))))
+    (.replaceWith formula equation)))
+
+(defn- wikipedia-math->tex!
+  "Convert Wikipedia formula wrappers with nonblank normalized TeX annotations.
+   Pre: `root` retains Wikipedia classes and MathML annotations.
+   Post: converted wrappers become stored TeX text, with no paired image.
+         Return [text-node source] pairs for restoration after layout cleanup.
+   Invariant: formulas without annotations and ordinary images remain intact."
+  [^Element root]
+  (into []
+    (keep
+      (fn [^Element formula]
+        (when-let [annotation (.selectFirst formula "annotation[encoding='application/x-tex']")]
+          (let [tex (.wholeText ^Element annotation)]
+            (when-not (str/blank? tex)
+              (let [source (math/wrap-tex tex)
+                    text-node (TextNode. source)
+                    block? (or (.hasClass formula "mwe-math-element-block")
+                               (some? (.selectFirst formula "math[display=block], img.mwe-math-fallback-image-display")))]
+                (if block?
+                  (separate-formula-paragraph! formula text-node)
+                  (.replaceWith formula text-node))
+                [text-node source]))))))
+    (.select root (str ".mwe-math-element, .mwe-math-element-inline, "
+                   ".mwe-math-element-block, [typeof='mw:Extension/math']"))))
+
 (defn- preprocess-wikipedia-html
   "Pre-process Wikipedia REST API HTML before sanitization:
    0. Strip navigation chrome (navboxes, portalboxes)
    1. Turn maintenance banners into blockquotes — see `wiki-banner-selector`
-   2. Remove <math> elements (prevents Jsoup text promotion of MathML nodes) and
-      simplify alt text on math <img> fallbacks
+   2. Convert normalized math annotations to stored TeX and remove remaining
+      MathML. Simplify alternative text on retained fallback images.
    3. Rewrite protocol-relative URLs to https://
    4. Rewrite relative `./<slug>` hrefs to https://<lang>.wikipedia.org/wiki/<slug>
-   5. Wrap body contents in a <div> carrying the source <body>'s `dir`/`lang`
+   5. Rewrite document layout for Quill, then restore captured TeX whitespace.
+   6. Wrap body contents in a <div> carrying the source <body>'s `dir`/`lang`
       so RTL layout survives `clean-html` (which discards the body element).
 
    The numbers match the phase comments in the body. Phases 0 and 1 read
    Wikipedia's own class names, so both MUST run before `clean-html`, which
-   admits neither `ambox` nor `metadata`."
+   admits neither `ambox` nor `metadata`.
+
+   Pre: `html` is raw Wikipedia HTML and `lang` identifies its wiki.
+   Post: return Quill-compatible HTML for `clean-html` to sanitize.
+   Invariant: normalized TeX bodies retain their decoded source text."
   [html lang]
   (let [doc (Jsoup/parse html)
         wiki-link-prefix (str "https://" lang ".wikipedia.org/wiki/")]
+    (.prettyPrint (.outputSettings doc) false)
     ;; Phase 0: Strip navigation chrome (navboxes, portalboxes)
     (doseq [nav (.select doc "[role=navigation], nav")]
       (.remove nav))
@@ -95,30 +149,35 @@
     ;; blockquotes while their classes still exist — `clean-html` admits neither
     ;; `ambox` nor `metadata`, so afterwards nothing can recognize one.
     (tl/tables->blockquotes! (.body doc) wiki-banner-selector)
-    ;; Phase 2: Math — remove <math> elements, clean alt on fallback <img>
-    (doseq [math-el (.select doc "math")]
-      (.remove math-el))
-    (doseq [img (.select doc "img.mwe-math-fallback-image-inline, img.mwe-math-fallback-image-display")]
-      (let [alt (.attr img "alt")]
-        (when (seq alt)
-          (.attr img "alt" (simplify-latex alt)))))
-    ;; Phase 3: Images — rewrite protocol-relative URLs
-    (doseq [img (.select doc "img[src^=//]")]
-      (.attr img "src" (str "https:" (.attr img "src"))))
-    ;; Phase 4: Links — rewrite relative hrefs to absolute same-wiki URLs
-    (doseq [a (.select doc "a[href^=./]")]
-      (let [href (.attr a "href")
-            slug (subs href 2)] ;; strip "./"
-        (.attr a "href" (str wiki-link-prefix slug))))
-    ;; Phase 5: Propagate body dir/lang into a wrapping <div>
-    (let [body (.body doc)
-          body-dir  (.attr body "dir")
-          body-lang (.attr body "lang")
-          inner     (.html body)]
-      (str "<div"
-           (when (seq body-dir)  (str " dir=\""  body-dir  "\""))
-           (when (seq body-lang) (str " lang=\"" body-lang "\""))
-           ">" inner "</div>"))))
+    ;; Phase 2: Convert formulas before removing MathML and image classes.
+    (let [formula-sources (wikipedia-math->tex! (.body doc))]
+      (doseq [math-el (.select doc "math")]
+        (.remove math-el))
+      (doseq [img (.select doc "img.mwe-math-fallback-image-inline, img.mwe-math-fallback-image-display")]
+        (let [alt (.attr img "alt")]
+          (when (seq alt)
+            (.attr img "alt" (simplify-latex alt)))))
+      ;; Phase 3: Images — rewrite protocol-relative URLs
+      (doseq [img (.select doc "img[src^=//]")]
+        (.attr img "src" (str "https:" (.attr img "src"))))
+      ;; Phase 4: Links — rewrite relative hrefs to absolute same-wiki URLs
+      (doseq [a (.select doc "a[href^=./]")]
+        (let [href (.attr a "href")
+              slug (subs href 2)] ;; strip "./"
+          (.attr a "href" (str wiki-link-prefix slug))))
+      ;; Phase 5: Layout cleanup moves text nodes but collapses their whitespace.
+      (dh/rewrite-for-quill! (.body doc))
+      (doseq [[^TextNode text-node source] formula-sources]
+        (.text text-node source))
+      ;; Phase 6: Propagate body dir/lang into a wrapping <div>.
+      (let [body (.body doc)
+            body-dir  (.attr body "dir")
+            body-lang (.attr body "lang")
+            inner     (.html body)]
+        (str "<div"
+             (when (seq body-dir)  (str " dir=\""  body-dir  "\""))
+             (when (seq body-lang) (str " lang=\"" body-lang "\""))
+             ">" inner "</div>")))))
 
 ;; Matches: <lang>.wikipedia.org, <lang>.m.wikipedia.org, m.<lang>.wikipedia.org.
 ;; Captures: lang (group 1, ≥2 chars so bare `m.wikipedia.org` doesn't capture
@@ -176,14 +235,10 @@
                                  (assoc :abstract (:extract summary)))
                         :identifiers {}}]
           {:title title
-           ;; `doc-html` runs between the wiki preprocess and the sanitizer, for
-           ;; the reason `page-pipeline` records: `clean-html` strips the classes
-           ;; and styles that identify a construct. Without it this path kept
-           ;; every `th`, every `colspan` and every hidden row, and Quill merged
-           ;; the banner and the infobox into one grid on load.
+           ;; Preprocessing includes document layout conversion before cleanup.
+           ;; Captured TeX survives that pass's whitespace normalization.
            :html (-> (:body resp)
                    (preprocess-wikipedia-html lang)
-                   dh/doc-html->quill-html
                    cleaner/clean-html)
            :url page-url
            :source-type "wikipedia"
