@@ -78,3 +78,18 @@
           (set! (.. el -style -top) (str top "px"))
           (set! (.. el -style -left) (str left "px"))
           nil)))))
+
+(defn show-focused!
+  "Show the label of `pill`, which just took keyboard focus, one frame later.
+   Focus scrolls an off-screen pill into view, and the browser fires that
+   scroll before the next frame's animation callbacks. Shown at once, the
+   label would be hidden by that scroll and placed at the pill's old rect.
+   Pre:  `pill` is a decorated citation link that has focus.
+   Post: on the next frame, the bubble shows the label at the pill's
+         scrolled rect, or nothing changes when `pill` lost focus before
+         then. Returns nil."
+  [pill]
+  (js/requestAnimationFrame
+    #(when (identical? pill (.-activeElement js/document))
+       (show! pill)))
+  nil)

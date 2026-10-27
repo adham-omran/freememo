@@ -91,6 +91,14 @@
              (citation-tooltip/hide!))
      :clj nil))
 
+(defn- show-focused-citation-label!
+  "Show the label of the citation pill that `event` focused, after the scroll
+   that focus causes. CLJ no-op."
+  [event]
+  #?(:cljs (when-let [pill (.closest (.-target event) evidence/citation-selector)]
+             (citation-tooltip/show-focused! pill))
+     :clj nil))
+
 (defn- hide-citation-label!
   "Hide the citation label bubble. CLJ no-op."
   []
@@ -145,7 +153,7 @@
         (dom/On "mouseleave"
           (fn [_] (pin-state/point! nil) (hide-citation-label!))
           nil)
-        (dom/On "focusin" show-citation-label! nil)
+        (dom/On "focusin" show-focused-citation-label! nil)
         (dom/On "focusout" (fn [_] (hide-citation-label!)) nil)
         (if (str/blank? content)
           (when-not (or (= "failed" status) (= "stopped" status))
