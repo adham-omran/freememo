@@ -45,6 +45,7 @@
    [freememo.llm-json :as llm-json]
    [freememo.kg-dedup :as kg-dedup]
    [freememo.kg-page-digest :as digest]
+   [freememo.kg-predicate :as predicate]
    [freememo.user-state :as us]
    [freememo.cards :as cards]
    [taoensso.telemere :as tel]
@@ -54,15 +55,9 @@
            [java.util.concurrent Executors Semaphore]))
 
 (defn slugify
-  "Predicate label → slug satisfying kg_predicates' CHECK
-   (^[a-z0-9]+(-[a-z0-9]+)*$). nil when nothing IRI-safe survives —
-   callers must skip such facts."
+  "Return a stable ASCII identifier while preserving Unicode predicate identity."
   [label]
-  (let [s (-> (str label)
-            str/lower-case
-            (str/replace #"[^a-z0-9]+" "-")
-            (str/replace #"^-+|-+$" ""))]
-    (when-not (str/blank? s) s)))
+  (predicate/slugify label))
 
 (defn- valid-triple?
   "Shape gate for pass-1 output: :s and :p non-blank strings, exactly one of

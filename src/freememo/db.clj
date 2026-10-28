@@ -18,6 +18,7 @@
    [freememo.csl-util :as csl]
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
+   [freememo.kg-predicate :as kg-predicate]
    [freememo.largeobj :as lo]
    [freememo.quota :as quota]
    [freememo.config :as config]
@@ -11877,20 +11878,46 @@
       (into {} (map (fn [[raw c]] [raw (id-by-clean c)])) clean))))
 
 (defn get-or-create-kg-predicate!
-  "Upsert a predicate by (user-id, slug); new rows land status='approved' —
-   the graph curates by exception (edit/reject in the facts browser), not by
-   pre-approval (decision revised 2026-07-04, see plan doc).
-   The no-op DO UPDATE makes RETURNING yield the id on conflict too.
-   Pre:  slug matches the table's CHECK (callers slugify first — violation
-         throws, blame: caller).
-   Post: {:id int :status str} of the existing-or-new row."
+  "Reuse a predicate only when its normalized label matches.
+   Preserve matching legacy slugs and their review status.
+   Resolve slug collisions without merging different labels.
+   Pre: slug satisfies the table's ASCII CHECK.
+   Post: {:id int :status str}. New predicates enter as approved."
   [user-id slug label]
-  (jdbc/execute-one! ds
-    ["INSERT INTO kg_predicates (user_id, slug, label, status) VALUES (?, ?, ?, 'approved')
-      ON CONFLICT (user_id, slug) DO UPDATE SET slug = EXCLUDED.slug
-      RETURNING id, status"
-     user-id slug (sanitize-utf8 label)]
-    {:builder-fn rs/as-unqualified-maps}))
+  (let [label (sanitize-utf8 label)
+        canonical (kg-predicate/canonical-label label)
+        legacy-slug (kg-predicate/legacy-slug label)
+        matching-row (fn [rows]
+                       (some #(when (= canonical (kg-predicate/canonical-label (:label %))) %) rows))
+        existing (or (matching-row
+                       (jdbc/execute! ds
+                         ["SELECT id, status, label FROM kg_predicates
+                            WHERE user_id = ? AND slug IN (?, ?) ORDER BY id"
+                          user-id slug legacy-slug]
+                         {:builder-fn rs/as-unqualified-maps}))
+                   ;; A legacy slug depends on the original Unicode composition.
+                   ;; Compare full labels before creating a new encoded identity.
+                   (when (not= slug legacy-slug)
+                     (matching-row
+                       (jdbc/execute! ds
+                         ["SELECT id, status, label FROM kg_predicates WHERE user_id = ? ORDER BY id"
+                          user-id]
+                         {:builder-fn rs/as-unqualified-maps}))))]
+    (if existing
+      (select-keys existing [:id :status])
+      (loop [candidate slug attempt 0]
+        (let [row (jdbc/execute-one! ds
+                    ["INSERT INTO kg_predicates (user_id, slug, label, status) VALUES (?, ?, ?, 'approved')
+                      ON CONFLICT (user_id, slug) DO UPDATE SET slug = EXCLUDED.slug
+                      RETURNING id, status, label"
+                     user-id candidate label]
+                    {:builder-fn rs/as-unqualified-maps})]
+          (if (= canonical (kg-predicate/canonical-label (:label row)))
+            (select-keys row [:id :status])
+            (if (< attempt 16)
+              (recur (kg-predicate/collision-slug label attempt) (inc attempt))
+              (throw (ex-info "Cannot create a unique predicate identifier."
+                       {:user-id user-id :slug slug})))))))))
 
 (defn insert-kg-facts!
   "Batch insert facts. Rows: {:user_id :subject_entity_id :predicate_id
@@ -12504,7 +12531,7 @@
                     SELECT f.id, coalesce(f.page_number, -1) AS pk,
                            lower(trim(s.label)) AS subj,
                            lower(trim(coalesce(o.label, f.object_literal))) AS obj,
-                           lower(s.label) || ' ' || replace(lower(p.slug), '-', ' ')
+                           lower(s.label) || ' ' || replace(lower(p.label), '-', ' ')
                              || ' ' || lower(coalesce(o.label, f.object_literal)) AS flat
                     FROM kg_facts f
                     JOIN kg_entities s ON s.id = f.subject_entity_id
