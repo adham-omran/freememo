@@ -34,8 +34,12 @@
    (which requires nothing), so `freememo.activity-registry` can read it without
    pulling the activity writer into a cycle.
 
-   One JVM only. During a blue/green flip two tabs on different colors could
-   each hold a lease. Accepted: a flip is short, and a flip mid-sync is rare."
+   One JVM only. The lease cannot see a run on the other color. `deploy.sh`
+   therefore waits before the Caddy flip while an `anki-reconcile` activity row
+   is live, because the flip closes the driving tab's WebSocket. The wait has a
+   cap (`DEPLOY_SYNC_WAIT_SECONDS`), and a run still live at the cap is cut.
+   During the wait Caddy still routes every tab to the old color, so a run that
+   starts then takes its lease there and extends the wait, up to the cap."
   (:require
    [freememo.anki-subtree-request :as subtree]
    [freememo.user-state :as us]))

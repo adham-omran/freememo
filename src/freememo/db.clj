@@ -2669,6 +2669,60 @@
       PERFORM freememo_refresh_document_summaries(roots);
     END
     $$"])
+  ;; A card write cannot change a root's item counts, only its two card
+  ;; counts, so the card triggers skip the descendant walk. On a root of 59109
+  ;; topics that walk cost 132 ms and the card count 9.5 ms, measured on
+  ;; production, and an Anki reconcile writes cards one statement at a time per
+  ;; batch. A root with no summary row yet gets the full refresh, which also
+  ;; decides whether it is a root at all.
+  (jdbc/execute! ds [(str "
+    CREATE OR REPLACE FUNCTION freememo_refresh_card_summaries(p_root_ids BIGINT[])
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE missing BIGINT[];
+    BEGIN
+      IF p_root_ids IS NULL OR cardinality(p_root_ids) = 0 THEN
+        RETURN;
+      END IF;
+
+      SELECT array_agg(DISTINCT r) INTO missing
+      FROM unnest(p_root_ids) r
+      WHERE r IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM document_summaries s WHERE s.root_topic_id = r);
+      PERFORM freememo_refresh_document_summaries(missing);
+
+      UPDATE document_summaries summary
+      SET total_cards = card_stats.total_cards,
+          synced_cards = card_stats.synced_cards,
+          updated_at = NOW()
+      FROM (
+        SELECT r AS root_id,
+               COUNT(card.id) AS total_cards,
+               COUNT(card.id) FILTER (WHERE NOT " (unsynced-sql "card.") ") AS synced_cards
+        FROM (SELECT DISTINCT r FROM unnest(p_root_ids) r WHERE r IS NOT NULL) roots
+        LEFT JOIN flashcards card ON card.root_topic_id = roots.r
+        GROUP BY r
+      ) card_stats
+      WHERE summary.root_topic_id = card_stats.root_id
+        AND card_stats.root_id <> ALL(COALESCE(missing, '{}'::BIGINT[]));
+    END
+    $$")])
+  ;; Same deferral as `freememo_summaries_affected`: inside a sync apply the
+  ;; roots are recorded for the one full refresh at commit.
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_card_summaries_affected(p_root_ids BIGINT[])
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF coalesce(current_setting('freememo.sync_apply', true), '') = 'on' THEN
+        PERFORM freememo_summaries_affected(p_root_ids);
+        RETURN;
+      END IF;
+      PERFORM freememo_refresh_card_summaries(p_root_ids);
+    END
+    $$"])
   (jdbc/execute! ds ["
     CREATE OR REPLACE FUNCTION freememo_refresh_summaries_after_topic_insert()
     RETURNS TRIGGER
@@ -2778,7 +2832,7 @@
           SELECT root_topic_id FROM deleted
         ) roots;
       END IF;
-      PERFORM freememo_summaries_affected(affected);
+      PERFORM freememo_card_summaries_affected(affected);
       RETURN NULL;
     END
     $$"])
@@ -7690,17 +7744,35 @@
                            [:not= :f.anki_conflict_at nil]]
                    :order-by [[:f.anki_conflict_at :asc]]}))))
 
+(def ^:private baseline-value-columns
+  "Bound parameters per card in `set-card-baselines!`' VALUES list:
+   id, anki digest, local digest, anki mod."
+  4)
+
+(defn- dedupe-last-by
+  "Keep the LAST entry for each `(k entry)`, as a per-row loop over `entries`
+   would leave it. `UPDATE … FROM (VALUES …)` with two value rows for one target
+   row applies an arbitrary one of them, so a set-based writer owes this."
+  [k entries]
+  (vals (into {} (map (juxt k identity)) entries)))
+
 (defn set-card-baselines!
-  "Write both reconcile baselines for `user-id`'s cards, in ONE statement per
-   card.
+  "Write both reconcile baselines for `user-id`'s cards, in one statement per
+   bounded batch.
 
    pre : `entries` = [{:card-id n :anki-digest s :local-digest s :anki-mod n?} …].
    post: both digests move together. Writing them in two statements would let a
          crash between the two leave a half-written baseline, which
          `anki-reconcile/classify` must then read as unknown — see its
-         `:needs-baseline` branch.
+         `:needs-baseline` branch. All batches commit in one transaction.
+         Returns the count of entries.
    Also stamps `anki_synced_at`, which is now a display timestamp only — no
-   staleness predicate reads it.
+   staleness predicate reads it. `anki_baseline_mod` moves only for an entry that
+   carries `:anki-mod`.
+
+   Set-based, not per row: every UPDATE statement on flashcards fires the
+   document-summary trigger once. A per-row loop over a 34,710-card backfill was
+   34,710 trigger runs (`plans/anki-reconcile-write-cost.md`).
 
    `local_current_digest` is set to the SAME value as `local_baseline_digest`, in
    the same statement. The caller derived `local-digest` from the row it just
@@ -7724,23 +7796,32 @@
   ([user-id entries] (set-card-baselines! user-id entries {}))
   ([user-id entries {:keys [restamp-current?]}]
   (when (seq entries)
-    (jdbc/with-transaction [tx ds]
-      (doseq [{:keys [card-id anki-digest local-digest anki-mod]} entries]
-        (jdbc/execute-one! tx
-          (sql/format {:update :flashcards
-                       :set (cond-> {:anki_baseline_digest anki-digest
-                                     :local_baseline_digest local-digest
-                                     :baseline_digest_version digest/digest-version
-                                     :anki_synced_at [:now]}
-                              (not restamp-current?) (assoc :local_current_digest local-digest)
-                              anki-mod (assoc :anki_baseline_mod anki-mod))
-                       :where [:and
-                               [:= :id card-id]
-                               [:in :root_topic_id
-                                {:select [:id] :from [:topics]
-                                 :where [:= :user_id user-id]}]]})))
-      (when restamp-current?
-        (restamp-card-digests! tx (mapv :card-id entries))))
+    (let [sql-head (str "UPDATE flashcards AS f SET "
+                     "anki_baseline_digest = v.anki_digest, "
+                     "local_baseline_digest = v.local_digest, "
+                     (when-not restamp-current? "local_current_digest = v.local_digest, ")
+                     "anki_baseline_mod = COALESCE(v.anki_mod, f.anki_baseline_mod), "
+                     "baseline_digest_version = ?, "
+                     "anki_synced_at = NOW() "
+                     "FROM (VALUES ")
+          sql-tail (str ") AS v(id, anki_digest, local_digest, anki_mod) "
+                     "WHERE f.id = v.id "
+                     "AND f.root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)")
+          ;; Two parameters sit outside the VALUES list: the version and the
+          ;; ownership id.
+          batch-size (quot (- max-statement-params 2) baseline-value-columns)]
+      (jdbc/with-transaction [tx ds]
+        (doseq [batch (partition-all batch-size (dedupe-last-by :card-id entries))]
+          (jdbc/execute-one! tx
+            (-> [(str sql-head
+                   (str/join "," (repeat (count batch)
+                                   "(?::bigint, ?::char(64), ?::char(64), ?::bigint)"))
+                   sql-tail)
+                 digest/digest-version]
+              (into (mapcat (juxt :card-id :anki-digest :local-digest :anki-mod)) batch)
+              (conj user-id))))
+        (when restamp-current?
+          (restamp-card-digests! tx (mapv :card-id entries)))))
     (count entries))))
 
 (defn list-anki-tombstones
@@ -8024,20 +8105,32 @@
           root-topic-id])
     (mapv :flashcards/anki_note_id)))
 
-(defn set-anki-note-id
-  "Set anki_note_id and anki_synced_at for a `user-id`-owned flashcard."
-  [user-id card-id anki-note-id]
-  (jdbc/execute-one! ds
-    ["UPDATE flashcards SET anki_note_id = ?, anki_synced_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
-     anki-note-id card-id user-id]))
-
 (defn set-anki-note-ids
-  "Bulk set anki_note_id + anki_synced_at for `user-id`'s cards.
-   Takes [[card-id note-id] ...]."
+  "Set anki_note_id + anki_synced_at for `user-id`'s cards, in one statement per
+   bounded batch.
+
+   pre : `pairs` = [[card-id note-id] …].
+   post: every owned card named holds its note id. All batches commit in one
+         transaction, and nothing else shares it — `record-anki-writes!`
+         commits these BEFORE the baselines, so a baseline failure cannot take
+         the links with it.
+
+   Set-based for the reason `set-card-baselines!` gives: one UPDATE statement is
+   one document-summary trigger run."
   [user-id pairs]
-  (doseq [[card-id note-id] pairs]
-    (set-anki-note-id user-id card-id note-id)))
+  (when (seq pairs)
+    (jdbc/with-transaction [tx ds]
+      (doseq [batch (partition-all (quot (dec max-statement-params) 2)
+                      (dedupe-last-by first pairs))]
+        (jdbc/execute-one! tx
+          (-> [(str "UPDATE flashcards AS f "
+                 "SET anki_note_id = v.note_id, anki_synced_at = CURRENT_TIMESTAMP "
+                 "FROM (VALUES "
+                 (str/join "," (repeat (count batch) "(?::bigint, ?::bigint)"))
+                 ") AS v(id, note_id) WHERE f.id = v.id "
+                 "AND f.root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)")]
+            (into (mapcat identity) batch)
+            (conj user-id)))))))
 
 (defn mark-anki-synced
   "Update anki_synced_at to now for a `user-id`-owned flashcard."

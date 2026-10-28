@@ -135,8 +135,16 @@
          `anki-write-bundles` returned with the bundles these notes were written
          from. A card missing from it gets no local baseline, so it reads
          unsynced and the next run retries — the safe direction.
-   post: each card holds its note id and both baselines, written together.
+   post: each card holds its note id and both baselines.
          Returns {:success true :count n}.
+
+   Two transactions, in this order: the note ids, then the baselines with the
+   restamp. A stop or a failure between the two leaves cards linked with no
+   baseline, which `classify` reads as `:needs-baseline` and the next run
+   backfills. One transaction would lose the links too, and a card with a note
+   in Anki but no `anki_note_id` is a `:create` — a duplicate note. That is how
+   34,713 links survived a deploy and 1,592 did not
+   (`plans/anki-reconcile-write-cost.md`).
 
    The local baseline is the digest of what was SENT, never a re-read. A re-read
    here, after the Anki round trip, would stamp an edit made during that round
@@ -190,6 +198,72 @@
     {:recorded (record-anki-writes! user-id entries local-digests)
      :verdict (lease/report-progress! user-id run-id progress)}))
 
+(def finish-chunk-size
+  "Cards per transaction in `finish-run!`'s pulls and backfill.
+
+   Not a cost bound: the writers are set-based, so one chunk of 34,710 would
+   cost little more than seven. The bound is what a stop keeps. A stop during
+   the finish phase loses only the chunk it was in. 5,000 is an inference, to be
+   checked against per-chunk times from a real run."
+  5000)
+
+(defn- write-chunks!
+  "Apply `write-chunk!` to `xs` in chunks of `finish-chunk-size`.
+
+   pre : `write-chunk!` writes one chunk and returns its count, or throws.
+   post: {:success bool :count n :error s?}. `:count` sums the chunks that
+         committed. A chunk that throws is logged under `log-id` and named in
+         `:error`. The chunks after it still run, the same best-effort rule
+         `finish-run!` applies to its steps."
+  [log-id write-chunk! xs]
+  (let [{:keys [n errors]}
+        (reduce (fn [acc chunk]
+                  (try
+                    (update acc :n + (write-chunk! chunk))
+                    (catch Exception e
+                      (tel/error! {:id log-id :data {:chunk-size (count chunk)}} e)
+                      (update acc :errors conj (.getMessage e)))))
+          {:n 0 :errors []}
+          (partition-all finish-chunk-size xs))]
+    (cond-> {:success (empty? errors) :count n}
+      (seq errors) (assoc :error (str/join "; " errors)))))
+
+(defn- apply-pull-chunk!
+  "One chunk of `apply-pulls!`. Returns the count applied, or throws.
+
+   Each content write commits on its own, through `db/update-flashcard!`, and the
+   chunk's baselines commit after them. A failure between the two leaves pulled
+   content with the old baselines, as it did before chunking."
+  [user-id card-ids notes-by-id digests]
+  (let [cards (db/get-cards-for-reconcile user-id (vec card-ids))
+        applied
+        (into []
+          (keep (fn [card]
+                  (let [nid (:flashcards/anki_note_id card)
+                        note (get notes-by-id nid)
+                        upd (some-> (when note
+                                      (helpers/note->pull-update card (:fields note)))
+                              sync-server/sanitized-pull-update)]
+                    (when upd
+                      (let [{:keys [question answer cloze io-fields]} upd]
+                        (if (seq io-fields)
+                          (db/merge-flashcard-io-fields! user-id (:flashcards/id card) io-fields)
+                          (let [flds (cond-> {}
+                                       question (assoc :question question)
+                                       answer   (assoc :answer answer)
+                                       cloze    (assoc :cloze cloze))]
+                            (when (seq flds)
+                              (db/update-flashcard! user-id (:flashcards/id card) flds))))
+                        {:card-id (:flashcards/id card) :anki-digest (get digests nid)})))))
+          cards)
+        locals (fresh-local-digests user-id (map :card-id applied))]
+    (db/set-card-baselines! user-id
+      (mapv (fn [{:keys [card-id anki-digest]}]
+              {:card-id card-id :anki-digest anki-digest
+               :local-digest (get locals card-id)})
+        applied))
+    (count applied)))
+
 (defn apply-pulls!
   "Write Anki's content into the local cards, then stamp both baselines.
 
@@ -207,41 +281,15 @@
 
    A card whose tracked fields turn out not to differ is skipped entirely,
    baseline included. Stamping one would record agreement with content this run
-   never compared."
+   never compared.
+
+   Chunked by `write-chunks!`, so a failed chunk keeps the others."
   [user-id card-ids notes-by-id digests]
-  (try
-    (let [cards (db/get-cards-for-reconcile user-id (vec card-ids))
-          applied
-          (into []
-            (keep (fn [card]
-                    (let [nid (:flashcards/anki_note_id card)
-                          note (get notes-by-id nid)
-                          upd (some-> (when note
-                                        (helpers/note->pull-update card (:fields note)))
-                                sync-server/sanitized-pull-update)]
-                      (when upd
-                        (let [{:keys [question answer cloze io-fields]} upd]
-                          (if (seq io-fields)
-                            (db/merge-flashcard-io-fields! user-id (:flashcards/id card) io-fields)
-                            (let [flds (cond-> {}
-                                         question (assoc :question question)
-                                         answer   (assoc :answer answer)
-                                         cloze    (assoc :cloze cloze))]
-                              (when (seq flds)
-                                (db/update-flashcard! user-id (:flashcards/id card) flds))))
-                          {:card-id (:flashcards/id card) :anki-digest (get digests nid)})))))
-            cards)
-          locals (fresh-local-digests user-id (map :card-id applied))]
-      (db/set-card-baselines! user-id
-        (mapv (fn [{:keys [card-id anki-digest]}]
-                {:card-id card-id :anki-digest anki-digest
-                 :local-digest (get locals card-id)})
-          applied))
-      (commands/bump! user-id :anki-sync)
-      {:success true :count (count applied)})
-    (catch Exception e
-      (tel/error! {:id ::apply-pulls!} e)
-      {:success false :error (.getMessage e)})))
+  (let [result (write-chunks! ::apply-pulls!
+                 #(apply-pull-chunk! user-id % notes-by-id digests)
+                 card-ids)]
+    (when (pos? (:count result)) (commands/bump! user-id :anki-sync))
+    result))
 
 (defn backfill-baselines!
   "Give `:needs-baseline` cards a baseline from the current state of both sides.
@@ -254,23 +302,25 @@
    This accepts whatever Anki holds right now as the truth. Measured on the
    production account before the first run: 56 of 56 comparable cards whose
    `mod` had moved held identical content, so the backfill discards nothing
-   there. Other accounts were never measured."
+   there. Other accounts were never measured.
+
+   Chunked by `write-chunks!`, so a failed chunk keeps the others."
   [user-id entries]
-  (try
-    (let [locals (fresh-local-digests user-id (map :card-id entries))]
-      (db/set-card-baselines! user-id
-        (mapv (fn [{:keys [card-id anki-digest]}]
-                {:card-id card-id
-                 :anki-digest anki-digest
-                 :local-digest (get locals card-id)})
-          entries))
-      (tel/log! {:level :info :id ::backfill-baselines!
-                 :data {:user-id user-id :count (count entries)}}
-        "reconcile baselines backfilled")
-      {:success true :count (count entries)})
-    (catch Exception e
-      (tel/error! {:id ::backfill-baselines!} e)
-      {:success false :error (.getMessage e)})))
+  (let [result (write-chunks! ::backfill-baselines!
+                 (fn [chunk]
+                   (let [locals (fresh-local-digests user-id (map :card-id chunk))]
+                     (db/set-card-baselines! user-id
+                       (mapv (fn [{:keys [card-id anki-digest]}]
+                               {:card-id card-id
+                                :anki-digest anki-digest
+                                :local-digest (get locals card-id)})
+                         chunk))
+                     (count chunk)))
+                 entries)]
+    (tel/log! {:level :info :id ::backfill-baselines!
+               :data {:user-id user-id :count (:count result)}}
+      "reconcile baselines backfilled")
+    result))
 
 (defn set-conflicts!
   "Make the stored conflict set exactly `conflict-card-ids`.

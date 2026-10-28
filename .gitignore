@@ -30,6 +30,7 @@ logs/
 # Blue-green deploy runtime state.
 /caddy/upstream.caddy
 /.deploy.lock
+/.deploy-sync-check.err
 # Cloudflare tunnel launcher — contains the tunnel TOKEN; never commit.
 /tunnel.sh
 

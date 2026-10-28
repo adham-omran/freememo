@@ -575,22 +575,6 @@
 ;; invitation to revive it: `anki-reconcile/classify` decides direction per card
 ;; from the two digests, and `db/unsynced-sql` is the only definition of unsynced.
 
-(defn finalize-bulk-push!
-  "Record a bulk push: refresh anki_note_id + anki_synced_at for pairs and
-   bump :sync-mutations ONCE. Deliberately saves no preferences of any kind —
-   a bulk update is not a preference-setting event. (The `finalize-push!` this
-   contrasted with is gone; see the note above `apply-anki-overlay!`.)
-   pairs: [{:card-id N :anki-note-id M} ...]"
-  [user-id pairs]
-  (try
-    (db/set-anki-note-ids user-id
-      (mapv (fn [{:keys [card-id anki-note-id]}] [card-id anki-note-id]) pairs))
-    (commands/bump! user-id :anki-sync)
-    {:success true :count (count pairs)}
-    (catch Exception e
-      (tel/error! {:id ::finalize-bulk-push!} e)
-      {:success false :error (.getMessage e)})))
-
 (defn- clean-pulled-field
   "Sanitize one pulled field value, and say so when it removed something.
 
