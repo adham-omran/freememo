@@ -8,7 +8,9 @@
    [freememo.command-bus :as bus]
    [freememo.forms-ext :as fields]
    [freememo.modal-shell :as modal]
+   [freememo.rich-text-editor :as editor]
    #?(:clj [freememo.article-split :as article-split])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.undo :as undo])))
 
 (def boundary-modes
@@ -19,6 +21,7 @@
 
 (defn initial-state []
   {:options {:mode :headings :splitmark ""}
+   :highlight-source? false
    :preview nil :selected #{} :result nil :error nil :busy? false})
 
 (defn preview* [user-id topic-id options]
@@ -73,6 +76,13 @@
           (forms/Input! :splitmark (get-in state [:options :splitmark])
             :class "input" :aria-label "Splitmark"
             :placeholder "A whole paragraph, such as ***")))
+      (dom/label
+        (dom/props {:class "article-split__selection"})
+        (e/amb
+          (forms/Checkbox! :highlight-source? (:highlight-source? state)
+            :aria-label "Highlight created sections in source"
+            :disabled (false? (get-in state [:preview :can-highlight?])))
+          (do (dom/span (dom/text "Highlight created sections in source")) (e/amb))))
       (forms/Button! [::preview]
         :class "btn btn-secondary" :label "Preview sections"))))
 
@@ -124,7 +134,9 @@
         (e/on-unmount #(swap! !state assoc :busy? false))
         (if (:success result)
           (case (swap! !state assoc :preview result :result nil
-                  :selected (set (map :index (:sections result))))
+                  :selected (set (map :index (:sections result)))
+                  :highlight-source? (and (:highlight-source? snapshot)
+                                       (not (false? (:can-highlight? result)))))
             (token))
           (case (swap! !state assoc :error (:error result))
             (token (:error result))))))))
@@ -140,7 +152,8 @@
       (case (swap! !state assoc :error error) (token error))
       (case (swap! !state assoc :busy? true :error nil)
         (let [request {:source-version (:source-version preview)
-                       :options (:options snapshot) :selected-indices (vec (sort selected))}
+                       :options (:options snapshot) :selected-indices (vec (sort selected))
+                       :highlight-source? (boolean (:highlight-source? snapshot))}
               result (e/server (e/Offload #(create-topics!* user-id topic-id request)))]
           (e/on-unmount #(swap! !state assoc :busy? false))
           (if (:success result)
@@ -161,7 +174,8 @@
       (let [result (e/server (e/Offload #(undo-topics!* user-id undo-id)))]
         (e/on-unmount #(swap! !state assoc :busy? false))
         (if (:success result)
-          (case (reset! !state (assoc (initial-state) :options (:options snapshot)))
+          (case (reset! !state (assoc (initial-state) :options (:options snapshot)
+                                :highlight-source? (:highlight-source? snapshot)))
             (token))
           (case (swap! !state assoc :error (:error result))
             (token (:error result))))))
@@ -173,8 +187,14 @@
       (map? command)
       (case (swap! !state
               (fn [state]
-                (if (or (contains? command :mode) (contains? command :splitmark))
+                (cond
+                  (contains? command :highlight-source?)
+                  (assoc state :highlight-source? (boolean (:highlight-source? command)))
+
+                  (or (contains? command :mode) (contains? command :splitmark))
                   (change-options state command)
+
+                  :else
                   (update state :selected
                     (fn [selected]
                       (reduce-kv (fn [indices index include?]
@@ -201,10 +221,16 @@
         (dom/h3 (dom/text "Split article"))
         (dom/p
           (dom/props {:class "hint"})
-          (dom/text "Preview sections from this topic's saved content. The source article stays unchanged."))
+          (dom/text
+            (if (:highlight-source? state)
+              "Preview saved content. Newly created sections receive blue highlights in the source article."
+              "Preview saved content. The source article stays unchanged unless you enable highlighting.")))
         (when (= :splitmark (get-in state [:options :mode]))
           (dom/p (dom/props {:class "hint"})
             (dom/text "Use a whole paragraph. Matching is case-sensitive. Surrounding whitespace is ignored.")))
+        (when (false? (get-in state [:preview :can-highlight?]))
+          (dom/p (dom/props {:class "hint"})
+            (dom/text "Source highlighting is unavailable for this topic type.")))
         (when (:error state)
           (dom/p (dom/props {:class "article-split__error" :role "alert"})
             (dom/text (:error state))))
@@ -228,7 +254,11 @@
   "Pre: mount once per topic. Post: publish a viewer command and own its dialog."
   [user-id topic-id]
   (e/client
-    (let [!open (atom false)]
+    (let [!open (atom false)
+          source-update (e/server (e/watch (us/get-atom user-id :article-source-update)))]
+      (e/for [update (e/diff-by :event-id (if source-update [source-update] []))]
+        (editor/install-saved-content! (:topic-id update)
+          (:before-content update) (:content update)))
       (bus/publish-invoker! :split-article #(reset! !open true))
       (e/on-unmount #(bus/retract-invoker! :split-article))
       (when (e/watch !open)

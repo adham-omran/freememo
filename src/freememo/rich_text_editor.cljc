@@ -565,6 +565,32 @@
              (rp/installed! "editor" content-topic-id (.-root ed))))
          true))))
 
+(defn install-saved-content!
+  "Pre: before-html and after-html describe one committed change to topic-id.
+   Post: install after-html only when the active editor still represents before-html.
+   Invariant: preserve local edits and the editor's dirty state."
+  [topic-id before-html after-html]
+  #?(:clj false
+     :cljs
+     (if-let [{:keys [editor math?] active-topic-id :topic-id} @!editor-state]
+       (if (and (= topic-id active-topic-id) (string? before-html) (string? after-html))
+         (try
+           (let [^js ed editor
+                 ^js clipboard (.-clipboard ed)
+                 ;; Convert both stored HTML values. Quill applies heading formats
+                 ;; only to newlines, but its clipboard applies them to whole lines.
+                 stored-delta (fn [html]
+                                (.convert clipboard
+                                  #js {:html (if math? (math/stored->editor-html html) html)}))
+                 current (stored-delta (quill-field/editor-html ed))
+                 expected (stored-delta before-html)]
+             (if (zero? (alength (.-ops (.diff current expected))))
+               (boolean (set-content! after-html topic-id))
+               false))
+           (catch :default _ false))
+         false)
+       false)))
+
 (defn update-topic-id!
   "Update the topic-id in editor state without reinitializing Quill.
    The text-change listener reads from !editor-state, so this ensures
