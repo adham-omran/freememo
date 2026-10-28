@@ -18,7 +18,7 @@
 
 (deftest every-tab-has-its-label
   (is (= {:home "Home" :viewer "Viewer" :library "Library" :learn "Learn"
-          :schedule "Schedule" :curriculum "Curriculum" :quiz "Quiz"
+          :schedule "Schedule" :curriculum "Curriculum" :quiz "Quiz" :comprehension "Comprehension"
           :search "Search" :knowledge "Knowledge" :graph "Graph"
           :import "Import" :help "Help" :settings "Settings" :credits "Credits"}
         fmt/tab-labels)))

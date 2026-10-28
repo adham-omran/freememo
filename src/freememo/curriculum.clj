@@ -5,6 +5,7 @@
    curriculum through user-id. Only a passing block exam completes a block.
    Unlock overrides change access, not completion."
   (:require
+   [freememo.assessment :as assessment]
    [cheshire.core :as json]
    [clojure.string :as str]
    [freememo.commands :as commands]
@@ -634,14 +635,14 @@
                      opts)))))
 
 (defn save-draft-form!
-  "Persist one validated five-question draft.
+  "Persist one validated mixed-format draft.
 
    Returns nil when a deletion happened after operation-started-at. This keeps
    a late model result from landing even if Undo has since restored the graph."
   [user-id subject {:keys [form-kind threshold blueprint questions source-versions cost
                            operation-started-at]}]
-  (when-not (= 5 (count questions))
-    (throw (ex-info "An exam form must contain five questions."
+  (when-not (<= 1 (count questions) 40)
+    (throw (ex-info "An exam form must contain from 1 to 40 questions."
              {:type ::invalid-form :question-count (count questions)})))
   (jdbc/with-transaction [tx db/ds]
     (let [curriculum (lock-subject-curriculum! tx user-id subject)]
@@ -665,12 +666,12 @@
 (defn- questions-with-prompts
   "Return the stored questions carrying the reader's prompts, in order.
 
-   Pre: prompts holds five strings, none of them blank.
+   Pre: prompts has one nonblank string per question.
    Post: rubric and evidence survive untouched, because only :prompt is
    replaced. The client therefore never sends a question map."
   [questions prompts]
-  (when-not (= 5 (count prompts))
-    (throw (ex-info "An exam form must contain five questions."
+  (when-not (= (count questions) (count prompts))
+    (throw (ex-info "The prompt count must match the question count."
              {:type ::invalid-form :prompt-count (count prompts)})))
   (let [prompts (mapv #(str/trim (str %)) prompts)]
     (when (some str/blank? prompts)
@@ -694,7 +695,7 @@
 (defn save-form-edits!
   "Persist edited prompts and a pass threshold.
 
-   Pre: the user owns form-id. prompts holds five non-blank strings, in the
+   Pre: the user owns form-id. prompts holds one nonblank string per question, in the
    order the reader sees them. The threshold is from 1 to 100.
    Post: a draft is written in place, and its own id comes back. An approved
    form yields a NEW draft version whose id comes back, and the approved
@@ -733,7 +734,7 @@
 (defn reorder-draft-question!
   "Write the live prompts, then move one question one step.
 
-   Pre: the user owns a DRAFT form. prompts holds the five prompts the reader
+   Pre: the user owns a DRAFT form. prompts holds all prompts the reader
    currently sees, in the current order.
    Post: the stored questions carry those prompts in the new order.
    Invariant: a move never reverts an unsaved prompt. The field keys are
@@ -885,31 +886,28 @@
            ["INSERT INTO curriculum_exam_sittings (form_id, user_id)
              VALUES (?, ?) RETURNING id" form-id user-id] opts))))
 
-(def ^:private blank-answer-draft
-  "The shape an answer draft starts from. Five slots, in question order."
-  (vec (repeat 5 {:answer "" :do-not-know false})))
+(defn- blank-answer-draft [question-count]
+  (vec (repeat question-count {:answer "" :do-not-know false})))
 
-(defn- answers-complete? [answers]
-  (and (= 5 (count answers))
+(defn- answers-complete? [answers question-count]
+  (and (= question-count (count answers))
     (every? #(or (not (str/blank? (str (:answer %)))) (:do-not-know %)) answers)))
 
 (defn- merge-answer-slots
-  "Return the draft with each slot written at its own index.
-   Pre: every slot carries an index from 0 to 4. A bad index is a caller bug."
-  [draft slots]
+  "Merge slots into a draft whose length matches the frozen form.
+   Pre: each slot index belongs to the form. Post: no slot changes position."
+  [draft slots question-count]
   (reduce (fn [answers {:keys [index answer do-not-know]}]
-            (when-not (and (integer? index) (<= 0 index 4))
-              (throw (ex-info "The answer index must be from 0 to 4."
+            (when-not (and (integer? index) (<= 0 index) (< index question-count))
+              (throw (ex-info "The answer index is outside this exam."
                        {:type ::invalid-answer-index :index index})))
-            (assoc answers index {:answer (str answer)
-                                  :do-not-know (boolean do-not-know)}))
-    (vec (or draft blank-answer-draft))
-    slots))
+            (assoc answers index {:answer (str answer) :do-not-know (boolean do-not-know)}))
+    (if (= question-count (count draft)) (vec draft) (blank-answer-draft question-count)) slots))
 
 (defn save-answer-draft!
   "Merge answer slots into an open sitting's draft.
 
-   Pre: the user owns sitting-id. Each slot carries an index from 0 to 4, an
+   Pre: the user owns sitting-id. Each slot carries a valid question index, an
    answer, and a do-not-know flag.
    Post: returns :saved, or :already-closed when the sitting is submitted or
    cancelled. Throws only when the user owns no such sitting.
@@ -923,7 +921,8 @@
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers
+                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers,
+                                    jsonb_array_length(f.questions) AS question_count
                                 FROM curriculum_exam_sittings s
                                 JOIN curriculum_exam_forms f ON f.id = s.form_id
                                 LEFT JOIN curriculum_materials m ON m.id = f.material_id
@@ -938,7 +937,7 @@
               (do (jdbc/execute-one! tx
                     ["UPDATE curriculum_exam_sittings SET draft_answers = ? WHERE id = ?"
                      (pg-json (merge-answer-slots (read-json (:draft_answers sitting))
-                                slots))
+                                slots (:question_count sitting)))
                      sitting-id])
                   :saved))))]
     outcome))
@@ -958,7 +957,8 @@
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (require-owned!
                           (jdbc/execute-one! tx
-                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers
+                            ["SELECT s.id, s.submitted_at, s.cancelled_at, s.draft_answers,
+                                    jsonb_array_length(f.questions) AS question_count
                                 FROM curriculum_exam_sittings s
                                 JOIN curriculum_exam_forms f ON f.id = s.form_id
                                 LEFT JOIN curriculum_materials m ON m.id = f.material_id
@@ -971,7 +971,7 @@
             (if (or (:submitted_at sitting) (:cancelled_at sitting))
               :already-closed
               (let [answers (read-json (:draft_answers sitting))]
-                (when-not (answers-complete? answers)
+                (when-not (answers-complete? answers (:question_count sitting))
                   (throw (ex-info "Answer every question or select “I do not know.”"
                            {:type ::incomplete-sitting})))
                 (jdbc/execute-one! tx
@@ -1066,21 +1066,32 @@
     (update :blueprint read-json)
     (update :source_versions read-json)))
 
+(defn- require-revision-sitting! [sitting sitting-id criteria]
+  (let [sitting (require-owned! sitting :sitting sitting-id)
+        questions (read-json (:questions sitting))]
+    (when-not (= (count questions) (count criteria))
+      (throw (ex-info "The grade must account for every question." {:type ::invalid-grade-revision})))
+    sitting))
+
 (defn record-grade-revision!
   "Append one successful AI grade and apply progression atomically.
 
    Returns nil when a curriculum deletion occurred after operation-started-at.
    Completion never reverses after a later lower revision."
   [user-id sitting-id {:keys [raw-score criteria explanation cost operation-started-at]}]
-  (let [criterion-scores (mapcat #(vals (:criteria %)) criteria)]
-    (when-not (and (= 5 (count criteria)) (= 25 (count criterion-scores))
-                (= raw-score (reduce + criterion-scores)))
-      (throw (ex-info "The raw score must equal all 25 criterion scores."
+  (let [criterion-scores (mapcat #(vals (:criteria %)) criteria)
+        expected-score (if (every? #(and (number? (:points %)) (number? (:max_points %))) criteria)
+                         (assessment/normalized-score criteria)
+                         (reduce + criterion-scores))]
+    (when-not (and (seq criteria) (seq criterion-scores) (integer? raw-score) (<= 0 raw-score 100)
+                  (every? #(and (integer? %) (<= 0 % 4)) criterion-scores)
+                  (= raw-score expected-score))
+      (throw (ex-info "The raw score must match the question scores."
                {:type ::invalid-grade-revision}))))
   (let [revision-id
         (jdbc/with-transaction [tx db/ds]
           (let [sitting (jdbc/execute-one! tx
-                          ["SELECT s.*, f.threshold, f.block_id, f.material_id,
+                          ["SELECT s.*, f.threshold, f.block_id, f.material_id, f.questions,
                                   c.id AS curriculum_id, c.staged_delete_id
                               FROM curriculum_exam_sittings s
                               JOIN curriculum_exam_forms f ON f.id = s.form_id
@@ -1101,7 +1112,7 @@
                        {:type ::not-found :entity :sitting :id sitting-id}))
 
               :else
-              (let [sitting (require-owned! sitting :sitting sitting-id)
+              (let [sitting (require-revision-sitting! sitting sitting-id criteria)
                     passed (>= raw-score (:threshold sitting))
                     revision (inc (:revision (jdbc/execute-one! tx
                                               ["SELECT COALESCE(max(revision), 0)::int AS revision
@@ -1360,6 +1371,8 @@
               :questions (:questions form)
               :assessed-outcomes (vec (:assessed_outcomes (:blueprint form)))
               :unassessed-outcomes (vec (:unassessed_outcomes (:blueprint form)))
+              :omitted-formats (vec (:omitted_formats (:blueprint form)))
+              :estimated-minutes (or (:estimated_minutes (:blueprint form)) 30)
               :evidence-packet-count (count (:evidence_packets (:blueprint form)))
               :generation-cost (charge->long (:generation_cost_credits form))
               :stale? (and (= "approved" (:status form))
@@ -1372,13 +1385,13 @@
        :open-sitting (when open
                        {:id (:id open)
                         :elapsed-seconds (:elapsed_seconds open)
-                        :draft-answers (or (:draft_answers open) blank-answer-draft)})
+                        :draft-answers (or (:draft_answers open) (blank-answer-draft (count (:questions form))))})
        :sitting (when chosen
                   {:id (:id chosen)
                    :submitted-at (:submitted_at chosen)
                    :cancelled? (some? (:cancelled_at chosen))
                    :elapsed-seconds (:elapsed_seconds chosen)
-                   :draft-answers (or (:draft_answers chosen) blank-answer-draft)
+                   :draft-answers (or (:draft_answers chosen) (blank-answer-draft (count (:questions form))))
                    :submitted? (some? (:submitted_at chosen))
                    :grade (grade-row->map (latest-grade user-id (:id chosen)))
                    :history (mapv grade-row->map

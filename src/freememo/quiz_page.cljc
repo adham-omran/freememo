@@ -25,6 +25,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [hyperfiddle.router5 :as r]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [clojure.string :as str]
    [taoensso.telemere :as tel]
@@ -65,9 +66,11 @@
    (defn active-session*
      "The session to resume, exam first — a running exam clock outranks an
       idle quiz."
-     [user-id]
-     (or (db/get-active-kg-session user-id "exam")
-         (db/get-active-kg-session user-id "quiz"))))
+     [user-id session-id]
+     (if session-id
+       (db/get-active-kg-session user-id "quiz" session-id)
+       (or (db/get-active-kg-session user-id "exam")
+           (db/get-active-kg-session user-id "quiz")))))
 
 #?(:clj
    (defn quiz-question*
@@ -778,8 +781,10 @@
 
 (e/defn QuizPage [user-id navigate!]
   (e/client
-    (let [preset (consume-pending-preset!)
-          resume (e/server (e/Offload #(active-session* user-id)))
+    (let [[segment route-id] r/route
+          session-id (when (= "session" (some-> segment str)) (some-> route-id str parse-long))
+          preset (consume-pending-preset!)
+          resume (e/server (e/Offload #(active-session* user-id session-id)))
           !session (atom ::unset) session (e/watch !session)
           !summary (atom nil) summary (e/watch !summary)
           !result-sid (atom nil) result-sid (e/watch !result-sid)

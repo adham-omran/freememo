@@ -19,6 +19,7 @@
    :schedule "Schedule"
    :curriculum "Curriculum"
    :quiz "Quiz"
+   :comprehension "Comprehension"
    :search "Search"
    :knowledge "Knowledge"
    :graph "Graph"

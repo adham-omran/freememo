@@ -39,6 +39,8 @@
    [freememo.ai-proxy :as ai-proxy]
    [freememo.desktop-auth :as desktop-auth]
    [freememo.sync-server :as sync-server]
+   [freememo.comprehension-http :as comprehension-http]
+   [freememo.docs-http :as docs-http]
    [freememo.archive-http :as archive-http]
    [freememo.epub-http :as epub-http]
    [freememo.upload-http :as upload-http]
@@ -1338,7 +1340,12 @@
    `:body` ∈ {:upload, :small, nil}; `wrap-route-body-size` resolves it to a
    byte ceiling, `api-routes` resolves `:handler`. Adding an upload route here
    body-caps it automatically — the middleware carries no separate route list."
-  [{:method :post :path "/api/logout"           :handler #'logout-handler           :body :small}
+  [{:method :get :pattern #"/docs(?:/.*)?" :handler #'docs-http/response}
+   {:method :head :pattern #"/docs(?:/.*)?" :handler #'docs-http/response}
+   {:method :post :path "/api/comprehension/scan" :handler #'comprehension-http/upload-handler :body :upload}
+   {:method :get :pattern #"/api/comprehension/original/[0-9]+" :handler #'comprehension-http/original-handler}
+   {:method :get :pattern #"/api/comprehension/print/[0-9]+" :handler #'comprehension-http/print-handler}
+   {:method :post :path "/api/logout"           :handler #'logout-handler           :body :small}
    {:method :post :path "/api/client-reactor-failure"
     :handler #'client-failure-http/handler :body :small}
    {:method :post :path "/api/upload-file"      :handler #'upload-file-handler      :body :upload}

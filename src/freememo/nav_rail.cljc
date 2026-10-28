@@ -55,7 +55,8 @@
    [{:tab :viewer :label "Continue" :icon :book-open}
     {:tab :library :label "Library" :icon :library}]
    [{:tab :learn :label "Learn" :icon :graduation-cap}
-    {:tab :quiz :label "Quiz" :icon :clipboard}]
+    {:tab :quiz :label "Quiz" :icon :clipboard}
+    {:tab :comprehension :label "Comprehension" :icon :route}]
    [{:tab :schedule :label "Schedule" :icon :clock}
     {:tab :curriculum :label "Curriculum" :icon :route}]
    [{:tab :search :label "Search" :icon :search}

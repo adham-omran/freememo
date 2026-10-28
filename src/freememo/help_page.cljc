@@ -86,6 +86,14 @@
                               :color "var(--color-text-primary)"}})
           (dom/text "Help"))
         (dom/p
+          (dom/a
+            (dom/props {:href "/docs/comprehension-loop"})
+            (dom/text "Read about the comprehension loop"))
+          (dom/text ", ")
+          (dom/a
+            (dom/props {:href "/docs"})
+            (dom/text "Browse public documentation")))
+        (dom/p
           (dom/props {:style {:font-size "15px" :color "var(--color-text-secondary)"
                               :margin-bottom "28px"}})
           (dom/text "FreeMemo runs three review systems over what you read: a priority queue for reading, FSRS-6 for quiz questions, and your own Anki for cards. Here's how to use it, feature by feature."))

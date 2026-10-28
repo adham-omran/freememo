@@ -510,7 +510,7 @@
              :detail "The exam route shows the blueprint, evidence, and questions. Use Edit to change a draft. Approve freezes the version used by later sittings."
              :commands #{}}
             {:label "Take or resume it"
-             :detail "Take exam opens five answer fields. Draft answers save when you leave a field. Reloading the sitting route restores the same exam and elapsed time."
+             :detail "Take exam opens the answer fields for its question formats. Draft answers save when you leave a field. Reloading the sitting route restores the same exam and elapsed time."
              :commands #{:save-exam-answer-draft}}
             {:label "Grade it"
              :detail "Submit freezes the answers and requests an AI grade. Use Regrade with AI when needed. A failed result can create a targeted retry exam."
@@ -520,6 +520,27 @@
              :commands #{:cancel-exam-sitting :archive-exam-sitting}}
             {:label "Understand credits"
              :detail "Paid actions show a credit notice before use. Completed forms and grades show their recorded charge. AI Costs lists every returned model charge."
+             :commands #{}}]}
+   {:slug "comprehension-loop"
+    :title "Using the comprehension loop"
+    :intro "Use a diagnostic exam to find gaps, choose further study, and check your understanding again. Open /comprehension to start."
+    :steps [{:label "Start a cycle"
+             :detail "Choose material and a target duration. Select Start cycle. Check the assessed topics, omitted formats, question counts, and points before answering."
+             :commands #{}}
+            {:label "Answer on paper or type"
+             :detail "Write numbered answers on ordinary paper, or type your answers. Print answer sheet provides an optional sheet with answer space. Keep later improvements separate from your first attempt."
+             :commands #{}}
+            {:label "Upload handwritten answers"
+             :detail "Select Upload handwritten answers. Choose a PDF, PNG, or JPEG. An answer can span several pages."
+             :commands #{}}
+            {:label "Review the transcript"
+             :detail "Select Review transcript. Compare each scan with its text and question assignments. Correct recognition errors and page assignments before grading."
+             :commands #{}}
+            {:label "Submit answers"
+             :detail "Select Submit answers. Inspect each gap alongside your answer, the criterion, and the cited source. Review uncertain results before you accept them as gaps."
+             :commands #{}}
+            {:label "Study and reassess"
+             :detail "Choose Study source or Practice questions for a gap. Select Reassess for another check. Studying alone does not close a gap. Diagnostic results do not complete curriculum blocks or update quiz review schedules."
              :commands #{}}]}
    {:slug "making-a-deck"
     :title "Making a deck"
@@ -744,6 +765,7 @@
    :learn      "reviewing"
    :schedule   "reading-schedule"
    :curriculum "building-a-curriculum"
+   :comprehension "comprehension-loop"
    :quiz       "quiz"
    :search     "finding-and-organizing"
    :knowledge  "knowledge-graph"

@@ -146,14 +146,15 @@
 ;; ── Schema drift (§5.2.2) ──────────────────────────────────────────
 
 (defn- tables-created-by-schema-setup
-  "Every table `db.clj` creates, read from its source.
+  "Every table schema setup creates, read from its source files.
 
    Reading the source rather than a live database keeps this test runnable with
    no PostgreSQL. The `\\s*\\(` tail is load-bearing: db.clj:704 mentions the
    same SQL inside a comment, and without it the regex captures a word from
    that sentence."
   []
-  (->> (slurp "src/freememo/db.clj")
+  (->> (str (slurp "src/freememo/db.clj")
+            (slurp "src/freememo/comprehension.clj"))
     (re-seq #"CREATE TABLE IF NOT EXISTS (\w+)\s*\(")
     (map (comp keyword second))
     set))

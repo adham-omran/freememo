@@ -150,6 +150,11 @@
    `db.clj` with no entry in either list is data silently dropped from every
    export, and `account_transfer_format_test` is what catches that."
   {:users "account identity — the target instance owns its own user row"
+   :comprehension_cycles "diagnostic snapshots with source IDs in JSON; account transfer does not yet remap these references"
+   :comprehension_submissions "diagnostic attempt history belonging to excluded comprehension cycles"
+   :comprehension_gaps "diagnostic evidence belonging to excluded comprehension submissions"
+   :comprehension_followups "study history belonging to excluded comprehension gaps"
+   :comprehension_scans "original answer scans belonging to excluded comprehension cycles"
    :app_migrations "deployment state: the one-time data migrations this database
                     has run. It is global, not per user, and the target keeps its
                     own list"
@@ -242,6 +247,8 @@
    ;; derived
    :document_summaries 6 :kg_graph_layout 6
    ;; peer-local or server-only
+   :comprehension_cycles 7 :comprehension_submissions 7 :comprehension_gaps 7
+   :comprehension_followups 7 :comprehension_scans 7
    :users 7 :app_migrations 7 :user_events 7 :credit_orders 7
    :credit_transactions 7 :undo_log 7 :upload_sessions 7 :kg_staged_triples 7
    :anki_card_states 7 :anki_deck_configs 7 :kg_sessions 7 :kg_answers 7
