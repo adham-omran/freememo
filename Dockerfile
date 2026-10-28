@@ -84,6 +84,26 @@ WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 ffmpeg git \
  && rm -rf /var/lib/apt/lists/*
+# Typst renders the comprehension answer sheet as a PDF (freememo.answer-sheet).
+# No Ubuntu release packages it, so this fetches one pinned release and checks
+# its sha256 before unpacking, as vendor-lock.sha256 does for client assets. The
+# digests are the ones GitHub lists for the v0.15.1 release assets. Without
+# typst, the print endpoint serves its HTML sheet instead. xz-utils unpacks the
+# .tar.xz, and is not in the base image on every architecture.
+ARG TYPST_VERSION=0.15.1
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
+ && case "${TARGETARCH:-amd64}" in \
+      amd64) triple=x86_64-unknown-linux-musl; sum=a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c ;; \
+      arm64) triple=aarch64-unknown-linux-musl; sum=5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee ;; \
+      *) echo "no pinned typst for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${triple}.tar.xz" \
+ && echo "${sum}  /tmp/typst.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/typst.tar.xz -C /tmp \
+ && install -m 0755 "/tmp/typst-${triple}/typst" /usr/local/bin/typst \
+ && rm -rf /tmp/typst.tar.xz "/tmp/typst-${triple}" \
+ && typst --version
 COPY --from=build /app/target/app.jar app.jar
 
 EXPOSE 8080
