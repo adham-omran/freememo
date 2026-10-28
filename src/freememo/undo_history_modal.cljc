@@ -45,6 +45,7 @@
          "delete-curriculum"  "Deleted a curriculum"
          "delete-assistant-chat" "Deleted chat"
          "move-topic"         "Moved a topic"
+         "split-article"      "Split article into topics"
          "reject-question"    "Rejected a question"
          "bulk-reject-questions" (str "Deleted " (plural "question"))
          "reject-fact"        "Rejected a fact"

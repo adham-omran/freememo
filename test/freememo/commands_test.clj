@@ -34,6 +34,13 @@
       (is (= #{:viewer} (:when entry)))
       (is (not (:palette-hidden entry))))))
 
+(deftest article-split-opens-only-in-the-viewer
+  (let [entry (commands/command :split-article)]
+    (is (= :ui-button (:exec entry)))
+    (is (= #{:viewer} (:when entry)))
+    (is (not (:palette-hidden entry)))
+    (is (empty? (:views entry)))))
+
 ;; ── Single bump authority ───────────────────────────────────────────────────
 
 (def ^:private bump-pattern

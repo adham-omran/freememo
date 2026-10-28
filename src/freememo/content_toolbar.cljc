@@ -14,6 +14,7 @@
    [freememo.gen-settings :as gs]
    [freememo.topic-kinds :as topic-kinds]
    [freememo.card-action-buttons :refer [CardActionButtons]]
+   [freememo.article-split-dialog :refer [SplitArticleButton]]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
@@ -65,6 +66,10 @@
         (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
         (DocumentOptionsTrigger dctx/!doc-options-open nil
           (fn [] (reset! !overflow-open false))))
+
+      (dom/div
+        (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
+        (SplitArticleButton))
 
       (when (and dctx/focus-available? (not is-pdf?))
         (dom/button
@@ -239,6 +244,10 @@
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
                 (DocumentOptionsTrigger dctx/!doc-options-open nil nil))
+
+              (dom/div
+                (dom/props {:class "toolbar-group toolbar-collapse-bib"})
+                (SplitArticleButton))
 
               (when (and dctx/focus-available? (not is-pdf?))
                 (FocusReaderToggle "toolbar-collapse-bib"))

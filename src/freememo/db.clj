@@ -223,6 +223,15 @@
 
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_parent ON topics(parent_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id)"])
+  ;; Split provenance survives edits to the generated topic.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS article_split_source_id BIGINT
+                      REFERENCES topics(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS article_split_key TEXT"])
+  ;; Topic rows cross Electric. JSON text avoids PostgreSQL wrapper objects.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS article_split_provenance TEXT"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_topics_article_split
+                      ON topics(article_split_source_id, article_split_key)
+                      WHERE article_split_source_id IS NOT NULL AND article_split_key IS NOT NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_next_review ON topics(next_review_at)"])
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_page
                       ON topics(parent_id, page_number) WHERE page_number IS NOT NULL"])
@@ -1125,7 +1134,7 @@
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-         'bulk-reject-questions','delete-assistant-chat')),
+         'bulk-reject-questions','delete-assistant-chat','split-article')),
       entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',
                     'assistant-chat')),
       entity_refs JSONB NOT NULL,
@@ -1145,7 +1154,7 @@
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','delete-curriculum','move-topic',
                          'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts',
-                         'bulk-reject-questions','delete-assistant-chat'))"])
+                         'bulk-reject-questions','delete-assistant-chat','split-article'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
                       CHECK (entity_type IN ('flashcard','pin','setting','document','curriculum','question','fact',

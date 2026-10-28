@@ -10,6 +10,7 @@
    restoring an Anki-synced card surfaces a divergence warning toast."
   (:require
    [freememo.db :as db]
+   [freememo.article-split :as article-split]
    [freememo.commands :as commands]
    [freememo.curriculum :as curriculum]
    [freememo.optimistic :as opt]
@@ -47,6 +48,7 @@
     "delete-curriculum" (curriculum/restore-staged-curriculum! user-id entry)
     "delete-assistant-chat" (do (db/restore-staged-assistant-chat! user-id entry) nil)
     "move-topic"      (do (db/restore-topic-parent! entry) nil)
+    "split-article"   (article-split/undo-batch! user-id entry)
     "reject-question" (do (db/restore-rejected-question! (:snapshot entry)) nil)
     "reject-fact"     (do (db/restore-rejected-fact! (:snapshot entry)) nil)
     ;; One entry covering many questions; each gets its own prior status back.

@@ -192,6 +192,42 @@
           (= (.-key e) "Tab")    (trap-tab! (.-currentTarget e) e)))
       nil)))
 
+#?(:cljs
+   (defn install-iframe-escape!
+     "Pre: frame is a same-origin iframe. close! applies the modal's close guard.
+      Post: Escape inside the current document calls close!.
+      Invariant: reload replaces the listener. The returned cleanup removes all listeners."
+     [frame close!]
+     (let [!frame-document (atom nil)
+           on-key (fn [event]
+                    (when (= "Escape" (.-key event))
+                      (.preventDefault event)
+                      (.stopPropagation event)
+                      (close!)))
+           detach! (fn []
+                     (when-let [document @!frame-document]
+                       (.removeEventListener document "keydown" on-key)
+                       (reset! !frame-document nil)))
+           on-load (fn [_]
+                     (detach!)
+                     (when-let [document (.-contentDocument frame)]
+                       (.addEventListener document "keydown" on-key)
+                       (reset! !frame-document document)))]
+       (.addEventListener frame "load" on-load)
+       (on-load nil)
+       (fn []
+         (.removeEventListener frame "load" on-load)
+         (detach!)))))
+#?(:clj (defn install-iframe-escape! [_frame _close!] (fn [])))
+
+(e/defn IframeEscape
+  "Pre: call inside a same-origin modal iframe. close! applies the modal's close guard.
+   Post: Escape closes through that callback. Unmount removes the iframe listeners."
+  [close!]
+  (e/client
+    (let [uninstall (e/snapshot (install-iframe-escape! dom/node close!))]
+      (e/on-unmount uninstall))))
+
 ;; Cmd/Ctrl+Enter → click the modal's primary (Save/Generate) button. Escape is
 ;; ModalEscape's job; this covers the one extra shortcut ModalEscape doesn't.
 ;; Top-level platform-split defn, NOT an inline #?(:cljs) fn body inside an

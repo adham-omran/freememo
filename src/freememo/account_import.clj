@@ -42,6 +42,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [freememo.account-transfer-format :as fmt]
+            [freememo.article-split-identity :as split-identity]
             [freememo.largeobj :as lo]
             [freememo.quota :as quota]
             [freememo.user-state :as us]
@@ -69,7 +70,8 @@
 
    `topic_files` and `topic_videos` are absent on purpose: phase 2 builds their
    rows directly and knows its own topic id."
-  {:topics {:parent_id :topics :source_id :sources}
+  ;; The split source link is set after all topic IDs have translated.
+  {:topics {:parent_id :topics :source_id :sources :article_split_source_id :topics}
    :poem_packages {:topic_id :topics}
    ;; Both are phase-1 tables, unlike the blob tables above: their rows travel
    ;; as ordinary JSON, so the topic id in each needs translating like any other.
@@ -218,7 +220,7 @@
   ;; seven columns are all carried: the four JSONB documents ARE the poem, and
   ;; `created_at` records when the package was imported, which stays true on the
   ;; target. It holds no generated column and no single-collection state.
-  {:topics #{:id :staged_delete_id :content_preview}
+  {:topics #{:id :staged_delete_id :content_preview :article_split_source_id}
    ;; `source_preview` is GENERATED, the same case as content_preview above.
    ;; `:id` is named because an entry REPLACES the default, even though this
    ;; table's key is topic_id and it has no id column of its own.
@@ -838,6 +840,37 @@
                          WHERE id = ?"
                        parent-id message-id chat-id])))
 
+(defn- link-imported-splits!
+  "Restore split provenance after all topics have imported.
+   Pre: topic-map translates archive IDs to the new IDs.
+   Post: source links use new IDs. Current keys match rewritten source HTML.
+   Invariant: historical source versions and edited copied content stay unchanged."
+  [tx archive-topics topic-map]
+  (let [archive-topics (vec archive-topics)
+        split-topics (filterv :article_split_source_id archive-topics)
+        old-source-ids (into #{} (map :article_split_source_id) split-topics)
+        old-versions (into {} (map (juxt :id #(split-identity/source-version (:content %))))
+                       (filter #(old-source-ids (:id %)) archive-topics))
+        source-ids (into #{} (keep topic-map) old-source-ids)
+        new-versions (into {} (map (juxt :id #(split-identity/source-version (:content %))))
+                       (when (seq source-ids)
+                         (jdbc/execute! tx ["SELECT id, content FROM topics WHERE id = ANY(?)" (long-array source-ids)]
+                           {:builder-fn rs/as-unqualified-maps})))]
+    (doseq [{:keys [id article_split_source_id article_split_provenance]} split-topics
+            :let [topic-id (get topic-map id)
+                  source-id (get topic-map article_split_source_id)]
+            :when (and topic-id source-id)]
+      (let [stored-provenance (split-identity/read-provenance article_split_provenance)
+            provenance (split-identity/rebase-source-version stored-provenance
+                         (get old-versions article_split_source_id) (get new-versions source-id))]
+        (if (and provenance (not= provenance stored-provenance))
+          (jdbc/execute! tx
+            ["UPDATE topics SET article_split_source_id = ?, article_split_key = ?,
+               article_split_provenance = ? WHERE id = ?"
+             source-id (split-identity/section-key provenance) (json/generate-string provenance) topic-id])
+          (jdbc/execute! tx
+            ["UPDATE topics SET article_split_source_id = ? WHERE id = ?" source-id topic-id]))))))
+
 (def ^:private phase-1-tables
   "Tables phase 1 inserts. `media` landed in phase 0, and the two blob tables
    cannot exist before their bytes (see the namespace docstring)."
@@ -1103,6 +1136,7 @@
                                     (assoc :unknown-columns (:unknown-columns r))))))
                             (do
                               (link-imported-forks! tx (entity-rows dir :assistant_chats) maps)
+                              (link-imported-splits! tx (entity-rows dir :topics) (:topics maps))
                               (doseq [space id-bearing-tables]
                                 (record-ids! tx import-id space
                                   (if (= space :media) (:media-map media) (get maps space))))
