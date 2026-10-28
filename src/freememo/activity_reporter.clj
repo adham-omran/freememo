@@ -59,6 +59,25 @@ an activity reporter bug."}
    relative to `activity/stale-after-ms`."
   20000)
 
+(defn- report-retained-run!
+  "Pre: runs belongs to this process and user. Post: saves the reading or outcome.
+   Invariant: discovery cannot reopen a run between termination and acknowledgment."
+  [user-id type work-key subject-id runs]
+  (locking runs
+    (when-some [state (registry/read-state type user-id work-key)]
+      (let [id (activity/start! user-id type work-key
+                 (merge {:subject-id subject-id} state))]
+        (if-let [outcome (:outcome state)]
+          (do
+            (activity/terminate! user-id id outcome {:error (:error state)})
+            (swap! runs dissoc work-key)
+            (swap! locally-observed-activity-ids disj id)
+            :closed)
+          (do
+            (swap! locally-observed-activity-ids conj id)
+            (activity/report! user-id id state)
+            :refreshed))))))
+
 (defn open-rows!
   "Open a row for every piece of server-owned work in flight for `user-id` that
    does not have one yet.
@@ -93,11 +112,13 @@ an activity reporter bug."}
                   ;; proving it is alive — opening a row for it would revive a
                   ;; dead run as a live one.
                   :when (and (some? state) (not (:stale? state)))]
-              (let [activity-id
-                    (activity/start! user-id type work-key
-                      (merge {:phase "starting" :subject-id subject-id} state))]
-                (swap! locally-observed-activity-ids conj activity-id)
-                activity-id)))
+              (if-let [runs (registry/retained-run-atom type user-id)]
+                (report-retained-run! user-id type work-key subject-id runs)
+                (let [activity-id
+                      (activity/start! user-id type work-key
+                        (merge {:phase "starting" :subject-id subject-id} state))]
+                  (swap! locally-observed-activity-ids conj activity-id)
+                  activity-id))))
           (catch Throwable t
             (tel/error! {:id ::open-type-failed
                          :data {:user-id user-id :type type}}
@@ -138,28 +159,32 @@ an activity reporter bug."}
     (reduce
       (fn [acc {:keys [id user_id type work_key]}]
         (try
-          (if-some [state (registry/read-state type user_id work_key)]
-            (if (:stale? state)
-              ;; The owner still names the work, but its driver stopped
-              ;; heartbeating (an Anki sync whose tab died). Neither refresh nor
-              ;; close: leaving `updated_at` alone is what lets the shared
-              ;; staleness rule mark the row interrupted, which is the truth.
-              ;; Closing it here would record a dead run as a success.
-              acc
-              (do (swap! locally-observed-activity-ids conj id)
-                  (activity/report! user_id id state)
-                  (update acc :refreshed inc)))
-            (if (contains? @locally-observed-activity-ids id)
-              ;; This process saw the owner before it disappeared. The work is
-              ;; finished, not stale, and this process can assign its outcome.
-              (let [err (registry/work-error type user_id work_key)]
-                (activity/terminate! user_id id (if err "failure" "success")
-                  {:error err})
-                (swap! locally-observed-activity-ids disj id)
-                (update acc :closed inc))
-              ;; Another process owns this row. Only its reporter can close it.
-              ;; If that process died, the shared staleness rule interrupts it.
-              acc))
+          (if-let [runs (registry/retained-run-atom type user_id)]
+            (if-let [result (report-retained-run! user_id type work_key nil runs)]
+              (update acc result inc)
+              acc)
+            (if-some [state (registry/read-state type user_id work_key)]
+              (if (:stale? state)
+                ;; The owner still names the work, but its driver stopped
+                ;; heartbeating (an Anki sync whose tab died). Neither refresh nor
+                ;; close: leaving `updated_at` alone is what lets the shared
+                ;; staleness rule mark the row interrupted, which is the truth.
+                ;; Closing it here would record a dead run as a success.
+                acc
+                (do (swap! locally-observed-activity-ids conj id)
+                    (activity/report! user_id id state)
+                    (update acc :refreshed inc)))
+              (if (contains? @locally-observed-activity-ids id)
+                ;; This process saw the owner before it disappeared. The work is
+                ;; finished, not stale, and this process can assign its outcome.
+                (let [err (registry/work-error type user_id work_key)]
+                  (activity/terminate! user_id id (if err "failure" "success")
+                    {:error err})
+                  (swap! locally-observed-activity-ids disj id)
+                  (update acc :closed inc))
+                ;; Another process owns this row. Only its reporter can close it.
+                ;; If that process died, the shared staleness rule interrupts it.
+                acc)))
           (catch Throwable t
             (tel/error! {:id ::tick-failed
                          :data {:activity-id id :user-id user_id

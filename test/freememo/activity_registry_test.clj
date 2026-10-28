@@ -40,7 +40,8 @@
    "exam-grade"           {:member 42 :entry [1 3]}
    "account-export"       {:member "account"}
    "account-import"       {:member "account"}
-   "url-import"           {:member "https://example.org/"}
+   "url-import"           {:member "url-run" :entry {:phase "Fetching"}}
+   "html-import"          {:member "html-run" :entry {:phase "Uploading"}}
    "repo-import"          {:member "github.com/owner/name" :entry "downloading"}
    "walkthrough-prepare"  {:member 42 :entry "reading diffs"}
    ;; A live lease: a fresh heartbeat, so the reader does not mark it stale.
