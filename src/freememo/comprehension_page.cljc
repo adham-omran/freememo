@@ -6,6 +6,7 @@
             [hyperfiddle.electric-forms5 :as forms]
             [hyperfiddle.router5 :as r]
             [freememo.navigation :as nav]
+            [freememo.typeahead :as typeahead]
             #?(:cljs [freememo.comprehension-upload :as upload])
             #?(:clj [freememo.comprehension :as cycle])
             #?(:clj [freememo.comprehension-ocr :as scan])))
@@ -66,7 +67,7 @@
 
 (e/defn StartCycle [user-id materials !revision !error navigate!]
   (e/client
-    (let [!topic (atom (some-> materials first :id str))
+    (let [!topic (atom (some-> materials first :id))
           initial {:minutes "30"}
           commits
           (forms/Form! initial
@@ -74,21 +75,16 @@
               (e/amb
                 (dom/label
                   (dom/text "Learning material")
-                  (dom/select
-                    (dom/props {:class "input" :aria-label "Learning material"
-                                :value (or (e/watch !topic) "")})
-                    (dom/On "change" #(reset! !topic (.. % -target -value)) nil)
-                    (e/for [material (e/diff-by :id materials)]
-                      (dom/option
-                        (dom/props {:value (str (:id material))})
-                        (dom/text (:title material)))))
+                  (typeahead/Typeahead !topic
+                    (mapv (fn [{:keys [id title]}] {:id id :label title}) materials)
+                    "Search learning material…" nil false)
                   (e/amb))
                 (forms/Input! :minutes minutes :type "number" :min 5 :max 180
                   :label "Target duration in minutes" :class "input" :required true)
                 (forms/SubmitButton! :label "Start cycle" :class "btn btn-primary"
-                  :disabled (empty? materials))))
+                  :disabled (nil? (e/watch !topic)))))
             :Parse (e/fn [fields _]
-                     (let [topic-id (some-> (e/watch !topic) parse-long)
+                     (let [topic-id (e/watch !topic)
                            minutes (some-> (:minutes fields) str parse-long)]
                        (if (and topic-id minutes (<= 5 minutes 180))
                          [:start topic-id minutes]
@@ -96,7 +92,7 @@
             :show-buttons false)]
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text "The duration is an estimate. You can take longer without a penalty."))
-      (when-let [topic-id (some-> (e/watch !topic) parse-long)]
+      (when-let [topic-id (e/watch !topic)]
         (Action user-id [:extract topic-id] "Extract facts" !revision !error navigate!))
       (CommandResult user-id commits !revision !error navigate!))))
 

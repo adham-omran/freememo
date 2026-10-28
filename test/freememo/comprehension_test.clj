@@ -52,6 +52,26 @@
          (finally
            (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id IN (?, ?)" uid other])))))
 
+(deftest material-picker-reads-only-owned-root-titles
+  (with-accounts
+    (fn [uid other tid]
+      (let [foreign-id (source! other)
+            deleted-id (source! uid)
+            deletion-id (:id (jdbc/execute-one! db/ds
+                               ["INSERT INTO undo_log
+                                  (user_id, action_type, entity_type, entity_refs, snapshot)
+                                 VALUES (?, 'delete-document', 'document', '{}', '{}') RETURNING id"
+                                uid] opts))]
+        (jdbc/execute-one! db/ds
+          ["INSERT INTO topics (user_id, title, kind, parent_id, content_text)
+            VALUES (?, 'Source chapter', 'markdown', ?, 'Child content.')" uid tid])
+        (jdbc/execute-one! db/ds
+          ["UPDATE topics SET staged_delete_id = ? WHERE id = ?" deletion-id deleted-id])
+        (let [materials (cycle/list-materials uid)]
+          (is (= [{:id tid :title "Diagnostic source"}] materials))
+          (is (every? #(= #{:id :title} (set (keys %))) materials))
+          (is (not-any? #(= foreign-id (:id %)) materials)))))))
+
 (deftest frozen-source-and-ownership
   (with-accounts
     (fn [uid other tid]

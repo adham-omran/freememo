@@ -207,14 +207,13 @@
           (finally (swap! membership disj member)))))))
 
 (defn list-materials
-  "Return owned source roots. Post: no other user's source appears."
+  "Read picker titles for an authenticated learner.
+   Pre: user-id comes from the server session. Post: each row contains only its ID and title.
+   Invariant: only owned, nondeleted roots appear. This function owns projection and ownership errors."
   [user-id]
   (jdbc/execute! db/ds
-    ["SELECT t.id, t.title,
-        (SELECT count(*) FROM kg_facts f WHERE f.graph_topic_id = t.id
-          AND f.user_id = ? AND f.status = 'approved') AS fact_count
-       FROM topics t WHERE user_id = ? AND parent_id IS NULL
-       AND staged_delete_id IS NULL ORDER BY lower(title), id" user-id user-id] opts))
+    ["SELECT id, title FROM topics WHERE user_id = ? AND parent_id IS NULL
+       AND staged_delete_id IS NULL ORDER BY lower(title), id" user-id] opts))
 
 (defn extract-facts!
   "Reuse the existing fact extractor after checking source ownership."

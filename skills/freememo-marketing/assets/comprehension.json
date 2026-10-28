@@ -1,0 +1,18 @@
+{
+  "feature": "Comprehension",
+  "headline": ["Find the gaps.", "Choose a focus."],
+  "description": [
+    "Turn your material into an exam.",
+    "Let the results guide your next session."
+  ],
+  "steps": ["Answer", "Review", "Study", "Reassess"],
+  "detailsLabel": "From answers to understanding",
+  "details": [
+    "Mixed-format exams",
+    "Handwritten answers",
+    "Source-backed gaps",
+    "Targeted practice"
+  ],
+  "footer": "Study the source. Check your understanding again.",
+  "screenshotAlt": "FreeMemo Comprehension shows a connection gap about force and acceleration, a supporting source passage, and actions to study, practice, and reassess."
+}
