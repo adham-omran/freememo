@@ -23,6 +23,7 @@
    [freememo.card-compare :refer [CompareInvoker]]
    [freememo.parse-questions-invoker :refer [ParseQuestionsInvoker]]
    [freememo.document-generate-form :refer [DocumentGenerateForm]]
+   [freememo.article-split-dialog :refer [ArticleSplitOwner]]
    #?(:clj [freememo.settings :as settings])))
 
 (defn save-gen-settings!*
@@ -73,6 +74,7 @@
         (dom/props {:class "card-actions-host"})
         (GenSettingsOwner user-id)
         (ExtractInvoker user-id topic-id)
+        (ArticleSplitOwner user-id topic-id)
         (AddCardInvoker user-id topic-id root-topic-id card-type)
         (GenerateInvokers)
         (CompareInvoker)

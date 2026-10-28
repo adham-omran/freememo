@@ -383,6 +383,30 @@ html:has(> body > .app-shell) > body {
    only gives their modals an element of their own. */
 .card-actions-host { display: contents; }
 
+.article-split {
+  width: min(820px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.article-split h3 { margin-top: 0; }
+.article-split__fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.article-split__rules { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.article-split__field { display: flex; flex-direction: column; gap: 6px; }
+.article-split__field[hidden] { display: none; }
+.article-split__sections { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+.article-split__section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-inline-start: calc(var(--section-depth, 0) * 12px);
+}
+.article-split__selection { display: flex; align-items: start; gap: 8px; font-weight: 600; }
+.article-split__section summary { cursor: pointer; margin-top: 8px; font-size: 13px; }
+.article-split__content { width: 100%; height: 240px; margin-top: 8px; border: 0; background: var(--color-bg); }
+.article-split__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.article-split__actions [hidden] { display: none; }
+.article-split__error { color: var(--color-danger, #b42318); }
+
 /* The right-click "Generate cards…" form (freememo.document-generate-form). */
 .document-generate-form {
     width: 360px;

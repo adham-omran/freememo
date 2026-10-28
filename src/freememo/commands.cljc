@@ -350,6 +350,8 @@
     {:extract        {:label "Extract selection" :class :mutation :exec :ui-button
                       :bind "meta+e" :when #{:viewer}
                       :data {:selection :dom} :table #{:topics} :views #{:tree-mutations}}
+     :split-article  {:label "Split article…" :class :query :exec :ui-button
+                      :when #{:viewer} :views #{}}
      :generate       {:label "Generate cards" :class :mutation :exec :ui-button
                       :bind "meta+g" :when #{:viewer}
                       :table #{:flashcards} :views #{:card-mutations}}
