@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}}</title>
+  <style>
+    @font-face {
+      font-family: "FreeMemo Open Sans";
+      src: url("{{fontDataURL}}") format("woff2");
+      font-style: normal;
+      font-weight: 300 800;
+      font-display: block;
+    }
+    :root {
+      --ink: #12243b;
+      --blue: #2563eb;
+      --ice: #eef4ff;
+      --slate: #52647c;
+      --line: #d6e2f7;
+      --white: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1800px; height: 1200px; overflow: hidden; }
+    body {
+      font-family: "FreeMemo Open Sans", "Open Sans", Arial, sans-serif;
+      background: var(--white);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    .announcement { position: relative; width: 1800px; height: 1200px; isolation: isolate; }
+    .blue-field {
+      position: absolute; inset: 0 0 0 792px;
+      background: var(--ice);
+      border-left: 1px solid var(--line);
+    }
+    .brand { position: absolute; top: 76px; left: 92px; display: flex; align-items: center; gap: 17px; }
+    .brand svg { width: 36px; height: 36px; }
+    .brand-name { font-size: 31px; font-weight: 750; letter-spacing: -1.2px; }
+    .copy { position: absolute; top: 220px; left: 92px; width: 660px; }
+    .eyebrow {
+      display: flex; align-items: center; gap: 14px;
+      color: var(--blue); font-size: 18px; font-weight: 750;
+      letter-spacing: 2.5px; text-transform: uppercase;
+      margin: 0 0 31px;
+    }
+    .eyebrow::before { content: ""; display: block; height: 2px; width: 33px; background: var(--blue); }
+    h1 {
+      margin: 0; font-size: 90px; line-height: 1.09; font-weight: 750;
+      letter-spacing: -5.2px;
+    }
+    h1 span { display: block; }
+    h1 .blue { color: var(--blue); }
+    .description > span { display: block; }
+    .description {
+      margin: 36px 0 0; max-width: 565px; font-size: 27px;
+      font-weight: 400; line-height: 1.6; letter-spacing: -.5px; color: var(--slate);
+    }
+    .workflow { margin: 31px 0 0; font-size: 20px; font-weight: 650; color: var(--ink); }
+    .workflow span { color: #94a8c4; padding: 0 11px; font-weight: 400; }
+    .modes { margin-top: 64px; padding-top: 29px; border-top: 1px solid var(--line); width: 570px; }
+    .modes-label { margin: 0 0 18px; color: var(--slate); font-size: 14px; letter-spacing: 1.6px; font-weight: 700; text-transform: uppercase; }
+    .mode-grid { display: grid; grid-template-columns: 1fr 1.25fr; row-gap: 17px; column-gap: 14px; }
+    .mode { display: flex; align-items: center; gap: 11px; font-size: 19px; font-weight: 600; }
+    .mode svg { width: 20px; height: 20px; flex: none; color: var(--blue); }
+    .closing { position: absolute; left: 92px; bottom: 72px; display: flex; gap: 12px; align-items: center; color: var(--slate); font-size: 17px; }
+    .closing svg { color: var(--blue); width: 20px; height: 20px; }
+    .preview {
+      position: absolute; left: 838px; top: 74px; width: 906px; height: 1052px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .preview img {
+      display: block; width: auto; height: auto;
+      max-width: 100%; max-height: 100%;
+      object-fit: contain; border-radius: 13px;
+      box-shadow: 0 36px 75px -28px rgba(20, 54, 116, .3), 0 3px 13px rgba(20, 54, 116, .08);
+    }
+  </style>
+</head>
+<body>
+<main class="announcement">
+  <div class="blue-field" aria-hidden="true"></div>
+  <div class="brand">
+    {{brandLogo}}
+    <div class="brand-name">FreeMemo</div>
+  </div>
+  <section class="copy">
+    <p class="eyebrow">{{feature}}</p>
+    <h1>{{headline}}</h1>
+    <p class="description">{{description}}</p>
+    {{workflowBlock}}
+    {{detailsBlock}}
+  </section>
+  {{footerBlock}}
+  <figure class="preview" style="margin: 0">
+    <img src="{{screenshotDataURL}}" alt="{{screenshotAlt}}">
+  </figure>
+</main>
+</body>
+</html>

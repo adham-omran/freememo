@@ -1,0 +1,18 @@
+{
+  "feature": "Split article",
+  "headline": ["Long article.", "Focused topics."],
+  "description": [
+    "Break a long read into smaller topics.",
+    "Keep the structure. Choose what stays."
+  ],
+  "steps": ["Preview", "Select", "Create topics"],
+  "detailsLabel": "Four ways to split",
+  "details": [
+    "Headings",
+    "Horizontal lines",
+    "Custom splitmarks",
+    "Groups of four blocks"
+  ],
+  "footer": "Your original article stays unchanged.",
+  "screenshotAlt": "The FreeMemo Split article dialog with section previews and topic selection."
+}

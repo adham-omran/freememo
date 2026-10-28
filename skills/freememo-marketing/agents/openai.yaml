@@ -1,0 +1,4 @@
+interface:
+  display_name: "FreeMemo Marketing"
+  short_description: "Create product images from real FreeMemo screenshots"
+  default_prompt: "Use $freememo-marketing to create a Discord announcement image from a real FreeMemo feature screenshot."
