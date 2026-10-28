@@ -228,12 +228,14 @@
           work)))))
 
 (defn- generated-form!
-  "Generate a form and report its stages. A refused form becomes a message that
-   says nothing was saved, what the attempt cost, and which button tries again."
+  "Generate a form and report its stages. A question that fails its checks is
+   dropped and listed in the blueprint, so a paid call still yields a cycle.
+   A refused form, which has no question left, becomes a message that says
+   nothing was saved, what the attempt cost, and which button tries again."
   [user-id member evidence options retry-label]
   (try
     (assessment/generate! user-id evidence
-      (assoc options :on-step #(report-step! user-id member %)))
+      (assoc options :drop-invalid? true :on-step #(report-step! user-id member %)))
     (catch clojure.lang.ExceptionInfo e
       (let [{:keys [type question charged-credits]} (ex-data e)]
         (if (= type ::assessment/invalid-assessment)

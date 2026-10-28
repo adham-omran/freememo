@@ -29,6 +29,7 @@
     (is (= 15 (get-in validated [:blueprint :target_minutes])))))
 
 (deftest unsupported-compositions-and-false-citations-fail
+  ;; Strict mode, the curriculum exam's contract: any defect refuses the form.
   (doseq [bad [(assoc form :questions [])
                (assoc-in form [:questions 0 :accepted_answers] [])
                (assoc-in form [:questions 1 :correct_option_id] "C")
@@ -36,6 +37,66 @@
                (assoc-in form [:blueprint :omitted_formats] [])
                (assoc-in form [:blueprint :assessed_outcomes 0 :question_ids] ["other"])]]
     (is (thrown? clojure.lang.ExceptionInfo (assessment/validate-form! bad evidence {})))))
+
+(defn- salvage [bad]
+  (assessment/validate-form! bad evidence {:drop-invalid? true :target-minutes 30}))
+
+(deftest drop-mode-keeps-the-questions-that-pass
+  (testing "a bad question is removed and named, and the rest survive"
+    (let [validated (salvage (-> form
+                                 (assoc-in [:blueprint :estimated_minutes] 20)
+                                 (assoc-in [:questions 0 :accepted_answers] [])))]
+      (is (= ["choice" "essay"] (mapv :id (:questions validated))))
+      (is (= [{:question 1 :prompt "Plants use ____ to make sugar."
+               :reason "A fill-in-the-blank question has no accepted answers."}]
+            (get-in validated [:blueprint :dropped_questions])))
+      (is (= ["choice" "essay"] (get-in validated [:blueprint :assessed_outcomes 0 :question_ids])))
+      (is (= 18 (get-in validated [:blueprint :estimated_minutes])) "90 of 100 points remain")
+      (is (= {"fill-in-the-blank" "The questions in this format did not pass the checks."
+              "long-essay" "The source is too short."}
+            (into {} (map (juxt :format :reason)) (get-in validated [:blueprint :omitted_formats]))))))
+  (testing "a false quote removes only its own question"
+    (let [validated (salvage (assoc-in form [:questions 2 :evidence 0 :quote] "Plants eat sugar."))]
+      (is (= ["blank" "choice"] (mapv :id (:questions validated))))
+      (is (= [3] (mapv :question (get-in validated [:blueprint :dropped_questions]))))))
+  (testing "a repeated prompt keeps its first question"
+    (let [validated (salvage (assoc-in form [:questions 2 :prompt] "What provides the energy?"))]
+      (is (= ["blank" "choice"] (mapv :id (:questions validated))))
+      (is (= "Two questions have the same ID or the same text."
+            (get-in validated [:blueprint :dropped_questions 0 :reason])))))
+  (testing "a clean form loses nothing and keeps the model's estimate"
+    (let [validated (salvage (assoc-in form [:blueprint :estimated_minutes] 20))]
+      (is (= 3 (count (:questions validated))))
+      (is (= [] (get-in validated [:blueprint :dropped_questions])))
+      (is (= 20 (get-in validated [:blueprint :estimated_minutes]))))))
+
+(deftest drop-mode-prunes-outcomes-to-what-remains
+  (let [two-outcomes (assoc-in form [:blueprint :assessed_outcomes]
+                       [{:id "blank-recall" :statement "Recall what plants use."
+                         :question_ids ["blank"] :evidence [citation]}
+                        {:id "energy" :statement "Explain where the energy comes from."
+                         :question_ids ["choice" "essay"] :evidence [citation]}])]
+    (testing "an outcome whose questions all fail is reported as not assessed"
+      (let [validated (salvage (assoc-in two-outcomes [:questions 0 :accepted_answers] []))]
+        (is (= ["energy"] (mapv :id (get-in validated [:blueprint :assessed_outcomes]))))
+        (is (some #(= {:statement "Recall what plants use."
+                       :reason "The questions written for this outcome did not pass the checks."} %)
+              (get-in validated [:blueprint :unassessed_outcomes])))))
+    (testing "an outcome with a false quote is not assessed, and its questions go with it"
+      (let [validated (salvage (assoc-in two-outcomes [:blueprint :assessed_outcomes 1 :evidence 0 :quote]
+                                 "Plants eat sugar."))]
+        (is (= ["blank"] (mapv :id (:questions validated))))
+        (is (= #{"A question is not linked to a learning outcome."}
+              (set (map :reason (get-in validated [:blueprint :dropped_questions])))))
+        (is (some #(= "The quotes given for this outcome do not match the material." (:reason %))
+              (get-in validated [:blueprint :unassessed_outcomes])))))))
+
+(deftest drop-mode-refuses-a-form-with-no-question-left
+  (let [bad (update form :questions (fn [qs] (mapv #(assoc % :evidence []) qs)))
+        e (try (salvage bad) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (= "A question quotes nothing from the material." (ex-message e)))
+    (is (= 1 (:question (ex-data e))))
+    (is (= ::assessment/invalid-assessment (:type (ex-data e))))))
 
 (deftest a-false-quote-names-the-question-that-made-it
   (let [bad (assoc-in form [:questions 2 :evidence 0 :quote] "Plants eat sugar.")

@@ -110,10 +110,129 @@
         (fail! "The model did not say why it left out a learning outcome." {:field :unassessed-outcomes})))
     blueprint))
 
+(defn- question-points
+  "Points a question claims, or 0 when the model gave none usable."
+  [question]
+  (let [points (or (:points question) 20)]
+    (if (and (integer? points) (pos? points)) points 0)))
+
+(defn- invalid-reason
+  "Run check. Return nil when it passes, else the ex-data of its refusal with :reason."
+  [check]
+  (try (check) nil
+       (catch clojure.lang.ExceptionInfo e
+         (if (= ::invalid-assessment (:type (ex-data e)))
+           (assoc (ex-data e) :reason (ex-message e))
+           (throw e)))))
+
+(defn- salvage-outcomes
+  "Keep the assessed outcomes that still have kept questions and valid quotes.
+   Post: [assessed unassessed-additions]. An outcome that loses either moves to
+   unassessed with a reason that says which."
+  [blueprint kept-ids materials]
+  (reduce
+    (fn [[assessed unassessed] outcome]
+      (let [question-ids (into [] (comp (map str) (filter kept-ids)) (:question_ids outcome))
+            evidence (if materials
+                       (filterv #(nil? (invalid-reason (fn [] (validate-citations! materials [%]))))
+                         (:evidence outcome))
+                       (vec (:evidence outcome)))
+            statement (:statement outcome)]
+        (cond
+          (and (nonblank? (:id outcome)) (nonblank? statement) (seq question-ids) (seq evidence))
+          [(conj assessed (assoc outcome :question_ids question-ids :evidence evidence)) unassessed]
+
+          (not (nonblank? statement))
+          [assessed unassessed]
+
+          (empty? question-ids)
+          [assessed (conj unassessed {:statement statement
+                                      :reason "The questions written for this outcome did not pass the checks."})]
+
+          :else
+          [assessed (conj unassessed {:statement statement
+                                      :reason "The quotes given for this outcome do not match the material."})])))
+    [[] []] (:assessed_outcomes blueprint)))
+
+(defn- salvage-omissions
+  "List every format the kept questions do not use, each with a reason."
+  [blueprint original-questions kept-questions]
+  (let [used (set (map #(or (:format %) "long-essay") kept-questions))
+        attempted (set (map #(or (:format %) "long-essay") original-questions))
+        given (into {} (keep (fn [{:keys [format reason]}] (when (nonblank? reason) [format reason])))
+                (:omitted_formats blueprint))]
+    (vec (for [format (sort (remove used formats))]
+           {:format format
+            :reason (cond
+                      (attempted format) "The questions in this format did not pass the checks."
+                      (given format) (given format)
+                      :else "The model gave no reason for leaving out this format.")}))))
+
+(defn- salvage-form
+  "Drop the generated questions that fail their own checks, and keep the rest.
+   Pre: the form has a blueprint and from 1 to 40 questions.
+   Post: a form the strict checks accept, with :dropped_questions in its blueprint;
+   or a throw with the first question's reason when no question survives.
+   Invariant: a kept question is unchanged except for a fixed :id."
+  [form evidence]
+  (let [facts (set (keep :id (:facts evidence)))
+        materials (:materials evidence)
+        checked
+        (reduce
+          (fn [{:keys [ids prompts] :as acc} [index question]]
+            (let [problem (invalid-reason
+                            #(let [q (normalize-question index question facts)]
+                               (when materials
+                                 (validate-citations! materials (:evidence q) {:question index}))
+                               q))
+                  normalized (when-not problem (normalize-question index question facts))
+                  prompt-key (some-> (:prompt normalized) normalize-text str/lower-case)
+                  problem (or problem
+                            (when (or (contains? ids (:id normalized)) (contains? prompts prompt-key))
+                              {:question index :reason "Two questions have the same ID or the same text."}))]
+              (if problem
+                (update acc :dropped conj {:question index :prompt (str (:prompt question)) :reason (:reason problem)})
+                (-> acc
+                    (update :kept conj [index (assoc question :id (:id normalized))])
+                    (update :ids conj (:id normalized))
+                    (update :prompts conj prompt-key)))))
+          {:kept [] :dropped [] :ids #{} :prompts #{}}
+          (map vector (range 1 (inc (count (:questions form)))) (:questions form)))
+        blueprint (:blueprint form)
+        linked? (some :format (:questions form))
+        [assessed unassessed] (if linked?
+                                (salvage-outcomes blueprint (set (map (comp :id second) (:kept checked))) materials)
+                                [(:assessed_outcomes blueprint) []])
+        covered (set (map str (mapcat :question_ids assessed)))
+        unlinked (if linked? (remove #(contains? covered (:id (second %))) (:kept checked)) [])
+        kept (mapv second (remove (set unlinked) (:kept checked)))
+        dropped (->> (concat (:dropped checked)
+                       (map (fn [[index question]]
+                              {:question index :prompt (str (:prompt question))
+                               :reason "A question is not linked to a learning outcome."}) unlinked))
+                  (sort-by :question) vec)
+        total (reduce + (map question-points (:questions form)))
+        estimate (:estimated_minutes blueprint)]
+    (when (empty? kept)
+      (let [{:keys [question reason]} (first dropped)]
+        (fail! reason {:question question})))
+    {:blueprint (cond-> (assoc blueprint
+                          :assessed_outcomes assessed
+                          :unassessed_outcomes (into (vec (:unassessed_outcomes blueprint)) unassessed)
+                          :omitted_formats (salvage-omissions blueprint (:questions form) kept)
+                          :dropped_questions dropped)
+                  (and (seq dropped) (integer? estimate) (pos? estimate) (pos? total))
+                  (assoc :estimated_minutes
+                    (max 1 (Math/round (double (* estimate (/ (reduce + (map question-points kept)) total)))))))
+     :questions kept}))
+
 (defn validate-form!
   "Validate a generated form before persistence.
    Pre: evidence contains frozen materials and approved facts.
-   Post: questions have stable ids and source-bound criteria.
+   Post: questions have stable ids and source-bound criteria. With
+   `:drop-invalid? true` in options, a question that fails its own checks is
+   removed and listed in the blueprint's :dropped_questions instead of refusing
+   the form; the form is refused only when no question survives.
    Invariant: unsupported formats are omitted, never invented."
   ([form] (validate-form! form nil {}))
   ([form evidence options]
@@ -126,7 +245,8 @@
      (fail! "The model did not list the learning outcomes." {:field :blueprint}))
    (when-not (and (vector? (:questions form)) (<= 1 (count (:questions form)) 40))
      (fail! "An assessment must contain from 1 to 40 questions." {:field :questions}))
-   (let [facts (set (keep :id (:facts evidence)))
+   (let [form (if (:drop-invalid? options) (salvage-form form evidence) form)
+         facts (set (keep :id (:facts evidence)))
          questions (mapv #(normalize-question %1 %2 facts)
                      (range 1 (inc (count (:questions form)))) (:questions form))
          blueprint (assoc (:blueprint form)

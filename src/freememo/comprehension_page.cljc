@@ -280,6 +280,25 @@
       (WorkProgress (e/server (get (e/watch (us/get-atom user-id :comprehension-work))
                                 [:reassess (:id gap)]))))))
 
+(defn dropped-summary [dropped kept]
+  (str dropped " of " (+ dropped kept) " generated questions did not pass the checks and "
+    (if (= 1 dropped) "was" "were") " removed."))
+
+(e/defn DroppedQuestions [dropped kept]
+  (e/client
+    ;; Always mounted, so the conditional inside it never shifts the panel's
+    ;; other children. See "An e/for Gets an Element of Its Own".
+    (dom/div
+      (dom/props {:class "comprehension-dropped"})
+      (when (seq dropped)
+        (dom/details
+          (dom/summary (dom/text (dropped-summary (count dropped) kept)))
+          (dom/ul
+            (e/for [question (e/diff-by :question dropped)]
+              (dom/li
+                (dom/p (dom/text (str "Question " (:question question) ": " (:reason question))))
+                (dom/p (dom/props {:class "comprehension-muted"}) (dom/text (:prompt question)))))))))))
+
 (e/defn CycleDetail [user-id detail !revision !error navigate!]
   (e/client
     (dom/section
@@ -310,7 +329,11 @@
                               (str outcome))))))
         (e/for [omission (e/diff-by identity (get-in detail [:form :blueprint :omitted_formats]))]
           (dom/p (dom/text (str (:format omission) ": " (:reason omission)))))
-        (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, " (:target_minutes detail) " estimated minutes")))
+        (DroppedQuestions (get-in detail [:form :blueprint :dropped_questions])
+          (count (get-in detail [:form :questions])))
+        (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, "
+                           (or (get-in detail [:form :blueprint :estimated_minutes]) (:target_minutes detail))
+                           " estimated minutes")))
         (dom/a (dom/props {:href (str "/api/comprehension/print/" (:id detail)) :target "_blank" :rel "noopener" :class "btn btn-secondary"})
           (dom/text "Print answer sheet")))
       (dom/h3 (dom/text "Handwritten answers"))

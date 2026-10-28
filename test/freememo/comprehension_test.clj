@@ -122,6 +122,14 @@
                     error))))
           (is (= 1 (count (cycle/list-cycles uid))) "the refused run saved no cycle"))))))
 
+(deftest generation-drops-bad-questions-instead-of-refusing-the-set
+  (with-accounts
+    (fn [uid _ tid]
+      (let [seen (atom nil)]
+        (with-redefs [assessment/generate! (fn [_ evidence options] (reset! seen options) (form evidence options))]
+          (is (:ok (cycle/start-cycle! uid tid 30))))
+        (is (true? (:drop-invalid? @seen)))))))
+
 (deftest save-before-grading-and-retry-one-attempt
   (with-accounts
     (fn [uid _ tid]
