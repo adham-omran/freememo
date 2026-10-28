@@ -46,17 +46,18 @@
   "Require citations in their declared frozen material and section.
    Pre: materials are frozen source packets. Post: every citation has a source.
    Invariant: model text cannot change the frozen source."
-  [materials citations]
-  (let [sources (into {} (mapcat (fn [{:keys [material-id evidence]}]
-                                         (map (fn [{:keys [topic-id text]}]
-                                                [[material-id topic-id] (normalize-text text)]) evidence)) materials))]
-    (doseq [{:keys [material_id topic_id quote]} citations]
-      (when-not (and (integer? material_id) (integer? topic_id) (nonblank? quote)
-                    (some-> (get sources [material_id topic_id])
-                            (str/includes? (normalize-text quote))))
-        (fail! "The model cited text that is not in the frozen source."
-          {:material-id material_id :topic-id topic_id}))))
-  citations)
+  ([materials citations] (validate-citations! materials citations {}))
+  ([materials citations fields]
+   (let [sources (into {} (mapcat (fn [{:keys [material-id evidence]}]
+                                          (map (fn [{:keys [topic-id text]}]
+                                                 [[material-id topic-id] (normalize-text text)]) evidence)) materials))]
+     (doseq [{:keys [material_id topic_id quote]} citations]
+       (when-not (and (integer? material_id) (integer? topic_id) (nonblank? quote)
+                     (some-> (get sources [material_id topic_id])
+                             (str/includes? (normalize-text quote))))
+         (fail! "A quoted passage does not match the material word for word."
+           (assoc fields :material-id material_id :topic-id topic_id)))))
+   citations))
 
 (defn- normalize-question [index question valid-fact-ids]
   (let [format (or (:format question) "long-essay")
@@ -66,24 +67,24 @@
         options (:options question)]
     (when-not (and (contains? formats format) (nonblank? (:prompt question))
                   (integer? points) (<= 1 points 1000))
-      (fail! "Every question needs a supported format, text, and positive points." {:question index}))
+      (fail! "A question has no text, an unknown format, or no points." {:question index}))
     (when-not (and (vector? (:evidence question)) (seq (:evidence question)))
-      (fail! "Every question needs source evidence." {:question index}))
+      (fail! "A question quotes nothing from the material." {:question index}))
     (when (and (not objective?)
                (not (and (map? rubric) (seq rubric)
                          (every? #(and (contains? (set criterion-keys) (key %)) (nonblank? (val %))) rubric))))
-      (fail! "Every essay needs source-bound rubric criteria." {:question index}))
+      (fail! "An essay question has no marking criteria." {:question index}))
     (when (and (= format "fill-in-the-blank")
                (not (and (vector? (:accepted_answers question)) (seq (:accepted_answers question))
                          (every? nonblank? (:accepted_answers question)))))
-      (fail! "A fill-in-the-blank question needs accepted answers." {:question index}))
+      (fail! "A fill-in-the-blank question has no accepted answers." {:question index}))
     (when (and (= format "multiple-choice")
                (not (and (vector? options) (<= 2 (count options) 8)
                          (every? #(and (nonblank? (:id %)) (nonblank? (:text %))) options)
                          (= (count options) (count (set (map #(str/lower-case (normalize-objective-answer (:id %))) options))))
                          (= (count options) (count (set (map #(normalize-objective-answer (:text %)) options))))
                          (some #(= (:id %) (:correct_option_id question)) options))))
-      (fail! "A multiple-choice question needs distinct options and one correct option." {:question index}))
+      (fail! "A multiple-choice question has repeated options or no correct option." {:question index}))
     (assoc question :id (str (or (:id question) (str "q" index))) :format format :points points
       :rubric (or rubric {})
       :fact_ids (vec (filter valid-fact-ids (:fact_ids question)))
@@ -94,19 +95,19 @@
         omitted (set (map :format (:omitted_formats blueprint)))
         ids (set (map :id questions))]
     (when-not (= (set (remove used formats)) omitted)
-      (fail! "The blueprint must explain every omitted format." {:field :omitted-formats}))
+      (fail! "The model did not say why it left out a question format." {:field :omitted-formats}))
     (doseq [outcome (:assessed_outcomes blueprint)]
       (when-not (and (nonblank? (:id outcome)) (nonblank? (:statement outcome))
                     (seq (:question_ids outcome)) (every? ids (:question_ids outcome))
                     (seq (:evidence outcome)))
-        (fail! "Every assessed outcome needs question ids and source evidence." {:field :assessed-outcomes}))
+        (fail! "A learning outcome is not linked to its questions and quotes." {:field :assessed-outcomes}))
       (when evidence (validate-citations! (:materials evidence) (:evidence outcome))))
     (when-not (and (seq (:assessed_outcomes blueprint))
                    (= ids (set (mapcat :question_ids (:assessed_outcomes blueprint)))))
-      (fail! "Every question must assess a declared outcome." {:field :assessed-outcomes}))
+      (fail! "A question is not linked to a learning outcome." {:field :assessed-outcomes}))
     (doseq [outcome (:unassessed_outcomes blueprint)]
       (when-not (and (nonblank? (:statement outcome)) (nonblank? (:reason outcome)))
-        (fail! "Every unassessed outcome needs an omission reason." {:field :unassessed-outcomes})))
+        (fail! "The model did not say why it left out a learning outcome." {:field :unassessed-outcomes})))
     blueprint))
 
 (defn validate-form!
@@ -122,7 +123,7 @@
    (when-not (and (map? (:blueprint form))
                  (vector? (get-in form [:blueprint :assessed_outcomes]))
                  (vector? (get-in form [:blueprint :unassessed_outcomes])))
-     (fail! "The blueprint must account for assessed and unassessed outcomes." {:field :blueprint}))
+     (fail! "The model did not list the learning outcomes." {:field :blueprint}))
    (when-not (and (vector? (:questions form)) (<= 1 (count (:questions form)) 40))
      (fail! "An assessment must contain from 1 to 40 questions." {:field :questions}))
    (let [facts (set (keep :id (:facts evidence)))
@@ -135,14 +136,16 @@
          blueprint (if evidence (assoc blueprint :evidence_packets (:materials evidence) :facts (:facts evidence)) blueprint)]
      (when-not (= (count questions) (count (set (map :id questions)))
                   (count (set (map #(str/lower-case (normalize-text (:prompt %))) questions))))
-       (fail! "Assessment questions must have distinct ids and prompts." {:field :duplicate-questions}))
+       (fail! "Two questions have the same ID or the same text." {:field :duplicate-questions}))
      (when-not (and (integer? (:estimated_minutes blueprint)) (pos? (:estimated_minutes blueprint)))
-       (fail! "The assessment needs a positive time estimate." {:field :estimated-minutes}))
-     (when evidence (validate-citations! (:materials evidence) (mapcat :evidence questions)))
+       (fail! "The model gave no time estimate." {:field :estimated-minutes}))
+     (when evidence
+       (doseq [[index question] (map-indexed vector questions)]
+         (validate-citations! (:materials evidence) (:evidence question) {:question (inc index)})))
      (when (some :format (:questions form)) (validate-blueprint! blueprint questions evidence))
      (doseq [omission (:omitted_formats blueprint)]
        (when-not (and (contains? formats (:format omission)) (nonblank? (:reason omission)))
-         (fail! "Every omitted format needs a reason." {:field :omitted-formats})))
+         (fail! "The model did not say why it left out a question format." {:field :omitted-formats})))
      {:blueprint blueprint :questions questions})))
 
 (defn- fact-in-excerpts? [materials fact]
@@ -217,24 +220,33 @@
 
 (defn generate!
   "Generate one mixed assessment and charge its completed model call.
-   Pre: the caller owns all evidence. Post: returns a validated frozen form.
+   Pre: the caller owns all evidence. Optional `:on-step` receives :writing before
+   the model call and :checking before validation.
+   Post: returns a validated frozen form. A refused form throws ::invalid-assessment
+   with the attempt's `:charged-credits` in its data.
    Invariant: validation failure cannot suppress a completed call charge."
   [user-id evidence options]
   (let [minutes (or (:target-minutes options) 30)
-        evidence (bounded-evidence evidence)]
+        evidence (bounded-evidence evidence)
+        step! (or (:on-step options) (fn [_]))]
     (when-not (and (integer? minutes) (<= 5 minutes 180))
       (fail! "Choose an estimated duration from 5 to 180 minutes." {:field :target-minutes}))
     (when-not (some nonblank? (mapcat #(map :text (:evidence %)) (:materials evidence)))
       (throw (ex-info "Add source text before generating an assessment." {:type ::insufficient-evidence})))
     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
+          _ (step! :writing)
           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
                                         (cards/load-prompt-template "curriculum-exam-form.md")
                                         (llm-json/write-prompt-input {:target_minutes minutes :target_outcomes (:target-outcomes options)
                                                                       :evidence evidence})
                                         :form :map {:feature :assessment-form :user-id user-id})
           charge (credits/record-cost-charge! user-id (or (:generation-feature options) :comprehension.exam-form)
-                   (:id entry) cost tokens)]
-      (assoc (validate-form! (include-source-limits parsed evidence) evidence options) :cost cost :charged-credits charge))))
+                   (:id entry) cost tokens)
+          _ (step! :checking)
+          form (try (validate-form! (include-source-limits parsed evidence) evidence options)
+                 (catch clojure.lang.ExceptionInfo e
+                   (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits charge) e))))]
+      (assoc form :cost cost :charged-credits charge))))
 
 (defn normalized-score
   "Return an integer percentage from earned and possible points."

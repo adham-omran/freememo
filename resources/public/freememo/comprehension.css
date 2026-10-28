@@ -11,6 +11,7 @@
 .comprehension-stages span { counter-increment: cycle-stage; padding: 8px 14px 8px 0; font-size: 13px; }
 .comprehension-stages span::before { content: counter(cycle-stage) ". "; color: var(--color-text-secondary); }
 .comprehension-panel { border: 1px solid var(--color-border); border-radius: 8px; padding: 18px 22px; margin: 16px 0; background: var(--color-bg-card); }
+.comprehension-progress p { margin: 4px 0 12px; font-weight: 500; }
 .comprehension-muted { color: var(--color-text-secondary); font-size: 13px; }
 .comprehension-warning { padding: 12px; border-left: 3px solid var(--color-danger, #b42318); }
 .comprehension-question { border-top: 1px solid var(--color-border); padding-top: 12px; margin-top: 24px; }

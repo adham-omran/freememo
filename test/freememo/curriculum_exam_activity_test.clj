@@ -168,14 +168,14 @@
     (testing "a paraphrase remains invalid"
       (is (thrown-with-msg?
             clojure.lang.ExceptionInfo
-            #"not in the frozen source"
+            #"does not match the material"
             (validate materials
               [(assoc-in question [:evidence 0 :quote]
                  "The material presents a single assertion.")]))))
     (testing "an exact quote under the wrong topic remains invalid"
       (is (thrown-with-msg?
             clojure.lang.ExceptionInfo
-            #"not in the frozen source"
+            #"does not match the material"
             (validate materials
               [(assoc-in question [:evidence 0 :topic_id] 45)]))))))
 

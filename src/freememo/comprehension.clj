@@ -187,13 +187,15 @@
        (catch Exception e {:ok false :error (or (ex-message e) "The study operation failed.")})))
 
 (defn with-work!
-  "Publish server work and its outcome. Pre: user-id comes from the server session."
+  "Publish server work and its outcome. Pre: user-id comes from the server session.
+   Post: while f runs, `:comprehension-work` maps member to its current step, a map
+   with a non-blank `:phase`. `report-step!` replaces that step."
   [user-id member f]
   (let [membership (us/get-atom user-id :comprehension-work)
         claimed (locking membership
                   (when-not (contains? @membership member)
                     (swap! (us/get-atom user-id :comprehension-errors) dissoc member)
-                    (swap! membership conj member)
+                    (swap! membership assoc member {:phase "Starting"})
                     true))]
     (if-not claimed
       {:ok false :error "This study operation is already running. Refresh to inspect its result."}
@@ -204,7 +206,46 @@
             (when-not (:ok response)
               (swap! (us/get-atom user-id :comprehension-errors) assoc member (:error response)))
             response)
-          (finally (swap! membership disj member)))))))
+          (finally (swap! membership dissoc member)))))))
+
+(def ^:private generation-steps
+  "The stages of making a form, in order. The page shows the position as X/Y."
+  [[:reading "Reading the material"]
+   [:writing "Writing the questions"]
+   [:checking "Checking the questions against the source"]
+   [:saving "Saving the cycle"]])
+
+(defn report-step!
+  "Name the running stage of member's work. Post: work that has ended stays absent."
+  [user-id member step]
+  (let [index (first (keep-indexed (fn [i [k]] (when (= k step) i)) generation-steps))]
+    (swap! (us/get-atom user-id :comprehension-work)
+      (fn [work]
+        (if (contains? work member)
+          (assoc work member {:phase (second (nth generation-steps index))
+                              :step (inc index) :total (count generation-steps)
+                              :since (System/currentTimeMillis)})
+          work)))))
+
+(defn- generated-form!
+  "Generate a form and report its stages. A refused form becomes a message that
+   says nothing was saved, what the attempt cost, and which button tries again."
+  [user-id member evidence options retry-label]
+  (try
+    (assessment/generate! user-id evidence
+      (assoc options :on-step #(report-step! user-id member %)))
+    (catch clojure.lang.ExceptionInfo e
+      (let [{:keys [type question charged-credits]} (ex-data e)]
+        (if (= type ::assessment/invalid-assessment)
+          (throw (ex-info
+                   (str "The model wrote questions that did not pass the checks, so nothing was saved. "
+                     "Reason: " (str/replace (ex-message e) #"\.$" "")
+                     (when question (str " (question " question ")")) ". "
+                     (when (pos? (or charged-credits 0))
+                       (str "This attempt used " charged-credits " credits. "))
+                     "Select " retry-label " to make a new set.")
+                   (ex-data e) e))
+          (throw e))))))
 
 (defn list-materials
   "Read picker titles for an authenticated learner.
@@ -317,10 +358,13 @@
   "Freeze owned sources before generation. Post: a saved form never follows later source edits."
   [user-id topic-id minutes]
   (with-work! user-id [:generate topic-id]
-    #(let [minutes (minutes! minutes)
+    #(let [member [:generate topic-id]
+           minutes (minutes! minutes)
+           _ (report-step! user-id member :reading)
            {:keys [title materials facts]} (source-snapshot user-id topic-id)
-           form (assessment/generate! user-id {:materials materials :facts facts}
-                  {:target-minutes minutes})
+           form (generated-form! user-id member {:materials materials :facts facts}
+                  {:target-minutes minutes} "Start cycle")
+           _ (report-step! user-id member :saving)
            cycle-id (insert-cycle! user-id topic-id title minutes materials facts
                       (select-keys form [:blueprint :questions :evidence_packets]) nil)]
        {:ok true :cycle-id cycle-id})))
@@ -540,7 +584,9 @@
   "Generate new evidence for an owned gap from its frozen source and learning target."
   [user-id gap-id minutes]
   (with-work! user-id [:reassess gap-id]
-    #(let [minutes (minutes! minutes)
+    #(let [member [:reassess gap-id]
+           minutes (minutes! minutes)
+           _ (report-step! user-id member :reading)
            gap (require-gap db/ds user-id gap-id)
            cycle (require-cycle db/ds user-id (:cycle_id gap))
            question (first (filter (fn [q] (= (:id q) (:question_id gap)))
@@ -548,8 +594,9 @@
            target {:reason (:reason gap) :criterion (:criterion gap)
                    :question (:prompt question) :outcomes (:outcomes question)
                    :evidence (:evidence gap) :fact_ids (:fact_ids gap)}
-           form (assessment/generate! user-id {:materials (:materials cycle) :facts (:facts cycle)}
-                  {:target-minutes minutes :target-outcomes [target]})
+           form (generated-form! user-id member {:materials (:materials cycle) :facts (:facts cycle)}
+                  {:target-minutes minutes :target-outcomes [target]} "Reassess")
+           _ (report-step! user-id member :saving)
            cycle-id (insert-cycle! user-id (:topic_id cycle) (:title cycle) minutes
                       (:materials cycle) (:facts cycle)
                       (select-keys form [:blueprint :questions :evidence_packets]) gap-id)]

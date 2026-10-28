@@ -176,7 +176,8 @@
    {:label "Comprehension cycle"
     :tier :server :subject :none
     :work-key (fn [operation id] (str (name operation) "/" id))
-    :state-key :comprehension-work :phase "working"
+    ;; The owner publishes each run's current stage, so the row names it.
+    :state-key :comprehension-work :entry->state (fn [{:keys [phase]}] {:phase phase})
     :key-fn (fn [work-key]
               (let [[operation id] (str/split work-key #"/")]
                 (when (and (#{"generate" "grade" "ocr" "extract" "reassess"} operation)

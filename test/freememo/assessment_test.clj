@@ -37,6 +37,13 @@
                (assoc-in form [:blueprint :assessed_outcomes 0 :question_ids] ["other"])]]
     (is (thrown? clojure.lang.ExceptionInfo (assessment/validate-form! bad evidence {})))))
 
+(deftest a-false-quote-names-the-question-that-made-it
+  (let [bad (assoc-in form [:questions 2 :evidence 0 :quote] "Plants eat sugar.")
+        e (try (assessment/validate-form! bad evidence {}) nil
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= "A quoted passage does not match the material word for word." (ex-message e)))
+    (is (= 3 (:question (ex-data e))))))
+
 (deftest objective-grading-needs-no-model-and-weights-points
   (let [exam (-> (assessment/validate-form! form evidence {})
                 (update :questions #(subvec % 0 2)))]

@@ -29,7 +29,7 @@
    `:entry` is the value for an owner whose atom is a map. `:subject-id` is what
    discovery must derive, and is absent for a type with `:subject :none`."
   {"card-gen"             {:member 42 :entry {:active-id 1 :pending 1} :subject-id 42}
-   "comprehension"        {:member [:generate 42]}
+   "comprehension"        {:member [:generate 42] :entry {:phase "Starting"}}
    "page-ocr"             {:member [7 3] :subject-id 7}
    "transcribe"           {:member 42 :subject-id 42}
    "video-process"        {:member 42 :subject-id 42}
