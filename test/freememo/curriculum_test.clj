@@ -27,16 +27,19 @@
    :evidence [{:material_id 1 :topic_id 2 :quote "frozen evidence"}]
    :rubric rubric})
 
-(deftest generated-form-requires-five-complete-essay-questions
+(deftest generated-form-supports-variable-count-legacy-essays
   (let [form {:blueprint {:assessed_outcomes ["a"] :unassessed_outcomes ["b"]}
               :questions (mapv question (range 5))}
         validated (exam/validate-generated-form! form)]
     (is (= 5 (count (:questions validated))))
     (is (every? :id (:questions validated))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly five"
+  (is (= 4 (count (:questions
+                    (exam/validate-generated-form!
+                      {:blueprint {:assessed_outcomes [] :unassessed_outcomes []}
+                       :questions (mapv question (range 4))})))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"1 to 40"
         (exam/validate-generated-form!
-          {:blueprint {:assessed_outcomes [] :unassessed_outcomes []}
-           :questions (mapv question (range 4))})))
+          {:blueprint {:assessed_outcomes [] :unassessed_outcomes []} :questions []})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Add material"
         (exam/validate-generated-form! {:insufficient true :reason "Too little evidence."}))))
 
@@ -497,3 +500,125 @@
         (finally
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id])
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" other-user-id]))))))
+
+(deftest
+ mixed-forms-persist-and-complete-with-their-own-question-count
+ (if-not
+  (db-up?)
+  (is true "PostgreSQL is unavailable; integration assertion skipped")
+  (let
+   [tag
+    (str "mixed-exam-" (System/nanoTime))
+    user-id
+    (:id
+     (jdbc/execute-one!
+      db/ds
+      ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+       tag
+       (str tag "@example.test")]
+      opts))]
+   (try
+    (let
+     [topic-id
+      (:id
+       (jdbc/execute-one!
+        db/ds
+        ["INSERT INTO topics (user_id, title, kind, content_text)\n                                VALUES (?, 'Mixed evidence', 'markdown', 'frozen evidence') RETURNING id"
+         user-id]
+        opts))
+      curriculum-id
+      (curriculum/create-curriculum!
+       user-id
+       {:title "Mixed exam", :daily-minutes 30, :study-weekdays []})
+      block-id
+      (curriculum/add-block! user-id curriculum-id "First")
+      material-id
+      (curriculum/add-material! user-id block-id topic-id 30)
+      subject
+      {:material-id material-id}
+      source
+      (curriculum/subject-evidence db/ds user-id subject)
+      questions
+      (mapv
+       (fn
+        [index]
+        (assoc
+         (question index)
+         :id
+         (str "q" index)
+         :format
+         (nth
+          ["fill-in-the-blank" "multiple-choice" "short-essay"]
+          index)
+         :points
+         20))
+       (range 3))
+      form-id
+      (curriculum/save-draft-form!
+       user-id
+       subject
+       {:threshold 70,
+        :blueprint {:assessed_outcomes [], :unassessed_outcomes []},
+        :questions questions,
+        :source-versions (:source-versions source)})]
+     (is
+      (=
+       form-id
+       (curriculum/save-form-edits!
+        user-id
+        form-id
+        {:threshold 70, :prompts ["One" "Two" "Three"]})))
+     (curriculum/reorder-draft-question!
+      user-id
+      form-id
+      0
+      1
+      ["One" "Two" "Three"])
+     (curriculum/approve-form! user-id form-id)
+     (let
+      [sitting-id (curriculum/start-sitting! user-id form-id)]
+      (is
+       (thrown?
+        clojure.lang.ExceptionInfo
+        (curriculum/save-answer-draft!
+         user-id
+         sitting-id
+         [{:index 3, :answer "Invalid"}])))
+      (curriculum/save-answer-draft!
+       user-id
+       sitting-id
+       [{:index 0, :answer "Answer"} {:index 1, :answer "Answer"}])
+      (is
+       (thrown?
+        clojure.lang.ExceptionInfo
+        (curriculum/finalize-sitting! user-id sitting-id)))
+      (curriculum/save-answer-draft!
+       user-id
+       sitting-id
+       [{:index 2, :answer "Answer"}])
+      (is
+       (=
+        :submitted
+        (curriculum/finalize-sitting! user-id sitting-id)))
+      (is
+       (=
+        3
+        (count
+         (:answers
+          (curriculum/sitting-for-grade user-id sitting-id)))))
+      (is
+       (some?
+        (curriculum/record-grade-revision!
+         user-id
+         sitting-id
+         {:raw-score 50,
+          :criteria
+          (vec
+           (repeat
+            3
+            {:criteria {:reasoning 2}, :points 10, :max_points 20})),
+          :explanation "Half of the available points."})))))
+    (finally
+     (jdbc/execute-one!
+      db/ds
+      ["DELETE FROM users WHERE id = ?" user-id]))))))

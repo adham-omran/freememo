@@ -87,7 +87,8 @@
 
 ;; ── Plain helpers ──────────────────────────────────────────────────────────
 
-(def question-field-keys [:question-1 :question-2 :question-3 :question-4 :question-5])
+(defn question-field-keys [question-count]
+  (mapv #(keyword (str "question-" (inc %))) (range question-count)))
 
 (defn parse-percent
   "Return an integer from 1 to 100, or nil."
@@ -108,9 +109,9 @@
   (-> (name criterion) (str/replace "_" " ") str/capitalize))
 
 (defn prompts-of
-  "Return the five prompts a Forms5 field map holds, in order."
-  [fields]
-  (mapv #(str/trim (str (get fields %))) question-field-keys))
+  "Return the question prompts in field order."
+  [fields question-count]
+  (mapv #(str/trim (str (get fields %))) (question-field-keys question-count)))
 
 ;; The DOM reads below are CLJS work, but every var must exist on BOTH peers:
 ;; each name appears at a call site Electric compiles twice, and a reader
@@ -125,7 +126,7 @@
      :clj nil))
 
 (defn prompts-in
-  "Return the five prompt textareas' current text, or nil when absent.
+  "Return the prompt textareas' current text, or nil when absent.
 
    A prompt read from the DOM is current, where a read from the Forms5 field
    map is only as current as the last frame. Approve and reorder both need the
@@ -136,7 +137,7 @@
                                (some-> (.querySelector root
                                          (str "[name=\"question-" index "\"]"))
                                  .-value))
-                         (range 5))]
+                         (range (.-length (.querySelectorAll root "[name^=\"question-\"]"))))]
              (when (every? some? found) (mapv str/trim found)))
      :clj nil))
 
@@ -154,7 +155,7 @@
    replaces a whole slot."
   [container target]
   #?(:cljs (when-let [field-name (some-> target .-name)]
-             (when-let [[_ digits] (re-matches #"(?:answer|unknown)-(\d)" field-name)]
+             (when-let [[_ digits] (re-matches #"(?:answer|unknown)-(\d+)" field-name)]
                (let [index (js/parseInt digits 10)
                      answer (.querySelector container
                               (str "[name=\"answer-" index "\"]"))
@@ -296,7 +297,7 @@
    Post: the section texts in order, one blank line apart."
   [packet]
   (if (map? packet)
-    (or (not-empty (str/join "\n\n" (keep #(readable % [:text :quote]) (:sections packet))))
+    (or (not-empty (str/join "\n\n" (keep #(readable % [:text :quote]) (or (:sections packet) (:evidence packet)))))
       (readable packet [:quote :text])
       (pr-str packet))
     (str packet)))
@@ -310,7 +311,10 @@
         (dom/p (dom/props {:class "curriculum-help"}) (dom/text "None."))
         (dom/ul
           (e/for [[_ outcome] (e/diff-by first (map-indexed vector outcomes))]
-            (dom/li (dom/text (outcome-text outcome)))))))))
+            (dom/li
+              (dom/text (outcome-text outcome))
+              (when (:reason outcome)
+                (dom/p (dom/text (:reason outcome)))))))))))
 
 (e/defn BlueprintSection
   "Assessed and unassessed coverage, with the source passages behind a
@@ -323,6 +327,9 @@
       (dom/section
         (dom/props {:class "curriculum-exam-section"})
         (dom/h2 (dom/text "Blueprint"))
+        (dom/p (dom/text (str "Estimated time: " (:estimated-minutes form) " minutes. No enforced time limit.")))
+        (e/for [omission (e/diff-by :format (:omitted-formats form))]
+          (dom/p (dom/text (str "Omitted " (:format omission) ": " (:reason omission)))))
         (dom/div (dom/props {:class "curriculum-outcome-grid"})
           (OutcomeList "Assessed outcomes" (:assessed-outcomes form))
           (OutcomeList "Unassessed outcomes" (:unassessed-outcomes form)))
@@ -352,14 +359,15 @@
       (dom/props {:class "curriculum-exam-question"})
       (dom/div (dom/props {:class "curriculum-question-meta"})
         (dom/span (dom/text (str "Question " index)))
-        (dom/span (dom/text (str/capitalize (str (:role question))))))
+        (dom/span (dom/text (str (str/capitalize (str/replace (or (:format question) "long-essay") "-" " "))
+                               " / " (or (:points question) 20) " points"))))
       (dom/h3 (dom/text (:prompt question)))
+      (e/for [option (e/diff-by :id (:options question))]
+        (dom/p (dom/text (str (:id option) ". " (:text option)))))
       (dom/details
         (dom/summary (dom/text "Rubric and evidence"))
         (dom/ul
-          (e/for [criterion (e/diff-by identity
-                              [:factual_accuracy :reasoning :source_evidence
-                               :integration :completeness])]
+          (e/for [criterion (e/diff-by identity (keys (:rubric question)))]
             (dom/li
               (dom/strong (dom/text (str (criterion-label criterion) ": ")))
               (dom/span (dom/text (get-in question [:rubric criterion]))))))
@@ -369,7 +377,7 @@
 
 (e/defn QuestionsReview [questions]
   (e/client
-    (e/for [[index question] (e/diff-by first (map vector (range 1 6) questions))]
+    (e/for [[index question] (e/diff-by first (map vector (range 1 (inc (count questions))) questions))]
       (QuestionReview index question))
     (e/amb)))
 
@@ -404,19 +412,20 @@
           nil)))
     (e/amb)))
 
-(e/defn QuestionEditRow [index key question fields !move-request]
+(e/defn QuestionEditRow [index question-count key question fields !move-request]
   (e/client
     (dom/div
       (dom/props {:class "curriculum-draft-question"})
       (e/amb
         (dom/div (dom/props {:class "curriculum-question-meta"})
           (e/amb
-            (dom/span (dom/text (str index ". " (str/capitalize (str (:role question))))))
+            (dom/span (dom/text (str index ". " (str (str/capitalize (str/replace (or (:format question) "long-essay") "-" " "))
+                               " / " (or (:points question) 20) " points"))))
             (dom/span (dom/props {:class "curriculum-draft-order"})
               (e/amb
                 (MoveQuestionButton "Move question up" (= 1 index)
                   (dec index) -1 !move-request)
-                (MoveQuestionButton "Move question down" (= 5 index)
+                (MoveQuestionButton "Move question down" (= question-count index)
                   (dec index) 1 !move-request)))))
         (forms/Input! key (get fields key) :as :textarea
           :name (str "question-" (dec index))
@@ -427,11 +436,12 @@
   [form]
   (e/client
     (let [questions (:questions form)
+          field-keys (question-field-keys (count questions))
           !move-request (atom nil)
           move-request (e/watch !move-request)
           seed (merge {:threshold (str (:threshold form))}
                  (into {} (map (fn [[key question]] [key (:prompt question)])
-                            (map vector question-field-keys questions))))
+                            (map vector field-keys questions))))
           form-commits
           (forms/Form! seed
             (e/fn Fields [fields]
@@ -442,8 +452,8 @@
                   :type "number" :class "input curriculum-threshold")
                 (e/for [[index key question]
                         (e/diff-by first
-                          (map vector (range 1 6) question-field-keys questions))]
-                  (QuestionEditRow index key question fields !move-request))
+                          (map vector (range 1 (inc (count questions))) field-keys questions))]
+                  (QuestionEditRow index (count questions) key question fields !move-request))
                 (dom/div (dom/props {:class "curriculum-form-actions"})
                   (forms/SubmitButton!
                     :label (if (= "draft" (:status form))
@@ -452,7 +462,7 @@
                     :class "btn btn-primary"))))
             :Parse (e/fn [fields _]
                      (let [threshold (parse-percent (:threshold fields))
-                           prompts (prompts-of fields)]
+                           prompts (prompts-of fields (count questions))]
                        (cond
                          (nil? threshold) (ex-info "Threshold must be from 1 to 100." {})
                          (some str/blank? prompts)
@@ -613,7 +623,7 @@
       (e/on-unmount #(stop-tick! timer))
       (dom/time
         (dom/text (str "Elapsed " (format-elapsed (+ (or base-seconds 0) tick))
-                    ". Suggested time is 45 min. No enforced limit."))))
+                    ". No enforced time limit."))))
     (e/amb)))
 
 (e/defn AnswerField [index question fields]
@@ -624,12 +634,15 @@
         (dom/div (dom/props {:class "curriculum-question-meta"})
           (e/amb
             (dom/span (dom/text (str "Question " (inc index))))
-            (dom/span (dom/text (str/capitalize (str (:role question)))))))
+            (dom/span (dom/text (str (str/capitalize (str/replace (or (:format question) "long-essay") "-" " "))
+                               " / " (or (:points question) 20) " points")))))
         (dom/h3 (dom/text (:prompt question)))
+        (e/for [option (e/diff-by :id (:options question))]
+          (dom/p (dom/text (str (:id option) ". " (:text option)))))
         (forms/Input! (answer-key index) (get fields (answer-key index))
           :as :textarea :name (str "answer-" index)
-          :class "input curriculum-answer" :rows 8
-          :placeholder "Write your answer")
+          :class "input curriculum-answer" :rows (if (contains? #{"multiple-choice" "fill-in-the-blank"} (:format question)) 2 8)
+          :placeholder (if (= "multiple-choice" (:format question)) "Enter the option id or option text" "Write your answer"))
         (dom/label (dom/props {:class "curriculum-unknown-answer"})
           (e/amb
             (forms/Checkbox! (unknown-key index)
@@ -641,7 +654,7 @@
   "The answer sheet. Returns commits and calls no server itself.
 
    A focus change autosaves that one slot, so a reload resumes the sitting.
-   Submit carries all five slots as well, because the two writes are
+   Submit carries every answer slot as well, because the two writes are
    concurrent and only the submit payload can order them."
   [questions sitting]
   (e/client
@@ -654,7 +667,7 @@
                                       [[(answer-key index) (or (:answer slot) "")]
                                        [(unknown-key index)
                                         (boolean (:do-not-know slot))]]))
-                            (range 5)))
+                            (range (count questions))))
             draft-commits
             (e/for [[token slot]
                     (dom/On-all "focusout"
@@ -673,14 +686,14 @@
                   (e/for [[index question]
                           (e/diff-by first (map-indexed vector questions))]
                     (AnswerField index question fields))
-                  (forms/SubmitButton! :label "Submit all five answers"
+                  (forms/SubmitButton! :label "Submit answers"
                     :class "btn btn-primary")))
               :Parse (e/fn [fields _]
                        (let [slots (mapv (fn [index]
                                            {:index index
                                             :answer (str/trim (str (get fields (answer-key index))))
                                             :do-not-know (boolean (get fields (unknown-key index)))})
-                                     (range 5))]
+                                     (range (count questions)))]
                          (if (every? #(or (seq (:answer %)) (:do-not-know %)) slots)
                            [:finalize {:sitting-id (:id sitting) :slots slots}]
                            (ex-info "Answer every question or write “I do not know.”" {}))))
@@ -715,7 +728,9 @@
   (e/client
     (dom/section
       (dom/props {:class "curriculum-grade-question"})
-      (dom/strong (dom/text (str "Question " (inc index))))
+      (dom/strong (dom/text (str "Question " (inc index)
+                              (when (:max_points question-grade)
+                                (str ": " (:points question-grade) "/" (:max_points question-grade) " points")))))
       (dom/div (dom/props {:class "curriculum-criterion-scores"})
         (e/for [[criterion score] (e/diff-by first (:criteria question-grade))]
           (dom/span (dom/text (str (criterion-label criterion) " " score "/4")))))

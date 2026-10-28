@@ -2,13 +2,11 @@
   "Evidence-bound exam form generation and grading."
   (:require
    [cheshire.core :as json]
+   [freememo.assessment :as assessment]
    [clojure.string :as str]
-   [freememo.cards :as cards]
-   [freememo.credits :as credits]
    [freememo.curriculum :as curriculum]
    [freememo.db :as db]
    [freememo.kg-llm :as llm]
-   [freememo.llm-json :as llm-json]
    [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [missionary.core :as m]
@@ -16,140 +14,23 @@
    [next.jdbc.result-set :as rs]
    [taoensso.telemere :as tel])
   (:import
-   [java.text Normalizer Normalizer$Form]
    [java.time Instant]
    [java.util.concurrent ExecutorService Executors TimeUnit]
    [missionary Cancelled]))
 
-(def question-roles #{"explain" "compare" "apply" "evaluate" "synthesize"})
-(def criterion-keys
-  [:factual_accuracy :reasoning :source_evidence :integration :completeness])
+(def criterion-keys assessment/criterion-keys)
 
 (defn- non-blank? [value]
   (and (string? value) (not (str/blank? value))))
 
-(defn- normalize-question [index question]
-  (let [role (some-> (:role question) name str/lower-case)
-        rubric (:rubric question)
-        evidence (:evidence question)]
-    (when-not (contains? question-roles role)
-      (throw (ex-info "The model returned an unsupported question role."
-               {:type ::invalid-form :question index :field :role})))
-    (when-not (non-blank? (:prompt question))
-      (throw (ex-info "The model returned a blank exam question."
-               {:type ::invalid-form :question index :field :prompt})))
-    (when-not (and (map? rubric) (every? #(non-blank? (get rubric %)) criterion-keys))
-      (throw (ex-info "The model returned an incomplete question rubric."
-               {:type ::invalid-form :question index :field :rubric})))
-    (when-not (and (vector? evidence) (seq evidence)
-                (every? #(and (integer? (:material_id %))
-                           (integer? (:topic_id %))
-                           (non-blank? (:quote %))) evidence))
-      (throw (ex-info "The model returned a question without source evidence."
-               {:type ::invalid-form :question index :field :evidence})))
-    ;; The grading guide repeats the required rubric. Some structured-output
-    ;; providers omit this redundant field. Preserve the complete rubric as the
-    ;; guide instead of discarding a valid five-question form.
-    (assoc question
-      :id (or (:id question) (str (random-uuid)))
-      :role role
-      :grading_guide (if (non-blank? (:grading_guide question))
-                       (:grading_guide question)
-                       (str/join " " (map rubric criterion-keys))))))
-
 (defn validate-generated-form!
-  "Validate the model contract and return a normalized form.
-   An explicit insufficiency becomes a typed failure with user guidance."
+  "Validate a mixed form and preserve legacy essay defaults."
   [form]
-  (when (:insufficient form)
-    (throw (ex-info
-             (str (or (:reason form) "The source cannot support five essay questions.")
-               " Add material, merge it with another block, or remove this exam subject.")
-             {:type ::insufficient-evidence})))
-  (let [questions (:questions form)
-        blueprint (:blueprint form)]
-    (when-not (= 5 (count questions))
-      (throw (ex-info "The source must support exactly five essay questions."
-               {:type ::invalid-form :question-count (count questions)})))
-    (when-not (map? blueprint)
-      (throw (ex-info "The model returned no exam blueprint."
-               {:type ::invalid-form :field :blueprint})))
-    (when-not (and (vector? (:assessed_outcomes blueprint))
-                (vector? (:unassessed_outcomes blueprint)))
-      (throw (ex-info "The exam blueprint must account for assessed and unassessed outcomes."
-               {:type ::invalid-form :field :blueprint-outcomes})))
-    (let [questions (mapv normalize-question (range 1 6) questions)]
-      (when-not (= 5 (count (set (map (comp str/lower-case str/trim :prompt) questions))))
-        (throw (ex-info "The source must support five distinct essay questions."
-                 {:type ::invalid-form :field :duplicate-questions})))
-      {:blueprint blueprint :questions questions})))
+  (assessment/validate-form! form))
 
-(def ^:private citation-punctuation
-  {\‘ "'" \’ "'" \‚ "'" \‛ "'" \ʼ "'"
-   \“ "\"" \” "\"" \„ "\"" \‟ "\""
-   \‐ "-" \‑ "-" \‒ "-" \– "-" \— "-" \― "-" \− "-"
-   \… "..."})
-
-(defn- normalize-citation-text
-  "Return a comparison-only form of source evidence.
-
-   Pre: text is a source string or a model citation string.
-   Post: Unicode compatibility forms, typographic punctuation, and whitespace
-   have canonical forms.
-   Invariant: persisted source text and citations remain unchanged. The caller
-   must still require exact containment inside the declared material and topic.
-   A failed comparison is blamed on the model citation, not the frozen source."
-  [text]
-  (-> (Normalizer/normalize text Normalizer$Form/NFKC)
-    (str/escape citation-punctuation)
-    (str/replace #"[\p{Z}\s]+" " ")
-    str/trim))
-
-(defn- validate-citations!
-  "Require each citation to occur in its declared frozen source section.
-
-   Pre: materials contain frozen evidence and questions contain normalized form
-   data from the model.
-   Post: returns questions when every normalized quote is an exact substring.
-   Invariant: normalization permits formatting changes only. It does not permit
-   paraphrases, cross-topic matches, or invented evidence. A mismatch is blamed
-   on the generated form."
-  [materials questions]
-  (let [source-text (into {}
-                      (mapcat
-                        (fn [{:keys [material-id evidence]}]
-                          (map (fn [{:keys [topic-id text]}]
-                                 [[material-id topic-id]
-                                  (normalize-citation-text text)]) evidence))
-                        materials))]
-    (doseq [[question-index question] (map-indexed vector questions)
-            {:keys [material_id topic_id quote]} (:evidence question)]
-      (when-not (some-> (get source-text [material_id topic_id])
-                  (str/includes? (normalize-citation-text quote)))
-        (throw (ex-info "The model cited text that is not in the frozen source."
-                 {:type ::invalid-form :question (inc question-index)
-                  :material-id material_id :topic-id topic_id}))))
-    questions))
-
-(defn- evidence-payload [bundles]
-  (let [per-material-budget (max 12000 (quot 120000 (max 1 (count bundles))))]
-    (mapv
-      (fn [{:keys [material-id topic-id digest evidence]}]
-        (let [[sections _]
-              (reduce
-                (fn [[rows remaining] {:keys [topic-id title kind page text]}]
-                  (let [take-count (min 5000 remaining (count text))]
-                    [(conj rows
-                       (cond-> {:topic_id topic-id :title title :kind kind :page page}
-                         (pos? take-count) (assoc :text (subs text 0 take-count))
-                         (< take-count (count text)) (assoc :text_omitted true)))
-                     (- remaining take-count)]))
-                [[] per-material-budget] evidence)]
-          {:material_id material-id
-           :topic_id topic-id
-           :digest digest
-           :sections sections}))
-      bundles)))
+(defn- validate-citations! [materials questions]
+  (assessment/validate-citations! materials (mapcat :evidence questions))
+  questions)
 
 (defn- latest-weaknesses [user-id block-id]
   (let [row (jdbc/execute-one! db/ds
@@ -189,7 +70,7 @@
   (contains? @(us/get-atom user-id :exam-form-generation-cancelled) work-key))
 
 (defn generate-form!
-  "Generate and persist one five-question draft.
+  "Generate and persist one mixed-format draft.
 
    Pre: the user owns subject. The caller owns an invalid or unowned subject.
    Post: each returned model cost is charged once. A successful result identifies
@@ -205,22 +86,11 @@
           (curriculum/subject-evidence db/ds user-id subject)
           retry? (= "targeted-retry" form-kind)
           weaknesses (when retry? (latest-weaknesses user-id (:block-id subject)))
-          {:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
-          payload {:exam_kind (if (:material-id subject) "material" "block")
-                   :form_kind (or form-kind "standard")
-                   :question_count 5
-                   :threshold (or threshold curriculum/default-threshold)
-                   :weaknesses weaknesses
-                   :evidence (evidence-payload materials)}
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
-                                         (cards/load-prompt-template "curriculum-exam-form.md")
-                                         (llm-json/write-prompt-input payload)
-                                         :form :map
-                                         {:feature :curriculum-exam-form :user-id user-id})
-          charge (credits/record-cost-charge! user-id :curriculum.exam-form
-                   (:id entry) cost tokens)
-          {:keys [blueprint questions]} (validate-generated-form! parsed)
-          questions (validate-citations! materials questions)]
+          {:keys [blueprint questions charged-credits]}
+          (assessment/generate! user-id {:materials materials}
+            {:target-minutes 30 :target-outcomes weaknesses
+             :generation-feature :curriculum.exam-form})
+          charge charged-credits]
       ;; OpenRouter ignores thread interruption during its socket read. This
       ;; check prevents a cancelled request from saving its late result.
       (if (generation-cancelled? user-id work-key)
@@ -228,7 +98,7 @@
         (let [form-id (curriculum/save-draft-form! user-id subject
                         {:form-kind (or form-kind "standard")
                          :threshold (or threshold curriculum/default-threshold)
-                         :blueprint (assoc blueprint :evidence_packets (:evidence payload))
+                         :blueprint blueprint
                          :questions questions
                          :source-versions source-versions
                          :cost nil
@@ -244,7 +114,7 @@
        :error (ex-message (llm/root-cause error))
        :error-type (cond
                      (llm/insufficient-credits? error) :insufficient-credits
-                     (= ::insufficient-evidence (:type (ex-data error))) :insufficient-evidence
+                     (contains? #{::insufficient-evidence ::assessment/insufficient-evidence} (:type (ex-data error))) :insufficient-evidence
                      :else :generation-failed)})))
 
 (defonce ^:private form-generation-executor (Executors/newFixedThreadPool 2))
@@ -404,7 +274,7 @@
     score))
 
 (defn validate-grade!
-  "Validate all 25 scores and compute the authoritative raw score."
+  "Validate a legacy five-essay grade for compatibility."
   [grade blueprint]
   (let [question-grades (:question_grades grade)
         source-texts (for [packet (:evidence_packets blueprint)
@@ -464,19 +334,15 @@
           sitting (or (curriculum/sitting-for-grade user-id sitting-id)
                     (throw (ex-info "Submitted exam sitting not found."
                              {:type ::missing-sitting})))
-          {:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
-          payload {:questions (:questions sitting)
-                   :blueprint (:blueprint sitting)
-                   :answers (:answers sitting)
-                   :threshold (:threshold sitting)}
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
-                                         (cards/load-prompt-template "curriculum-exam-grade.md")
-                                         (llm-json/write-prompt-input payload)
-                                         :grade :map
-                                         {:feature :curriculum-exam-grade :user-id user-id})
-          charge (credits/record-cost-charge! user-id :curriculum.exam-grade
-                   (:id entry) cost tokens)
-          grade (validate-grade! parsed (:blueprint sitting))
+          answers (into {} (map-indexed
+                             (fn [index question]
+                               [(str (or (:id question) (str "q" (inc index))))
+                                (let [answer (nth (:answers sitting) index nil)]
+                                  (if (:do-not-know answer) "I do not know" (:answer answer)))])
+                             (:questions sitting)))
+          grade (assessment/grade! user-id
+                  (assoc sitting :grading-feature :curriculum.exam-grade) answers)
+          charge (:charged-credits grade)
           revision-id (curriculum/record-grade-revision! user-id sitting-id
                         (assoc grade :cost nil :operation-started-at operation-started-at))]
       (if revision-id

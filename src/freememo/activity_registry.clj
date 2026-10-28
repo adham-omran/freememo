@@ -172,7 +172,23 @@
    :progress-unit  :count | :bytes — how the panel should READ done/total. A
                 unit column would be per row, and a type's unit cannot vary by
                 run; without it the panel prints an upload's byte counts raw."
-  {:card-gen
+  {:comprehension
+   {:label "Comprehension cycle"
+    :tier :server :subject :none
+    :work-key (fn [operation id] (str (name operation) "/" id))
+    :state-key :comprehension-work :phase "working"
+    :key-fn (fn [work-key]
+              (let [[operation id] (str/split work-key #"/")]
+                (when (and (#{"generate" "grade" "ocr" "extract" "reassess"} operation)
+                        (some-> id parse-long))
+                  [(keyword operation) (parse-long id)])))
+    :owner-key->args identity
+    :error-fn (fn [uid work-key]
+                (let [[operation id] (str/split work-key #"/")]
+                  (get @(us/get-atom uid :comprehension-errors)
+                    [(keyword operation) (some-> id parse-long)])))}
+
+   :card-gen
    {:label "Generating cards"
     :tier :server :subject :topic :work-key id->key
     :state-key :card-gen-status

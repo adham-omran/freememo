@@ -22,6 +22,7 @@
             [freememo.knowledge-page :refer [KnowledgePage]]
             [freememo.graph-page :refer [GraphPage]]
             [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
+            [freememo.comprehension-page :refer [ComprehensionPage]]
             [freememo.search-page :refer [SearchPage]]
             [freememo.help-page :refer [HelpPage PageHelpModal]]
             [freememo.subset-review :refer [SubsetReviewSession]]
@@ -149,6 +150,7 @@
        ;; SchedulePage, so a forecast survives a reload and is linkable.
        :schedule-detail (list 'schedule (:id nav-map))
        :curriculum-detail (list 'curriculum (:id nav-map))
+       :comprehension-cycle (list 'comprehension (:cycle-id nav-map))
        ;; /curriculum/<id>/exam/<form-id>[/sitting/<sitting-id>]. CurriculumPage
        ;; reads these segments after `r/pop`, so the exam page needs no
        ;; active-tab branch of its own and the Routes count stays 14.
@@ -430,7 +432,9 @@
                         (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
                           (KnowledgePage user-id navigate!)))
                       (when (= active-tab :graph) (GraphPage user-id navigate!))
-                      (when (= active-tab :quiz) (QuizPage user-id navigate!))
+                      (when (= active-tab :quiz) (r/pop (QuizPage user-id navigate!)))
+                      (when (= active-tab :comprehension)
+                        (r/pop (ComprehensionPage user-id navigate!)))
                       (when (= active-tab :help)
                         (r/pop ; consume 'help; HelpPage reads the slug segment
                           (HelpPage)))

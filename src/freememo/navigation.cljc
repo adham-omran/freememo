@@ -48,6 +48,9 @@
   [slug]
   {:type :help :slug slug})
 
+(defn nav-comprehension [cycle-id]
+  {:type :comprehension-cycle :cycle-id cycle-id})
+
 (defn set-url-page!
   "Reflect the current PDF page in the address bar as /viewer/topic/<root>/<page>.
    replaceState — no history entry (page scrolls don't spam back/forward) and no

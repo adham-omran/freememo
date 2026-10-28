@@ -2049,7 +2049,7 @@
       threshold INTEGER NOT NULL DEFAULT 70 CHECK (threshold BETWEEN 0 AND 100),
       blueprint JSONB NOT NULL,
       questions JSONB NOT NULL CHECK (jsonb_typeof(questions) = 'array'
-                                     AND jsonb_array_length(questions) = 5),
+                                     AND jsonb_array_length(questions) BETWEEN 1 AND 40),
       source_versions JSONB NOT NULL,
       accepted_source_versions JSONB,
       generation_cost_credits NUMERIC(12,4),
@@ -2058,6 +2058,12 @@
       CHECK ((block_id IS NULL) <> (material_id IS NULL)),
       CHECK ((status = 'approved') = (approved_at IS NOT NULL))
     )"])
+  ;; Existing five-essay forms remain valid under the mixed-format contract.
+  (jdbc/execute! ds ["ALTER TABLE curriculum_exam_forms
+                      DROP CONSTRAINT IF EXISTS curriculum_exam_forms_questions_check,
+                      ADD CONSTRAINT curriculum_exam_forms_questions_check
+                      CHECK (jsonb_typeof(questions) = 'array'
+                        AND jsonb_array_length(questions) BETWEEN 1 AND 40)"])
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_material_form_version
                       ON curriculum_exam_forms(material_id, version)
                       WHERE material_id IS NOT NULL"])
@@ -3387,6 +3393,8 @@
   (setup-schema-flashcard-uniqueness!)
   ;; After every table exists: it converts ids and triggers all of them.
   (setup-schema-sync!)
+
+  ((requiring-resolve 'freememo.comprehension/ensure-schema!))
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -13568,7 +13576,8 @@
    not), so an exam resumes at the first unanswered question even when
    grading hasn't run. Timestamps stay server-side; the client gets derived
    numbers only."
-  [user-id kind]
+  ([user-id kind] (get-active-kg-session user-id kind nil))
+  ([user-id kind session-id]
   (when-let [row (jdbc/execute-one! ds
                    ["SELECT id, kind, question_ids, time_limit_seconds,
                        EXTRACT(EPOCH FROM (now() - started_at))::bigint AS elapsed_seconds,
@@ -13576,15 +13585,16 @@
                         WHERE a.session_id = s.id) AS answered
                      FROM kg_sessions s
                      WHERE user_id = ? AND kind = ? AND finished_at IS NULL
+                       AND (?::bigint IS NULL OR s.id = ?)
                      ORDER BY id DESC LIMIT 1"
-                    user-id kind]
+                    user-id kind session-id session-id]
                    {:builder-fn rs/as-unqualified-maps})]
     {:id (:id row)
      :kind (:kind row)
      :question-ids (sql-int-array->vec (:question_ids row))
      :answered (long (:answered row))
      :time-limit-seconds (:time_limit_seconds row)
-     :elapsed-seconds (long (:elapsed_seconds row))}))
+     :elapsed-seconds (long (:elapsed_seconds row))})))
 
 (defn get-kg-question-for-session
   "Everything one quiz turn needs: the question, its facts with document +

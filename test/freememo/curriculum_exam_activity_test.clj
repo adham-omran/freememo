@@ -218,7 +218,8 @@
         charges (atom [])]
     (with-redefs [curriculum/sitting-for-grade
                   (fn [_user-id _sitting-id]
-                    {:questions [] :blueprint {} :answers {} :threshold 70})
+                    {:questions (mapv exam-question (range 5)) :blueprint {}
+                     :answers (vec (repeat 5 {:answer "answer"})) :threshold 70})
                   llm/resolve-model+gate!
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
