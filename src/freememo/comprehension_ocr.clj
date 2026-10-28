@@ -244,7 +244,11 @@
     assignments))
 
 (defn accept-scan!
-  "Save reviewed assignments and literal corrections. Original scan and OCR suggestion remain unchanged."
+  "Save reviewed assignments and literal corrections.
+   Pre: the learner owns this cycle and has reviewed this scan.
+   Post: only this scan's old and new question assignments update draft answers.
+   Invariant: unrelated saved answers and original evidence stay unchanged.
+   This function owns lost draft edits."
   [user-id cycle-id scan-id assignments]
   (result
     (fn [] (jdbc/with-transaction [tx db/ds]
@@ -260,17 +264,16 @@
                                                  ["SELECT id, accepted_assignments FROM comprehension_scans
                                                     WHERE cycle_id = ? AND status = 'accepted' ORDER BY id"
                                                   cycle-id] opts))
-               old-questions (into #{} (map :question_id)
-                               (mapcat :accepted_assignments accepted-scans))
+               affected-questions (into (set (map :question_id (:accepted_assignments scan)))
+                                    (map :question_id assignments))
                updated-scans (sort-by :id
                                (conj (filterv (fn [row] (not= scan-id (:id row))) accepted-scans)
                                  {:id scan-id :accepted_assignments assignments}))
-               all-assignments (mapcat (fn [row] (sort-by (comp first :page_numbers)
-                                                  (:accepted_assignments row))) updated-scans)
-               answer-parts (group-by :question_id all-assignments)
+               transcripts (comprehension/accepted-scan-answers updated-scans)
                current (into {} (map (fn [[k v]] [(name k) v])) (:draft_answers cycle))
-               cleared (merge current (zipmap old-questions (repeat "")))
-               answers (merge cleared (update-vals answer-parts #(str/join "\n\n" (map :text %))))]
+               answers (reduce (fn [answers question-id]
+                                 (assoc answers question-id (get transcripts question-id "")))
+                         current affected-questions)]
            (jdbc/execute-one! tx
              ["UPDATE comprehension_scans SET accepted_assignments = ?, accepted_at = now(), status = 'accepted'
                 WHERE id = ?" (encoded assignments) scan-id])

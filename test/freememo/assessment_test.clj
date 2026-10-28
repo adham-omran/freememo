@@ -142,3 +142,33 @@
           exam (assoc exam :questions [choice])]
       (is (= 0 (:raw-score (assessment/grade! 1 exam {"choice" "B"}))))
       (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" "a"})))))))
+
+(deftest objective-grading-preserves-mathematical-notation
+  (doseq [[accepted incorrect] [["x²" "x2"] ["H₂O" "H2O"] ["𝑥" "x"]]]
+    (let [exam {:blueprint {:evidence_packets (:materials evidence)}
+                :questions [{:id "notation" :format "fill-in-the-blank" :points 10
+                             :accepted_answers [accepted] :evidence [citation]}]}
+          incorrect-grade (assessment/grade! 1 exam {"notation" incorrect})]
+      (is (= 100 (:raw-score (assessment/grade! 1 exam {"notation" (str "\u00a0" accepted " \n")}))))
+      (is (zero? (:raw-score incorrect-grade)))
+      (is (= "recall" (get-in incorrect-grade [:gaps 0 :category])))))
+  (let [exam {:blueprint {:evidence_packets (:materials evidence)}
+              :questions [{:id "notation" :format "fill-in-the-blank" :points 10
+                           :accepted_answers ["café’s energy"] :evidence [citation]}]}]
+    (is (= 100 (:raw-score (assessment/grade! 1 exam {"notation" "cafe\u0301's\u00a0energy"}))))))
+
+(deftest multiple-choice-options-preserve-distinct-notation
+  (let [validated (assessment/validate-form!
+                    (assoc-in form [:questions 1 :options]
+                      [{:id "A" :text "x²"} {:id "B" :text "x2"}]) evidence {})
+        exam (assoc validated :questions [(get-in validated [:questions 1])])]
+    (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" "x²"}))))
+    (is (zero? (:raw-score (assessment/grade! 1 exam {"choice" "x2"})))))
+  (let [validated (assessment/validate-form!
+                    (-> form
+                        (assoc-in [:questions 1 :options]
+                          [{:id "x²" :text "Square"} {:id "x2" :text "Product"}])
+                        (assoc-in [:questions 1 :correct_option_id] "x²")) evidence {})
+        exam (assoc validated :questions [(get-in validated [:questions 1])])]
+    (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" "x²"}))))
+    (is (zero? (:raw-score (assessment/grade! 1 exam {"choice" "x2"}))))))

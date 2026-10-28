@@ -120,6 +120,39 @@
 (defn- string-keys [answers]
   (into {} (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) v])) answers))
 
+(defn accepted-scan-answers
+  "Join accepted transcripts by question in file and page order.
+   Pre: scans contain saved IDs and accepted assignments.
+   Post: each question maps to its complete transcript.
+   Invariant: transcript text remains unchanged. This function owns assembly errors."
+  [scans]
+  (->> (sort-by :id scans)
+    (mapcat #(sort-by (comp first :page_numbers) (:accepted_assignments %)))
+    (group-by :question_id)
+    (map (fn [[question-id parts]] [question-id (str/join "\n\n" (map :text parts))]))
+    (into {})))
+
+(defn- submission-revision-kind
+  "Classify changes against the latest saved attempt.
+   Pre: answers and scans belong to the same cycle as previous.
+   Post: only transcript changes can produce a transcription correction.
+   Invariant: typed improvements remain answer revisions. This function owns misclassification."
+  [previous answers scans]
+  (if-not previous
+    "initial"
+    (let [before (accepted-scan-answers (:scan_assignments previous))
+          after (accepted-scan-answers scans)
+          previous-answers (string-keys (:answers previous))
+          changed (filter #(not= (get previous-answers %) (get answers %)) (keys answers))
+          transcript-changes (into #{}
+                               (filter #(not= (get before % "") (get after % "")))
+                               (concat (keys before) (keys after)))]
+      (if (and (not= scans (:scan_assignments previous))
+               (every? transcript-changes changed)
+               (every? #(= (get answers %) (get after % "")) transcript-changes))
+        "transcription-correction"
+        "answer-revision"))))
+
 (defn- owned-cycle [connectable user-id cycle-id]
   (decode-row (jdbc/execute-one! connectable
                 ["SELECT * FROM comprehension_cycles WHERE id = ? AND user_id = ?"
@@ -339,13 +372,10 @@
                   (jdbc/execute! tx
                     ["SELECT id, accepted_assignments FROM comprehension_scans
                        WHERE cycle_id = ? AND status = 'accepted' ORDER BY id" cycle-id] opts))
-          previous (jdbc/execute-one! tx
-                     ["SELECT id FROM comprehension_submissions
-                        WHERE cycle_id = ? LIMIT 1" cycle-id] opts)
-          revision (if previous
-                     (if (= "transcription-correction" (:draft_kind cycle))
-                       "transcription-correction" "answer-revision")
-                     "initial")]
+          previous (decode-row (jdbc/execute-one! tx
+                                 ["SELECT answers, scan_assignments FROM comprehension_submissions
+                                    WHERE cycle_id = ? ORDER BY id DESC LIMIT 1" cycle-id] opts))
+          revision (submission-revision-kind previous answers scans)]
       (when (pos? unreviewed)
         (throw (ex-info "Review and accept each uploaded transcript before submitting answers." {})))
       (jdbc/execute-one! tx
@@ -386,16 +416,18 @@
            WHERE id = ? AND user_id = ?" (:id cycle) user-id]))))
 
 (defn- preserve-transcription-uncertainty [grade submission]
-  (let [uncertain-questions (into #{}
+  (let [answers (string-keys (:answers submission))
+        transcripts (accepted-scan-answers (:scan_assignments submission))
+        uncertain-questions (into #{}
                               (comp (mapcat :accepted_assignments)
-                                (filter :uncertain) (map :question_id))
-                              (when-not (= "answer-revision" (:revision_kind submission))
-                                (:scan_assignments submission)))
+                                (filter :uncertain) (map :question_id)
+                                (filter #(= (get answers %) (get transcripts %))))
+                              (:scan_assignments submission))
         uncertain-questions (into uncertain-questions
                               (keep (fn [[question-id answer]]
                                       (when (re-find #"(?i)\[\s*(unclear|illegible|unreadable)[^\]]*\]" answer)
                                         question-id)))
-                              (string-keys (:answers submission)))]
+                              answers)]
     (cond-> grade
       (seq uncertain-questions)
       (assoc :uncertain_questions (vec (sort uncertain-questions))

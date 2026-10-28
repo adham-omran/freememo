@@ -13,10 +13,24 @@
 (defn- nonblank? [x] (and (string? x) (not (str/blank? x))))
 (defn- fail! [message fields] (throw (ex-info message (assoc fields :type ::invalid-assessment))))
 
-(defn normalize-text [text]
-  (-> (Normalizer/normalize (str text) Normalizer$Form/NFKC)
+(defn- normalize-typography
+  "Normalize punctuation and whitespace without changing Unicode notation.
+   Pre: text is a string. Post: spacing and quotation marks use a common form.
+   Invariant: this function preserves letter case and numeric script positions."
+  [text]
+  (-> text
       (str/escape {\‘ "'" \’ "'" \“ "\"" \” "\"" \– "-" \— "-" \… "..."})
       (str/replace #"[\p{Z}\s]+" " ") str/trim))
+
+(defn normalize-text [text]
+  (normalize-typography (Normalizer/normalize (str text) Normalizer$Form/NFKC)))
+
+(defn- normalize-objective-answer
+  "Normalize answer typography without folding compatibility characters.
+   Pre: text is an answer or an option label. Post: canonical spellings compare equally.
+   Invariant: superscripts, subscripts, and letter case retain their meaning."
+  [text]
+  (normalize-typography (Normalizer/normalize (str text) Normalizer$Form/NFC)))
 
 (defn evidence-materials
   "Read current material packets and legacy section packets."
@@ -66,8 +80,8 @@
     (when (and (= format "multiple-choice")
                (not (and (vector? options) (<= 2 (count options) 8)
                          (every? #(and (nonblank? (:id %)) (nonblank? (:text %))) options)
-                         (= (count options) (count (set (map #(str/lower-case (normalize-text (:id %))) options))))
-                         (= (count options) (count (set (map #(normalize-text (:text %)) options))))
+                         (= (count options) (count (set (map #(str/lower-case (normalize-objective-answer (:id %))) options))))
+                         (= (count options) (count (set (map #(normalize-objective-answer (:text %)) options))))
                          (some #(= (:id %) (:correct_option_id question)) options))))
       (fail! "A multiple-choice question needs distinct options and one correct option." {:question index}))
     (assoc question :id (str (or (:id question) (str "q" index))) :format format :points points
@@ -239,13 +253,13 @@
     (or (str/blank? text) (boolean (re-matches #"i (?:do not|don't) know[.!]?" text)))))
 
 (defn- objective-grade [question answer]
-  (let [text (normalize-text answer)
+  (let [text (normalize-objective-answer answer)
         normalize-answer (if (false? (:case_sensitive question))
-                           #(str/lower-case (normalize-text %)) normalize-text)
+                           #(str/lower-case (normalize-objective-answer %)) normalize-objective-answer)
         correct
         (and (not (unknown-answer? answer))
              (if (= "multiple-choice" (:format question))
-               (let [option-id (some #(when (= (str/lower-case (:id %)) (str/lower-case text)) (:id %))
+               (let [option-id (some #(when (= (str/lower-case (normalize-objective-answer (:id %))) (str/lower-case text)) (:id %))
                                  (:options question))
                      correct-option (some #(when (= (:id %) (:correct_option_id question)) %) (:options question))]
                  (if option-id

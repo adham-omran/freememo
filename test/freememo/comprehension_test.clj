@@ -126,6 +126,96 @@
 (defn- set-review! [sid]
   (jdbc/execute-one! db/ds ["UPDATE comprehension_scans SET status = 'review' WHERE id = ?" sid]))
 
+(defn- two-question-form [evidence options]
+  (let [exam (form evidence options)]
+    (update exam :questions conj (assoc (first (:questions exam)) :id "q2"))))
+
+(deftest accepting-another-scan-preserves-saved-answer-improvements
+  (with-accounts
+    (fn [uid _ tid]
+      (with-redefs [assessment/generate! (fn [_ evidence options] (two-question-form evidence options))
+                    assessment/grade! (fn [_ assessment answers] (grade assessment answers))]
+        (let [cid (:cycle-id (cycle/start-cycle! uid tid 30))
+              first-scan (:scan-id (scan/stage-scan! uid cid (png) "image/png" "first.png"))
+              second-scan (:scan-id (scan/stage-scan! uid cid (png) "image/png" "second.png"))]
+          (set-review! first-scan)
+          (set-review! second-scan)
+          (is (:ok (scan/accept-scan! uid cid first-scan
+                     [{:question_id "q1" :text "Original handwritten answer." :page_numbers [1]}])))
+          (is (:ok (scan/accept-scan! uid cid second-scan
+                     [{:question_id "q2" :text "Original second answer." :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid (:answers (cycle/cycle-detail uid cid)))))
+          (is (:ok (cycle/save-draft-answers! uid cid
+                     {"q1" "Improved saved argument." "q2" "Original second answer."})))
+          (is (:ok (scan/accept-scan! uid cid second-scan
+                     [{:question_id "q2" :text "Corrected second transcript." :page_numbers [1]}])))
+          (is (= "Improved saved argument." (get-in (cycle/cycle-detail uid cid) [:answers "q1"])))
+          (is (= "Corrected second transcript." (get-in (cycle/cycle-detail uid cid) [:answers "q2"])))
+          (is (:ok (cycle/submit-answers! uid cid (:answers (cycle/cycle-detail uid cid)))))
+          (is (= "answer-revision"
+                (:revision_kind (last (:submissions (cycle/cycle-detail uid cid)))))))))))
+
+(deftest unchanged-scanned-answers-retain-their-own-uncertainty
+  (with-accounts
+    (fn [uid _ tid]
+      (with-redefs [assessment/generate! (fn [_ evidence options] (two-question-form evidence options))
+                    assessment/grade! (fn [_ assessment answers] (grade assessment answers))]
+        (let [cid (:cycle-id (cycle/start-cycle! uid tid 30))
+              sid (:scan-id (scan/stage-scan! uid cid (png) "image/png" "uncertain.png"))]
+          (set-review! sid)
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q1" :text "Ambiguous handwriting." :uncertain true :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "Ambiguous handwriting." "q2" "First answer."})))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "Ambiguous handwriting." "q2" "Improved answer."})))
+          (let [latest (last (:submissions (cycle/cycle-detail uid cid)))]
+            (is (= "answer-revision" (:revision_kind latest)))
+            (is (= ["q1"] (get-in latest [:grade :uncertain_questions])))
+            (is (= "uncertain" (get-in latest [:grade :gaps 0 :category]))))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "A new typed answer." "q2" "Improved answer."})))
+          (let [latest (last (:submissions (cycle/cycle-detail uid cid)))]
+            (is (empty? (get-in latest [:grade :uncertain_questions])))
+            (is (= "reasoning" (get-in latest [:grade :gaps 0 :category])))))))))
+
+(deftest direct-submit-distinguishes-improvements-from-transcript-corrections
+  (with-accounts
+    (fn [uid _ tid]
+      (with-redefs [assessment/generate! (fn [_ evidence options] (form evidence options))
+                    assessment/grade! (fn [_ assessment answers] (grade assessment answers))]
+        (let [cid (:cycle-id (cycle/start-cycle! uid tid 30))
+              sid (:scan-id (scan/stage-scan! uid cid (png) "image/png" "answer.png"))]
+          (set-review! sid)
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q1" :text "Original answer." :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "Original answer."})))
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q1" :text "Corrected original answer." :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "An improved answer with new reasoning."})))
+          (is (= "answer-revision"
+                (:revision_kind (last (:submissions (cycle/cycle-detail uid cid))))))
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q1" :text "Another transcript correction." :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid {"q1" "An improved answer with new reasoning."})))
+          (is (= "answer-revision"
+                (:revision_kind (last (:submissions (cycle/cycle-detail uid cid)))))))))))
+
+(deftest remapping-a-transcript-remains-a-transcription-correction
+  (with-accounts
+    (fn [uid _ tid]
+      (with-redefs [assessment/generate! (fn [_ evidence options] (two-question-form evidence options))
+                    assessment/grade! (fn [_ assessment answers] (grade assessment answers))]
+        (let [cid (:cycle-id (cycle/start-cycle! uid tid 30))
+              sid (:scan-id (scan/stage-scan! uid cid (png) "image/png" "answer.png"))]
+          (set-review! sid)
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q1" :text "The handwritten answer." :page_numbers [1]}])))
+          (is (:ok (cycle/submit-answers! uid cid (:answers (cycle/cycle-detail uid cid)))))
+          (is (:ok (scan/accept-scan! uid cid sid
+                     [{:question_id "q2" :text "The handwritten answer." :page_numbers [1]}])))
+          (is (= "" (get-in (cycle/cycle-detail uid cid) [:answers "q1"])))
+          (is (:ok (cycle/submit-answers! uid cid (:answers (cycle/cycle-detail uid cid)))))
+          (is (= "transcription-correction"
+                (:revision_kind (last (:submissions (cycle/cycle-detail uid cid)))))))))))
+
 (deftest scanned-answer-originals-corrections-and-uncertainty
   (with-accounts
     (fn [uid other tid]
