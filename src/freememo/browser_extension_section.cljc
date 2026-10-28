@@ -14,14 +14,9 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
 
-(def ^:private store-listing-url
-  "The Chrome Web Store listing.
-
-   A store URL, not a repository path. The Zotero plugin links to
-   `/raw/main/extensions/zotero/dist/…`, which breaks whenever that directory
-   moves — it did, in the commit that created `extensions/`. A store listing
-   is a stable identifier the repository layout cannot invalidate."
-  "https://chromewebstore.google.com/detail/freememo-web-capture")
+(def ^:private extension-download-url
+  "The prebuilt Chrome extension ZIP in the public GitHub repository."
+  "https://github.com/adham-omran/freememo/raw/refs/heads/main/extensions/chrome/dist/freememo-web-capture-0.1.0.zip")
 
 (def ^:private capability-lines
   ["Captures the page as your browser rendered it, including content behind a login."
@@ -63,12 +58,19 @@
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
         (dom/a
-          (dom/props {:href store-listing-url
+          (dom/props {:href extension-download-url
                       :target "_blank"
                       :rel "noopener noreferrer"
                       :class "btn btn-secondary"
                       :style {:font-size "13px"}})
-          (dom/text "Get the Chrome extension")))
+          (dom/text "Download the Chrome extension (.zip)")))
+
+      (dom/p
+        (dom/props {:style {:margin "12px 0 0" :color "var(--color-text-muted)"
+                            :font-size "12px"}})
+        (dom/text
+          (str "Extract the ZIP. Open chrome://extensions. Enable Developer mode. "
+            "Select Load unpacked and choose the extracted folder.")))
 
       (dom/p
         (dom/props {:style {:margin "12px 0 0" :color "var(--color-text-muted)"
