@@ -163,7 +163,7 @@
     :title "Write a new topic"
     :intro "Start a topic with no imported content, and write in it."
     :steps [{:label "Create"
-             :detail "Import → More sources → New Topic, type a title, and Create. A blank title becomes New Topic. The empty topic opens in the Viewer."
+             :detail "Import → More sources → New Topic. The title starts with your local date and time, such as 20261028-1341. Keep or edit it, then select Create. A blank title uses the current date and time. The empty topic opens in the Viewer."
              :commands #{:new-topic}}]}
    {:slug "import-paste"
     :title "Paste HTML or Markdown"

@@ -284,6 +284,18 @@
        (< n (* 1024 1024)) (format "%.1f KB" (/ (double n) 1024))
        :else (format "%.1f MB" (/ (double n) (* 1024 1024))))))
 
+(defn default-topic-title
+  "Return the current local date and time as yyyyMMdd-HHmm."
+  []
+  #?(:clj (.format (LocalDateTime/now) (DateTimeFormatter/ofPattern "yyyyMMdd-HHmm"))
+     :cljs (let [now (js/Date.)
+                 pad (fn [n] (if (< n 10) (str "0" n) (str n)))]
+             (str (.getFullYear now)
+                  (pad (inc (.getMonth now)))
+                  (pad (.getDate now)) "-"
+                  (pad (.getHours now))
+                  (pad (.getMinutes now))))))
+
 #?(:clj
    (defn format-timestamp [ts]
      (when ts
