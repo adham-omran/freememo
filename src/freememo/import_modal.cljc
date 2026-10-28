@@ -55,6 +55,14 @@
            (.toLowerCase (subs n (inc dot))))))))
 
 #?(:cljs
+   (defn- html-file? [^js file]
+     (let [group (itypes/group-for (.-name file))
+           mime (some-> (.-type file) (str/split #";") first str/trim str/lower-case)]
+       (or (= "HTML" (:label group))
+           (and (nil? group)
+                (#{"text/html" "application/xhtml+xml"} mime))))))
+
+#?(:cljs
    (defn- flow-label [flow]
      (case flow
        "pdf" "PDF"
@@ -172,6 +180,34 @@
                      (js/console.error "Upload failed:" err)
                      (ce/report! :import/upload err)
                      (on-error "Upload failed — please try again.")))))))
+
+#?(:cljs
+   (defn- report-html-import! [run-id action error]
+     (post-form! "/api/import-activity"
+       {"run-id" run-id "action" action "error" error}
+       (fn [_] nil)
+       (fn [message]
+         (js/console.error "HTML import activity update failed:" message)))))
+
+#?(:cljs
+   (defn- start-html-import!
+     "Pre: run-id identifies this submission.
+      Post: send-content! runs after tracking starts, while the run remains current.
+      Invariant: a closed modal cannot send content."
+     [run-id run-current? send-content! on-error]
+     (post-form! "/api/import-activity"
+       {"run-id" run-id "action" "start"}
+       (fn [^js response]
+         (if (run-current? run-id)
+           (if (.-success response)
+             (send-content!)
+             (on-error (or (.-error response) "Import could not start.")))
+           ;; Closing can reach the server before start does.
+           (report-html-import! run-id "cancel" nil)))
+       (fn [message]
+         (if (run-current? run-id)
+           (on-error message)
+           (report-html-import! run-id "cancel" nil))))))
 
 ;; ── Chunked archive upload ─────────────────────────────────────────
 ;; A `.zip` / `.7z` cannot go through /api/upload-file, which reads its whole
@@ -1118,6 +1154,8 @@
           !md-text (atom "")
           !format (atom "markdown")
           !paste-url (atom "")
+          !html-import-run-id (atom nil)
+          !closed? (atom false)
           !image-mode (atom "reduce")
           !advanced-open (atom false)
           ;; repo confirm: whether to distill knowledge-graph facts on import
@@ -1137,6 +1175,15 @@
           source (e/watch !source)
           stage (e/watch !stage)
           ceilings (e/server (e/Offload #(itypes/ceilings* nil user-id)))
+          cancel-html-import! (fn []
+                                (when-some [run-id @!html-import-run-id]
+                                  (reset! !html-import-run-id nil)
+                                  (report-html-import! run-id "cancel" nil)))
+          close-import! (fn []
+                          (when (#{:fetching :text-confirming} @!stage)
+                            (cancel-html-import!))
+                          (reset! !closed? true)
+                          (reset! !show false))
           navigate-to-viewer! (fn [doc-id]
                                 (reset! !show false)
                                 (navigate! :viewer (nav/nav-topic doc-id nil)))
@@ -1154,7 +1201,53 @@
           handle-fetch-err (fn [err]
                              (reset! !error err)
                              (reset! !stage :error))
+          html-run-current? (fn [run-id]
+                              (and (not @!closed?)
+                                   (= run-id @!html-import-run-id)))
+          html-import-error! (fn [run-id message]
+                               (when (html-run-current? run-id)
+                                 (report-html-import! run-id "fail" message)
+                                 (reset! !html-import-run-id nil)
+                                 (handle-fetch-err message)))
+          html-import-response! (fn [run-id ^js response]
+                                  (when (html-run-current? run-id)
+                                    (cond
+                                      (not (.-success response))
+                                      (do (report-html-import! run-id "fail"
+                                            (or (.-error response) "Import failed."))
+                                          (reset! !html-import-run-id nil))
+
+                                      (.-doc_id response)
+                                      (reset! !html-import-run-id nil)
+
+                                      (not= "html" (.-flow response))
+                                      (do (report-html-import! run-id "fail"
+                                            "The uploaded file is not HTML.")
+                                          (reset! !html-import-run-id nil))
+
+                                      (nil? (.-content response))
+                                      (do (report-html-import! run-id "fail"
+                                            "Unexpected response from server.")
+                                          (reset! !html-import-run-id nil)))
+                                    (handle-resp response)))
+          post-html-import! (fn [params]
+                              (let [review-run-id @!html-import-run-id
+                                    run-id (or review-run-id (str (random-uuid)))
+                                    send-content! (fn []
+                                                    (post-form! "/api/upload-paste"
+                                                      (assoc params "import-run-id" run-id)
+                                                      #(html-import-response! run-id %)
+                                                      #(html-import-error! run-id %)))]
+                                (reset! !html-import-run-id run-id)
+                                (reset! !stage :importing)
+                                (if review-run-id
+                                  (send-content!)
+                                  (start-html-import! run-id html-run-current?
+                                    send-content!
+                                    #(html-import-error! run-id %)))))
           handle-file (fn [^js f]
+                        (when (#{:fetching :text-confirming} @!stage)
+                          (cancel-html-import!))
                         (reset-error! !error !quota-error?)
                         (reset! !file f)
                         (cond
@@ -1227,6 +1320,17 @@
                                      (reset! !busy-msg nil)
                                      (handle-fetch-err msg))})))
 
+                          (html-file? f)
+                          (let [run-id (str (random-uuid))]
+                            (reset! !html-import-run-id run-id)
+                            (reset! !stage :fetching)
+                            (start-html-import! run-id html-run-current?
+                              #(post-multipart! "/api/upload-file" f
+                                 {"import-run-id" run-id}
+                                 (fn [response] (html-import-response! run-id response))
+                                 (fn [message] (html-import-error! run-id message)))
+                              #(html-import-error! run-id %)))
+
                           :else
                           (do (reset! !stage :fetching)
                               (post-multipart! "/api/upload-file" f {}
@@ -1262,15 +1366,17 @@
                                     (reset! !stage :error))
 
                                 :else
-                                (do (reset! !stage :importing)
-                                    (post-form! "/api/upload-paste"
-                                      (cond-> {"format" format-v
-                                               "title" title-v
-                                               "content" content-v}
-                                        (and (= format-v "html") (seq @!paste-url))
-                                        (assoc "url" @!paste-url))
-                                      handle-resp
-                                      handle-fetch-err)))))
+                                (let [params (cond-> {"format" format-v
+                                                     "title" title-v
+                                                     "content" content-v}
+                                               (and (= format-v "html") (seq @!paste-url))
+                                               (assoc "url" @!paste-url))]
+                                  (if (= format-v "html")
+                                    (post-html-import! params)
+                                    (do (reset! !stage :importing)
+                                        (post-form! "/api/upload-paste" params
+                                          handle-resp
+                                          handle-fetch-err)))))))
           ;; Pre: title may be empty (defaults to "New Topic"). No Forms5 validation.
           on-new-topic (fn [title]
                          (reset-error! !error !quota-error?)
@@ -1284,14 +1390,17 @@
                             (reset-error! !error !quota-error?)
                             (let [flow-v @!flow
                                   content-v (if (= flow-v "html") @!html-text @!md-text)]
-                              (reset! !stage :importing)
-                              (post-form! "/api/upload-paste"
-                                {"format" flow-v
-                                 "title" title
-                                 "content" content-v}
-                                handle-resp
-                                handle-fetch-err)))
+                              (let [params {"format" flow-v
+                                            "title" title
+                                            "content" content-v}]
+                                (if (= flow-v "html")
+                                  (post-html-import! params)
+                                  (do (reset! !stage :importing)
+                                      (post-form! "/api/upload-paste" params
+                                        handle-resp
+                                        handle-fetch-err))))))
           on-cancel-text (fn []
+                           (cancel-html-import!)
                            (reset! !html-text "")
                            (reset! !md-text "")
                            (reset! !title "")
@@ -1334,16 +1443,20 @@
       ;; What the intake area collected, consumed once at mount. The page never
       ;; duplicates this modal's transport routing or its ceiling checks — it
       ;; decides only WHICH modal opens (import-types/transport-for).
+      (e/on-unmount
+        #(do (reset! !closed? true)
+             (when (#{:fetching :text-confirming} @!stage)
+               (cancel-html-import!))))
       (e/snapshot (take-intake! !intake consume-intake!))
       (when-some [u (e/watch !auto-url)]
         (AutoUrlImport user-id u navigate-to-viewer!
           !stage !staged !flow !error !quota-error?))
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape (fn [] (reset! !show false)) "Import")
+        (modal/ModalEscape close-import! "Import")
         (dom/On "click" (fn [e]
                           (when (= (.-target e) (.-currentTarget e))
-                            (reset! !show false)))
+                            (close-import!)))
           nil)
         (dom/div
           (dom/props {:class (case source

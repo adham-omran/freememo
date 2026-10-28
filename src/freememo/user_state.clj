@@ -54,18 +54,13 @@
           :card-gen-cancellers (atom {})    ; topic id -> fn marking it cancelled
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})
-          ;; URLs being fetched by a link Import, so the Activity monitor can
-          ;; discover them. The member is the url: one import per url at a
-          ;; time, and a second click on the same link joins the first rather
-          ;; than racing it.
+          ;; The editor uses active URLs to avoid another fetch for the same URL.
           :importing-urls   (atom #{})
-          ;; url -> error string for a link Import that failed. Written before
-          ;; membership drops, so `activity-registry`'s :error-fn can still read
-          ;; it when the reporter closes the row — otherwise a failed import is
-          ;; recorded in history as a success. Left behind on purpose after the
-          ;; work is gone, which is what makes the outcome readable; a later
-          ;; success on the same url clears its entry, so only failures persist.
-          :url-import-errors (atom {})
+          ;; Import runs retain their outcome until the reporter saves it.
+          :url-import-runs  (atom {})
+          :html-import-runs (atom {})
+          ;; Keep abandoned IDs so a delayed start cannot revive a closed import.
+          :html-import-cancelled (atom #{})
           :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
           ;; video topic id -> error string for a `process-video!` run that
           ;; failed. Written before membership drops from :processing-videos,

@@ -18,6 +18,8 @@
             [freememo.db :as db]
             [freememo.epub :as epub]
             [freememo.image-rehost :as image-rehost]
+            [freememo.html-cleaner :as cleaner]
+            [freememo.import-activity :as import-activity]
             [freememo.page-pipeline :as pipeline]
             [freememo.text :as text]
             [freememo.toasts :as toasts]
@@ -56,7 +58,7 @@
        (catch Exception e
          (log/log-warn (str "biblio attach failed for topic " topic-id ": " (.getMessage e))))))
 
-(defn import-url!*
+(defn- fetch-and-import-url!*
   "Fetch a URL and either import as a web topic or stage as binary.
    Pre  : user-id is a logged-in user; url is non-blank.
    Post : returns one of:
@@ -106,6 +108,27 @@
       (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
 
+(defn import-url!*
+  "Pre: user-id is authenticated and url is non-blank.
+   Post: the shared import records its result and activity outcome.
+   Invariant: every URL entry point uses this lifecycle."
+  [user-id url]
+  (import-activity/run-url! user-id url #(fetch-and-import-url!* user-id url)))
+
+(defn import-html!*
+  "Pre: title and content are non-blank. run-id is nil or owns HTML review.
+   Post: creates a web topic and records one terminal activity outcome.
+   Invariant: sanitizing and bibliography behavior match HTML paste imports."
+  [user-id run-id title content url]
+  (import-activity/run-html! user-id run-id
+    (fn []
+      (let [bib (when (seq url) {:url url :source-type "web"})
+            topic-id (db/create-web-topic! user-id title (cleaner/clean-html content) bib)]
+        (when topic-id
+          (attach-biblio-best-effort! user-id topic-id nil))
+        (commands/bump! user-id :import-document)
+        {:ok true :topic-id topic-id}))))
+
 (defn start-url-import!*
   "Answer a link Import without waiting for the network.
 
@@ -119,9 +142,7 @@
           clicking a link is answered at once when the page is already held,
           and handed off when it is not; nothing makes them wait on a network
           round trip inside their editor.
-   Inv  : membership in `:importing-urls` is published for the whole extent of
-          the fetch, so `activity-reporter` discovers the row, keeps it fresh
-          and closes it. `us/with-in-flight` owns the `finally`.
+   Inv  : `import-url!*` owns membership and activity outcomes for all callers.
    Inv  : the outcome reaches the user as a toast, because by the time it
           lands they may be reading something else. `import-url!*` owns the
           import itself; this owns only when it runs and who is told."
@@ -135,40 +156,31 @@
         {:flow :busy}
         (do
           (future
-            (us/with-in-flight user-id :importing-urls url
-              (let [r (try (import-url!* user-id url)
-                           (catch Throwable e
-                             (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
-                             {:ok false :error (.getMessage e)}))
-                    errors (us/get-atom user-id :url-import-errors)]
-                ;; Record the outcome BEFORE `with-in-flight`'s finally drops
-                ;; membership: that is when the reporter closes the row and
-                ;; reads `:error-fn`. Recorded after, the row is already closed
-                ;; as a success.
-                (if (:ok r)
-                  (swap! errors dissoc url)
-                  (swap! errors assoc url (or (:error r) "Import failed")))
-                (cond
-                  (and (:ok r) (:topic-id r))
-                  (toasts/push! user-id
-                    {:level :success
-                     :message (str "Imported \"" (:title r) "\"")
-                     :actions [{:label "Open"
-                                :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]})
+            (let [r (try (import-url!* user-id url)
+                      (catch Throwable e
+                        (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
+                        {:ok false :error (.getMessage e)}))]
+              (cond
+                (and (:ok r) (:topic-id r))
+                (toasts/push! user-id
+                  {:level :success
+                   :message (str "Imported \"" (:title r) "\"")
+                   :actions [{:label "Open"
+                              :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]})
 
-                  ;; A PDF or EPUB needs a confirmation step this path cannot
-                  ;; drive, so it is reported rather than silently staged.
-                  (= :staged (:flow r))
-                  (toasts/push! user-id
-                    {:level :info
-                     :message (str (:flow-label r) " downloaded — open Import to finish it.")
-                     :actions [{:label "Import" :nav :import}]})
+                ;; A PDF or EPUB needs a confirmation step this path cannot
+                ;; drive, so it is reported rather than silently staged.
+                (= :staged (:flow r))
+                (toasts/push! user-id
+                  {:level :info
+                   :message (str (:flow-label r) " downloaded — open Import to finish it.")
+                   :actions [{:label "Import" :nav :import}]})
 
-                  :else
-                  (toasts/push! user-id
-                    {:level :error
-                     :message (str "Could not import " url
-                               (when (:error r) (str " — " (:error r))))})))))
+                :else
+                (toasts/push! user-id
+                  {:level :error
+                   :message (str "Could not import " url
+                             (when (:error r) (str " — " (:error r))))}))))
           {:flow :queued})))))
 
 (defn capture-page!*

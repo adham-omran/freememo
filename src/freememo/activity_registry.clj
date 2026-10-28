@@ -146,7 +146,8 @@
                 string, so the composing and parsing sides stay in step
    :state-key   server tier — the per-user atom carrying live state
    :phase       the phase to report, for entries with one fixed phase
-   :entry->state  for the two owners whose entry decides phase or progress
+   :entry->state  reads the phase, progress, or outcome from an owner entry
+   :retain-outcome?  the reporter saves terminal entries before removing them
    :key-fn      work_key -> the key the owner's atom uses (default: parse-long)
    :canceller-key  the per-user atom of missionary cancel fns, when the owner
                 has one. Holds cancel FUNCTIONS — not to be confused with
@@ -386,20 +387,19 @@
    ;; been navigated or toasted. A subject that is null for the row's whole
    ;; life is worse than declaring none.
    ;;
-   ;; The member is the URL, so two links to the same page share one row. The
-   ;; member IS the work key, so the default `vector` hands it to `identity`
-   ;; unchanged — `(constantly [])` here called `identity` with no arguments.
+   ;; A run keeps its terminal outcome until the reporter acknowledges it.
+   ;; This includes imports that finish before asynchronous discovery runs.
    :url-import
    {:label "Importing page"
     :tier :server :subject :none :work-key identity
-    :state-key :importing-urls :phase "fetching"
-    :key-fn identity
-    ;; Without this a failed fetch closes as a success, because the reporter
-    ;; reads outcomes here and nowhere else. `start-url-import!*` records the
-    ;; error before membership drops, and clears it on a later success for the
-    ;; same url, so the map holds failures only.
-    :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :url-import-errors) work-key))}
+    :state-key :url-import-runs :key-fn identity
+    :entry->state identity :retain-outcome? true}
+
+   :html-import
+   {:label "Importing HTML"
+    :tier :server :subject :none :work-key identity
+    :state-key :html-import-runs :key-fn identity
+    :entry->state identity :retain-outcome? true}
 
    ;; A git forge import or update. SERVER tier: it runs on an e/Offload thread
    ;; that no browser owns. The member is `host/owner/name`, so one repository
@@ -445,6 +445,13 @@
    `activities.type` column holds."
   [type]
   (get registry (if (keyword? type) type (keyword type))))
+
+(defn retained-run-atom
+  "Pre: type is registered. Post: returns its retained import runs, or nil.
+   Invariant: only the reporter removes a run after it saves the outcome."
+  [type user-id]
+  (let [{:keys [state-key retain-outcome?]} (activity-type type)]
+    (when retain-outcome? (us/get-atom user-id state-key))))
 
 (defn label
   "Human name for `type`, falling back to the raw type so an unregistered row

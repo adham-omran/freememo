@@ -16,13 +16,13 @@
    [freememo.toasts :as toasts]
    [freememo.deployment-hook :as hook]
    [freememo.extractor :as extractor]
-   [freememo.html-cleaner :as cleaner]
    [freememo.quota :as quota]
    [freememo.commands :as commands]
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.input-check :as input]
    [freememo.import-staging :as staging]
+   [freememo.import-activity :as import-activity]
    [freememo.live-doc :as live-doc]
    [freememo.markdown :as md]
    [freememo.poem-import :as poem-import]
@@ -200,7 +200,7 @@
     (try (json/parse-string s true)
          (catch Exception _ nil))))
 
-(defn upload-file-handler
+(defn- upload-file-response
   "POST /api/upload-file — multipart file.
    Pre:  authenticated; size within cap.
    Post: one of:
@@ -333,6 +333,40 @@
         (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
     (json-response 401 {:success false :error "Not authenticated"})))
 
+(defn upload-file-handler
+  "Pre: the request is multipart. Post: HTML upload advances its existing activity.
+   Invariant: other upload types keep their response and lifecycle."
+  [request]
+  (let [response (upload-file-response request)
+        user-id (require-auth request)
+        run-id (get-in request [:params "import-run-id"])]
+    (when (and user-id run-id)
+      (let [body (json/parse-string (:body response) true)]
+        (if (and (:success body) (= "html" (:flow body)))
+          (import-activity/html-upload-ready! user-id run-id)
+          (import-activity/abandon-html! user-id run-id "failure"
+            (or (:error body) "The uploaded file is not HTML")))))
+    response))
+
+(defn import-activity-handler
+  "Pre: authenticated with a UUID run-id. Post: updates only this user's HTML import.
+   Invariant: client callbacks cannot terminate server processing."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (let [run-id (get-in request [:params "run-id"])
+          action (get-in request [:params "action"])]
+      (if-not (and (string? run-id) (uuid? (parse-uuid run-id)))
+        (json-response 400 {:success false :error "Invalid import run ID"})
+        (case action
+          "start" (json-response 200 {:success (boolean (import-activity/start-html! user-id run-id))})
+          "cancel" (do (import-activity/abandon-html! user-id run-id "cancelled" nil)
+                       (json-response 200 {:success true}))
+          "fail" (do (import-activity/abandon-html! user-id run-id "failure"
+                       (or (get-in request [:params "error"]) "Import failed"))
+                     (json-response 200 {:success true}))
+          (json-response 400 {:success false :error "Invalid import activity action"}))))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
 ;; ── /api/upload-paste ──────────────────────────────────────────────
 
 (defn upload-paste-handler
@@ -388,16 +422,11 @@
           (json-response 400 {:success false :error "Title is required"})
 
           (= format "html")
-          (let [bib (when (seq url-val) {:url url-val :source-type "web"})
-                topic-id (db/create-web-topic! user-id title
-                           (cleaner/clean-html content)
-                           bib)]
-            (when topic-id
-              (try (biblio-import/prepare-biblio! user-id topic-id nil)
-                   (catch Exception e
-                     (tel/log! {:level :warn :id ::upload-paste-biblio} (.getMessage e)))))
-            (commands/bump! user-id :import-document)
-            (json-response 200 {:success true :doc_id topic-id}))
+          (let [r (web-import/import-html!* user-id
+                    (get-in request [:params "import-run-id"]) title content url-val)]
+            (if (:ok r)
+              (json-response 200 {:success true :doc_id (:topic-id r)})
+              (json-response 409 {:success false :error (:error r)})))
 
           (= format "markdown")
           (let [html (md/parse-markdown content)
@@ -1311,6 +1340,7 @@
    {:method :post :path "/api/client-reactor-failure"
     :handler #'client-failure-http/handler :body :small}
    {:method :post :path "/api/upload-file"      :handler #'upload-file-handler      :body :upload}
+   {:method :post :path "/api/import-activity"  :handler #'import-activity-handler  :body :small}
    {:method :post :path "/api/upload-paste"     :handler #'upload-paste-handler     :body :small}
    {:method :post :path "/api/upload-staged"    :handler #'upload-staged-handler    :body :small}
    {:method :post :path "/api/zotero/stage"     :handler #'zotero-stage-handler     :body :upload}
