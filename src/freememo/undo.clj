@@ -67,7 +67,10 @@
    Actions modal refreshes. Registry :views for the undo commands are empty."
   [user-id entry]
   (commands/bump-channels! user-id
-    (conj (commands/entity-views (:entity_type entry) #{}) :undo-mutations)))
+    (conj (if (= "split-article" (:action_type entry))
+            #{:card-mutations :tree-mutations :pin-mutations}
+            (commands/entity-views (:entity_type entry) #{}))
+      :undo-mutations)))
 
 (defn undo-entry!
   "Reverse a single undo entry owned by user-id.
@@ -87,22 +90,29 @@
         {:success false :error "The 12-hour recovery window has ended."}
 
         :else
-        (let [warn? (boolean (anki-divergence? entry))
+        (let [anki-warn? (boolean (anki-divergence? entry))
               result (restore! user-id entry)
+              source-highlights-kept? (boolean (:source-highlights-kept? result))
+              warn? (or anki-warn? source-highlights-kept?)
               over-quota? (boolean (:over-quota? result))]
           (db/mark-undone! entry-id)
           (log/audit! {:id ::undo :user-id user-id :action :restore
                        :entity (keyword (:entity_type entry)) :entity-id entry-id})
           (bump-views! user-id entry)
-          (when warn?
+          (when anki-warn?
             (toasts/push! user-id
               {:level :warning
                :message "Restored in FreeMemo, but the Anki note(s) were not re-added."}))
+          (when source-highlights-kept?
+            (toasts/push! user-id
+              {:level :warning
+               :message "Topics removed. Source highlights were kept because the article changed."}))
           (when over-quota?
             (toasts/push! user-id
               {:level :warning
                :message "Document restored — you're now over your storage quota."}))
-          {:success true :warning? warn? :over-quota? over-quota?})))
+          (cond-> {:success true :warning? warn? :over-quota? over-quota?}
+            source-highlights-kept? (assoc :source-highlights-kept? true)))))
     (catch Exception e
       (tel/error! {:id ::undo-entry} e)
       {:success false :error "Undo failed"})))

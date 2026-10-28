@@ -1,5 +1,5 @@
 (ns freememo.article-sections
-  "Split stored article HTML without changing the source."
+  "Split stored article HTML and optionally highlight selected source sections."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Element Node TextNode]))
@@ -85,7 +85,8 @@
                     :parent-index parent-index
                     :title (or (not-empty (some-> title str/trim))
                                (section-title content (str "Section " (inc index))))
-                    :content content}))
+                    :content content
+                    :tokens (vec tokens)}))
     result))
 
 (defn- heading-sections [tokens]
@@ -140,14 +141,7 @@
           {:blocks [] :inline-ancestors nil} tokens)]
     blocks))
 
-(defn sections
-  "Return indexed HTML sections for a deterministic boundary mode.
-   Pre: HTML is a string or nil. Mode is :headings, :lines, :splitmark, or :blocks.
-   Pre: :splitmark requires a nonblank string. Invalid inputs throw ex-info.
-   Post: indices are consecutive. Each parent index names an earlier section.
-   Post: heading sections contain only their own content.
-   Invariant: source HTML does not change. No model or database calls occur.
-   The caller owns invalid inputs. This parser owns content and hierarchy errors."
+(defn- section-plan
   [html {:keys [mode splitmark] :or {mode :headings}}]
   (when-not (or (nil? html) (string? html))
     (throw (ex-info "Article content must be HTML text." {:type :invalid-content})))
@@ -156,13 +150,17 @@
   (when (and (= :splitmark mode) (or (not (string? splitmark)) (str/blank? splitmark)))
     (throw (ex-info "Enter a nonblank custom splitmark." {:type :invalid-splitmark})))
   (if (str/blank? html)
-    []
+    {:sections []}
     (let [document (Jsoup/parseBodyFragment html)
           _ (.prettyPrint (.outputSettings document) false)
           body (.body document)
           single-section [{:index 0 :parent-index nil
-                           :title (section-title html "Section 1") :content html}]]
-      (if (= :blocks mode)
+                           :title (section-title html "Section 1") :content html
+                           :tokens (mapv (fn [node] {:node node :ancestors []})
+                                         (.childNodes body))}]]
+      {:document document
+       :sections
+       (if (= :blocks mode)
         (let [blocks (->> (.childNodes body)
                           (mapcat #(block-tokens % []))
                           content-blocks)]
@@ -178,4 +176,59 @@
             (let [tokens (into [] (mapcat :tokens) walks)]
               (if (= :headings mode)
                 (heading-sections tokens)
-                (delimiter-sections tokens)))))))))
+                (delimiter-sections tokens))))))})))
+
+(defn sections
+  "Return indexed HTML sections for a deterministic boundary mode.
+   Pre: HTML is a string or nil. Mode is :headings, :lines, :splitmark, or :blocks.
+   Pre: :splitmark requires a nonblank string. Invalid inputs throw ex-info.
+   Post: indices are consecutive. Each parent index names an earlier section.
+   Post: heading sections contain only their own content.
+   Invariant: source HTML does not change. No model or database calls occur.
+   The caller owns invalid inputs. This parser owns content and hierarchy errors."
+  [html options]
+  (mapv #(dissoc % :tokens) (:sections (section-plan html options))))
+
+(defn- background-color? [^Element element]
+  (or (= "mark" (.normalName element))
+      (.hasAttr element "bgcolor")
+      (some (fn [[_ color]]
+              (not (#{"transparent" "inherit" "initial" "unset" "none"}
+                     (str/lower-case (str/trim color)))))
+            (re-seq #"(?i)(?:^|;)\s*background(?:-color)?\s*:\s*([^;]+)"
+                    (.attr element "style")))))
+
+(defn- visible-text-nodes [^Node node]
+  (if (instance? TextNode node)
+    (when-not (str/blank? (.getWholeText ^TextNode node)) [node])
+    (mapcat visible-text-nodes (.childNodes node))))
+
+(defn- existing-background? [^TextNode node]
+  (some background-color? (take-while #(instance? Element %) (rest (iterate #(.parent ^Node %) node)))))
+
+(defn highlight-sections
+  "Add blue backgrounds to selected source sections.
+   Pre: parser inputs are valid. Section indices identify existing sections.
+   Post: selected text gains blue backgrounds. Existing background colors remain visible.
+   Post: excluded sections, delimiters, images, and block structures remain intact.
+   Invariant: section indices use the same source DOM plan as sections.
+   Empty selections and selections without highlightable text return the exact source.
+   The caller owns invalid indices. This function owns source preservation errors."
+  [html options section-indices]
+  (let [{:keys [document sections]} (section-plan html options)]
+    (when-not (and (or (nil? section-indices) (coll? section-indices))
+                   (every? #(and (integer? %) (<= 0 %)
+                                 (< % (count sections))) section-indices))
+      (throw (ex-info "Choose existing article sections to highlight."
+                      {:type :invalid-section-indices})))
+    (let [text-nodes (->> (distinct section-indices)
+                         (mapcat #(get-in sections [% :tokens]))
+                         (mapcat #(visible-text-nodes (:node %)))
+                         (remove existing-background?)
+                         vec)]
+      (if (empty? text-nodes)
+        html
+        (do
+          (doseq [^TextNode node text-nodes]
+            (.wrap node "<span style=\"background-color: #44C2FF;\"></span>"))
+          (.html (.body document)))))))

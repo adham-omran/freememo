@@ -6,9 +6,11 @@
             [freememo.article-split :as article-split]
             [freememo.article-split-identity :as split-identity]
             [freememo.db :as db]
+            [freememo.text :as text]
             [freememo.undo :as undo]
             [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs]))
+            [next.jdbc.result-set :as rs])
+  (:import [org.jsoup Jsoup]))
 
 (def ^:private row-options {:builder-fn rs/as-unqualified-maps})
 (def ^:private headings {:mode :headings})
@@ -36,6 +38,16 @@
 
 (defn- request [preview indices]
   {:source-version (:source-version preview) :options headings :selected-indices indices})
+
+(defn- highlighted-request [preview indices]
+  (assoc (request preview indices) :highlight-source? true))
+
+(defn- source-content [source-id]
+  (:topics/content (db/get-topic source-id)))
+
+(defn- blue-text [html]
+  (mapv #(.text %)
+    (.select (.body (Jsoup/parseBodyFragment html)) "span[style*=#44C2FF]")))
 
 (deftest preview-and-creation-preserve-source-and-hierarchy
   (with-user [user-id]
@@ -349,3 +361,217 @@
             (mapv :anki_note_id (jdbc/execute! db/ds
                                  ["SELECT anki_note_id FROM anki_note_tombstones WHERE user_id = ?" user-id]
                                  row-options)))))))
+
+(deftest optional-source-highlighting-preserves-excluded-sections-and-topic-copies
+  (with-user [user-id]
+    (let [html (str "<div class='original'>" article "</div>")
+          source-id (topic! user-id nil html)
+          preview (article-split/preview user-id source-id headings)
+          result (article-split/create-topics! user-id source-id (highlighted-request preview [1]))
+          generated (last (topics user-id))
+          highlighted (source-content source-id)]
+      (is (:success result))
+      (is (= 1 (:created result)))
+      (is (= ["Parent" "Own text"] (blue-text highlighted)))
+      (is (= (:content (nth (:sections preview) 1)) (:content generated)))
+      (is (empty? (blue-text (:content generated))))
+      (is (= html (:source-before-content result)))
+      (is (= highlighted (:source-content result)))
+      (is (= source-id (:source-topic-id result)))
+      (is (= (text/strip-html html)
+             (:topics/content_text (db/get-topic source-id))))
+      (let [undone (undo/undo-entry! user-id (:undo-id result))]
+        (is (:success undone))
+        (is (not (:source-highlights-kept? undone)))
+        (is (= html (source-content source-id)))
+        (is (= [source-id] (mapv :id (topics user-id))))))))
+
+(deftest explicitly-disabled-source-highlighting-keeps-exact-source
+  (with-user [user-id]
+    (let [html (str "<article class='original'>" article "</article>")
+          source-id (topic! user-id nil html)
+          before (db/get-topic source-id)
+          preview (article-split/preview user-id source-id headings)
+          result (article-split/create-topics! user-id source-id
+                   (assoc (request preview [1]) :highlight-source? false))]
+      (is (= 1 (:created result)))
+      (is (= before (db/get-topic source-id)))
+      (is (not (contains? result :source-content)))
+      (is (not (contains? result :source-before-content)))
+      (is (:success (undo/undo-entry! user-id (:undo-id result))))
+      (is (= html (source-content source-id))))))
+
+(deftest source-highlighting-marks-only-new-sections-and-repeat-does-not-write
+  (with-user [user-id]
+    (let [source-id (topic! user-id nil article)
+          preview (article-split/preview user-id source-id headings)
+          initial (article-split/create-topics! user-id source-id (request preview [1]))
+          parent-id (:id (last (topics user-id)))
+          edited "<p>Edited existing topic</p>"]
+      (is (= 1 (:created initial)))
+      (jdbc/execute! db/ds ["UPDATE topics SET content = ? WHERE id = ?" edited parent-id])
+      (let [result (article-split/create-topics! user-id source-id (highlighted-request preview [1 2]))
+            source-after (db/get-topic source-id)
+            undo-after (db/get-undo-entries user-id)
+            fresh-preview (article-split/preview user-id source-id headings)
+            repeated (article-split/create-topics! user-id source-id
+                       (highlighted-request fresh-preview [1 2]))]
+        (is (= 1 (:created result)))
+        (is (= 1 (:skipped result)))
+        (is (= ["Child" "Child text"] (blue-text (:topics/content source-after))))
+        (is (= edited (:topics/content (db/get-topic parent-id))))
+        (is (= {:success true :created 0 :skipped 2 :undo-id nil} repeated))
+        (is (= source-after (db/get-topic source-id)))
+        (is (= undo-after (db/get-undo-entries user-id)))
+        (is (= 3 (count (topics user-id))))))))
+
+(deftest source-highlight-and-undo-rebase-surviving-identities-across-all-modes
+  (with-user [user-id]
+    (let [html (str "<p>Introduction</p><h2>Parent</h2><p>Own text</p><hr>"
+                    "<p>CUT</p><h3>Child</h3><p>Child text</p><p>Last text</p>")
+          source-id (topic! user-id nil html)
+          options-list [headings {:mode :lines} {:mode :blocks}
+                        {:mode :splitmark :splitmark "CUT"}]]
+      (doseq [options options-list]
+        (let [preview (article-split/preview user-id source-id options)]
+          (is (= 1 (:created (article-split/create-topics! user-id source-id
+                               (assoc (request preview [0]) :options options)))))))
+      (let [existing (filterv :article_split_source_id (topics user-id))
+            source-version (split-identity/source-version html)
+            edited-id (:id (first existing))
+            edited "<p>Keep this edited copy</p>"]
+        (jdbc/execute! db/ds ["UPDATE topics SET content = ? WHERE id = ?" edited edited-id])
+        (let [preview (article-split/preview user-id source-id headings)
+              highlighted (article-split/create-topics! user-id source-id
+                            (highlighted-request preview [1]))
+              highlighted-version (split-identity/source-version (source-content source-id))]
+          (is (= 1 (:created highlighted)))
+          (is (not= source-version highlighted-version))
+          (doseq [topic existing]
+            (let [updated (db/get-topic (:id topic))]
+              (is (= highlighted-version
+                     (:source-version (split-identity/read-provenance
+                                        (:topics/article_split_provenance updated)))))
+              (is (not= (:article_split_key topic) (:topics/article_split_key updated)))))
+          (doseq [options options-list]
+            (let [fresh-preview (article-split/preview user-id source-id options)]
+              (is (= {:success true :created 0 :skipped 1 :undo-id nil}
+                     (article-split/create-topics! user-id source-id
+                       (assoc (highlighted-request fresh-preview [0]) :options options))))))
+          (is (:success (undo/undo-entry! user-id (:undo-id highlighted))))
+          (is (= html (source-content source-id)))
+          (is (= edited (:topics/content (db/get-topic edited-id))))
+          (doseq [topic existing]
+            (let [restored (db/get-topic (:id topic))]
+              (is (= (:article_split_key topic) (:topics/article_split_key restored)))
+              (is (= (split-identity/read-provenance (:article_split_provenance topic))
+                     (split-identity/read-provenance (:topics/article_split_provenance restored))))))
+          (doseq [options options-list]
+            (let [restored-preview (article-split/preview user-id source-id options)]
+              (is (= {:success true :created 0 :skipped 1 :undo-id nil}
+                     (article-split/create-topics! user-id source-id
+                       (assoc (request restored-preview [0]) :options options)))))))))))
+
+(deftest source-highlight-undo-preserves-later-source-edits-and-warns
+  (with-user [user-id]
+    (let [source-id (topic! user-id nil article)
+          preview (article-split/preview user-id source-id headings)
+          result (article-split/create-topics! user-id source-id (highlighted-request preview [1]))
+          edited (str (source-content source-id) "<p>User added text</p>")]
+      (is (= 1 (:created result)))
+      (jdbc/execute! db/ds ["UPDATE topics SET content = ? WHERE id = ?" edited source-id])
+      (let [undone (undo/undo-entry! user-id (:undo-id result))]
+        (is (:success undone))
+        (is (true? (:source-highlights-kept? undone)))
+        (is (true? (:warning? undone)))
+        (is (= edited (source-content source-id)))
+        (is (= [source-id] (mapv :id (topics user-id))))))))
+
+(deftest source-highlighting-rejects-read-only-topics-without-partial-writes
+  (doseq [kind ["gdoc-snapshot" "poem"]]
+    (testing kind
+      (with-user [user-id]
+        (let [source-id (topic! user-id nil article)]
+          (jdbc/execute! db/ds ["UPDATE topics SET kind = ? WHERE id = ?" kind source-id])
+          (let [before (db/get-topic source-id)
+                preview (article-split/preview user-id source-id headings)
+                result (article-split/create-topics! user-id source-id (highlighted-request preview [1]))]
+            (is (:success preview))
+            (is (false? (:success result)))
+            (is (string? (:error result)))
+            (is (= before (db/get-topic source-id)))
+            (is (= [source-id] (mapv :id (topics user-id))))
+            (is (empty? (db/get-undo-entries user-id)))
+            (let [without-highlights (article-split/create-topics! user-id source-id (request preview [1]))]
+              (is (= 1 (:created without-highlights)))
+              (is (= before (db/get-topic source-id))))))))))
+
+(deftest failed-highlighted-batch-rolls-back-source-topics-identities-and-references
+  (with-user [user-id]
+    (let [source-id (topic! user-id nil article)
+          bibliography-id (:sources/id (db/create-source!
+                                         {:user-id user-id :csl-type "webpage"
+                                          :csl {:title "Citation"}}))]
+      (jdbc/execute! db/ds ["UPDATE topics SET source_id = ? WHERE id = ?" bibliography-id source-id])
+      (let [preview (article-split/preview user-id source-id headings)
+            initial (article-split/create-topics! user-id source-id (request preview [0]))
+            before-source (db/get-topic source-id)
+            before-topics (topics user-id)
+            before-undo (db/get-undo-entries user-id)
+            reached-undo? (atom false)
+            result (with-redefs [db/insert-undo-entry-raw!
+                                (fn [& _]
+                                  (reset! reached-undo? true)
+                                  (throw (ex-info "Forced failure" {})))]
+                     (article-split/create-topics! user-id source-id (highlighted-request preview [1 2])))]
+        (is (= 1 (:created initial)))
+        (is @reached-undo?)
+        (is (false? (:success result)))
+        (is (= before-source (db/get-topic source-id)))
+        (is (= before-topics (topics user-id)))
+        (is (= before-undo (db/get-undo-entries user-id)))
+        (is (= 2 (:n (jdbc/execute-one! db/ds
+                         ["SELECT count(*) AS n FROM sources WHERE user_id = ?" user-id] row-options))))))))
+
+(deftest source-highlighting-keeps-historical-source-identities-distinct
+  (with-user [user-id]
+    (let [source-id (topic! user-id nil article)
+          historical-preview (article-split/preview user-id source-id headings)
+          historical-result (article-split/create-topics! user-id source-id (request historical-preview [1]))
+          historical-topic (last (topics user-id))
+          current-html (str article "<p>Later source edit</p>")]
+      (is (= 1 (:created historical-result)))
+      (jdbc/execute! db/ds ["UPDATE topics SET content = ? WHERE id = ?" current-html source-id])
+      (let [current-preview (article-split/preview user-id source-id headings)
+            current-result (article-split/create-topics! user-id source-id (request current-preview [0]))
+            highlighted-result (article-split/create-topics! user-id source-id
+                                 (highlighted-request current-preview [1]))]
+        (is (= 1 (:created current-result)))
+        (is (= 1 (:created highlighted-result)))
+        (is (= (:article_split_key historical-topic)
+               (:topics/article_split_key (db/get-topic (:id historical-topic)))))
+        (is (= (split-identity/read-provenance (:article_split_provenance historical-topic))
+               (split-identity/read-provenance
+                 (:topics/article_split_provenance (db/get-topic (:id historical-topic))))))
+        (is (:success (undo/undo-entry! user-id (:undo-id highlighted-result))))
+        (is (= current-html (source-content source-id)))
+        (is (= (:article_split_key historical-topic)
+               (:topics/article_split_key (db/get-topic (:id historical-topic)))))
+        (let [restored-preview (article-split/preview user-id source-id headings)]
+          (is (= {:success true :created 0 :skipped 1 :undo-id nil}
+                 (article-split/create-topics! user-id source-id (request restored-preview [0]))))
+          (is (= 1 (:created (article-split/create-topics! user-id source-id
+                               (request restored-preview [1]))))))))))
+
+(deftest source-highlighting-without-visible-text-keeps-exact-source
+  (with-user [user-id]
+    (let [html "<img src='/api/media/12' alt='Example'>"
+          source-id (topic! user-id nil html)
+          before (db/get-topic source-id)
+          preview (article-split/preview user-id source-id headings)
+          result (article-split/create-topics! user-id source-id (highlighted-request preview [0]))]
+      (is (= 1 (:created result)))
+      (is (= before (db/get-topic source-id)))
+      (is (not (contains? result :source-content)))
+      (is (:success (undo/undo-entry! user-id (:undo-id result))))
+      (is (= html (source-content source-id))))))

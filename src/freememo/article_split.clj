@@ -13,6 +13,8 @@
             [freememo.input-check :as input]
             [freememo.logging :as log]
             [freememo.text :as text]
+            [freememo.topic-kinds :as topic-kinds]
+            [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
 
@@ -55,6 +57,7 @@
     (let [options (normalized-options options)]
       (if-let [source (source-topic db/ds user-id topic-id false)]
         {:success true :source-version (identity/source-version (:content source))
+         :can-highlight? (not (contains? topic-kinds/read-only-content-kinds (:kind source)))
          :sections (proposed-sections (:content source) options)}
         {:success false :error "Article not found."}))
     (catch Exception e
@@ -88,7 +91,45 @@
       (contains? selected parent) (get topic-ids parent source-id)
       :else (recur (:parent-index (nth sections parent))))))
 
-(defn- save-batch! [conn user-id topic-id {:keys [source-version options selected-indices]}]
+(defn- rebase-split-identities!
+  "Pre: the source row is locked. Only source annotation changed between versions.
+   Post: current split identities follow that annotation without changing copied content.
+   Invariant: historical identities and existing keys remain distinct."
+  [conn topic-id before-version after-version]
+  (when (not= before-version after-version)
+    (let [rows (jdbc/execute! conn
+                 ["SELECT id, article_split_key, article_split_provenance FROM topics
+                   WHERE article_split_source_id = ? FOR UPDATE" topic-id] row-options)
+          holders (into {} (map (juxt :article_split_key :id)) rows)]
+      (doseq [{:keys [id article_split_provenance]} rows
+              :let [original (identity/read-provenance article_split_provenance)
+                    rebased (identity/rebase-source-version original before-version after-version)]
+              :when (and rebased (not= original rebased))
+              :let [key (identity/section-key rebased)]
+              :when (or (nil? (get holders key)) (= id (get holders key)))]
+        (jdbc/execute! conn
+          ["UPDATE topics SET article_split_key = ?, article_split_provenance = ? WHERE id = ?"
+           key (json/generate-string rebased) id])))))
+
+(defn- write-highlighted-source!
+  "Pre: source is locked and editable. Post: source and current identities change together."
+  [conn topic-id before-content after-content]
+  (jdbc/execute! conn
+    ["UPDATE topics SET content = ?, content_text = ? WHERE id = ?"
+     after-content (text/strip-html after-content) topic-id])
+  (rebase-split-identities! conn topic-id
+    (identity/source-version before-content) (identity/source-version after-content)))
+
+(defn- publish-source-update!
+  "Pre: the source transaction committed. Post: active readers can install its saved content.
+   Invariant: the update holds only the latest source change for this user."
+  [user-id result]
+  (when (contains? result :source-content)
+    (reset! (us/get-atom user-id :article-source-update)
+      {:event-id (str (random-uuid)) :topic-id (:source-topic-id result)
+       :before-content (:source-before-content result) :content (:source-content result)})))
+
+(defn- save-batch! [conn user-id topic-id {:keys [source-version options selected-indices highlight-source?]}]
   (if-let [source (source-topic conn user-id topic-id true)]
     (let [version (identity/source-version (:content source))]
       (if (not= source-version version)
@@ -99,6 +140,9 @@
           (when-not (and (sequential? selected-indices) (seq selected)
                      (every? integer? selected) (every? valid-indices selected))
             (throw (ex-info "Select at least one valid section." {:invalid? true})))
+          (when (and highlight-source?
+                  (contains? topic-kinds/read-only-content-kinds (:kind source)))
+            (throw (ex-info "Source highlights are not available for read-only topics." {:invalid? true})))
           (let [bibliography-id (effective-source-id conn topic-id)
                 existing (into {} (map (juxt :article_split_key :id))
                            (jdbc/execute! conn
@@ -132,19 +176,32 @@
                                      id topic-id])
                                   (-> batch (assoc-in [:topic-ids (:index section)] id)
                                     (update :created conj id)
+                                    (update :created-indices conj (:index section))
                                     (update :sources into (if source-id [source-id] []))))))))
-                        {:topic-ids {} :created [] :sources [] :skipped 0} sections)
+                        {:topic-ids {} :created [] :created-indices [] :sources [] :skipped 0} sections)
                 created (:created batch)
+                before-content (:content source)
+                after-content (when (and highlight-source? (seq created))
+                                (db/sanitize-utf8
+                                  (article-sections/highlight-sections before-content options (:created-indices batch))))
+                source-change (when (and (some? after-content) (not= before-content after-content))
+                                {:source-topic-id topic-id :source-before-content before-content
+                                 :source-content after-content})
                 undo-id (when (seq created)
+                          (when source-change
+                            (write-highlighted-source! conn topic-id before-content after-content))
                           (db/insert-undo-entry-raw! conn user-id "split-article" "document" created
-                            {:topic-ids created :source-ids (:sources batch) :source-topic-id topic-id}))]
-            {:success true :created (count created) :skipped (:skipped batch) :undo-id undo-id}))))
+                            (merge {:topic-ids created :source-ids (:sources batch) :source-topic-id topic-id}
+                              (when source-change {:source-highlight source-change}))))]
+            (merge {:success true :created (count created) :skipped (:skipped batch) :undo-id undo-id}
+              source-change)))))
     {:success false :error "Article not found."}))
 
 (defn create-topics!
   "Pre: caller supplies a preview version and selected section indices.
    Post: every selected new section exists, or the transaction changes nothing.
-   Invariants: source content and existing generated topics stay unchanged."
+   Invariants: source content stays unchanged unless highlighting is enabled.
+   Existing topic content and edits stay unchanged."
   [user-id topic-id request]
   (try
     (let [request (update request :options normalized-options)
@@ -157,6 +214,7 @@
             (log/log-error (str "Article split undo cleanup failed: " (.getMessage e))))))
       (when (and (:success result) (pos? (:created result)))
         (commands/bump-channels! user-id #{:tree-mutations :undo-mutations :pin-mutations}))
+      (publish-source-update! user-id result)
       result)
     (catch Exception e
       (if (:invalid? (ex-data e))
@@ -194,17 +252,33 @@
               OR (scope_type = 'score_group' AND scope_id = ANY(?)))"
            root-id deleting-ids card-ids occlusion-ids score-ids])))))
 
+(defn- restore-source-highlight!
+  "Pre: source is locked when present. Post: restore its exact prior HTML only if unchanged.
+   Invariant: later source edits and read-only content survive undo."
+  [conn snapshot source]
+  (when-let [{:keys [source-topic-id source-before-content source-content]} (:source-highlight snapshot)]
+    (if (and source (= (:content source) source-content)
+          (not (contains? topic-kinds/read-only-content-kinds (:kind source))))
+      (do
+        (write-highlighted-source! conn source-topic-id source-content source-before-content)
+        {:source-topic-id source-topic-id :source-before-content source-content
+         :source-content source-before-content})
+      {:source-highlights-kept? true})))
+
 (defn undo-batch!
   "Pre: entry is the user's split undo entry.
    Post: only its created topics and unused bibliography copies are removed.
-   Invariant: unrelated child topics move to the nearest surviving ancestor."
+   Invariants: unrelated children move to the nearest surviving ancestor.
+   Source restoration cannot overwrite later edits."
   [user-id entry]
-  (jdbc/with-transaction [tx db/ds]
+  (let [result (jdbc/with-transaction [tx db/ds]
     (let [locked-entry (jdbc/execute-one! tx
                          ["SELECT * FROM undo_log WHERE id = ? AND user_id = ? FOR UPDATE"
                           (:id entry) user-id] row-options)]
       (when (and locked-entry (nil? (:undone_at locked-entry)))
         (let [snapshot (json/parse-string (str (:snapshot locked-entry)) true)
+              source (when (:source-highlight snapshot)
+                       (source-topic tx user-id (:source-topic-id snapshot) true))
               ids (long-array (:topic-ids snapshot))
               rows (jdbc/execute! tx
                      ["SELECT id, parent_id FROM topics WHERE id = ANY(?) AND user_id = ? FOR UPDATE"
@@ -230,5 +304,8 @@
             ["DELETE FROM sources s WHERE s.id = ANY(?) AND s.user_id = ?
               AND NOT EXISTS (SELECT 1 FROM topics t WHERE t.source_id = s.id)"
              (long-array (:source-ids snapshot)) user-id])
-          (jdbc/execute! tx ["UPDATE undo_log SET undone_at = now() WHERE id = ?" (:id entry)])))))
-  nil)
+          (let [source-result (restore-source-highlight! tx snapshot source)]
+            (jdbc/execute! tx ["UPDATE undo_log SET undone_at = now() WHERE id = ?" (:id entry)])
+            source-result)))))]
+    (publish-source-update! user-id result)
+    result))
