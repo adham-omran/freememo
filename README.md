@@ -40,6 +40,8 @@ It includes source evidence, acceptance cases, and open decisions.
 - **Graphviz**. 
   - The `sfdp` binary needs its layout-engine plugin — on **Debian/Ubuntu** the plugin is a **separate** package: `apt install graphviz libgvplugin-neato-layout8` (without it `sfdp` aborts with *"no layout engine support for sfdp"*). **Fedora**: `dnf install graphviz`; **macOS**: `brew install graphviz` — both bundle the plugin. Missing `sfdp` throws `Cannot run program "sfdp"` and closes the graph page's WebSocket.
 
+- **Typst** (optional). The comprehension answer sheet is a PDF made by `typst` on PATH. **Fedora**: `dnf install typst`. **macOS**: `brew install typst`. **Debian/Ubuntu** packages no release, so download one from [the Typst releases](https://github.com/typst/typst/releases). Without it, Print answer sheet serves an HTML page that you print from the browser.
+
 ### Run
 
 ```bash
@@ -93,6 +95,7 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Rich text | Quill 2.0.3 (self-hosted) |
 | Client libraries | Vendored under `resources/public/freememo/vendor/` — no CDN, works offline |
 | Graph layout | Graphviz `sfdp` (server-side, Knowledge Graph view) |
+| Answer sheet PDF | Typst (server-side, with the vendored Noto Naskh Arabic font) |
 | Logging | Telemere (structured, CLJ + CLJS) |
 | AI | OpenRouter (card gen default GPT-5.1, OCR default Gemini 3 Flash; multi-model catalog) |
 
@@ -301,6 +304,7 @@ To accept uploads larger than 100 MB, also raise `STORAGE_REQUEST_MAX_BYTES` (th
 Requires a reachable Postgres (e.g. `docker compose up` for just the DB), ImageMagick on PATH
 (HEIC upload conversion shells out to `magick`), and — for the Knowledge Graph view — Graphviz on
 PATH (layout shells out to `sfdp`; Debian/Ubuntu also needs the separate `libgvplugin-neato-layout8`).
+For a PDF answer sheet, Typst must be on PATH as well (the Docker image installs a pinned release).
 
 ```bash
 # Build client + uberjar

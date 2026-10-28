@@ -37,7 +37,7 @@
   {:pdf.js "3.11.174", :highlight.js "11.9.0", :quill "2.0.3",
    :quill-resize-module "2.1.3", :konva "9.3.16", :graphology "0.26.0",
    :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11",
-   :highlightjs-zig "1.0.2", :amiri "5.3.0",
+   :highlightjs-zig "1.0.2", :amiri "5.3.0", :noto-naskh-arabic "2.021",
    ;; @floating-ui/core and @floating-ui/dom are released together and share a
    ;; version number, so one string covers both packages below.
    :floating-ui "1.8.0"})
@@ -45,6 +45,9 @@
 (defn- v [lib] (get versions lib))
 (def ^:private cdnjs "https://cdnjs.cloudflare.com/ajax/libs")
 (def ^:private jsd "https://cdn.jsdelivr.net/npm")
+;; google/fonts publishes no release tags, so a commit pins the font files.
+(def ^:private google-fonts
+  "https://raw.githubusercontent.com/google/fonts/ad2e6647e3d97ad5a8b6b5f95042f99161af5915")
 
 (def ^:private assets
   "[local-path-under-vendor  url] pairs.
@@ -56,7 +59,7 @@
   (let [pdf (v :pdf.js), hl (v :highlight.js), q (v :quill), rs (v :quill-resize-module)
         kv (v :konva), gr (v :graphology), sg (v :sigma), ws (v :wavesurfer.js)
         lm (v :lamejs), kx (v :katex), hz (v :highlightjs-zig), am (v :amiri)
-        fl (v :floating-ui)]
+        fl (v :floating-ui), nn (v :noto-naskh-arabic)]
     [[(str "pdf.js@" pdf "/pdf.min.js")                (str cdnjs "/pdf.js/" pdf "/pdf.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.js")         (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.js")]
      [(str "pdf.js@" pdf "/pdf_viewer.min.css")        (str cdnjs "/pdf.js/" pdf "/pdf_viewer.min.css")]
@@ -102,6 +105,14 @@
       (str jsd "/@fontsource/amiri@" am "/files/amiri-arabic-700-normal.woff2")]
      ;; The OFL text, so the vendored tree carries its own licence.
      [(str "amiri@" am "/LICENSE") (str jsd "/@fontsource/amiri@" am "/LICENSE")]
+     ;; Noto Naskh Arabic — the Arabic face of the Typst answer sheet
+     ;; (freememo.answer-sheet). Typst reads TTF and OTF but not woff2, so
+     ;; Amiri above cannot serve it. The browser never loads this file. The
+     ;; server copies it out of the jar and passes its directory to Typst.
+     ;; freememo.answer-sheet names this path, so a version bump edits it too.
+     [(str "noto-naskh-arabic@" nn "/NotoNaskhArabic-wght.ttf")
+      (str google-fonts "/ofl/notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf")]
+     [(str "noto-naskh-arabic@" nn "/OFL.txt") (str google-fonts "/ofl/notonaskharabic/OFL.txt")]
      ;; Floating UI — core must execute before dom, which reads window.FloatingUICore
      ;; and defines window.FloatingUIDOM. freememo.spotlight is the consumer.
      [(str "floating-ui@" fl "/floating-ui.core.umd.min.js")

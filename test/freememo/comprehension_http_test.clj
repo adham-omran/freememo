@@ -4,10 +4,13 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [freememo.answer-sheet :as answer-sheet]
             [freememo.api :as api]
             [freememo.comprehension :as cycle]
             [freememo.comprehension-ocr :as scan])
   (:import [java.io File RandomAccessFile]
+           [org.apache.pdfbox Loader]
+           [org.apache.pdfbox.text PDFTextStripper]
            [org.jsoup Jsoup]))
 
 (defn- request [method uri user-id]
@@ -116,8 +119,40 @@
                      {:id "q3" :format "long-essay" :points 10 :prompt "Explain the connection."
                       :rubric {:reasoning "PRIVATE-RUBRIC"}}]}})
 
-(deftest printable-sheet-shows-prompts-and-option-ids-without-answer-keys
-  (with-redefs [cycle/cycle-detail (fn [uid cid] (when (and (= 7 uid) (= 42 cid)) printable-cycle))]
+(def ^:private private-texts
+  ["PRIVATE-GRADING-GUIDE" "PRIVATE-ACCEPTED-ANSWER" "PRIVATE-RUBRIC" "correct_option_id"])
+
+(defn- typst-ready?
+  "Typst on PATH and the vendored Arabic font on the classpath. A clone without
+   either skips the PDF check rather than failing it."
+  []
+  (and (io/resource "public/freememo/vendor/noto-naskh-arabic@2.021/NotoNaskhArabic-wght.ttf")
+       (try (zero? (.waitFor (.start (ProcessBuilder. ["typst" "--version"]))))
+            (catch java.io.IOException _ false))))
+
+(deftest printable-sheet-is-a-pdf-of-prompts-without-answer-keys
+  (if-not (typst-ready?)
+    (println "SKIP printable-sheet-is-a-pdf: typst or the vendored font is missing")
+    (with-redefs [cycle/cycle-detail (fn [uid cid] (when (and (= 7 uid) (= 42 cid)) printable-cycle))]
+      (let [response (api/api-routes (request :get "/api/comprehension/print/42" 7))
+            pdf (with-open [in (:body response)] (.readAllBytes in))
+            text (with-open [doc (Loader/loadPDF ^bytes pdf)] (.getText (PDFTextStripper.) doc))]
+        (is (= 200 (:status response)))
+        (is (= "application/pdf" (get-in response [:headers "Content-Type"])))
+        (is (= "private, no-store" (get-in response [:headers "Cache-Control"])))
+        (is (= "inline; filename=\"answer-sheet-42.pdf\"" (get-in response [:headers "Content-Disposition"])))
+        (doseq [[i question] (map-indexed vector (get-in printable-cycle [:form :questions]))]
+          (is (str/includes? text (str "Question " (inc i))))
+          (is (str/includes? text (:prompt question))))
+        (testing "a title that looks like markup is printed, not run"
+          (is (str/includes? text "<script>secret</script>")))
+        (is (str/includes? text "option-two."))
+        (doseq [private-text private-texts]
+          (is (not (str/includes? text private-text))))))))
+
+(deftest printable-sheet-falls-back-to-html-without-answer-keys
+  (with-redefs [cycle/cycle-detail (fn [uid cid] (when (and (= 7 uid) (= 42 cid)) printable-cycle))
+                answer-sheet/render (fn [_] {:ok false :reason :missing-binary :error "no typst"})]
     (let [response (api/api-routes (request :get "/api/comprehension/print/42" 7))
           doc (Jsoup/parse (:body response))
           articles (.select doc "article")
@@ -133,7 +168,7 @@
         (is (str/includes? (.text (.get articles i)) (:prompt question)))
         (is (str/includes? (.text (.selectFirst (.get articles i) "h2")) (str "Question " (inc i))))
         (is (some? (.selectFirst (.get articles i) ".space"))))
-      (doseq [private-text ["PRIVATE-GRADING-GUIDE" "PRIVATE-ACCEPTED-ANSWER" "PRIVATE-RUBRIC" "correct_option_id"]]
+      (doseq [private-text private-texts]
         (is (not (str/includes? text private-text))))
       (is (str/includes? text "Ordinary numbered paper also works.")))
     (doseq [[uid cid] [[8 42] [7 9999]]]
