@@ -9,7 +9,8 @@
             [freememo.typeahead :as typeahead]
             #?(:cljs [freememo.comprehension-upload :as upload])
             #?(:clj [freememo.comprehension :as cycle])
-            #?(:clj [freememo.comprehension-ocr :as scan])))
+            #?(:clj [freememo.comprehension-ocr :as scan])
+            #?(:clj [freememo.user-state :as us])))
 
 (defn read-page* [user-id cycle-id _revision]
   #?(:clj {:materials (cycle/list-materials user-id)
@@ -43,7 +44,9 @@
   #?(:cljs (upload/upload! cycle-id file)
      :clj nil))
 
-(e/defn CommandResult [user-id commits !revision !error navigate!]
+;; A `Form!` prints its token's error under its Submit button, so only a bare
+;; button needs the page alert. Writing both showed a form's error twice.
+(e/defn CommandResult [user-id commits !revision !error navigate! form-shows-error?]
   (e/client
     (e/for [[token command] (e/diff-by first (e/as-vec commits))]
       (let [captured (e/snapshot command)
@@ -56,14 +59,41 @@
                    (when-let [id (:cycle-id result)]
                      (navigate! :comprehension (nav/nav-comprehension id)))))
             (token))
-          (case (reset! !error (:error result))
+          (case (when-not form-shows-error? (reset! !error (:error result)))
             (token (:error result))))))))
 
 (e/defn Action [user-id command label !revision !error navigate!]
   (e/client
     (CommandResult user-id
       (forms/Button! command :label label :class "btn btn-secondary")
-      !revision !error navigate!)))
+      !revision !error navigate! false)))
+
+(defn work-step
+  "The reported stage of the first running work whose operation is op, or nil."
+  [work op]
+  (some (fn [[[operation] step]] (when (and (= operation op) (:step step)) step)) work))
+
+(defn step-text [{:keys [step total phase]}]
+  (str "Preparing " step "/" total ": " phase "…"))
+
+(defn elapsed-text [{:keys [since]} now-ms]
+  (str " (" (max 0 (quot (- now-ms since) 1000)) " s)"))
+
+(e/defn WorkProgress [step]
+  (e/client
+    ;; Always mounted, so the conditional line inside it never shifts its
+    ;; parent's other children. See "An e/for Gets an Element of Its Own".
+    (dom/div
+      (dom/props {:class "comprehension-progress"})
+      (when (:step step)
+        (dom/p
+          (dom/props {:role "status"})
+          (dom/text (step-text step))
+          ;; The seconds change every second, so a screen reader must not
+          ;; announce them. The stage name is what the status announces.
+          (dom/span
+            (dom/props {:aria-hidden "true" :class "comprehension-muted"})
+            (dom/text (elapsed-text step (e/System-time-ms)))))))))
 
 (e/defn StartCycle [user-id materials !revision !error navigate!]
   (e/client
@@ -90,11 +120,12 @@
                          [:start topic-id minutes]
                          (ex-info "Choose material and a duration from 5 to 180 minutes." {}))))
             :show-buttons false)]
+      (WorkProgress (e/server (work-step (e/watch (us/get-atom user-id :comprehension-work)) :generate)))
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text "The duration is an estimate. You can take longer without a penalty."))
       (when-let [topic-id (e/watch !topic)]
         (Action user-id [:extract topic-id] "Extract facts" !revision !error navigate!))
-      (CommandResult user-id commits !revision !error navigate!))))
+      (CommandResult user-id commits !revision !error navigate! true))))
 
 (e/defn Question [index question]
   (e/client
@@ -137,7 +168,7 @@
             :show-buttons false)]
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text "For multiple choice, enter the option ID or its full text. Leave an answer blank if you do not know."))
-      (CommandResult user-id commits !revision !error navigate!))))
+      (CommandResult user-id commits !revision !error navigate! true))))
 
 (defn scan-assignments [fields questions]
   (->> questions
@@ -197,7 +228,7 @@
             (dom/p (dom/text "Compare each transcript with the original. Correct recognition errors and page assignments before accepting."))
             (e/for [uncertainty (e/diff-by identity (:uncertainties scan))]
               (dom/p (dom/props {:class "comprehension-warning"}) (dom/text (str uncertainty))))
-            (CommandResult user-id commits !revision !error navigate!))))
+            (CommandResult user-id commits !revision !error navigate! true))))
       (when (= "accepted" (:status scan))
         (dom/p (dom/text "Transcript accepted. Review the answer fields before submitting."))))))
 
@@ -245,7 +276,28 @@
             (dom/p (dom/text (or (:prompt question) (:question question) (str question)))))
           (when-not (:completed_at followup)
             (Action user-id [:finish-study (:id followup)] "Mark study complete" !revision !error navigate!))))
-      (Action user-id [:reassess (:id gap)] "Reassess" !revision !error navigate!))))
+      (Action user-id [:reassess (:id gap)] "Reassess" !revision !error navigate!)
+      (WorkProgress (e/server (get (e/watch (us/get-atom user-id :comprehension-work))
+                                [:reassess (:id gap)]))))))
+
+(defn dropped-summary [dropped kept]
+  (str dropped " of " (+ dropped kept) " generated questions did not pass the checks and "
+    (if (= 1 dropped) "was" "were") " removed."))
+
+(e/defn DroppedQuestions [dropped kept]
+  (e/client
+    ;; Always mounted, so the conditional inside it never shifts the panel's
+    ;; other children. See "An e/for Gets an Element of Its Own".
+    (dom/div
+      (dom/props {:class "comprehension-dropped"})
+      (when (seq dropped)
+        (dom/details
+          (dom/summary (dom/text (dropped-summary (count dropped) kept)))
+          (dom/ul
+            (e/for [question (e/diff-by :question dropped)]
+              (dom/li
+                (dom/p (dom/text (str "Question " (:question question) ": " (:reason question))))
+                (dom/p (dom/props {:class "comprehension-muted"}) (dom/text (:prompt question)))))))))))
 
 (e/defn CycleDetail [user-id detail !revision !error navigate!]
   (e/client
@@ -277,7 +329,11 @@
                               (str outcome))))))
         (e/for [omission (e/diff-by identity (get-in detail [:form :blueprint :omitted_formats]))]
           (dom/p (dom/text (str (:format omission) ": " (:reason omission)))))
-        (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, " (:target_minutes detail) " estimated minutes")))
+        (DroppedQuestions (get-in detail [:form :blueprint :dropped_questions])
+          (count (get-in detail [:form :questions])))
+        (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, "
+                           (or (get-in detail [:form :blueprint :estimated_minutes]) (:target_minutes detail))
+                           " estimated minutes")))
         (dom/a (dom/props {:href (str "/api/comprehension/print/" (:id detail)) :target "_blank" :rel "noopener" :class "btn btn-secondary"})
           (dom/text "Print answer sheet")))
       (dom/h3 (dom/text "Handwritten answers"))

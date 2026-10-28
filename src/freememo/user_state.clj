@@ -43,7 +43,9 @@
           :schedule-mutations (atom 0)
           :curriculum-mutations (atom 0)
           :comprehension-mutations (atom 0)
-          :comprehension-work (atom #{})
+          ;; work member -> its current stage {:phase …}, plus :step :total :since
+          ;; once it names one (comprehension/report-step!)
+          :comprehension-work (atom {})
           :comprehension-errors (atom {})
           :activity-mutations (atom 0)
           :question-mutations (atom 0)

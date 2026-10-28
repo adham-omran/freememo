@@ -8,6 +8,7 @@
             [freememo.db :as db]
             [freememo.kg-llm :as llm]
             [freememo.settings :as settings]
+            [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
   (:import [java.awt.image BufferedImage]
@@ -86,6 +87,48 @@
           (is (not (:ok (cycle/save-draft-answers! other cid {"q1" "forged"}))))
           (is (not (:ok (cycle/save-draft-answers! uid cid {"q2" "foreign question"}))))
           (is (:ok (cycle/save-draft-answers! uid cid {"q1" "Draft"}))))))))
+
+(deftest start-reports-each-stage-and-explains-a-refused-form
+  (with-accounts
+    (fn [uid _ tid]
+      (let [work (us/get-atom uid :comprehension-work)
+            seen (atom [])
+            record! #(swap! seen conj (select-keys (get @work [:generate tid]) [:step :total :phase]))]
+        (testing "every stage is published in order while the work runs"
+          (with-redefs [assessment/generate! (fn [_ evidence options]
+                                               (record!)
+                                               ((:on-step options) :writing) (record!)
+                                               ((:on-step options) :checking) (record!)
+                                               (form evidence options))
+                        cycle/insert-cycle! (let [insert @#'cycle/insert-cycle!]
+                                              (fn [& args] (record!) (apply insert args)))]
+            (is (:ok (cycle/start-cycle! uid tid 30))))
+          (is (= [[1 "Reading the material"] [2 "Writing the questions"]
+                  [3 "Checking the questions against the source"] [4 "Saving the cycle"]]
+                (mapv (juxt :step :phase) @seen)))
+          (is (every? #(= 4 (:total %)) @seen))
+          (is (not (contains? @work [:generate tid])) "finished work leaves no stage behind"))
+        (testing "a refused form says nothing was saved, what it cost, and how to retry"
+          (with-redefs [assessment/generate!
+                        (fn [_ _ _]
+                          (throw (ex-info "A question quotes nothing from the material."
+                                   {:type ::assessment/invalid-assessment :question 3
+                                    :charged-credits 12})))]
+            (let [{:keys [ok error]} (cycle/start-cycle! uid tid 30)]
+              (is (not ok))
+              (is (= (str "The model wrote questions that did not pass the checks, so nothing was saved. "
+                       "Reason: A question quotes nothing from the material (question 3). "
+                       "This attempt used 12 credits. Select Start cycle to make a new set.")
+                    error))))
+          (is (= 1 (count (cycle/list-cycles uid))) "the refused run saved no cycle"))))))
+
+(deftest generation-drops-bad-questions-instead-of-refusing-the-set
+  (with-accounts
+    (fn [uid _ tid]
+      (let [seen (atom nil)]
+        (with-redefs [assessment/generate! (fn [_ evidence options] (reset! seen options) (form evidence options))]
+          (is (:ok (cycle/start-cycle! uid tid 30))))
+        (is (true? (:drop-invalid? @seen)))))))
 
 (deftest save-before-grading-and-retry-one-attempt
   (with-accounts
