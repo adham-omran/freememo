@@ -25,6 +25,14 @@ A page that cannot be read falls back to a screenshot. The trigger is failure,
 never a guess — an injection Chrome refuses, or a content script that returns
 nothing.
 
+## Install
+
+1. [Download the prebuilt ZIP](https://github.com/adham-omran/freememo/raw/refs/heads/main/extensions/chrome/dist/freememo-web-capture-0.1.0.zip).
+2. Extract the ZIP into a folder you will keep.
+3. Open `chrome://extensions`.
+4. Turn on Developer mode.
+5. Click **Load unpacked** and choose the extracted folder.
+
 ## Install for development
 
 1. Open `chrome://extensions`.
@@ -40,6 +48,11 @@ Change `ORIGIN` in `src/config.js` to point at a local server.
 ```
 
 Produces `dist/freememo-web-capture-<version>.zip` for the Chrome Web Store.
+
+The repository also includes the prebuilt ZIP for manual installation.
+Rebuild it after extension changes and include it in the same commit.
+When the version changes, update the download links in this README and
+`src/freememo/browser_extension_section.cljc`.
 
 There is no bundler and no dependency. Every file is an ES module the browser
 loads directly. The one thing that would have needed a bundler, a PDF library,
