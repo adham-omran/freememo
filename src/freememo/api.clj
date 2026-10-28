@@ -21,6 +21,7 @@
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.input-check :as input]
+   [freememo.util :as util]
    [freememo.import-staging :as staging]
    [freememo.import-activity :as import-activity]
    [freememo.live-doc :as live-doc]
@@ -572,7 +573,8 @@
 (defn create-topic-handler [request]
   (if-let [user-id (require-auth request)]
     (try
-      (let [title (or (get-in request [:params "title"]) "New Topic")
+      (let [requested-title (get-in request [:params "title"])
+            title (if (str/blank? requested-title) (util/default-topic-title) requested-title)
             {:keys [topic-id]} (db/create-standalone-topic! user-id title)]
         (if topic-id
           (do

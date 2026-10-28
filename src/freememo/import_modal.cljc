@@ -18,6 +18,7 @@
    [freememo.navigation :as nav]
    [freememo.client-errors :as ce]
    [freememo.import-types :as itypes]
+   [freememo.util :as util]
    #?(:cljs [freememo.archive-upload :as archive-upload])
    #?(:cljs [freememo.chunked-upload :as cu])
    #?(:clj [freememo.web-import :as web-import])
@@ -697,10 +698,11 @@
 
 ;; Pre:  `on-create` is a 1-arg fn taking a title string (possibly empty).
 ;; Post: on submit, `(on-create title)` fires once and the form's token is spent.
-;; Invariant: empty title is allowed — the parent's callback defaults to "New Topic".
+;; An empty title uses the current date and time when the user submits.
 (e/defn NewTopicInput [on-create]
   (e/client
-    (let [commits (forms/Form! {:title ""}
+    (let [initial-title (e/snapshot (util/default-topic-title))
+          commits (forms/Form! {:title initial-title}
                     (e/fn Fields [{:keys [title]}]
                       (e/amb
                         (dom/p
@@ -1377,10 +1379,10 @@
                                         (post-form! "/api/upload-paste" params
                                           handle-resp
                                           handle-fetch-err)))))))
-          ;; Pre: title may be empty (defaults to "New Topic"). No Forms5 validation.
+          ;; A blank title uses the current local date and time.
           on-new-topic (fn [title]
                          (reset-error! !error !quota-error?)
-                         (let [title-v (if (seq title) title "New Topic")]
+                         (let [title-v (if (str/blank? title) (util/default-topic-title) title)]
                            (reset! !stage :importing)
                            (post-form! "/api/create-topic" {"title" title-v}
                              handle-resp
