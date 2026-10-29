@@ -8,10 +8,12 @@
    [freememo.logging :as log]
    [freememo.modal-shell :as modal]
    [freememo.tooltip :as tooltip]
+   [freememo.typeahead-search :as search-state]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]))
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [missionary.core :as m]))
 
 (def ^:private row-height 30)
 (def ^:private described-row-height 46)
@@ -70,8 +72,8 @@
                 first so the input keeps focus
 
    Pre:  options is non-empty; every option has a display label.
-   Post: only the visible window of rows is mounted (Scroll-window/Tape), so
-         cost is bounded regardless of option count."
+   Post: only the visible window of rows mounts. Transfer and filtering costs
+         depend on the supplied option count."
   [options active-idx on-pick!]
   (e/client
     (let [n (count options)
@@ -113,9 +115,8 @@
                           (on-pick! i))
                         nil))))))))))))
 
-(e/defn Typeahead
-  "Combobox over identified options: filtered dropdown, writes the selected
-   option's ID to !atom.
+(e/defn TypeaheadInput
+  "Shared combobox renderer. Writes the selected option's ID to !atom.
 
    Keyed on id, not on the visible label. Keying on the label made every consumer
    resolve its selection by string-matching titles back to rows, which silently
@@ -130,27 +131,36 @@
                   selection (mousedown or Enter), not per keystroke. nil to disable.
    autofocus?   — when truthy, focus the input on mount (skipped on touch,
                   where autofocus would pop the on-screen keyboard)
+   remote-label — selected label from an independent server lookup
+   !request     — optional request atom for server search, nil for local filtering
+   busy?        — true while the current server request awaits its response
 
-   Pre:  every option has a non-nil :id; !atom holds an :id present in `options`,
-         or nil for no selection.
+   Pre: every option has a non-nil ID. Local selections belong to options.
+        Server selections resolve through remote-label. nil means no selection.
    Post: !atom holds an option's :id or nil — never free text. Typing filters
          without selecting; emptying the field and leaving clears the selection;
          any other uncommitted text is discarded rather than guessed at.
-   Invariant: an :id in !atom that is absent from `options` displays as blank
-         rather than as a stale label.
+   Local invariant: an ID absent from `options` displays as blank.
+   Server invariant: remote-label identifies the selected ID independently of options.
 
    A field that must accept text absent from `options` is a different widget —
    use `Suggest`, not a mode flag on this one."
-  [!atom options placeholder ?!committed autofocus?]
+  [!atom options placeholder ?!committed autofocus? remote-label !request busy?]
   (e/client
     (let [value (e/watch !atom)
-          selected-label (some (fn [o] (when (= (:id o) value) (:label o))) options)
+          selected-label (if !request remote-label
+                           (some (fn [o] (when (= (:id o) value) (:label o))) options))
           !search (atom nil)
           search (e/watch !search)
           !open? (atom false)
           open? (e/watch !open?)
           !active-idx (atom -1)
           active-idx (e/watch !active-idx)
+          edit! (fn [text]
+                  (reset! !search text)
+                  (when !request
+                    (reset! !request
+                      (when (some? text) {:query text :id (random-uuid)}))))
           ;; Touch: skip autofocus — it would pop the on-screen keyboard; the
           ;; learner taps the field when they actually mean to type.
           coarse? (e/watch viewport/!coarse?)
@@ -158,7 +168,7 @@
           ;; filtered when typing. Scrolls (max-height below). Keyed on open?,
           ;; not on search, so focus keeps the value visible without clearing it.
           filtered (when open?
-                     (if (some? search)
+                     (if (and (not !request) (some? search))
                        (vec (filter #(string/includes? (string/lower-case (str (:label %)))
                                        (string/lower-case search))
                               options))
@@ -171,6 +181,7 @@
           (dom/props {:type "text" :dir "auto"
                       :value (if (some? search) search (or selected-label ""))
                       :placeholder placeholder
+                      :aria-busy busy?
                       :class "input"
                       :style {:width "100%"}})
           ;; rAF focus-on-mount: HTML :autofocus is inert on dynamically
@@ -180,21 +191,23 @@
           ;; Focus opens the dropdown but keeps the value — search stays nil so
           ;; the input shows the current value; Tab-through no longer loses it.
           (dom/On "focus" (fn [_] (reset! !open? true)
-                            (reset! !active-idx -1)) nil)
+                            (reset! !active-idx -1)
+                            (when !request
+                              (reset! !request {:query "" :id (random-uuid)}))) nil)
           ;; Emptying the field and leaving is how the selection is cleared. Other
           ;; uncommitted text is dropped: the atom holds ids, so half-typed labels
           ;; have nothing to write, and guessing a match is what the id-keying
           ;; exists to prevent.
           (dom/On "blur" (fn [_] (when (= "" @!search) (reset! !atom nil))
                            (reset! !open? false)
-                           (reset! !search nil)
+                           (edit! nil)
                            (reset! !active-idx -1)) nil)
           ;; Typing filters only — the selection changes on definitive commit, so
           ;; consumers reacting to !atom (URL sync, server queries) see one change
           ;; per selection instead of one per keystroke.
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v)
-              (reset! !search v)
+              (edit! v)
               (reset! !active-idx -1)))
           (dom/On "keydown"
             (fn [e]
@@ -210,19 +223,19 @@
                   (and (= key "ArrowUp") (pos? n))
                   (do (.preventDefault e)
                     (reset! !active-idx (mod (dec active-idx) n)))
-                  (and (= key "Enter") (>= active-idx 0))
+                  (and (= key "Enter") (< -1 active-idx n))
                   (do (.preventDefault e)
                     (let [id (:id (nth filtered active-idx))]
                       (reset! !atom id)
                       (when ?!committed (reset! ?!committed id)))
-                    (reset! !search nil)
+                    (edit! nil)
                     (reset! !open? false)
                     (reset! !active-idx -1))
                   ;; An open dropdown owns Escape: it closes the dropdown and
                   ;; goes no further, so a modal around the field stays open.
                   (= key "Escape")
                   (do (when @!open? (.stopPropagation e))
-                    (reset! !search nil)
+                    (edit! nil)
                     (reset! !open? false)
                     (reset! !active-idx -1)))))
             nil))
@@ -234,9 +247,38 @@
               (let [id (:id (nth filtered i))]
                 (reset! !atom id)
                 (when ?!committed (reset! ?!committed id)))
-              (reset! !search nil)
+              (edit! nil)
               (reset! !open? false)
               (reset! !active-idx -1))))))))
+
+(e/defn Typeahead
+  "Select an ID from a local option collection. Keep small static domains here."
+  [!atom options placeholder ?!committed autofocus?]
+  (TypeaheadInput !atom options placeholder ?!committed autofocus? nil nil false))
+
+(e/defn SearchTypeahead
+  "Select an ID through bounded server suggestions.
+
+   Search receives {:query text :id uuid :scope scope-key} and returns
+   {:request request :options [{:id :label}]}. Bound the query inside Search.
+   Selected receives an ID and returns {:id id :label text}, or nil.
+   Both callbacks are Electric functions and must offload blocking reads.
+
+   Each edit has a new request identity. Debounce waits 200 ms. Response checks
+   reject old edits and old scopes. Selected labels use a separate lookup."
+  [!atom Search Selected scope-key placeholder ?!committed autofocus?]
+  (e/client
+    (let [!request (atom nil)
+          raw-request (e/watch !request)
+          request (when raw-request (assoc raw-request :scope scope-key))
+          debounced (first (e/as-vec (when request (e/Task (m/sleep 200 request)))))
+          response (first (e/as-vec (when debounced (Search debounced))))
+          value (e/watch !atom)
+          selected (first (e/as-vec (Selected value)))
+          options (search-state/matching-options request response)
+          label (search-state/matching-label value selected)
+          busy? (boolean (and request (not= request (:request response))))]
+      (TypeaheadInput !atom options placeholder ?!committed autofocus? label !request busy?))))
 
 (e/defn Suggest
   "Free-text input with a filtered suggestion dropdown.

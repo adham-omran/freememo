@@ -20,6 +20,7 @@
    [freememo.typeahead :as typeahead]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.entity-options :as entity-options])
    #?(:clj [freememo.knowledge-bulk :as bulk])))
 
 (def ^:private sort-keys
@@ -45,11 +46,16 @@
      :cljs nil))
 
 (defn list-entity-options*
-  "Lean [{:id :label}] of entities for the entity filter. With `source-id` (a
-   graph_topic_id) set, only entities appearing in that document."
-  [_kg-bump user-id source-id]
-  #?(:clj (mapv (fn [ent] {:id (:id ent) :label (:label ent)})
-            (db/list-kg-entities user-id nil 1000 source-id))
+  "Return bounded entity suggestions tagged with their request identity."
+  [_kg-bump user-id source-id request]
+  #?(:clj {:request request
+           :options (entity-options/search-options user-id source-id (:query request))}
+     :cljs nil))
+
+(defn selected-entity-option*
+  "Resolve the selected entity independently of the current suggestions."
+  [_kg-bump user-id entity-id]
+  #?(:clj (entity-options/selected-option user-id entity-id)
      :cljs nil))
 
 (defn run-question-action!*
@@ -138,9 +144,8 @@
           !editing (atom nil)               ; the question map being edited, or nil
           !stats (atom nil)                 ; {:question id} whose stats are open
           docs (e/server (e/Offload #(scope/list-source-docs* kg-bump user-id)))
-          ents (e/server (e/Offload #(list-entity-options* kg-bump user-id source-id)))
+          selected-entity (e/server (e/Offload #(selected-entity-option* kg-bump user-id entity-id)))
           doc-options (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
-          ent-options (mapv (fn [x] {:id (:id x) :label (:label x)}) ents)
           ;; Select 34px, Kind 84px, Facts 50px, State 110px. Actions 104px: Edit
           ;; (~44px) and ⋯ (~38px) with the cell's 4px gap inside 10px padding.
           grid-cols "34px minmax(180px,1.4fr) minmax(180px,1.4fr) 84px 50px 110px 104px"]
@@ -163,7 +168,12 @@
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
                   (typeahead/Typeahead !source-id doc-options "Filter by source…" nil nil))
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
-                  (typeahead/Typeahead !entity-id ent-options "Filter by entity…" nil nil))
+                  (typeahead/SearchTypeahead !entity-id
+                    (e/fn Search [request]
+                      (e/server (e/Offload #(list-entity-options* kg-bump user-id source-id request))))
+                    (e/fn Selected [id]
+                      (e/server (e/Offload #(selected-entity-option* kg-bump user-id id))))
+                    [kg-bump source-id] "Filter by entity…" nil nil))
                 (scope/FilterToggle "Flagged" flagged? !flagged?)
                 (scope/FilterToggle "Suspended" suspended? !suspended?)
                 (dom/span (dom/props {:class "knowledge-count"})
@@ -179,7 +189,7 @@
                       (fn [] (reset! !source-id nil))))
                   (when (some? entity-id)
                     (tape/FilterLabel
-                      (str "Entity: " (or (some #(when (= entity-id (:id %)) (:label %)) ent-options) entity-id))
+                      (str "Entity: " (or (:label selected-entity) entity-id))
                       (fn [] (reset! !entity-id nil))))
                   (when flagged? (tape/FilterLabel "Flagged" (fn [] (reset! !flagged? false))))
                   (when suspended? (tape/FilterLabel "Suspended" (fn [] (reset! !suspended? false))))
