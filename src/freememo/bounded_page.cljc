@@ -12,9 +12,9 @@
         start (* size (page-index requested (count items) size))]
     (subvec items start (min (count items) (+ start size)))))
 
-(e/defn PageControls [!page total size label]
+(e/defn PageControlsValue [requested total size label set-page!]
   (e/client
-   (let [page (page-index (e/watch !page) total size)
+   (let [page (page-index requested total size)
          last-page (page-index total total size)]
      (when (> total size)
        (dom/nav
@@ -22,10 +22,14 @@
         (dom/button
          (dom/props {:type "button" :class "btn btn-sm" :disabled (zero? page)})
          (dom/text "Previous")
-         (dom/On "click" (fn [_] (reset! !page (max 0 (dec page)))) nil))
+         (dom/On "click" (fn [_] (set-page! (max 0 (dec page)))) nil))
         (dom/span (dom/props {:role "status"})
                   (dom/text (str (inc (* size page)) "–" (min total (* size (inc page))) " of " total)))
         (dom/button
          (dom/props {:type "button" :class "btn btn-sm" :disabled (= page last-page)})
          (dom/text "Next")
-         (dom/On "click" (fn [_] (reset! !page (min last-page (inc page)))) nil)))))))
+         (dom/On "click" (fn [_] (set-page! (min last-page (inc page)))) nil)))))))
+
+(e/defn PageControls [!page total size label]
+  (e/client
+    (PageControlsValue (e/watch !page) total size label #(reset! !page %))))

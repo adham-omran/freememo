@@ -13,6 +13,7 @@
    [freememo.typeahead :as typeahead]
    [freememo.bounded-page :as page]
    [freememo.graph-lifecycle :as lifecycle]
+   [freememo.graph-filter :as filter]
    #?(:clj [freememo.entity-options :as entity-options])
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
@@ -77,24 +78,21 @@
         counts (predicate-counts scoped-edges)
         q (str/lower-case (str/trim (or query "")))]
     (->> predicates
-      (map-indexed (fn [idx [_id label]]
-                     {:idx idx :label (str label) :count (get counts idx 0)}))
+      (map-indexed (fn [idx [id label]]
+                     {:idx idx :id id :label (str label) :count (get counts idx 0)}))
       (filter #(or (str/blank? q)
                  (str/includes? (str/lower-case (:label %)) q)))
       (sort-by (juxt (comp - :count) (comp str/lower-case :label)))
       vec)))
 
-(defn- pred-checked? [pred-set idx]
-  (or (nil? pred-set) (contains? pred-set idx)))
+(defn- pred-checked? [selection id]
+  (filter/checked? selection id))
 
-(defn- set-pred-checked [pred-set idx n-preds checked?]
-  (let [full (set (range n-preds))
-        current (or pred-set full)
-        next (if checked? (conj current idx) (disj current idx))]
-    (when-not (= next full) next)))
+(defn- set-pred-checked [selection id checked?]
+  (filter/set-checked selection id checked?))
 
-(defn- selected-predicate-count [pred-set n-preds]
-  (if (nil? pred-set) n-preds (count pred-set)))
+(defn- selected-predicate-count [selection payload]
+  (filter/selected-count payload selection))
 
 (defn- source-title [payload source]
   (if (= source :all)
@@ -271,7 +269,7 @@
           (dom/label (dom/text "Relations"))
           (dom/span
             (dom/props {:class "graph-filter-meta"})
-            (dom/text (str (selected-predicate-count preds n-preds) " of " n-preds))))
+            (dom/text (str (selected-predicate-count preds payload) " of " n-preds))))
         (let [query (forms/Input* "" :type "search" :class "input"
                       :placeholder "Filter relations…" :aria-label "Filter relations")
               rows (relation-rows payload source query)
@@ -285,7 +283,7 @@
             (dom/button
               (dom/props {:type "button" :class "graph-text-action"})
               (dom/text "Select none")
-              (dom/On "click" (fn [_] (reset! !preds #{})) nil)))
+              (dom/On "click" (fn [_] (reset! !preds {:mode :include :ids #{}})) nil)))
           (dom/div
             (dom/props {:class "graph-relation-list tape-scroll"
                         :style {:--row-height (str relation-row-height "px")
@@ -297,9 +295,9 @@
               (dom/table
                 (dom/props {:style {:width "100%"}})
                 (e/for [i (Tape offset limit)]
-                  (let [{:keys [idx label count] :as row} (nth rows i nil)]
+                  (let [{:keys [id idx label count] :as row} (nth rows i nil)]
                     (when row
-                      (let [checked? (pred-checked? preds idx)]
+                      (let [checked? (pred-checked? preds id)]
                         (dom/tr
                           (dom/props {:style {:--order i}})
                           (dom/td
@@ -309,8 +307,7 @@
                                                     :aria-label (str "Show " label))]
                                 (when (not= checked? next-checked?)
                                   (reset! !preds
-                                    (set-pred-checked @!preds idx n-preds
-                                      next-checked?))))
+                                    (set-pred-checked @!preds id next-checked?))))
                               (dom/span
                                 (dom/props {:class "graph-relation-label" :dir "auto"})
                                 (dom/text label))
@@ -369,7 +366,7 @@
                         :aria-label (str "Remove document filter " source-title)})
             (dom/text (str source-title " ×"))
             (dom/On "click" (fn [_] (reset! !source :all)) nil)))
-        (when (not= selected-pred-count n-preds)
+        (when (some? (e/watch !preds))
           (dom/button
             (dom/props {:type "button"
                         :class "filter-chip filter-chip-active graph-active-filter"
@@ -384,7 +381,7 @@
             (dom/text (str "Connectedness " connectedness "+ ×"))
             (dom/On "click" (fn [_] (reset! !connectedness 1)) nil)))
         (when (or (not= source-title "All documents")
-                  (not= selected-pred-count n-preds)
+                  (some? (e/watch !preds))
                   (> connectedness 1))
           (dom/button
             (dom/props {:type "button" :class "graph-clear-filters"})
@@ -448,10 +445,10 @@
                                 (reset! !stats counts)))
                  :minimap-container @!minimap-node}))]
                 (e/on-unmount cancel!)))))
-        (case (apply-filters! ctx source preds connectedness) nil)
+        (case (apply-filters! ctx source (filter/renderer-indexes payload preds) connectedness) nil)
         (case (set-view! ctx view-mode selected-id depth) nil)
         (GraphToolbar ctx stats view-mode depth (source-title payload source)
-          (selected-predicate-count preds n-preds) n-preds
+          (selected-predicate-count preds payload) n-preds
           connectedness filters-open? !filters-open?
           !source !preds !connectedness)
         (when (= view-mode :neighborhood)
@@ -563,8 +560,10 @@
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           !selected-id (atom nil) selected-id (e/watch !selected-id)
-          !edge-page (atom 0) edge-page (e/watch !edge-page)
-          selection {:entity-id selected-id :page edge-page}
+          !edge-page (atom {:entity-id nil :page 0})
+          stored-page (e/watch !edge-page)
+          selection (filter/graph-selection selected-id stored-page)
+          edge-page (:page selection)
           payload (e/server (e/Offload #(graph-payload* kg-bump user-id selection)))
           node-count (count (:nodes payload))
           max-degree (reduce (fn [m node] (max m (nth node 2 0))) 1 (:nodes payload))
@@ -579,6 +578,12 @@
           !stats (atom {:nodes node-count :edges (count (:edges payload))})
           stats (e/watch !stats)
           !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)]
+      (case (when (not= selected-id (:entity-id stored-page))
+              (reset! !edge-page selection)) nil)
+      (case (when (not= source (filter/document-source payload source))
+              (reset! !source :all)) nil)
+      (case (when (not= connectedness (filter/connectedness connectedness max-connectedness))
+              (reset! !connectedness (filter/connectedness connectedness max-connectedness))) nil)
       (if (zero? node-count)
         (dom/div
           (GraphSearch user-id kg-bump !selected-id)
@@ -586,7 +591,7 @@
             (dom/button
               (dom/props {:type "button" :class "btn"})
               (dom/text "Show all concepts")
-              (dom/On "click" (fn [_] (reset! !edge-page 0) (reset! !selected-id nil)) nil)))
+              (dom/On "click" (fn [_] (reset! !edge-page {:entity-id nil :page 0}) (reset! !selected-id nil)) nil)))
           (GraphEmptyState navigate!))
         (dom/div
           (dom/props {:class "graph-page"})
@@ -599,8 +604,9 @@
               (dom/button
                 (dom/props {:type "button" :class "btn btn-sm"})
                 (dom/text "Show all concepts")
-                (dom/On "click" (fn [_] (reset! !edge-page 0) (reset! !selected-id nil)) nil)))
-            (page/PageControls !edge-page (get-in payload [:budget :total-edges] 0) 500 "Graph relations"))
+                (dom/On "click" (fn [_] (reset! !edge-page {:entity-id nil :page 0}) (reset! !selected-id nil)) nil)))
+            (page/PageControlsValue edge-page (get-in payload [:budget :total-edges] 0) 500 "Graph relations"
+              (fn [next-page] (reset! !edge-page {:entity-id selected-id :page next-page}))))
           (FiltersPanel payload !selected-id selected-id !source !preds preds
             !connectedness connectedness max-connectedness
             !view-mode view-mode filters-open?)
