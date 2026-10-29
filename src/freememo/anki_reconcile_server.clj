@@ -452,7 +452,7 @@
         :conflict-card-ids (filterv inside conflict-card-ids)
         :finished-note-ids []))))
 
-(defn finish-run!
+(defn- finish-steps!
   "Every server write a run makes after its batches, in one call and one order.
 
    The writes themselves are NOT here: each batch records its own through
@@ -509,3 +509,18 @@
                   (str/join ", " (map (fn [[k v]] (str (name k) " — " (:error v)))
                                    failures)))
                 "Sync complete")}))
+
+(defn finish-run!
+  "Apply finish writes only while the browser still owns its uncanceled run.
+   The two-argument form supports existing server maintenance callers."
+  ([user-id outcome]
+   (finish-steps! user-id outcome))
+  ([user-id run-id outcome]
+   (let [verdict (lease/report-progress! user-id run-id {:phase "finishing"})]
+     (if (= :continue verdict)
+       (finish-steps! user-id outcome)
+       {:success false
+        :verdict verdict
+        :cancelled? (= :cancel verdict)
+        :counts {}
+        :report "Sync stopped before finish writes."}))))

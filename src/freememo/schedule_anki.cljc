@@ -24,6 +24,7 @@
    deck-wide sweep."
   (:require [freememo.schedule-fsrs :as sf]
             [freememo.logging :as log]
+            [freememo.task-owner :as owner]
             ;; `anki-call!` is cljs-only, so a plain `:refer` fails to resolve
             ;; on the JVM peer and this whole namespace stops loading. The pure
             ;; half — `preset?`, `config-deck-candidates`, `ignore-before-ms`,
@@ -471,7 +472,7 @@
 
       The project's `run-*!` shape: a task plus two callbacks, never a promise
       chain, so a failure reaches an atom the reactive graph is watching rather
-      than an unhandled rejection. Returns nil — the atom is the output.
+      than an unhandled rejection. Returns its canceller for frame teardown.
 
       ONE atom, not two. A failure used to write an error atom AND
       `{:status :unreachable}`, which is one fact in two places; the status
@@ -482,12 +483,12 @@
       serve cached state with a staleness marker, so the failure callback
       writes `{:status :unreachable}` and the caller decides what to render."
      [note-ids push-deck !result]
-     ((acquire! note-ids push-deck)
+     (reset! !result nil)
+     (owner/start! (acquire! note-ids push-deck)
       (fn [res] (reset! !result res))
       (fn [err]
         (log/log-debug (str "[schedule-anki] unreachable: " (.-message err)))
-        (reset! !result {:status :unreachable :message (.-message err)})))
-     nil))
+        (reset! !result {:status :unreachable :message (.-message err)})))))
 
 (defn start-acquire!
   "Reactive-body-safe entry to `run-acquire!`.
@@ -497,9 +498,8 @@
    Functions in .cljc Files'). The body-level reader conditional is what keeps
    the symbol resolvable on CLJ while the work stays on CLJS.
 
-   Callers MUST wrap this in `e/snapshot` inside a keyed frame. It writes to
-   an atom and starts a fetch, and Electric re-evaluates reactive bodies
-   unpredictably — the same rule the JS-library-init section states."
+   Start once inside a keyed frame with `e/snapshot`.
+   Register the returned canceller with that frame's `e/on-unmount`."
   [note-ids push-deck !result]
   #?(:cljs (run-acquire! note-ids push-deck !result)
      :clj nil))

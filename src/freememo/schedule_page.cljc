@@ -77,9 +77,10 @@
       ;; call in this body would restart on every re-evaluation (CLAUDE.md,
       ;; 'JS Library Init Side Effects in e/defn'); the key makes a change of
       ;; user or of card set an honest unmount and mount instead.
-      (e/for-by identity [_k [user-id (count note-ids)]]
+      (e/for-by identity [_k [[user-id note-ids push-deck]]]
         (when (pos? (count note-ids))
-          (e/snapshot (sa/start-acquire! note-ids push-deck !acq))))
+          (let [cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq))]
+            (e/on-unmount cancel!))))
 
       ;; §7.3 — the ingest is sequenced, never a `(token)` sibling of the
       ;; server call. `do` is concurrent in Electric, so a sibling token would
