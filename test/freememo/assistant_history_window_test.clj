@@ -67,11 +67,14 @@
 (deftest chat-and-document-search-reach-options-outside-the-first-page
   (let [{:keys [uid root chat]} (fixture!)]
     (try
-      (jdbc/execute! db/ds
-        ["INSERT INTO topics(user_id,kind,title) SELECT ?,'basic','Document ' || i FROM generate_series(1,30000) i" uid])
-      (jdbc/execute! db/ds
-        ["INSERT INTO assistant_chats(user_id,root_topic_id,title,mode,provider_session_id)
-           SELECT ?,?,'Chat ' || i,'socratic',gen_random_uuid()::text FROM generate_series(1,1000) i" uid root])
+      (jdbc/with-transaction [tx db/ds]
+        (jdbc/execute! tx ["SET LOCAL session_replication_role = replica"])
+        (jdbc/execute! tx
+          ["INSERT INTO topics(user_id,kind,title) SELECT ?,'basic','Document ' || i FROM generate_series(1,30000) i" uid])
+        (jdbc/execute! tx
+          ["INSERT INTO assistant_chats(user_id,root_topic_id,title,mode,provider_session_id)
+             SELECT ?,?,'Chat ' || i,'socratic',gen_random_uuid()::text FROM generate_series(1,1000) i" uid root])
+        (jdbc/execute! tx ["SET LOCAL session_replication_role = origin"]))
       (is (= 50 (count (history/document-options uid root ""))))
       (is (= ["Document 30000"] (mapv :title (history/document-options uid root "Document 30000"))))
       (is (= 50 (count (:rows (history/chat-page uid root "" 0)))))
