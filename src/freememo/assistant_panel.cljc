@@ -104,7 +104,8 @@
                                     (when (some? query)
                                       (e/Offload
                                         #(hash-map :query query
-                                           :rows (assistant/referenceable-docs user-id root-topic-id query))))))]
+                                           :rows (mapv (fn [document] (assoc document :mention-query query))
+                                                   (assistant/referenceable-docs user-id root-topic-id query)))))))]
                 (if (= mention-query (:query result)) (:rows result) []))
               []))
           reference-document-count (e/server (count reference-documents))
@@ -134,8 +135,7 @@
 
       ;; Add one selected document as a chip. Its own e/defn, so this method
       ;; stays under the 64KB bytecode limit.
-      (composer/ReferencePickEffect picked reference-documents reference-document-count
-        draft !refs !draft !mention-index !at-open? !picked)
+      (composer/ReferencePickEffect picked !refs !draft !mention-index !at-open? !picked)
 
       (dom/div
         (dom/props {:class "assistant-panel"})
