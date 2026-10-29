@@ -46,7 +46,14 @@
   #?(:clj (curriculum/curriculum-detail refresh user-id curriculum-id) :cljs nil))
 
 (defn curriculum-schedule* [refresh user-id curriculum-id]
-  #?(:clj (curriculum/build-schedule refresh user-id curriculum-id) :cljs nil))
+  #?(:clj
+     (when-let [plan (curriculum/build-schedule refresh user-id curriculum-id)]
+       (-> (select-keys plan [:total-minutes :daily-minutes :feasible?
+                             :earliest-date :target-date :adjustment])
+         (assoc :tasks (into [] (comp (take 3)
+                                 (map #(select-keys % [:date :title :minutes])))
+                        (:tasks plan)))))
+     :cljs nil))
 
 (defn documents-for-picker* [refresh user-id]
   #?(:clj (curriculum/documents-for-picker refresh user-id) :cljs nil))
@@ -276,7 +283,7 @@
 (e/defn AddMaterialWizard [user-id block-id navigate! !open?]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          docs (e/server (documents-for-picker* refresh user-id))
+          docs (e/server (e/Offload #(documents-for-picker* refresh user-id)))
           !kind (atom nil)
           kind (e/watch !kind)
           !topic-id (atom nil)
@@ -641,7 +648,7 @@
   [user-id curriculum-id]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          plan (e/server (curriculum-schedule* refresh user-id curriculum-id))]
+          plan (e/server (e/Offload #(curriculum-schedule* refresh user-id curriculum-id)))]
       (when (e/server (some? plan))
        (dom/aside
         (dom/props {:class "curriculum-schedule-summary"})
