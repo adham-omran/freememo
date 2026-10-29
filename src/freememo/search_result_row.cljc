@@ -84,10 +84,13 @@
            (tooltip/set-tooltip! title title-text)
            (set! (.-textContent source) source-text)
            (tooltip/set-tooltip! source source-text)
-           (when (or (not (:rendered? previous)) (not= html (:html previous)))
-             (swap! state assoc :rendered? true :html html)
-             (math/set-html! snippet html
-               #(when (:alive? @state) (after-render snippet))))
+           (if (or (not (:rendered? previous)) (not= html (:html previous)))
+             (do
+               (swap! state assoc :rendered? true :html html)
+               (math/set-html! snippet html
+                 #(when (:alive? @state) (after-render snippet))))
+             (when-not (:visible? previous)
+               (after-render snippet)))
            (when (.contains node (.-activeElement js/document))
              (menu/publish-focus-target! node current-target)))
          (do
