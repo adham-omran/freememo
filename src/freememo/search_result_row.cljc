@@ -69,7 +69,9 @@
        (reset! state (assoc previous :row row :navigate! navigate!
                        :target current-target :visible? visible?))
        (set! (.-hidden node) (not visible?))
-       (set! (.-inert node) (not visible?))
+       (if visible?
+         (.removeAttribute node "inert")
+         (.setAttribute node "inert" ""))
        (if visible?
          (let [[badge-text badge-class] badge
                title-text (or (:title row) "(untitled)")
