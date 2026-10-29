@@ -212,11 +212,11 @@
           ;; Typing filters only — the selection changes on definitive commit, so
           ;; consumers reacting to !atom (URL sync, server queries) see one change
           ;; per selection instead of one per keystroke.
-          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v)
-              (edit! v)
+          (dom/On "input"
+            (fn [event]
+              (edit! (-> event .-target .-value))
               (reset! !open? true)
-              (reset! !active-idx -1)))
+              (reset! !active-idx -1)) nil)
           (dom/On "keydown"
             (fn [e]
               ;; Arrow keys guard on (pos? n): the dropdown can be closed while
@@ -335,11 +335,11 @@
           ;; so there is nothing uncommitted to discard.
           (dom/On "blur" (fn [_] (reset! !open? false)
                            (reset! !active-idx -1)) nil)
-          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v)
-              (reset! !atom v)
+          (dom/On "input"
+            (fn [event]
+              (reset! !atom (-> event .-target .-value))
               (reset! !open? true)
-              (reset! !active-idx -1)))
+              (reset! !active-idx -1)) nil)
           (dom/On "keydown"
             (fn [e]
               (let [key (.-key e)
