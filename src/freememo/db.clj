@@ -7586,7 +7586,7 @@
                                  [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                      :where [:and
                              [:= :root.user_id user-id]
-                             [:in :f.id (vec card-ids)]]})))))
+                             [:= :f.id [:any [:lift (long-array card-ids)]]]]})))))
 
 (defn- fully-deleted-groups-of
   "Rows of `group-table` that deleting `card-ids` would leave with no member.
@@ -7667,7 +7667,7 @@
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
-                               (seq card-ids) (conj [:in :f.id (vec card-ids)])
+                               (seq card-ids) (conj [:= :f.id [:any [:lift (long-array card-ids)]]])
                                (some? root-id)
                                (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
 
@@ -7689,7 +7689,7 @@
                      :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                      :where [:and
                              [:= :root.user_id user-id]
-                             [:in :f.id (vec card-ids)]
+                             [:= :f.id [:any [:lift (long-array card-ids)]]]
                              (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)]})))))
 
 (defn set-anki-conflicts!
@@ -7703,7 +7703,7 @@
 
          With `root-id` the clearing stops at the subtree. A branch run never
          looked at the other cards, so it knows nothing about their conflicts
-         and must not forget them."
+         and must not forget them. Marking also stays within that subtree."
   ([user-id card-ids] (set-anki-conflicts! user-id card-ids nil))
   ([user-id card-ids root-id]
    (jdbc/with-transaction [tx ds]
@@ -7714,17 +7714,19 @@
                       :where (cond-> [:and
                                       [:in :root_topic_id owned]
                                       [:not= :anki_conflict_at nil]]
-                               (seq card-ids) (conj [:not-in :id (vec card-ids)])
+                               (seq card-ids) (conj [:not [:= :id [:any [:lift (long-array card-ids)]]]])
                                (some? root-id)
                                (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))}))
        (when (seq card-ids)
          (jdbc/execute! tx
            (sql/format {:update :flashcards
                         :set {:anki_conflict_at [:now]}
-                        :where [:and
-                                [:in :root_topic_id owned]
-                                [:in :id (vec card-ids)]
-                                [:= :anki_conflict_at nil]]})))))))
+                        :where (cond-> [:and
+                                         [:in :root_topic_id owned]
+                                         [:= :id [:any [:lift (long-array card-ids)]]]
+                                         [:= :anki_conflict_at nil]]
+                                 (some? root-id)
+                                 (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))})))))))
 
 (defn clear-anki-conflicts!
   "Drop the conflict flag from `card-ids` only, leaving every other card's alone.
@@ -7738,7 +7740,7 @@
                    :where [:and
                            [:in :root_topic_id
                             {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
-                           [:in :id (vec card-ids)]]}))))
+                           [:= :id [:any [:lift (long-array card-ids)]]]]}))))
 
 (defn list-anki-conflicts
   "Card ids `user-id` currently has flagged as reconcile conflicts, oldest
