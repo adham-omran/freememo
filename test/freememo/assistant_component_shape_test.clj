@@ -39,8 +39,7 @@
 
 (deftest transcript-diffs-at-the-server-source
   (let [source (slurp "src/freememo/assistant_transcript.cljc")]
-    (is (str/includes? source
-          "(e/server\n              (e/diff-by :assistant_messages/id"))
+    (is (re-find #"\(e/server\s+\(e/diff-by :assistant_messages/id" source))
     (is (str/includes? source
           "(mapv assistant/transcript-message-view messages)")
       "the view is diffed, so a row's shape and content cross in one frame")
@@ -53,8 +52,7 @@
         composer-source (slurp "src/freememo/assistant_composer.cljc")
         row-source (slurp "src/freememo/assistant_panel_rows.cljc")
         data-source (slurp "src/freememo/assistant_panel_data.cljc")]
-    (is (str/includes? panel-source
-          "(e/server (assistant/referenceable-docs\n                      user-id root-topic-id mention-query))"))
+    (is (re-find #"\(e/server \(e/Offload #\(assistant/referenceable-docs\s+user-id root-topic-id mention-query\)\)\)" panel-source))
     (is (str/includes? panel-source "(e/server (count reference-documents))"))
     (is (str/includes? composer-source
           "(rows/ReferenceMenu at-open? reference-documents reference-document-count"))
@@ -95,8 +93,7 @@
 (deftest transcript-rows-never-share-a-branch-with-the-empty-state
   (testing "the row loop is always mounted, in an element of its own"
     (let [source (slurp "src/freememo/assistant_transcript.cljc")]
-      (is (str/includes? source
-            "(dom/props {:class \"assistant-panel__rows\"})\n          (e/for [display-message message-rows]"))
+      (is (re-find #"\(dom/props \{:class \"assistant-panel__rows\"\}\)\s+\(e/for \[display-message message-rows\]" source))
       (is (str/includes? source "(when (zero? message-count)"))
       (is (not (str/includes? source "(if (zero? message-count)"))
         "a branch from the starters to every row at once is what detached the rows")
