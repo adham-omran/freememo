@@ -570,19 +570,20 @@
 ;; count and the bulk actions can expand without ever reading :filtered-rows in
 ;; client scope — that read materializes all N ids on every filter change
 ;; (measured: 531 ms of main-thread block at 2.9k cards).
-(e/defn RowSelectCell [row-key member-ids !selected selected]
+(e/defn RowSelectCell [row-key member-ids !selected selected visible?]
   (e/client
     (dom/td
       (dom/props {:class "card-cell-center"})
       (dom/input
-        (dom/props {:type "checkbox" :aria-label "Select card"})
-        (set! (.-checked dom/node) (contains? selected row-key))
+        (dom/props {:type "checkbox" :aria-label "Select card" :disabled (not visible?)})
+        (set! (.-checked dom/node) (and visible? (contains? selected row-key)))
         (dom/On "click"
           (fn [e]
             (.stopPropagation e)
-            (swap! !selected #(if (contains? % row-key)
-                                (dissoc % row-key)
-                                (assoc % row-key member-ids))))
+            (when visible?
+              (swap! !selected #(if (contains? % row-key)
+                                  (dissoc % row-key)
+                                  (assoc % row-key member-ids)))))
           nil)))))
 
 ;; Diff cell — direction glyph + secondary Anki state icons; click → diff modal.
@@ -712,7 +713,33 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (when (#{"basic" "cloze"} kind)
         (stats/StatsOpenerButton !stats {:card id})))))
 
-(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay !stats]
+(defn install-card-row-guard!
+  "Reject events from hidden retained rows, including synthetic events."
+  [node]
+  #?(:cljs
+     (let [events ["click" "keydown" "contextmenu" "focusin"]
+           guard (fn [event]
+                   (when (.-hidden node)
+                     (.preventDefault event)
+                     (.stopImmediatePropagation event)))]
+       (doseq [event events] (.addEventListener node event guard true))
+       (fn [] (doseq [event events] (.removeEventListener node event guard true))))
+     :clj nil))
+
+(defn sync-card-row-focus!
+  "Clear hidden focus targets and refresh a recycled row's current target."
+  [node visible? target]
+  #?(:cljs
+     (if visible?
+       (when (.contains node (.-activeElement js/document))
+         (menu-surface/publish-focus-target! node target))
+       (do
+         (when (.contains node (.-activeElement js/document))
+           (.blur (.-activeElement js/document)))
+         (menu-surface/retract-focus-target! node)))
+     :clj nil))
+
+(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i visible? anki-overlay !stats]
   (e/client
     ;; Plain client-sited keyword lookups, NOT 16 × (e/server (:k card)).
     ;; Each e/server read is its own cross-peer reactive node; at 22 windowed
@@ -782,15 +809,18 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (dom/tr
         (dom/props {:class (str (when (even? i) "row-alt")
                              (review/row-class anki-flags))
+                    :hidden (not visible?) :inert (not visible?)
                     ;; The key freememo.row-motion follows when rows move. A
                     ;; card that comes back, from an undo, slides in.
-                    :data-row-key (pr-str row-key)
+                    :data-row-key (when visible? (pr-str row-key))
                     :data-enter (when (:fresh? card) "1")
                     ;; 0-based absolute index → per-row translateY (C1c)
                     :style {:--order i}})
+        (e/on-unmount (e/snapshot (install-card-row-guard! dom/node)))
+        (case (sync-card-row-focus! dom/node visible? target) nil)
         (menu-surface/RowMenu target)
         (dom/On "click" edit-card! nil)
-        (RowSelectCell row-key member-ids !selected selected)
+        (RowSelectCell row-key member-ids !selected selected visible?)
         (RowDiffCell (member-directions member-ids member-states anki-overlay)
           anki-flags
           (when-not group-row?
@@ -1457,6 +1487,28 @@ bytecode cap in the :prod build, which dev compilation never emits.
   [cards visible]
   (into #{} (map #(:row-key (nth cards %))) visible))
 
+(defn window-slots
+  "Keep bounded slot identities when a result window shrinks or becomes empty."
+  [window limit]
+  (mapv (fn [slot] {:slot slot :card (nth window slot nil)}) (range limit)))
+
+(defn card-slot-state
+  "Retain one hidden card per slot within the same account."
+  [previous scope incoming]
+  {:scope scope
+   :visible? (some? incoming)
+   :card (or incoming (when (= scope (:scope previous)) (:card previous)))})
+
+(e/defn LibraryCardSlot
+  [incoming navigate! !editing-card !diff-card !selected selected user-id anki-overlay !stats]
+  (e/client
+    (let [{:keys [card visible?]}
+          (e/with-cycle [previous nil]
+            (card-slot-state previous user-id incoming))]
+      (when card
+        (LibraryCardRow card navigate! !editing-card !diff-card !selected selected
+          user-id (:pos card) visible? anki-overlay !stats)))))
+
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
 ;; positioned sibling overlay rather than a branch that swaps the table out.
@@ -1512,19 +1564,19 @@ bytecode cap in the :prod build, which dev compilation never emits.
                       :style {:width "100%" :font-size (str font-sz "px")}})
           ;; Rows slide by key, whichever node paints them.
           (e/on-unmount (row-motion/install! dom/node))
-          ;; The window is diffed by row key on the server, so a row's card
-          ;; and its position cross together. A slot loop read each card by a
-          ;; client index, and a delete moved every slot below it to another
-          ;; card, so each of those rows went empty for the round trip.
+          ;; One bounded server window transfers card content and position together.
+          ;; Stable slots retain their row frames through empty results.
+          ;; Hidden slots keep at most one card and reject input.
           (let [arrived (e/server (row-motion/arrivals! !seen [rows-view-key offset]
                                     (visible-row-keys cards-vec visible-indexes)))
-                window (e/server
-                         (e/diff-by :row-key
-                           (window-card-summaries*
-                             (window-cards cards-vec visible-indexes offset limit arrived))))]
-            (e/for [card window]
-              (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                selected user-id (:pos card) anki-overlay !stats))))
+                slots (e/server
+                        (e/diff-by :slot
+                          (window-slots
+                            (window-card-summaries*
+                              (window-cards cards-vec visible-indexes offset limit arrived)) limit)))]
+            (e/for [slot slots]
+              (LibraryCardSlot (:card slot) navigate! !editing-card !diff-card !selected
+                selected user-id anki-overlay !stats))))
         ;; Sibling overlay — never a branch that unmounts the table above.
         (when (zero? row-count)
           (dom/div

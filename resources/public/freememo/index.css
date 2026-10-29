@@ -6194,6 +6194,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .cards-table-body .card-cell-glyph { font-size: 9px; }
 .cards-table-body .card-cell-glyph-remarked { color: var(--color-primary-text); }
 .cards-table-body tr { cursor: pointer; }
+.cards-table-body tr[hidden] { display: none; }
 .cards-table-body input[type="checkbox"] { cursor: pointer; }
 
 /* The tint shows the most urgent state: suspended, then marked, then
