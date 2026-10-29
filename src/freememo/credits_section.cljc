@@ -16,6 +16,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
    [freememo.motion :as motion]
+   [freememo.storage-copy :as storage-copy]
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
@@ -88,10 +89,7 @@
           ;; button press, rent does not.
           (dom/div
             (dom/props {:class "hint" :style {:margin-bottom "10px"}})
-            (dom/text (if rate-label
-                        (str "Spent by OCR and flashcard generation, and by stored videos at "
-                          rate-label ".")
-                        "Spent by OCR and flashcard generation.")))
+            (dom/text (storage-copy/credit-spend rate-label)))
 
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
           (dom/div

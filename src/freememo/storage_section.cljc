@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
+   [freememo.storage-copy :as storage-copy]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.storage-meter :as meter])
@@ -93,9 +94,4 @@
               (dom/text rate-label))))
         (dom/div
           (dom/props {:class "hint"})
-          (dom/text (str "Storage is consumed by uploaded PDFs, EPUBs, audio files, and videos. "
-                      (if rate-label
-                        (str "Stored videos are billed at this rate for as long as they are kept; "
-                          "everything else is free. ")
-                        "")
-                      "Delete documents from the Library to free space.")))))))
+          (dom/text (storage-copy/storage-usage rate-label)))))))
