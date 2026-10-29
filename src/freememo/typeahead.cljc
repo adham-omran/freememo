@@ -194,6 +194,13 @@
                             (reset! !active-idx -1)
                             (when !request
                               (reset! !request {:query "" :id (random-uuid)}))) nil)
+          (dom/On "click"
+            (fn [_]
+              (when-not @!open?
+                (reset! !open? true)
+                (reset! !active-idx -1)
+                (when !request
+                  (reset! !request {:query (or @!search "") :id (random-uuid)})))) nil)
           ;; Emptying the field and leaving is how the selection is cleared. Other
           ;; uncommitted text is dropped: the atom holds ids, so half-typed labels
           ;; have nothing to write, and guessing a match is what the id-keying
@@ -208,6 +215,7 @@
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v)
               (edit! v)
+              (reset! !open? true)
               (reset! !active-idx -1)))
           (dom/On "keydown"
             (fn [e]
