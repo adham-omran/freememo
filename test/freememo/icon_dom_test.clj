@@ -14,4 +14,5 @@
     (is (= "0 0 24 24" (:viewBox attrs)))
     (is (= "none" (:fill attrs)))
     (is (= "currentColor" (:stroke attrs)))
-    (is (= "2" (:stroke-width attrs)))))
+    (is (= "2" (:stroke-width attrs))))
+  (is (nil? (:class (icon-dom/root-attributes 16 false false)))))

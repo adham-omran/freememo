@@ -5,7 +5,7 @@
   {:width (str size) :height (str size) :viewBox "0 0 24 24"
    :fill "none" :stroke "currentColor" :stroke-width "2"
    :stroke-linecap "round" :stroke-linejoin "round"
-   :aria-hidden (if title "false" "true") :class class})
+   :aria-hidden (if title "false" "true") :class (when class class)})
 
 (defn install!
   "Update one SVG root and its trusted icon children. The Electric root owns
