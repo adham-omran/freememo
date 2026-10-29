@@ -68,6 +68,7 @@
   (e/client
     (e/for-by identity [_k [epoch]]
       (let [!timer (atom nil)]
+        (e/on-unmount #(util/cancel-debounce! !timer))
         (dom/input
           (dom/props {:type "search" :placeholder placeholder
                       :aria-label (str/replace placeholder #"…$" "")

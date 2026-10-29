@@ -140,6 +140,14 @@
 ;; derived value behind rapid client input so every keystroke doesn't fire a
 ;; query. Does not touch the input's own displayed value (callers keep that
 ;; on its own, un-debounced atom when the input is controlled).
+(defn cancel-debounce!
+  "Cancel the timer owned by this input frame."
+  [!timer]
+  #?(:cljs (when-let [timer @!timer]
+             (js/clearTimeout timer)
+             (reset! !timer nil))
+     :clj nil))
+
 (defn debounce!
   "Reset `!debounced` to `v` after `ms` of idle time, cancelling any pending
    timer from a previous call. `!timer` is a plain (atom nil) owned by the
@@ -147,8 +155,9 @@
   [!timer !debounced v ms]
   #?(:cljs
      (do
-       (when-let [t @!timer] (js/clearTimeout t))
-       (reset! !timer (js/setTimeout #(reset! !debounced v) ms)))
+       (cancel-debounce! !timer)
+       (reset! !timer (js/setTimeout #(do (reset! !timer nil)
+                                        (reset! !debounced v)) ms)))
      :clj nil))
 
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)

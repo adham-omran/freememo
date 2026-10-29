@@ -8,21 +8,14 @@
    #?(:cljs [freememo.citation-tooltip :as citation-tooltip])
    [freememo.command-bus :as bus]
    [freememo.math :as math]
+   [freememo.transcript-scroll :as transcript-scroll]
    [freememo.question-pin-state :as pin-state]))
 
 (defn pin-transcript!
-  "Scroll the transcript holding `node` to its bottom. CLJ no-op.
-
-   KaTeX typesets on a promise, so an answer carrying math grows AFTER the
-   transcript has re-pinned itself — which parked a finished answer with its
-   last lines below the fold. This runs on set-html!'s after-render, the one
-   moment the final height is known.
-
-   Pre:  `node` is inside a transcript, or inside nothing (a detached leaf).
-   Post: the enclosing transcript is at its bottom, or nothing happened."
+  "Follow delayed answer layout only while the reader follows new output."
   [node]
   #?(:cljs (when-let [transcript (.closest node ".assistant-panel__transcript")]
-             (set! (.-scrollTop transcript) (.-scrollHeight transcript))
+             (transcript-scroll/follow! transcript)
              nil)
      :clj nil))
 
