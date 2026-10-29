@@ -2685,7 +2685,7 @@
                       (history/checkpoints user-id (keep :checkpoint_id events)))]
     (-> page
       (dissoc :events)
-      (assoc :rows
+      (assoc :scope [chat-id before] :rows
         (mapv (fn [{:keys [kind message_id checkpoint_id inherited chat_title]}]
                 (case (long kind)
                   0 (cond-> (get messages message_id)
@@ -2695,6 +2695,13 @@
                   2 {:assistant_messages/id "fork" :assistant_messages/role "event"
                      :assistant_event/type "fork" :assistant_messages/content chat_title}))
           events)))))
+
+(defn current-transcript-page
+  "Hide a retained page until its chat and cursor match the current request."
+  [page chat-id before]
+  (if (= [chat-id before] (:scope page))
+    page
+    {:rows [] :more? false :cursor nil :pending? true}))
 
 (defn live-transcript-row*
   "Read and project only the active answer when a stream publication arrives."

@@ -74,8 +74,10 @@
                 WHERE user_id = ? AND root_topic_id = ? AND staged_delete_id IS NULL
                   AND (id = ? OR id = (SELECT parent_chat_id FROM assistant_chats WHERE id = ? AND user_id = ?)
                        OR parent_chat_id = ?)
-                ORDER BY (id = ?) DESC, id DESC LIMIT ?")
-         user-id root-topic-id chat-id chat-id user-id chat-id chat-id page-size]
+                ORDER BY (id = ?) DESC,
+                         (id = (SELECT parent_chat_id FROM assistant_chats WHERE id = ? AND user_id = ?)) DESC,
+                         id DESC LIMIT ?")
+         user-id root-topic-id chat-id chat-id user-id chat-id chat-id chat-id user-id page-size]
         read-options))))
 
 (def ^:private timeline-sql

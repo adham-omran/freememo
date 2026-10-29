@@ -135,3 +135,31 @@
     ((resolve 'freememo.assistant-transcript/retire-echo!) echo page 7 nil)
     (is (nil? @echo))
     (is (= {:chat 7 :before nil :trail []} @page))))
+
+(deftest a-retained-transcript-page-cannot-belong-to-another-request
+  (let [page {:scope [7 nil] :rows [{:assistant_messages/id 1}]
+              :more? true :cursor [2 2 0 1]}]
+    (is (= page (assistant/current-transcript-page page 7 nil)))
+    (is (= {:rows [] :more? false :cursor nil :pending? true}
+          (assistant/current-transcript-page page 8 nil)))
+    (is (:pending? (assistant/current-transcript-page page 7 [2 2 0 1])))))
+
+(deftest bounded-branch-navigation-always-includes-the-parent
+  (let [{:keys [uid root chat]} (fixture!)]
+    (try
+      (seed-messages! chat 1)
+      (let [parent-message (:id (one "SELECT max(id) AS id FROM assistant_messages WHERE chat_id=?" chat))
+            child (:id (one "INSERT INTO assistant_chats(user_id,root_topic_id,title,mode,parent_chat_id,fork_message_id,provider_session_id)
+                             VALUES (?,?,'Active child','socratic',?,?,?) RETURNING id"
+                         uid root chat parent-message (str (random-uuid))))]
+        (seed-messages! child 1)
+        (let [child-message (:id (one "SELECT max(id) AS id FROM assistant_messages WHERE chat_id=?" child))]
+          (jdbc/execute! db/ds
+            ["INSERT INTO assistant_chats(user_id,root_topic_id,title,mode,parent_chat_id,fork_message_id,provider_session_id)
+               SELECT ?,?,'Branch ' || n,'socratic',?,?,gen_random_uuid()::text
+               FROM generate_series(1,100) n" uid root child child-message]))
+        (let [options (history/branch-options uid root child)]
+          (is (= 50 (count options)))
+          (is (some #(= child (:id %)) options))
+          (is (some #(= chat (:id %)) options))))
+      (finally (cleanup! uid)))))

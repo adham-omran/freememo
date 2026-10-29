@@ -47,9 +47,11 @@
                 (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
                 stream-rev
                 (e/server (e/watch (us/get-atom user-id :assistant-stream)))
-                page
+                page-result
                 (e/server
                   (e/Offload #(assistant/transcript-page* assistant-rev user-id active (:before page-state))))
+                page
+                (e/server (assistant/current-transcript-page page-result active (:before page-state)))
                 live-row
                 (e/server
                   (e/Offload #(assistant/live-transcript-row* [assistant-rev stream-rev] user-id active)))
@@ -111,7 +113,7 @@
                                    :trail (conj (:trail page-state) (:before page-state))})) nil))
               (dom/button
                 (dom/props {:type "button" :class "btn btn-sm"
-                            :disabled (empty? (:trail page-state))})
+                            :disabled (or (empty? (:trail page-state)) (e/server (:pending? page)))})
                 (dom/text "Newer messages")
                 (dom/On "click"
                   (fn [_]
