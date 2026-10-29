@@ -146,6 +146,20 @@
     (is (= (:rows page) (:rows (assistant/current-transcript-page page 7 [2 2 0 1]))))
     (is (nil? (:cursor (assistant/current-transcript-page page 7 [2 2 0 1]))))))
 
+(deftest exact-old-document-title-remains-reachable-among-newer-prefix-matches
+  (let [{:keys [uid root]} (fixture!)]
+    (try
+      (one "INSERT INTO topics(user_id,kind,title) VALUES (?,'markdown','Reference-1') RETURNING id" uid)
+      (jdbc/execute! db/ds
+        ["INSERT INTO topics(user_id,kind,title)
+           SELECT ?,'markdown','Reference-' || n FROM generate_series(100,199) n" uid])
+      (let [defaults (history/document-options uid root "")
+            matches (history/document-options uid root "Reference-1")]
+        (is (not-any? #(= "Reference-1" (:title %)) defaults))
+        (is (= 50 (count matches)))
+        (is (= "Reference-1" (:title (first matches)))))
+      (finally (cleanup! uid)))))
+
 (deftest bounded-branch-navigation-always-includes-the-parent
   (let [{:keys [uid root chat]} (fixture!)]
     (try

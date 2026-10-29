@@ -20,8 +20,9 @@
        WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
          AND id <> ? AND kind NOT IN ('repo', 'score')
          AND lower(coalesce(title, 'Untitled')) LIKE ?
-       ORDER BY created_at DESC, id DESC LIMIT ?"
-     user-id current-root-id (literal-pattern query) page-size]
+       ORDER BY (lower(coalesce(title, 'Untitled')) = ?) DESC, created_at DESC, id DESC LIMIT ?"
+     user-id current-root-id (literal-pattern query)
+     (str/lower-case (str/trim (or query ""))) page-size]
     read-options))
 
 (defn chat-option [row]
