@@ -337,66 +337,13 @@
                           :fsrsParams5 (count (:fsrsParams5 cfg))
                           :fsrsParams6 (count (:fsrsParams6 cfg))})))))))))
 
-#?(:cljs
-   (defn revlog!
-     "§2.4 — the WHOLE revlog for `card-ids`, grouped by card id.
-
-      One path, and it names its cards. The namespace docstring records what
-      the deck-scoped incremental path lost.
-
-      Batched at `notes-info-batch` for the reason `cards-info!` batches: the
-      response carries one object per review, and a whole account's history in
-      a single response is megabytes (measured: 1624 cards, 6575 rows, 798 KB).
-
-      Post: a task of {card-id [{:id :ease :ivl :type} …]}, complete for every
-            card named. A card Anki holds with no reviews is absent from the
-            map, which `card-rows` reads as never-reviewed."
-     [card-ids]
-     (m/sp
-       (loop [batches (partition-all notes-info-batch (vec card-ids))
-              acc {}]
-         (if-let [b (first batches)]
-           (let [res (m/? (anki-call! "getReviewsOfCards" {:cards (vec b)}))]
-             (recur (rest batches)
-               ;; getReviewsOfCards keys its result by card id, which JSON
-               ;; renders as an object KEY — a string, which `anki-call!`'s
-               ;; keywordizing turns into a keyword. The rest of this feature
-               ;; keys on the numeric id, so the key is read back out of the
-               ;; keyword's name.
-               (reduce-kv (fn [m k v] (assoc m (js/parseInt (name k) 10) (vec v)))
-                 acc res)))
-           acc)))))
 
 #?(:cljs
    (defn acquire!
-     "The whole client-side acquisition, in one task (§2).
-
-      This stops at RAW rows. §9.4.1 puts the AnkiConnect I/O in the browser
-      because only the browser can reach localhost:8765, and §9.4.2 puts the
-      replay on the server because the branch tree of §4.6 would occupy the
-      browser's only thread. So this returns `:infos` and `:revlog` verbatim
-      and calls `card-rows` nowhere.
-
-      Pre : `note-ids` are `flashcards.anki_note_id` values for the document's
-            pushed cards. `push-deck` is the deck FreeMemo pushes this user's
-            cards to, or nil.
-      Post: a task of one of
-              {:status :ok :deck :deck-config :fingerprint :infos :revlog
-               :card-count :note-card-ids}
-              {:status :unsupported :missing [action …]}      ; §8.1, cause 1
-              {:status :no-deck}                              ; cards in no deck
-              {:status :filtered-deck :deck}                  ; no preset reachable
-              {:status :no-fsrs :deck :param-counts {…}}      ; §8.1, causes 2 and 3
-              {:status :no-cards}                             ; §8.3
-      Post: `:revlog` is always the WHOLE history of every card named, so the
-            server replays from fresh and no flag can be read backwards.
-
-      The deck is inferred, ranked by how many of the document's cards each
-      holds. `push-deck` is a LAST resort, tried only when no deck the cards
-      are actually in yields a preset — which happens when the user gathers the
-      whole document into a filtered deck to study it. Trying it first would
-      let a stale setting name a deck governing none of these cards, which is
-      why §2 rejected asking the user in the first place."
+     "Read card metadata and send complete histories through acknowledged replay chunks.
+      Each history starts from fresh state. Filtered decks preserve every named card.
+      The server receives at most 1,000 reviews per replay request.
+      Return compact acquisition metadata after every card finishes."
      [note-ids push-deck consume!]
      (m/sp
        (let [probe (m/? (probe!))]

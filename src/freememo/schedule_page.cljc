@@ -65,8 +65,9 @@
               [t ?error] (e/Token (:id item))]
           (when t
             (let [result (e/server (e/Offload #(sched/ingest-history-chunk! user-id data)))]
-              (e/on-unmount #(request/resolve! item result))
-              (t))))))))
+              (case result
+                (do (e/on-unmount #(request/resolve! item result))
+                    (t))))))))))
 
 (e/defn AnkiSync [user-id]
   (e/client

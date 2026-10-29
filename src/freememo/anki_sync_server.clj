@@ -315,12 +315,12 @@
   "Flag live Anki note state against local cards, for the Library rows.
 
    pre:  present-notes [{:note-id long
-                         :stripped-fields [str ...]   ; strip-html'd, Anki field order
+                         :field-fingerprints [hex ...] ; normalized text hashes in field order
                          :tags [str ...]
-                         :remark string or nil
+                         :remark boolean
                          :suspended {:total n :suspended n}} ...]
          absent-note-ids [long ...] — accepted and IGNORED, see below.
-         Both derive from ONE notesInfo batch on the client.
+         Both derive from a complete sequence of validated client batches.
    post: {:success true
           :per-card {card-id {:anki-modified bool, :marked bool, :remarked bool,
                               :suspended {:total n :suspended n}}}  ; SPARSE — flagged cards only

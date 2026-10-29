@@ -5494,13 +5494,10 @@
   [root-id merged page-numbers]
   (jdbc/with-transaction [tx ds]
     (let [rows (jdbc/execute! tx
-                 (sql/format {:select [:id :page_number :content]
-                              :from [:topics]
-                              :where [:and
-                                      [:= :parent_id root-id]
-                                      [:= :kind "page"]
-                                      [:is :staged_delete_id nil]
-                                      [:is-not :page_number nil]]}))
+                 ["SELECT id,page_number,content FROM topics
+                   WHERE parent_id=? AND kind='page' AND staged_delete_id IS NULL
+                     AND page_number=ANY(?)"
+                  root-id (long-array (remove nil? page-numbers))])
           by-page (into {} (map (juxt :topics/page_number identity)) rows)
           ;; The caller's list is authoritative for WHICH pages to split into.
           ;; Intersecting it with the live rows keeps a page deleted in another

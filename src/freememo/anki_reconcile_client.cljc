@@ -14,7 +14,7 @@
      4. `read-back!`   notesInfo again, over ONLY the notes step 3 touched
      5. (server records the batch — note ids and baselines)
      then once:
-     6. `delete!`      deleteNotes for tombstones the plan cleared
+     6. `finish-io/finish!` commits bounded pull and deletion chunks
      7. (server applies pulls, backfill, conflicts and tombstones)
 
    Step 4 is the one that looks redundant and is not. Anki normalises HTML on
@@ -107,8 +107,7 @@
                                             #(get kind-by-card (:card-id %))))
                               pairs)
                card-by-note (into {} (map (juxt :anki-note-id :card-id)) pairs)
-               notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                       :keywordize-keys true)]
+               notes (m/? (reads/read-notes! helpers/anki-call! note-ids))]
            (into []
              (keep (fn [n]
                      (when-let [nid (:noteId n)]
@@ -119,20 +118,6 @@
                           :anki-mod mod}))))
              notes))))))
 
-#?(:cljs
-   (defn delete!
-     "Remove notes from Anki.
-      pre : `note-ids` are tombstoned notes the plan classified `:delete-anki`.
-      post: task of the ids that were sent. AnkiConnect's deleteNotes ignores an
-            id it does not hold, so a note already gone is not an error — the
-            caller drops those tombstones either way."
-     [note-ids]
-     (if (empty? note-ids)
-       (m/sp [])
-       (m/sp
-         (m/? (helpers/anki-call! "deleteNotes" {:notes (vec note-ids)}))
-         (log/log-debug (str "[reconcile] deleted " (count note-ids) " notes"))
-         (vec note-ids)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Drivers — plain fns that run a task and land its result in atoms.
@@ -220,27 +205,6 @@
        nil)
      :clj nil))
 
-(defn run-deletes!
-  "Remove the tombstoned notes, after every batch.
-
-   The deletes run AFTER the writes deliberately. Both touch the same collection,
-   and a delete that raced a create could remove a note the same run had just
-   made if Anki reused the id.
-
-   post (async): `:!finished-note-ids` ← every tombstone this run settled, or
-         `:!error` and phase `:error`."
-  [note-ids-to-delete note-ids-to-drop recon]
-  #?(:cljs
-     (let [g (swap! !run-gen inc)]
-       (run-task! recon
-         (delete! note-ids-to-delete)
-         g
-         (fn [deleted]
-           (reset! (:!finished-note-ids recon)
-             (vec (concat deleted note-ids-to-drop))))
-         (fn [err] (fail! recon (str "Anki delete failed: " (.-message err)))))
-       nil)
-     :clj nil))
 
 (defn run-finish-io!
   "Read and commit pulls and deletes through bounded acknowledged requests."
@@ -260,16 +224,3 @@
                  (reset! (:!finished-note-ids recon) (:finished-note-ids result)))))
          (fn [err] (fail! recon (str "Anki finish failed: " (.-message err))))))
      :clj nil))
-
-(defn notes-for
-  "The subset of a scan's notes the server needs to apply pulls.
-
-   pre : `notes-by-id` is `scan!`'s whole batch; `note-ids` are the notes of the
-         plan's `:pull` cards.
-   post: {note-id note} for those ids only.
-
-   Sending the whole batch back would double the run's wire cost for no gain —
-   the server builds every update itself, and only needs the handful of notes
-   whose cards it decided to pull."
-  [notes-by-id note-ids]
-  (select-keys notes-by-id (vec note-ids)))

@@ -67,8 +67,9 @@
               [t ?error] (e/Token (:id item))]
           (when t
             (let [result (e/server (e/Offload #(finish-request!* user-id run-id root-id data)))]
-              (e/on-unmount #(request/resolve! item result))
-              (t))))))))
+              (case result
+                (do (e/on-unmount #(request/resolve! item result))
+                    (t))))))))))
 
 (defn toast!* [user-id level message]
   #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)

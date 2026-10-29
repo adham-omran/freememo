@@ -7,11 +7,9 @@
    [freememo.anki-digest :as digest]
    [freememo.task-request :as request]
    [freememo.task-owner :as owner]
-   [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.client-state :as cs]
    [freememo.logging :as log]
-   [freememo.math :as math]
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.user-state :as us])))
 
@@ -54,8 +52,9 @@
               [t ?error] (e/Token (:id item))]
           (when t
             (let [ids (e/server (mapv :note-id (take 500 (drop offset manifest))))]
-              (e/on-unmount #(request/resolve! item ids))
-              (t))))))))
+              (case ids
+                (do (e/on-unmount #(request/resolve! item ids))
+                    (t))))))))))
 
 (e/defn AnkiOverlay [user-id manifest !status !payload !check-tick]
   (e/client
