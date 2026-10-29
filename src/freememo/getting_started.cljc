@@ -111,8 +111,8 @@
       (do (navigate! :quiz)
           (spotlight/show! {:anchors [:quiz-start]
                             :route-key (spotlight/route-key :quiz nil)
-                            :title "Review a card"
-                            :body "Review your new cards here."}))
+                            :title "Review a basic or cloze card"
+                            :body "Quiz reviews basic and cloze cards here. If you made another kind, create a basic or cloze card first."}))
 
       :anki
       (do (open-settings! "settings-anki")

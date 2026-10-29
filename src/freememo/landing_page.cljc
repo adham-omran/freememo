@@ -3,10 +3,9 @@
    hero → three-loop diagram → objection rebuttal → feature grid → FAQ →
    early-user pact → footer.
 
-   The page's core claim is that FreeMemo runs three review systems, one per
-   kind of knowledge — reading on a priority queue, questions on FSRS-6, cards
-   on Anki's own scheduler. Every string here must trace to a shipped
-   capability; see plans/reposition-landing-copy-three-loops.md.
+   The page describes reading, in-app practice, and optional Anki sync.
+   Every factual claim must trace to a shipped capability.
+   See plans/reposition-landing-copy-three-loops.md.
 
    **The words live in `freememo.landing-copy`, not here.** This namespace owns
    structure and markup only. `freememo.crawler-page` renders the same data to
@@ -72,7 +71,7 @@
         (dom/a
           (dom/props {:href "/auth/google"
                       :class "btn btn-primary landing-signin"})
-          (dom/text "Sign in"))))))
+          (dom/text "Sign in with Google"))))))
 
 (e/defn Hero [auth-error auth-mode]
   (e/client
@@ -96,11 +95,16 @@
           (dom/a
             (dom/props {:href "/auth/google"
                         :class "btn btn-primary landing-cta-primary"})
-            (dom/text "Get early access →")))
+            (dom/text "Sign in with Google →")))
         (dom/a
           (dom/props {:href "#how-it-works"
                       :class "landing-cta-secondary"})
-          (dom/text "How it works ↓"))))))
+          (dom/text "How it works ↓")))
+      (dom/p
+        (dom/props {:class "hint"})
+        (dom/text (if (show-google? auth-mode)
+                    "Use a Google account to sign in. Anki sync needs Anki Desktop and AnkiConnect on this computer."
+                    "Use credentials from your server administrator. Anki sync needs Anki Desktop and AnkiConnect on this computer."))))))
 
 (e/defn ThreeLoops []
   ;; Carries id="how-it-works" — Hero's secondary CTA anchors to it. Renaming

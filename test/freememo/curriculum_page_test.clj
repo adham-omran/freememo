@@ -149,10 +149,15 @@
       (str "An e/fn argument needs a capitalized parameter: " (pr-str @bad)))))
 
 (deftest curriculum-delete-dialog-states-the-recovery-boundary
-  (let [source (slurp "src/freememo/curriculum_page.cljc")]
+  (let [source (slurp "src/freememo/curriculum_page.cljc")
+        dialog (first (forms-matching
+                        #(and (seq? %) (= 'modal/ConfirmModal (first %))
+                           (= "Delete curriculum?" (nth % 2 nil)))
+                        page-source-forms))
+        message (apply str (filter string? (rest (nth dialog 3 nil))))]
     (is (.contains source "stage-curriculum-for-deletion!")
       "the dialog must stage the root instead of physically deleting it")
-    (is (.contains source "You can undo this for 12 hours.")
+    (is (.contains message "You can undo this for 12 hours.")
       "the dialog must state the recovery deadline")
-    (is (.contains source "Imported documents stay.")
+    (is (.contains message "Imported documents stay.")
       "the dialog must state that imported sources remain")))

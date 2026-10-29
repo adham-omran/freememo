@@ -15,9 +15,9 @@
    {:id :extract :done-key :extracted? :label "Extract a passage"
     :text "Select a passage, then press Extract."}
    {:id :cards :done-key :carded? :label "Make flashcards"
-    :text "Generate cards from an extract."}
-   {:id :quiz :done-key :reviewed? :label "Review a card"
-    :text "Quiz asks each card when it is due."}
+    :text "Generate basic or cloze cards from an extract to review in Quiz."}
+   {:id :quiz :done-key :reviewed? :label "Review a basic or cloze card"
+    :text "Quiz reviews basic and cloze cards when they are due. Other card kinds can go to Anki."}
    {:id :anki :done-key :anki-pushed? :label "Send cards to Anki" :optional? true
     :text "Optional: send your cards to Anki on this computer."}])
 
