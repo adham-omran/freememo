@@ -19,3 +19,10 @@
   (let [scope (:save-scope editor-state)]
     {:html html :topic-id (or (:editor-doc-id scope) (:topic-id editor-state))
      :save-scope scope :edit-id edit-id}))
+
+(defn save-needed? [dirty user-id saved-edit-id local-saved-id]
+  (and (some? dirty)
+       (= user-id (get-in dirty [:save-scope :user-id]))
+       (some? (:edit-id dirty))
+       (not= (:edit-id dirty) saved-edit-id)
+       (not= (:edit-id dirty) local-saved-id)))

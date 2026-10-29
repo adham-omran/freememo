@@ -29,3 +29,10 @@
     (is (= scope (:save-scope dirty)))
     (is (not= (:save-scope requested) (:save-scope dirty)))
     (is (= (vec (range 1 21)) (get-in dirty [:save-scope :page-numbers])))))
+
+(deftest a-remounted-editor-does-not-replay-an-acknowledged-edit
+  (let [dirty {:edit-id "saved" :save-scope {:user-id 7}}]
+    (is (not (window/save-needed? dirty 7 "saved" nil)))
+    (is (window/save-needed? dirty 7 "previous" nil))
+    (is (not (window/save-needed? dirty 8 "previous" nil)))
+    (is (not (window/save-needed? nil 7 "saved" nil)))))

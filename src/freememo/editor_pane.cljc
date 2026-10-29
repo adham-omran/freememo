@@ -14,6 +14,7 @@
    [freememo.commands :as commands]
    [freememo.merged-page-bridge :refer [MergedPageBridge]]
    [freememo.merged-window-navigation :refer [MergedWindowNavigation]]
+   [freememo.merged-window :as merged-window]
    [freememo.editor-pin-layer :refer [EditorPinLayer]]
    [freememo.reading-anchor :as reading-anchor]
    [freememo.reading-position-view :refer [ReadingPosition]]
@@ -190,9 +191,8 @@
             ;; The dirty tag is the DOCUMENT id, which merged reading makes
             ;; distinct from the page — see doc-context/editor-doc-id.
             doc-id (or dctx/editor-doc-id topic-id)
-            needs-save? (and (some? dirty-data)
-                          (= user-id (get-in dirty-data [:save-scope :user-id]))
-                          (not= (:edit-id dirty-data) (e/watch !last-saved)))
+            needs-save? (merged-window/save-needed? dirty-data user-id
+                          (e/watch editor/!saved-edit-id) (e/watch !last-saved))
             save-result (when needs-save?
                           (log/log-debug (str "EditorPane auto-save topic-id=" topic-id))
                           (e/server
