@@ -204,12 +204,7 @@
      :verdict (lease/report-progress! user-id run-id progress)}))
 
 (def finish-chunk-size
-  "Cards per transaction in `finish-run!`'s pulls and backfill.
-
-   Not a cost bound: the writers are set-based, so one chunk of 34,710 would
-   cost little more than seven. The bound is what a stop keeps. A stop during
-   the finish phase loses only the chunk it was in. 5,000 is an inference, to be
-   checked against per-chunk times from a real run."
+  "Cards per set-based finish transaction. A stopped run retains completed chunks."
   500)
 
 (defn- write-chunks!
