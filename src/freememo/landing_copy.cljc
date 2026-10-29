@@ -107,7 +107,7 @@
    `{:t text}`, optionally with `:href`. Both renderers must handle both shapes —
    a renderer that assumes a string drops the answer that has a link."
   [["What does it cost?"
-    "There is no app subscription during pre-production. Hosted AI calls spend credits, including OCR, card generation, transcription, fact distillation, and answer grading. When hosted storage metering is enabled, stored files also spend credits over time, even with AI off. Settings shows the storage rate and credit balance. At zero balance, video playback pauses and a grace period starts. Video files can be removed after that period; transcripts, extracts, and cards stay. Self-hosting uses your own OpenRouter key and storage configuration."]
+    "There is no app subscription during pre-production. Hosted AI calls spend credits, including OCR, card generation, transcription, fact distillation, and answer grading. When hosted storage metering is enabled, stored files also spend credits over time, even with AI off. Settings shows the storage rate and credit balance. With storage metering enabled, a zero balance pauses video playback and starts a grace period. Video files can be removed after that period; transcripts, extracts, and cards stay. Self-hosting uses your own OpenRouter key and storage configuration."]
    ["Where does my reading go?"
     "In the hosted app, your documents, extracted text, and cards live on the FreeMemo server, tied to your account. A Zotero import goes there once you pick it. Anki sync pushes copies into your local collection over AnkiConnect, and edits you make there pull back. Your browser connects to Zotero and Anki locally. Self-hosted and desktop local libraries use the storage you run."]
    ["Will my cards work in regular Anki?"

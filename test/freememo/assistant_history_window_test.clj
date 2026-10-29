@@ -127,3 +127,11 @@
                     :assistant_messages/content "Partial"}]
           (is (= [terminal] (assistant/transcript-rows {:rows [terminal]} late)))))
       (finally (cleanup! uid)))))
+
+(deftest a-submitted-turn-keeps-the-latest-page-after-echo-retirement
+  (require 'freememo.assistant-transcript)
+  (let [echo (atom {:id "submitted" :text "Question"})
+        page (atom {:chat 7 :before [2 300 0 150] :trail [nil]})]
+    ((resolve 'freememo.assistant-transcript/retire-echo!) echo page 7 nil)
+    (is (nil? @echo))
+    (is (= {:chat 7 :before nil :trail []} @page))))

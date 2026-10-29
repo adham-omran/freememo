@@ -2414,35 +2414,11 @@
           :content answer-context-text)
         card-count))))
 
-(def ^:private max-referenceable-files
-  "Most repo files the @ picker lists for one query. A repository can hold
-   thousands of files, so the learner narrows the list by typing."
-  50)
-
-(def ^:private unreferenceable-kinds
-  "Root kinds the @ picker never offers, because a reference to one sends the
-   model no text. A repository root holds none: `referenceable-docs` offers
-   its files instead. A score holds a sheet-music PDF and a recording. No
-   import makes text from either."
-  #{"repo" "score"})
-
 (defn referenceable-docs
-  "Return what a learner can reference from a chat: root documents, then repo
-   files.
+  "Return at most 50 owned documents and repository files matching query text.
 
-   A repository root holds no text of its own. Its files live in `topic_code`
-   under commit and directory nodes, so a reference to the root gave the model
-   nothing. The list offers the files instead, from the newest commit of each
-   repository, and only those with stored source. A blank query lists no files:
-   the panel computes this list while the menu is closed, and a bare `@` would
-   bury the documents under files the learner did not ask for.
-
-   Pre: `query` is the unfinished text after `@`, or an empty string.
-   Post: the documents exclude the open document and every root of an
-         `unreferenceable-kinds` kind, in newest-first order. At most
-         `max-referenceable-files` files follow them, each titled
-         `<repo title>/<path>`.
-   Invariant: every result has an `:id` and a displayable `:title`."
+   Repository roots and scores hold no referenceable text. Blank queries return
+   document suggestions only. The panel performs no query while the menu is closed."
   ([user-id current-root-topic-id]
    (referenceable-docs user-id current-root-topic-id ""))
   ([user-id current-root-topic-id query]

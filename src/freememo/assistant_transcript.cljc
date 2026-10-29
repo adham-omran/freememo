@@ -15,6 +15,14 @@
   [node _dependency]
   (transcript-scroll/follow! node))
 
+(defn retire-echo!
+  "Keep a submitted turn on the latest page after its durable row arrives."
+  [!echo !page chat node]
+  (reset! !page {:chat chat :before nil :trail []})
+  (reset! !echo nil)
+  (transcript-scroll/resume! node)
+  nil)
+
 (e/defn AssistantTranscript
   [{:keys [sending? echo active mode-entry web-search? active-run user-id page-topic-id
            root-topic-id seeded? annotations]}
@@ -23,7 +31,7 @@
   (e/client
     (let [!page (atom {:chat nil :before nil :trail []})
           stored-page (e/watch !page)
-          page-state (if (= active (:chat stored-page)) stored-page
+          page-state (if (and (= active (:chat stored-page)) (nil? echo)) stored-page
                        {:chat active :before nil :trail []})
           !following (atom true)
           following? (e/watch !following)]
@@ -65,7 +73,7 @@
             ;; from painting empty between the echo leaving and the row arriving.
             ;; It also stops a completed echo reappearing after a chat switch.
             (when (and echo echo-arrived?)
-              (reset! !echo nil))
+              (retire-echo! !echo !page active dom/node))
             ;; The answer selection menu, one per transcript (plans/assistant-
             ;; answer-selection-actions.md §5.1.4). Every argument is stable, so it
             ;; installs once and tears down with the transcript.
