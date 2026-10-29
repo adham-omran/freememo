@@ -50,8 +50,8 @@
   #?(:clj (recon/record-batch! user-id run-id root-id entries local-digests progress)
      :cljs nil))
 
-(defn finish-run!* [user-id outcome]
-  #?(:clj (recon/finish-run! user-id outcome) :cljs nil))
+(defn finish-run!* [user-id run-id outcome]
+  #?(:clj (recon/finish-run! user-id run-id outcome) :cljs nil))
 
 (defn toast!* [user-id level message]
   #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
@@ -277,23 +277,27 @@
             root-id @(:!root-id recon)
             [t _] (e/Token :reconcile-finish)]
         (when t
-          ;; Display only: the verdict cannot stop anything now, because the
-          ;; deletes are the last Anki write and the rest is local.
-          (case (e/server (lc/report-progress!* user-id run-id {:phase "finishing"}))
-            (case (rc/run-deletes! (:note-ids-to-delete p) (:note-ids-to-drop p) recon)
-              (let [finished (e/watch (:!finished-note-ids recon))]
-                (when finished
-                  (let [outcome {:pull-card-ids (:pull-card-ids p)
-                                 :pull-notes (rc/notes-for (:notes-by-id scan) (:pull-note-ids p))
-                                 :digests (:digests scan)
-                                 :backfill (:backfill p)
-                                 :conflict-card-ids (:conflict-card-ids p)
-                                 :finished-note-ids finished
-                                 :root-id root-id}
-                        result (e/server (e/Offload #(finish-run!* user-id outcome)))]
-                    (case (reset! (:!result recon) result)
-                      (do (e/on-unmount #(reset! (:!phase recon) :done))
-                          (t)))))))))))))
+          (let [verdict (e/server (lc/report-progress!* user-id run-id {:phase "finishing"}))]
+            (if (not= :continue verdict)
+              (do (e/on-unmount #(halt! recon verdict))
+                  (t))
+              (case (rc/run-deletes! (:note-ids-to-delete p) (:note-ids-to-drop p) recon)
+                (let [finished (e/watch (:!finished-note-ids recon))]
+                  (when finished
+                    (let [outcome {:pull-card-ids (:pull-card-ids p)
+                                   :pull-notes (rc/notes-for (:notes-by-id scan) (:pull-note-ids p))
+                                   :digests (:digests scan)
+                                   :backfill (:backfill p)
+                                   :conflict-card-ids (:conflict-card-ids p)
+                                   :finished-note-ids finished
+                                   :root-id root-id}
+                          result (e/server (e/Offload #(finish-run!* user-id run-id outcome)))]
+                      (if (:verdict result)
+                        (do (e/on-unmount #(halt! recon (:verdict result)))
+                            (t))
+                        (case (reset! (:!result recon) result)
+                          (do (e/on-unmount #(reset! (:!phase recon) :done))
+                              (t)))))))))))))))
 
 (e/defn ReconcileOutcome
   "Reports the run, once, then releases the lease.
