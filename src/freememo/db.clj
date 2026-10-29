@@ -7875,12 +7875,10 @@
   (if (empty? note-ids)
     []
     (jdbc/execute! ds
-      (sql/format {:select [:f.id :f.kind :f.question :f.answer :f.cloze :f.anki_note_id]
-                   :from [[:flashcards :f]]
-                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
-                   :where [:and
-                           [:= :root.user_id user-id]
-                           [:in :f.anki_note_id (vec note-ids)]]}))))
+      ["SELECT f.id, f.kind, f.question, f.answer, f.cloze, f.anki_note_id
+          FROM flashcards f JOIN topics root ON f.root_topic_id = root.id
+         WHERE root.user_id = ? AND f.anki_note_id = ANY(?)"
+       user-id (long-array note-ids)])))
 
 (defn delete-flashcard!
   "Delete flashcard `card-id` iff owned by `user-id` (via its root topic).
