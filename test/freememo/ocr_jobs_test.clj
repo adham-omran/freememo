@@ -5,7 +5,8 @@
             [freememo.ocr :as ocr]
             [freememo.ocr-jobs :as jobs]
             [freememo.toasts :as toasts]
-            [freememo.user-state :as us])
+            [freememo.user-state :as us]
+            [freememo.work-run :as run])
   (:import [java.util.concurrent CountDownLatch TimeUnit]))
 
 (defn- await! [latch]
@@ -74,3 +75,66 @@
       (await! settled)
       (is (empty? @writes))
       (is (= "Scan timed out after 30 seconds" (:message (first @notices)))))))
+
+(defn- queued-attempt [action]
+  (let [uid (if (= action :cancel) 930013 930014)
+        doc (if (= action :cancel) 73 74)
+        key [doc 1]
+        executor jobs/executor
+        occupied (CountDownLatch. 3)
+        release (CountDownLatch. 1)
+        drained (CountDownLatch. 3)
+        settled (CountDownLatch. 1)
+        file-reads (atom 0) model-calls (atom 0) writes (atom 0) notices (atom [])
+        observed (reify java.util.concurrent.Executor
+                   (execute [_ runnable]
+                     (.execute executor
+                       (fn []
+                         (try (.run runnable)
+                              (finally (.countDown settled)))))))]
+    (dotimes [_ 3]
+      (.execute executor
+        (fn []
+          (.countDown occupied)
+          (try (drain-interrupts release)
+               (finally (.countDown drained))))))
+    (try
+      (await! occupied)
+      (with-redefs [jobs/executor observed
+                    db/get-topic-file (fn [_]
+                                        (swap! file-reads inc)
+                                        {:topic_files/file_data (byte-array 0)})
+                    ocr/extract-text (fn [& _]
+                                       (swap! model-calls inc)
+                                       {:success true :text "Queued response"})
+                    db/save-page-text! (fn [& _] (swap! writes inc))
+                    commands/bump! (fn [& _])
+                    us/work-started! (fn [& _])
+                    toasts/push! (fn [_ notice] (swap! notices conj notice))]
+        (binding [jobs/*timeout-ms* (if (= action :cancel) 30000 1)]
+          (jobs/start! uid doc 1 nil 150))
+        (let [attempt (get @(us/get-atom uid :scan-runs) key)]
+          (is (some? attempt))
+          (if (= action :cancel)
+            ((get @(us/get-atom uid :scan-cancellers) key))
+            (loop []
+              (when (= :active (run/state attempt))
+                (Thread/yield)
+                (recur))))
+          (is (= (if (= action :cancel) :cancelled :timed-out) (run/state attempt))))
+        (.countDown release)
+        (await! settled)
+        (is (zero? @file-reads))
+        (is (zero? @model-calls))
+        (is (zero? @writes))
+        (is (not (contains? @(us/get-atom uid :scanning-pages) key)))
+        (if (= action :cancel)
+          (is (empty? @notices))
+          (is (= "Scan timed out after 30 seconds" (:message (first @notices))))))
+      (finally (.countDown release) (await! drained)))))
+
+(deftest canceled-queued-ocr-starts-no-file-read-or-model-call
+  (queued-attempt :cancel))
+
+(deftest expired-queued-ocr-starts-no-file-read-or-model-call
+  (queued-attempt :deadline))

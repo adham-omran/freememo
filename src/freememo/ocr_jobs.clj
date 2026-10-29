@@ -62,9 +62,12 @@
       (log/log-info (str "OCR scan started topic-id=" doc " page=" page-number
                         " run=" (:id attempt))))
     ((m/via executor
-       (page/extract-page-text uid doc page-number enc-key dpi
-         {:cancelled? #(= :cancelled (run/state attempt))
-          :commit! #(run/commit! attempt %)}))
+       (case (run/state attempt)
+         :active (page/extract-page-text uid doc page-number enc-key dpi
+                   {:cancelled? #(= :cancelled (run/state attempt))
+                    :commit! #(run/commit! attempt %)})
+         :timed-out {:success false :timed-out? true :error "Scan timed out after 30 seconds"}
+         {:success false :cancelled? true}))
      #(settle! uid key attempt %)
      #(settle! uid key attempt {:success false :error (.getMessage %)}))
     (us/work-started! uid)
