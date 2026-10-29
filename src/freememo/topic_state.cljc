@@ -598,7 +598,7 @@
    Post: returns the page/content/biblio prop slice for DocumentBody."
   [resolved topic-id focus?]
   (e/client
-    (let [{:keys [refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
+    (let [{:keys [user-id refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
                   pdf-page-count static-content static-content-topic-id queue-ctx]} resolved
           ;; Merged reading (plans/merged-page-reading.md). The whole PDF becomes
           ;; one document with a boundary marker per page. Score topics are out:
