@@ -54,9 +54,9 @@
     (local/spawn engine
       (capture-errors tap
         (local/local-ngn {} engine
-          (let [uid (e/watch user)
-                owner-id (e/Reconcile (if uid (client/Owner uid) nil))]
-            (tap [uid (e/watch route) owner-id])))))
+          (let [uid (e/watch user)]
+            (client/Owner uid)
+            (tap [uid (e/watch route) (:id (e/watch current))])))))
     (try
       (until #(= 1 (first %)))
       (let [first-owner @current]
