@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
+            [freememo.assistant-history :as history]
             [freememo.db :as db]))
 
 (def ^:private reference-context-packet #'assistant/reference-context-packet)
@@ -97,12 +98,9 @@
 
 (defn- picker [query]
   (let [!file-calls (atom [])]
-    (with-redefs [db/get-root-topic-titles
-                  (fn [_]
-                    [{:topics/id 9 :topics/kind "pdf" :topics/title "Open document"}
-                     {:topics/id 1 :topics/kind "repo" :topics/title "adham/grid"}
-                     {:topics/id 11 :topics/kind "score" :topics/title "Grid sonata"}
-                     {:topics/id 7 :topics/kind "web" :topics/title "Grid layout notes"}])
+    (with-redefs [history/document-options
+                  (fn [_ _ query]
+                    [{:id 7 :title "Grid layout notes"}])
                   db/get-referenceable-repo-files
                   (fn [user-id needle limit]
                     (swap! !file-calls conj [user-id needle limit])
@@ -117,7 +115,7 @@
           docs)
       (str "documents first, then files. The repository root and the score both "
         "match the query, and neither is offered."))
-    (is (= [[5 "grid" 50]] file-calls) "the needle reaches the query in lower case")))
+    (is (= [[5 "grid" 49]] file-calls) "the needle reaches the query in lower case")))
 
 (deftest a-blank-query-lists-documents-only
   (doseq [query ["" nil]]

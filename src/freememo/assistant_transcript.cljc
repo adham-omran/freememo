@@ -21,7 +21,11 @@
    !submit !active !refs !details-run !evidence !error !echo
    !annotations !selection-cards !side !pending-fork]
   (e/client
-    (let [!following (atom true)
+    (let [!page (atom {:chat nil :before nil :trail []})
+          stored-page (e/watch !page)
+          page-state (if (= active (:chat stored-page)) stored-page
+                       {:chat active :before nil :trail []})
+          !following (atom true)
           following? (e/watch !following)]
       (dom/div
         (dom/props {:class "assistant-panel__transcript-shell"})
@@ -35,12 +39,13 @@
                 (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
                 stream-rev
                 (e/server (e/watch (us/get-atom user-id :assistant-stream)))
-                ;; One read of the transcript, used for the rendered rows and for
-                ;; the echo's retirement. Two server reads would land in two frames.
-                messages
+                page
                 (e/server
-                  (or (assistant/messages* [assistant-rev stream-rev] user-id active)
-                    []))
+                  (e/Offload #(assistant/transcript-page* assistant-rev user-id active (:before page-state))))
+                live-row
+                (e/server
+                  (e/Offload #(assistant/live-transcript-row* [assistant-rev stream-rev] user-id active)))
+                messages (e/server (assistant/transcript-rows page live-row))
                 ;; The VIEW is what gets diffed, so a row's shape and its content
                 ;; cross in one frame. Diffing the raw rows and reading each view
                 ;; through a nested (e/server …) made the content a second, demand
@@ -50,7 +55,8 @@
                 message-rows
                 (e/server
                   (e/diff-by :assistant_messages/id
-                    (mapv assistant/transcript-message-view messages)))
+                    messages))
+                page-cursor (e/server (:cursor page))
                 message-count (e/Count message-rows)
                 echo-arrived?
                 (e/server (assistant/message-client-id-present? messages (:id echo)))]
@@ -84,6 +90,35 @@
             ;; siblings are its own rows. `display: contents` keeps the rows as
             ;; flex items of the transcript.
             (dom/div
+              (dom/props {:class "assistant-transcript__paging"})
+              (dom/button
+                (dom/props {:type "button" :class "btn btn-sm"
+                            :disabled (not (e/server (:more? page)))})
+                (dom/text "Older messages")
+                (dom/On "click"
+                  (fn [event]
+                    (transcript-scroll/pause!
+                      (.closest (.-currentTarget event) ".assistant-panel__transcript"))
+                    (reset! !page {:chat active :before page-cursor
+                                   :trail (conj (:trail page-state) (:before page-state))})) nil))
+              (dom/button
+                (dom/props {:type "button" :class "btn btn-sm"
+                            :disabled (empty? (:trail page-state))})
+                (dom/text "Newer messages")
+                (dom/On "click"
+                  (fn [_]
+                    (reset! !page {:chat active :before (peek (:trail page-state))
+                                   :trail (pop (:trail page-state))})) nil))
+              (when (seq (:trail page-state))
+                (dom/button
+                  (dom/props {:type "button" :class "btn btn-sm"})
+                  (dom/text "Latest messages")
+                  (dom/On "click"
+                    (fn [event]
+                      (reset! !page {:chat active :before nil :trail []})
+                      (transcript-scroll/resume!
+                        (.closest (.-currentTarget event) ".assistant-panel__transcript"))) nil))))
+            (dom/div
               (dom/props {:class "assistant-panel__rows"})
               (e/for [display-message message-rows]
                 (transcript-entry/AssistantTranscriptEntry
@@ -115,7 +150,7 @@
             ;; the stream channel stops, the row count does not move, and only the
             ;; mutation bump marks the last of the answer arriving.
             (scroll-to-bottom! dom/node
-              [active message-count stream-rev assistant-rev sending? (:id echo)])))
+              [active page-cursor message-count stream-rev assistant-rev sending? (:id echo)])))
         (when-not following?
           (dom/button
             (dom/props {:type "button" :class "btn assistant-panel__latest"
@@ -123,6 +158,7 @@
             (dom/text "Return to latest")
             (dom/On "click"
               (fn [event]
+                (reset! !page {:chat active :before nil :trail []})
                 (transcript-scroll/resume!
                   (.querySelector (.-parentElement (.-currentTarget event))
                     ".assistant-panel__transcript")))

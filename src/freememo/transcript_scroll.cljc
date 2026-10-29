@@ -55,3 +55,13 @@
        (follow! node))
      :clj nil)
   nil)
+
+(defn pause!
+  "Preserve the reader position while an older transcript page loads."
+  [node]
+  #?(:cljs
+     (when-let [{:keys [following notify!]} (.get owners node)]
+       (reset! following false)
+       (notify! false))
+     :clj nil)
+  nil)

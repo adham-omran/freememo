@@ -17,6 +17,7 @@
    [freememo.settings-tab :as settings-tab]
    [freememo.spotlight :as spotlight]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.onboarding-progress :as onboarding])
    #?(:clj [freememo.settings :as settings])))
 
 ;; ── Server ─────────────────────────────────────────────────────────────────
@@ -33,7 +34,8 @@
        {:dismissed? false
         :ai-configured? (boolean ai-configured?)
         :llm-enabled? (settings/get-llm-enabled user-id)
-        :progress (db/get-getting-started-progress user-id)
+        :progress (assoc (db/get-getting-started-progress user-id)
+                    :carded? (onboarding/reviewable-cards? user-id))
         :targets (db/get-getting-started-targets user-id)})))
 
 (defn dismiss!* [user-id]

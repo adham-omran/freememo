@@ -19,6 +19,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [missionary.core :as m]
    [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-chat-history :as history]
    [freememo.assistant-composer :as composer]
@@ -94,12 +95,16 @@
                  pending-web-search?)
           chat-options (:chat-options data)
           mention-query (panel-data/mention-query draft)
-          ;; Offloaded: this re-runs on every key typed after `@`, and a plain
-          ;; e/server call held the whole session for each run. The latch keeps
-          ;; the previous list while the next one loads.
+          ;; A closed menu performs no title query. New text invalidates old options.
           reference-documents
-          (e/server (e/Offload #(assistant/referenceable-docs
-                                  user-id root-topic-id mention-query)))
+          (e/server
+            (if (and at-open? (some? mention-query))
+              (let [query (e/Task (m/sleep 200 mention-query))
+                    result (e/Offload
+                             #(hash-map :query query
+                                :rows (assistant/referenceable-docs user-id root-topic-id query)))]
+                (if (= mention-query (:query result)) (:rows result) []))
+              []))
           reference-document-count (e/server (count reference-documents))
           active-reference-index
           (if (pos? reference-document-count)
@@ -138,7 +143,7 @@
         (dom/props {:class (when (= :map (e/watch pin-state/!panel-view))
                              "assistant-panel--map")})
 
-        (history/ChatBarWithHistory root-topic-id chat-options active
+        (history/ChatBarWithHistory user-id root-topic-id chat-options active
           (:active-title data)
           !active !history-open? !renaming-active? !chat-action !draft !error)
         (question-map/QuestionMapTabs user-id page-topic-id !draft sending?)

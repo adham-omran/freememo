@@ -18,6 +18,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [missionary.core :as m]
+   #?(:clj [freememo.assistant-history :as history])
    [freememo.assistant-chat-lineage :as lineage]
    [freememo.assistant-chat-tree :as tree]
    [freememo.assistant-composer :as composer]
@@ -514,17 +516,29 @@
    so each open starts with an empty query and a fresh clock.
    Pre: called directly inside the history view's container, which is
    `dom/node` here."
-  [chat-options active new-chat! !active !history-open? !error !chat-action]
+  [user-id root-topic-id active new-chat! !active !history-open? !error !chat-action]
   (e/client
     (let [view-node dom/node
           now-ms (e/snapshot (current-time-ms))
           !query (atom "")
           query (e/watch !query)
+          !page (atom {:query "" :offset 0})
+          page-state (e/watch !page)
+          offset (if (= query (:query page-state)) (:offset page-state) 0)
+          rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
+          result (e/server
+                   (let [q (e/Task (m/sleep 200 query))]
+                     (e/Offload #(do rev (history/chat-page user-id root-topic-id q offset)))))
+          current-result? (and (= query (:query result)) (= offset (:offset result)))
+          chat-options (if current-result? (:rows result) [])
           !menu (atom nil)
           menu (e/watch !menu)
           !editing-id (atom nil)
           editing-id (e/watch !editing-id)
-          sections (history-sections chat-options query now-ms)
+          sections (history-sections
+                     (let [ids (set (map :id chat-options))]
+                       (mapv #(if (ids (:parent-id %)) % (assoc % :parent-id nil)) chat-options))
+                     "" now-ms)
           listed? (boolean (some seq (vals sections)))
           open! (fn [chat-id]
                   (trail/record! :assistant {:action :select-chat :chat-id chat-id})
@@ -578,6 +592,16 @@
           (dom/text (if (seq chat-options)
                       "No chats match."
                       "Chats about this document appear here."))))
+      (dom/div
+        (dom/props {:class "assistant-history__paging"})
+        (dom/button
+          (dom/props {:type "button" :class "btn btn-sm" :disabled (zero? offset)})
+          (dom/text "Previous chats")
+          (dom/On "click" (fn [_] (reset! !page {:query query :offset (max 0 (- offset 50))})) nil))
+        (dom/button
+          (dom/props {:type "button" :class "btn btn-sm" :disabled (not (and current-result? (:more? result)))})
+          (dom/text "More chats")
+          (dom/On "click" (fn [_] (reset! !page {:query query :offset (+ offset 50)})) nil)))
       (when menu
         (HistoryRowMenu menu view-node !menu !editing-id !chat-action)))))
 
@@ -587,7 +611,7 @@
    Its container stays mounted and a class shows it, so opening and closing it
    never remounts the transcript beside it. Escape closes it (§3.3.10); the
    rename input and the row menu stop their own Escape first."
-  [chat-options active history-open? new-chat! !active !history-open? !error
+  [user-id root-topic-id active history-open? new-chat! !active !history-open? !error
    !chat-action]
   (e/client
     (dom/div
@@ -601,7 +625,7 @@
             (reset! !history-open? false)))
         nil)
       (when history-open?
-        (HistoryList chat-options active new-chat! !active !history-open? !error
+        (HistoryList user-id root-topic-id active new-chat! !active !history-open? !error
           !chat-action)))))
 
 (e/defn ChatBar
@@ -651,7 +675,7 @@
    Post: \"＋ New\" clears only `!active`, `!draft` and `!error` and writes no
    row (§4.1). While mounted, the composer half of that is published as
    :reset-assistant-composer!, which the palette's New assistant chat runs."
-  [root-topic-id chat-options active active-title
+  [user-id root-topic-id chat-options active active-title
    !active !history-open? !renaming-active? !chat-action !draft !error]
   (e/client
     (let [history-open? (e/watch !history-open?)
@@ -678,7 +702,7 @@
           (request-chat-action! !chat-action :exclude chat-id :excluded? excluded?)))
       ;; Over the bar and the transcript while open; always mounted, so the
       ;; transcript beside it never remounts (§3.2).
-      (ChatHistoryView chat-options active history-open? new-chat!
+      (ChatHistoryView user-id root-topic-id active history-open? new-chat!
         !active !history-open? !error !chat-action))))
 
 (e/defn AssistantChatEffects

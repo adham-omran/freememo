@@ -9688,3 +9688,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .commit-card__sha { font-size: 12px; overflow-wrap: anywhere; }
 .commit-card__walk { align-self: flex-start; }
 .commit-card__refusal { margin: 0; }
+
+/* Bounded assistant history controls. */
+.assistant-transcript__paging,
+.assistant-history__paging {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  flex-shrink: 0;
+}

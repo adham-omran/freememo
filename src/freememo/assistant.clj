@@ -16,6 +16,7 @@
    [freememo.assistant-chat-tree :as tree]
    [freememo.assistant-context-usage :as context-usage]
    [freememo.assistant-evidence :as evidence]
+   [freememo.assistant-history :as history]
    [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-slash :as slash]
@@ -2445,21 +2446,14 @@
   ([user-id current-root-topic-id]
    (referenceable-docs user-id current-root-topic-id ""))
   ([user-id current-root-topic-id query]
-   (let [needle (str/lower-case (or query ""))
-         documents (into []
-                     (comp
-                       (remove #(= current-root-topic-id (:topics/id %)))
-                       (remove #(unreferenceable-kinds (:topics/kind %)))
-                       (map (fn [topic]
-                              {:id (:topics/id topic)
-                               :title (or (:topics/title topic) "Untitled")}))
-                       (filter #(str/includes? (str/lower-case (:title %)) needle)))
-                     (db/get-root-topic-titles user-id))]
+   (let [needle (str/lower-case (str/trim (or query "")))
+         documents (history/document-options user-id current-root-topic-id needle)]
      (if (str/blank? needle)
        documents
        (into documents
          (map (fn [{:keys [id label]}] {:id id :title label}))
-         (db/get-referenceable-repo-files user-id needle max-referenceable-files))))))
+         (db/get-referenceable-repo-files user-id needle
+           (max 0 (- history/page-size (count documents)))))))))
 
 ;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
 
@@ -2685,6 +2679,62 @@
                (db/get-assistant-checkpoints-made-for user-id chat-id)))
         (sort-by ::order)
         (mapv #(dissoc % ::order))))))
+
+(defn- history-message-views
+  "Project one bounded set of owned messages and their cited evidence."
+  [user-id ids]
+  (let [evidence (group-by :run_uuid (history/cited-evidence user-id ids))]
+    (into {}
+      (map (fn [row]
+             (let [message (cond-> {:assistant_messages/id (:id row)
+                                   :assistant_messages/role (:role row)
+                                   :assistant_messages/content (:content row)
+                                   :assistant_messages/client_id (:client_id row)}
+                             (:run_uuid row)
+                             (assoc :assistant_messages/content (:response_text row)
+                               :assistant_run/uuid (:run_uuid row)
+                               :assistant_run/status (:status row)
+                               :assistant_run/error (:error_text row)
+                               :assistant_run/retry_of (:retry_of_run_uuid row)
+                               :assistant_run/evidence (get evidence (:run_uuid row) [])))]
+               [(:id row) (transcript-message-view message)])))
+      (history/message-rows user-id ids))))
+
+(defn transcript-page*
+  "Read and project a fixed transcript page away from the session reactor."
+  [_rev user-id chat-id before]
+  (let [{:keys [events] :as page} (history/transcript-page user-id chat-id before)
+        messages (history-message-views user-id (keep :message_id events))
+        checkpoints (into {} (map (juxt :id identity))
+                      (history/checkpoints user-id (keep :checkpoint_id events)))]
+    (-> page
+      (dissoc :events)
+      (assoc :rows
+        (mapv (fn [{:keys [kind message_id checkpoint_id inherited chat_title]}]
+                (case (long kind)
+                  0 (cond-> (get messages message_id)
+                      inherited (assoc :assistant_messages/inherited? true))
+                  1 (transcript-message-view
+                      (checkpoint-event (assoc (get checkpoints checkpoint_id) :chat_title chat_title)))
+                  2 {:assistant_messages/id "fork" :assistant_messages/role "event"
+                     :assistant_event/type "fork" :assistant_messages/content chat_title}))
+          events)))))
+
+(defn live-transcript-row*
+  "Read and project only the active answer when a stream publication arrives."
+  [_stream-rev user-id chat-id]
+  (when-let [id (and chat-id (history/active-message-id user-id chat-id))]
+    (get (history-message-views user-id [id]) id)))
+
+(defn transcript-rows
+  "Replace a live answer on its own page without replacing a terminal result."
+  [page live-row]
+  (let [id (:assistant_messages/id live-row)
+        active-statuses #{"queued" "streaming" "stop-requested"}]
+    (mapv #(if (and id (= id (:assistant_messages/id %))
+                   (active-statuses (:assistant_run/status %)))
+             live-row %)
+      (:rows page))))
 
 (defn message-client-id-present?
   "Return true when `rows` already carry the optimistic user message.
