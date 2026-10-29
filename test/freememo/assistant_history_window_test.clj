@@ -142,7 +142,9 @@
     (is (= page (assistant/current-transcript-page page 7 nil)))
     (is (= {:rows [] :more? false :cursor nil :pending? true}
           (assistant/current-transcript-page page 8 nil)))
-    (is (:pending? (assistant/current-transcript-page page 7 [2 2 0 1])))))
+    (is (:pending? (assistant/current-transcript-page page 7 [2 2 0 1])))
+    (is (= (:rows page) (:rows (assistant/current-transcript-page page 7 [2 2 0 1]))))
+    (is (nil? (:cursor (assistant/current-transcript-page page 7 [2 2 0 1]))))))
 
 (deftest bounded-branch-navigation-always-includes-the-parent
   (let [{:keys [uid root chat]} (fixture!)]

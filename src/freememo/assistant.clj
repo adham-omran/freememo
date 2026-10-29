@@ -2697,11 +2697,12 @@
           events)))))
 
 (defn current-transcript-page
-  "Hide a retained page until its chat and cursor match the current request."
+  "Keep same-chat rows during paging and hide rows from another chat."
   [page chat-id before]
-  (if (= [chat-id before] (:scope page))
-    page
-    {:rows [] :more? false :cursor nil :pending? true}))
+  (cond
+    (= [chat-id before] (:scope page)) page
+    (= chat-id (first (:scope page))) (assoc page :more? false :cursor nil :pending? true)
+    :else {:rows [] :more? false :cursor nil :pending? true}))
 
 (defn live-transcript-row*
   "Read and project only the active answer when a stream publication arrives."
