@@ -32,6 +32,7 @@
    [hyperfiddle.electric3 :as e]
    [freememo.doc-context :as dctx]
    [freememo.editor-actions :as editor-actions]
+   [freememo.merged-window :as merged-window]
    [freememo.rich-text-editor :as editor]))
 
 (e/defn MergedPageBridge
@@ -111,5 +112,7 @@
       (let [scrolled (e/watch editor-actions/!scrolled-page)
             page (:page scrolled)]
         (when (and merged? (some? page) (= (:doc-id scrolled) doc-id)
+                (= (:body-key scrolled) (merged-window/body-key doc-id true merged-page-numbers))
+                (some #{current} merged-page-numbers)
                 (not= page current) on-page-change!)
           (on-page-change! page))))))

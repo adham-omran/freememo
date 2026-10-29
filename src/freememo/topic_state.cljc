@@ -15,6 +15,8 @@
    [freememo.viewport :as viewport]
    [freememo.bibliography-form :as bibform]
    [freememo.page-merge :as page-merge]
+   [freememo.merged-window :as merged-window]
+   #?(:clj [freememo.merged-window-db :as merged-db])
    [freememo.focus-reader :as focus-reader]
    [freememo.rich-text-editor :as editor]
    [clojure.string :as str]
@@ -135,17 +137,9 @@
      :cljs nil))
 
 (defn get-merged-document*
-  "The whole PDF as one document, with a boundary marker per page
-   (plans/merged-page-reading.md item 1.1).
-
-   Returns `{:html <merged> :page-numbers [ints]}`, or nil when there is no PDF
-   root. The page-number list rides along because the split needs it: the editor
-   cannot report a page whose marker the reader deleted.
-
-   Re-fetches on `:refresh`, which is what an OCR scan bumps — a page scanned
-   while the mode is on has to appear."
-  [_refresh pdf-root-id]
-  #?(:clj (when pdf-root-id (db/merged-page-document pdf-root-id))
+  "Read one bounded Focus reader range. The page list owns later saves."
+  [_refresh user-id pdf-root-id page-range]
+  #?(:clj (when pdf-root-id (merged-db/read-window user-id pdf-root-id page-range))
      :cljs nil))
 
 (defn save-merged-document!*
@@ -677,7 +671,7 @@
                       (e/Offload #(when (and is-pdf? (not is-score?))
                                     (get-page-info* refresh meta-refresh pdf-root-id current-page))))
           page-topic-id (page-topic-id-of is-pdf? is-score? page-info topic-id)
-          ;; Effective content: merged mode -> the whole document; PDF ->
+          ;; Effective content: merged mode -> the current page range; PDF ->
           ;; fetched page text; non-PDF and score -> static (score pages carry
           ;; no per-page text).
           ;;
@@ -703,11 +697,13 @@
           ;; Bound unconditionally, the Offload always has a value: nil for
           ;; every PDF outside the mode, which costs no database work because
           ;; the gate is the thunk's first act.
+          requested-range (merged-window/page-range current-page total)
           merged-doc (e/server
                        (e/Offload #(when merged?
-                                     (get-merged-document* refresh pdf-root-id))))
-          merged-html (e/server (:html merged-doc))
-          merged-page-numbers (e/server (:page-numbers merged-doc))
+                                     (get-merged-document* refresh user-id pdf-root-id requested-range))))
+          merged-view (e/server (select-keys merged-doc [:html :page-numbers :root-id :range]))
+          merged-html (:html merged-view)
+          merged-page-numbers (:page-numbers merged-view)
           ;; Gate inside the thunk, for the reason merged-doc above records: a
           ;; `when` outside it makes this binding go from NO VALUE to pending
           ;; when the mode turns OFF, which unmounts DocumentRoot's subtree.
@@ -736,7 +732,7 @@
                                        page-topic-id
                                        static-content-topic-id)
           ;; The identity of the body in the editor — see doc-context. Merged
-          ;; mode holds the whole document, so it is the root; every other mode
+          ;; mode keeps one document identity across page ranges, so it is the root; every other mode
           ;; holds one topic's body, so it is that topic.
           ;; A plain call for the same reason as effective-content above.
           editor-doc-id (if-else merged? pdf-root-id page-topic-id)
@@ -774,6 +770,8 @@
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
        :effective-content-topic-id effective-content-topic-id
        :merged? merged? :merged-page-numbers merged-page-numbers
+       :merged-range (:range merged-view)
+       :merged-root-id (:root-id merged-view)
        :editor-doc-id editor-doc-id
        :!show-bib !show-bib :show-bib? show-bib?
        :!doc-options-open !doc-options-open :doc-options-open? doc-options-open?

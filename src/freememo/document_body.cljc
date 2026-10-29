@@ -132,6 +132,8 @@
               dctx/focus? (:focus? m) dctx/set-focus! (:set-focus! m)
               dctx/focus-available? (:focus-available? m) dctx/focus-scope-id (:focus-scope-id m)
               dctx/merged? (:merged? m) dctx/merged-page-numbers (:merged-page-numbers m)
+              dctx/merged-range (:merged-range m)
+              dctx/merged-root-id (:merged-root-id m)
               dctx/editor-doc-id (:editor-doc-id m)
               dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)
               dctx/has-source-pane? (:has-source-pane? m) dctx/editor-hidden? (:editor-hidden? m)
