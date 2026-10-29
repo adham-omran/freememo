@@ -75,156 +75,155 @@
 
 (e/defn StatusPage [user-id navigate!]
   (e/client
-    (dom/div
-      (dom/props {:class "page-container"
-                  :style {:display "flex" :flex-direction "column" :height "100%"}})
+   (dom/div
+    (dom/props {:class "page-container"
+                :style {:display "flex" :flex-direction "column" :height "100%"}})
 
-      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-            all-rows (e/server (e/Offload #(get-document-status* refresh user-id)))
-            !kind-filter (atom "all")
-            kind-filter (e/watch !kind-filter)
-            !status-filter (atom "all")
-            status-filter (e/watch !status-filter)
-            !sort-col (atom :done)
-            sort-col (e/watch !sort-col)
-            !sort-dir (atom :asc)
-            sort-dir (e/watch !sort-dir)
-            filtered (e/server (apply-filters all-rows kind-filter status-filter))
-            sorted (e/server (vec (sort-rows filtered sort-col sort-dir)))
-            item-count (e/server (count sorted))
-            row-height 36
-            grid-cols "1fr 90px 90px"]
+    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+          all-rows (e/server (e/Offload #(get-document-status* refresh user-id)))
+          !kind-filter (atom "all")
+          kind-filter (e/watch !kind-filter)
+          !status-filter (atom "all")
+          status-filter (e/watch !status-filter)
+          !sort-col (atom :done)
+          sort-col (e/watch !sort-col)
+          !sort-dir (atom :asc)
+          sort-dir (e/watch !sort-dir)
+          filtered (e/server (apply-filters all-rows kind-filter status-filter))
+          sorted (e/server (vec (sort-rows filtered sort-col sort-dir)))
+          item-count (e/server (count sorted))
+          row-height 36
+          grid-cols "1fr 90px 90px"]
 
         ;; Header row: title + filters
-        (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "12px" :flex-shrink "0"}})
-          (dom/span
-            (dom/props {:style {:font-size "16px" :font-weight "600" :color "var(--color-text-primary)"}})
-            (dom/text "Progress"))
-          (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text (str item-count " document" (when (not= item-count 1) "s"))))
+      (dom/div
+       (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "12px" :flex-shrink "0"}})
+       (dom/span
+        (dom/props {:style {:font-size "16px" :font-weight "600" :color "var(--color-text-primary)"}})
+        (dom/text "Progress"))
+       (dom/span
+        (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
+        (dom/text (str item-count " document" (when (not= item-count 1) "s"))))
 
           ;; Spacer
-          (dom/div (dom/props {:style {:flex "1"}}))
+       (dom/div (dom/props {:style {:flex "1"}}))
 
           ;; Kind filter
-          (dom/select
-            (dom/props {:class "input"})
-            (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
-            (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
-            (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
-            (dom/option (dom/props {:value "web"}) (dom/text "Web"))
-            (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
+       (dom/select
+        (dom/props {:class "input"})
+        (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
+        (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
+        (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
+        (dom/option (dom/props {:value "web"}) (dom/text "Web"))
+        (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
             ;; No "poem" option, deliberately (poem-reader-spec row 2.4.2). This
             ;; tab measures per-item reading progress over a document's children,
             ;; and the list already omits `supermemo`, `audio`, `video` and
             ;; `score` for that reason. A poem is ONE topic with no children, so
             ;; an option here would filter to rows with no progress to show.
-            (e/for [[t ev] (dom/On-all "change")]
-              (when ev (reset! !kind-filter (-> ev .-target .-value)))
-              (t)))
+        (e/for [[t ev] (dom/On-all "change")]
+          (when ev (reset! !kind-filter (-> ev .-target .-value)))
+          (t)))
 
           ;; Status filter
-          (dom/select
-            (dom/props {:class "input"})
-            (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
-            (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
-            (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))
-            (dom/option (dom/props {:value "complete"}) (dom/text "Complete"))
-            (dom/option (dom/props {:value "unsynced"}) (dom/text "Unsynced"))
-            (e/for [[t ev] (dom/On-all "change")]
-              (when ev (reset! !status-filter (-> ev .-target .-value)))
-              (t))))
+       (dom/select
+        (dom/props {:class "input"})
+        (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
+        (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
+        (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))
+        (dom/option (dom/props {:value "complete"}) (dom/text "Complete"))
+        (dom/option (dom/props {:value "unsynced"}) (dom/text "Unsynced"))
+        (e/for [[t ev] (dom/On-all "change")]
+          (when ev (reset! !status-filter (-> ev .-target .-value)))
+          (t))))
 
-        (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
-                       :font-weight "600" :font-size "13px" :color "var(--color-text-primary)" :cursor "pointer" :user-select "none"}
-              arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
-              aria-sort (fn [col] (when (= sort-col col)
-                                    (if (= sort-dir :asc) "ascending" "descending")))
-              toggle-sort! (fn [col]
-                             (if (= col @!sort-col)
-                               (swap! !sort-dir #(if (= % :asc) :desc :asc))
-                               (do (reset! !sort-col col)
+      (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
+                     :font-weight "600" :font-size "13px" :color "var(--color-text-primary)" :cursor "pointer" :user-select "none"}
+            arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
+            aria-sort (fn [col] (when (= sort-col col)
+                                  (if (= sort-dir :asc) "ascending" "descending")))
+            toggle-sort! (fn [col]
+                           (if (= col @!sort-col)
+                             (swap! !sort-dir #(if (= % :asc) :desc :asc))
+                             (do (reset! !sort-col col)
                                  (reset! !sort-dir :asc))))]
-          (dom/div
-            (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
+        (dom/div
+         (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
             ;; Fixed header
-            (dom/table
-              (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
-              (dom/thead
-                (dom/props {:style {:display "contents"}})
-                (dom/tr
-                  (dom/props {:style {:display "contents"}})
-                  (dom/th
-                    (dom/props {:aria-sort (aria-sort :document)
-                                :style (merge th-base {:text-align "left" :padding "8px 10px"})})
-                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :document)))
-                    (dom/text (str "Document" (arrow :document)))
-                    (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
-                  (dom/th
-                    (dom/props {:aria-sort (aria-sort :done)
-                                :style (merge th-base {:text-align "center"})})
-                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :done)))
-                    (dom/text (str "Done" (arrow :done)))
-                    (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
-                  (dom/th
-                    (dom/props {:aria-sort (aria-sort :synced)
-                                :style (merge th-base {:text-align "center"})})
-                    (a11y/KeyActivate {} (fn [_] (toggle-sort! :synced)))
-                    (dom/text (str "Synced" (arrow :synced)))
-                    (dom/On "click" (fn [_] (toggle-sort! :synced)) nil)))))
+         (dom/table
+          (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
+          (dom/thead
+           (dom/props {:style {:display "contents"}})
+           (dom/tr
+            (dom/props {:style {:display "contents"}})
+            (dom/th
+             (dom/props {:aria-sort (aria-sort :document)
+                         :style (merge th-base {:text-align "left" :padding "8px 10px"})})
+             (a11y/KeyActivate {} (fn [_] (toggle-sort! :document)))
+             (dom/text (str "Document" (arrow :document)))
+             (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
+            (dom/th
+             (dom/props {:aria-sort (aria-sort :done)
+                         :style (merge th-base {:text-align "center"})})
+             (a11y/KeyActivate {} (fn [_] (toggle-sort! :done)))
+             (dom/text (str "Done" (arrow :done)))
+             (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
+            (dom/th
+             (dom/props {:aria-sort (aria-sort :synced)
+                         :style (merge th-base {:text-align "center"})})
+             (a11y/KeyActivate {} (fn [_] (toggle-sort! :synced)))
+             (dom/text (str "Synced" (arrow :synced)))
+             (dom/On "click" (fn [_] (toggle-sort! :synced)) nil)))))
 
             ;; Scrollable body
-            (dom/div
-              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1.5 :reset-key [kind-filter status-filter sort-col sort-dir]})]
-                (dom/props {:class "tape-scroll"
-                            :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
-                (dom/table
-                  (dom/props {:style {:width "100%" :font-size "13px"}})
-                  (do
-(e/for [i (Tape offset limit)]
-                      (let [item (e/server (nth sorted i nil))]
-                        (when item
-                          (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
-                                [badge-text badge-color] (bibform/topic-badge kind source-container)
-                                is-pdf? (= kind "pdf")
-                                open! (fn [_] (navigate! :viewer (nav/nav-topic id :status)))]
-                            (dom/tr
-                              (dom/props {:class "audit-tape-row status-tape-row" :style {:--order i}})
-                              (dom/On "click" open! nil)
+         (dom/div
+          (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+          (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1.5 :reset-key [kind-filter status-filter sort-col sort-dir]})]
+            (dom/props {:class "tape-scroll"
+                        :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
+            (dom/table
+             (dom/props {:style {:width "100%" :font-size "13px"}})
+             (do
+               (e/for [i (Tape offset limit)]
+                 (let [item (e/server (nth sorted i nil))]
+                   (when item
+                     (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
+                           [badge-text badge-color] (bibform/topic-badge kind source-container)
+                           is-pdf? (= kind "pdf")
+                           open! (fn [_] (navigate! :viewer (nav/nav-topic id :status)))]
+                       (dom/tr
+                        (dom/props {:class "audit-tape-row status-tape-row" :style {:--order i}})
+                        (dom/On "click" open! nil)
                               ;; Document + badge
-                              (dom/td
-                                (dom/props {:class "status-document-cell"})
-                                (a11y/KeyActivate {:label (str "Open " title)} open!)
-                                (dom/span
-                                  (dom/props {:class "type-badge status-kind-badge" :style {:background badge-color}})
-                                  (dom/text badge-text))
-                                (dom/span
-                                  (dom/props {:class "tape-cell-text"})
-                                  (tooltip/Tooltip! title)
-                                  (dom/text title)))
+                        (dom/td
+                         (dom/props {:class "status-document-cell"})
+                         (a11y/KeyActivate {:label (str "Open " title)} open!)
+                         (dom/span
+                          (dom/props {:class "type-badge status-kind-badge" :style {:background badge-color}})
+                          (dom/text badge-text))
+                         (dom/span
+                          (dom/props {:class "tape-cell-text"})
+                          (tooltip/Tooltip! title)
+                          (dom/text title)))
                               ;; Done
-                              (dom/td
-                                (dom/props {:class (str "status-number-cell "
-                                          (cond
-                                            (and (pos? total-items) (= done-items total-items)) "is-complete"
-                                            (pos? done-items) "is-started"
-                                            :else "is-muted"))})
-                                (dom/text (str done-items " / " total-items)))
+                        (dom/td
+                         (dom/props {:class (str "status-number-cell "
+                                                 (cond
+                                                   (and (pos? total-items) (= done-items total-items)) "is-complete"
+                                                   (pos? done-items) "is-started"
+                                                   :else "is-muted"))})
+                         (dom/text (str done-items " / " total-items)))
                               ;; Synced
-                              (dom/td
-                                (dom/props {:class "status-number-cell is-muted"})
-                                (dom/text (if (pos? total-cards)
-                                            (str synced-cards " / " total-cards)
-                                            "\u2013"))))))))
-(when (zero? item-count)
-(dom/tr
-                      (dom/props {:style {:height "auto"}})
-                      (dom/td
-                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                            :color "var(--color-text-secondary)" :font-size "13px"}})
-                        (dom/text "No documents yet"))))))
-                ))))))))
+                        (dom/td
+                         (dom/props {:class "status-number-cell is-muted"})
+                         (dom/text (if (pos? total-cards)
+                                     (str synced-cards " / " total-cards)
+                                     "\u2013"))))))))
+               (when (zero? item-count)
+                 (dom/tr
+                  (dom/props {:style {:height "auto"}})
+                  (dom/td
+                   (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                       :color "var(--color-text-secondary)" :font-size "13px"}})
+                   (dom/text "No documents yet"))))))))))))))

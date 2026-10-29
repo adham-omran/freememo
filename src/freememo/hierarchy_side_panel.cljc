@@ -427,78 +427,78 @@
   (e/client
     ;; :tree-mutations = tree shape; :meta-refresh = done-status (drives the
     ;; strike-through). Both re-run the rows query.
-    (let [tree-rev   (e/server (+ (e/watch (us/get-atom user-id :tree-mutations))
+   (let [tree-rev   (e/server (+ (e/watch (us/get-atom user-id :tree-mutations))
                                  (e/watch (us/get-atom user-id :meta-refresh))))
-          !expanded-set (atom #{})
-          expanded-set (e/watch !expanded-set)
+         !expanded-set (atom #{})
+         expanded-set (e/watch !expanded-set)
           ;; Server-form binding (sited-by-use): the subtree rows stay
           ;; server-side; only row-count and the window rows cross.
           ;; The page travels with its rows: the Offload keeps the old rows
           ;; while it runs again, and row-motion/arrivals! must not pair them
           ;; with the new page.
-          built (e/server (e/Offload #(when-some [rows (build-hierarchy-rows* tree-rev user-id
-                                                           page-topic-id expanded-set)]
-                                        {:rows rows :page-topic-id page-topic-id})))
-          rows (e/server (:rows built))]
-      (when (e/server (some? rows))
-        (let [row-count (e/server (count rows))
-              row-height 36
-              !scroll-node (atom nil)
+         built (e/server (e/Offload #(when-some [rows (build-hierarchy-rows* tree-rev user-id
+                                                                             page-topic-id expanded-set)]
+                                       {:rows rows :page-topic-id page-topic-id})))
+         rows (e/server (:rows built))]
+     (when (e/server (some? rows))
+       (let [row-count (e/server (count rows))
+             row-height 36
+             !scroll-node (atom nil)
               ;; Drag-and-drop nesting (no promote-to-root here — the
               ;; hierarchy tab has no root target by design).
-              !drag-src (atom nil)
-              drag-src (e/watch !drag-src)
+             !drag-src (atom nil)
+             drag-src (e/watch !drag-src)
               ;; The nil test lives INSIDE the thunk on purpose. e/Offload latches
               ;; the previous value while it recomputes, so `forbidden` holds the
               ;; old set (#{} before the first drag) instead of going empty and
               ;; blanking every row for the length of the query. A stale set only
               ;; costs a drop the user cannot make: db/reparent-topic! rejects a
               ;; cycle on the server.
-              forbidden (e/server (e/Offload #(if drag-src (set (db/get-subtree-ids drag-src)) #{})))
-              !drop-cmd (atom nil)
-              drop-cmd (e/watch !drop-cmd)]
+             forbidden (e/server (e/Offload #(if drag-src (set (db/get-subtree-ids drag-src)) #{})))
+             !drop-cmd (atom nil)
+             drop-cmd (e/watch !drop-cmd)]
 
-          (let [[t _] (e/Token drop-cmd)]
-            (when t
-              (let [{:keys [src dst]} drop-cmd
-                    ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
-                (case ok
-                  (case (e/client (reset! !drop-cmd nil)) (t))))))
+         (let [[t _] (e/Token drop-cmd)]
+           (when t
+             (let [{:keys [src dst]} drop-cmd
+                   ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
+               (case ok
+                 (case (e/client (reset! !drop-cmd nil)) (t))))))
 
-          (dom/div
-            (dom/props {:class "tape-scroll"
-                        :style {:flex "1" :overflow-y "auto" :min-height "0"
-                                :scrollbar-gutter "stable"}})
-            (reset! !scroll-node dom/node)
-            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1.5 :reset-key page-topic-id})
+         (dom/div
+          (dom/props {:class "tape-scroll"
+                      :style {:flex "1" :overflow-y "auto" :min-height "0"
+                              :scrollbar-gutter "stable"}})
+          (reset! !scroll-node dom/node)
+          (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1.5 :reset-key page-topic-id})
                   ;; Row ids of the last window, for row-motion/arrivals!. The
                   ;; open page and the offset are in the scope: a page turn or
                   ;; a scroll shows rows, it does not add them.
-                  !seen (e/server (atom {}))]
-              (dom/props {:style {:--count row-count
-                                  :--grid-cols "1fr"
-                                  :--row-height (str row-height "px")}})
-              (dom/table
-                (dom/props {:style {:width "100%"
-                                    :font-size "13px"}})
-                (e/on-unmount (row-motion/install! dom/node))
-                (do
-(let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
-                                            (panel-row-ids rows)))
-                        window (e/server
-                                 (e/diff-by (comp :topics/id :topic)
-                                   (panel-window rows offset limit arrived)))]
-                    (e/for [row window]
-                      (HierarchyRow (:pos row) row navigate! !nav-target
-                        !drag-src drag-src forbidden !drop-cmd
-                        !expanded-set !scroll-node)))
-(when (zero? row-count)
-(dom/tr
-                    (dom/props {:style {:--order 1 :height "auto"}})
-                    (dom/td
-                      (dom/props {:style {:padding "16px 12px" :text-align "center"
-                                          :color "var(--color-text-secondary)" :font-size "13px"}})
-                      (dom/text "No items.")))))))))))))
+                !seen (e/server (atom {}))]
+            (dom/props {:style {:--count row-count
+                                :--grid-cols "1fr"
+                                :--row-height (str row-height "px")}})
+            (dom/table
+             (dom/props {:style {:width "100%"
+                                 :font-size "13px"}})
+             (e/on-unmount (row-motion/install! dom/node))
+             (do
+               (let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
+                                                             (panel-row-ids rows)))
+                     window (e/server
+                             (e/diff-by (comp :topics/id :topic)
+                                        (panel-window rows offset limit arrived)))]
+                 (e/for [row window]
+                   (HierarchyRow (:pos row) row navigate! !nav-target
+                                 !drag-src drag-src forbidden !drop-cmd
+                                 !expanded-set !scroll-node)))
+               (when (zero? row-count)
+                 (dom/tr
+                  (dom/props {:style {:--order 1 :height "auto"}})
+                  (dom/td
+                   (dom/props {:style {:padding "16px 12px" :text-align "center"
+                                       :color "var(--color-text-secondary)" :font-size "13px"}})
+                   (dom/text "No items.")))))))))))))
 
 (e/defn HierarchySidePanel [user-id page-topic-id root-topic-id navigate! !nav-target]
   (e/client

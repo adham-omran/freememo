@@ -79,7 +79,7 @@
     ;; nothing, so the caller can bind it before anything that reads it.
     (let [refresh (e/server (e/watch (us/get-atom user-id :schedule-mutations)))
           sync-refresh (e/server (e/watch (us/get-atom user-id :sync-mutations)))
-          inputs (e/server (sched/refresh-inputs (+ refresh sync-refresh) user-id))
+          inputs (e/server (e/Offload #(sched/refresh-inputs (+ refresh sync-refresh) user-id)))
           note-ids (e/server (:note-ids inputs))
           push-deck (e/server (:push-deck inputs))
           !acq (atom nil)

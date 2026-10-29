@@ -198,48 +198,48 @@
 
 (e/defn DesktopSyncBody [user-id]
   (e/client
-    (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
-          status (e/server (e/Offload #(sync-status* refresh)))
-          conflicts (e/server (e/Offload #(conflicts* refresh)))
-          conflict-count (e/server (count conflicts))
-          !conflict-page (atom 0)
-          conflict-page (e/watch !conflict-page)
-          !parent (atom nil)
-          parent (e/watch !parent)]
-      (dom/section
-        (dom/props {:class "settings-group"})
-        (group/GroupHeading "Sync")
-        (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
-        (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
-        (dom/div
-          (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
-          (when (= :full-sync-choice (:state status))
-            (dom/div
-              (dom/props {:style {:display "contents"}})
-              (SyncNowButton "Keep freememo.net's copy"
-                (e/fn [] (e/server (e/Offload #(choose-full-sync!* "download")))))
-              (SyncNowButton "Keep this device's copy"
-                (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload")))))))))
-      (dom/section
-        (dom/props {:class "settings-group"})
-        (group/GroupHeading "Sync conflicts")
-        (dom/p (dom/props {:class "hint"})
-          (dom/text (if (zero? conflict-count)
-                      "Nothing was left out of a sync."
-                      "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
-        (dom/div
-          (dom/props {:class "field"})
-          (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
+   (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
+         status (e/server (e/Offload #(sync-status* refresh)))
+         conflicts (e/server (e/Offload #(conflicts* refresh)))
+         conflict-count (e/server (count conflicts))
+         !conflict-page (atom 0)
+         conflict-page (e/watch !conflict-page)
+         !parent (atom nil)
+         parent (e/watch !parent)]
+     (dom/section
+      (dom/props {:class "settings-group"})
+      (group/GroupHeading "Sync")
+      (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
+      (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
+      (dom/div
+       (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
+       (when (= :full-sync-choice (:state status))
+         (dom/div
+          (dom/props {:style {:display "contents"}})
+          (SyncNowButton "Keep freememo.net's copy"
+                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "download")))))
+          (SyncNowButton "Keep this device's copy"
+                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload")))))))))
+     (dom/section
+      (dom/props {:class "settings-group"})
+      (group/GroupHeading "Sync conflicts")
+      (dom/p (dom/props {:class "hint"})
+             (dom/text (if (zero? conflict-count)
+                         "Nothing was left out of a sync."
+                         "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
+      (dom/div
+       (dom/props {:class "field"})
+       (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
           ;; An empty field is no selection, which restores at the top level.
-          (picker/DocumentPicker !parent refresh user-id :source nil
-            "Top level. Type to choose a document."))
-        (dom/div
-(dom/table
-          (dom/props {:style {:width "100%" :font-size "13px"}})
-          (dom/tbody
-            (e/for [c (e/server (e/diff-by :id (page/page-items conflicts conflict-page 20)))]
-              (ConflictRow user-id c parent))))
-(page/PageControls !conflict-page conflict-count 20 "Sync conflicts"))))))
+       (picker/DocumentPicker !parent refresh user-id :source nil
+                              "Top level. Type to choose a document."))
+      (dom/div
+       (dom/table
+        (dom/props {:style {:width "100%" :font-size "13px"}})
+        (dom/tbody
+         (e/for [c (e/server (e/diff-by :id (page/page-items conflicts conflict-page 20)))]
+           (ConflictRow user-id c parent))))
+       (page/PageControls !conflict-page conflict-count 20 "Sync conflicts"))))))
 
 ;; ── Server body ────────────────────────────────────────────────────
 
@@ -247,9 +247,9 @@
   (e/client
     (let [refresh (+ (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
                     (e/server (e/watch (us/get-atom user-id :credits-refresh))))
-          summary (e/server (license-summary* refresh user-id))
+          summary (e/server (e/Offload #(license-summary* refresh user-id)))
           price (e/server (price-label* refresh))
-          devices (e/server (devices* refresh user-id))
+          devices (e/server (e/Offload #(devices* refresh user-id)))
           !error (atom nil)
           error (e/watch !error)]
       (dom/section

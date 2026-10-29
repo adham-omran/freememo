@@ -217,7 +217,7 @@
 (e/defn CurriculumDashboard [user-id navigate!]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          curricula (e/server (list-curricula* refresh user-id))]
+          curricula (e/server (e/Offload #(list-curricula* refresh user-id)))]
       (if (empty? curricula)
         (dom/div (dom/props {:class "curriculum-empty"})
           (icons/Icon :route :size 32)

@@ -17,10 +17,15 @@
     (jdbc/with-transaction [tx db/ds {:rollback-only true}]
       (with-redefs [db/ds tx] (run)))))
 
+(defn- seed-many! [sql user-id]
+  (one "SET LOCAL session_replication_role = replica")
+  (try (one sql user-id)
+       (finally (one "SET LOCAL session_replication_role = origin"))))
+
 (deftest large-domains-return-bounded-suggestions-and-reach-rare-values (let [user-id (user!) other-user (user!)
                                                                               rare (:id (one "INSERT INTO topics(user_id,title,kind) VALUES (?, 'Z rare 100% _needle', 'markdown') RETURNING id" user-id))
-                                                                              playlist (:id (one "INSERT INTO topics(user_id,title,kind) VALUES (?, 'Z rare playlist', 'video-playlist') RETURNING id" user-id))] (one "INSERT INTO topics(user_id,title,kind) SELECT ?, 'Common material ' || n, 'markdown' FROM generate_series(1,30000) n" user-id)
-                                                                             (one "INSERT INTO topics(user_id,title,kind) SELECT ?, 'Common playlist ' || n, 'video-playlist' FROM generate_series(1,1000) n" user-id)
+                                                                              playlist (:id (one "INSERT INTO topics(user_id,title,kind) VALUES (?, 'Z rare playlist', 'video-playlist') RETURNING id" user-id))] (seed-many! "INSERT INTO topics(user_id,title,kind) SELECT ?, 'Common material ' || n, 'markdown' FROM generate_series(1,30000) n" user-id)
+                                                                             (seed-many! "INSERT INTO topics(user_id,title,kind) SELECT ?, 'Common playlist ' || n, 'video-playlist' FROM generate_series(1,1000) n" user-id)
                                                                              (doseq [domain [:source :curriculum :playlist]] (is (= 50 (count (:options (options/search user-id domain nil {:query ""}))))))
                                                                              (is (= [rare] (mapv :id (:options (options/search user-id :curriculum nil {:query "100% _needle"})))))
                                                                              (is (= [playlist] (mapv :id (:options (options/search user-id :playlist nil {:query "Z rare playlist"})))))
