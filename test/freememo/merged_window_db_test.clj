@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [next.jdbc :as jdbc]
             [freememo.db :as db]
+            [freememo.editor-pane :as editor-pane]
             [freememo.merged-window-db :as window-db]
             [freememo.merged-window :as window]))
 
@@ -44,9 +45,21 @@
                     {:save-scope {:user-id uid :topic-id root :editor-doc-id root
                                   :pdf-root-id root :merged? true :page-numbers (:page-numbers body)}}
                     (str/replace (:html body) "Body 20 " "Body 20 edited ") "edit-1")
-            saved (db/save-merged-pages! root (:html dirty) (get-in dirty [:save-scope :page-numbers]))
+            saved (editor-pane/save-editor-html!*
+                    (merge (:save-scope dirty) {:html (:html dirty)}))
             after (window-db/read-window uid root [21 40])]
-        (is (= [20] (:pages saved)))
+        (is (= {:success true :written 1} saved))
         (is (= next-body after))
         (is (= 883 (:count (jdbc/execute-one! db/ds
                               ["SELECT count(*) AS count FROM topics WHERE parent_id=?" root]))))))))
+
+(deftest a-captured-save-cannot-write-a-foreign-document
+  (with-document
+    (fn [uid root]
+      (let [body (window-db/read-window uid root [1 20])
+            result (editor-pane/save-editor-html!*
+                     {:user-id -1 :merged? true :pdf-root-id root
+                      :page-numbers (:page-numbers body)
+                      :html (str/replace (:html body) "Body 1 " "Foreign edit ")})]
+        (is (false? (:success result)))
+        (is (= body (window-db/read-window uid root [1 20])))))))
