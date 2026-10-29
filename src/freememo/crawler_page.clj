@@ -137,7 +137,7 @@
    Duplicated from index.prod.html. Mirror any change."
   "FreeMemo — Incremental reading, AI quizzes, and Anki cards")
 
-(def ^:private og-title "FreeMemo — read it once, remember it")
+(def ^:private og-title "FreeMemo — turn reading into practice")
 
 (def ^:private description
   "Duplicated from index.prod.html, per the T3 decision. Mirror any change."
