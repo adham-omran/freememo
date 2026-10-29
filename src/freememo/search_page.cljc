@@ -210,9 +210,9 @@
       (when row
         (ResultRow row i navigate! visible?)))))
 
-;; Always-mounted: SearchPage renders this unconditionally, never gated by a
-;; cond branch. row-count drives the Tape window; 0 → an empty (but mounted)
-;; differential. Two regressions drove this shape:
+;; SearchPage keeps this table mounted across query changes. Empty results
+;; hide cached row frames. Each Tape slot retains at most one result.
+;; Two regressions drove the permanently mounted table:
 ;;  - Unmounting the whole table (Scroll-window + Tape + per-row server flows)
 ;;    when the validity gate flipped <2 chars raced the cancelled query's
 ;;    e/Offload teardown and crashed the WS (:diff-corruption). Keeping the
