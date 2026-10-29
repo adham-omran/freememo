@@ -271,9 +271,23 @@
 ;; Ingest — raw acquisition in, derived state out (§9.4.2, §9.4.3)
 ;; ---------------------------------------------------------------------------
 
+(defn start-acquisition! [!owner]
+  #?(:clj (locking !owner (let [id (str (random-uuid))] (reset! !owner id) id)) :cljs nil))
+
+(defn cancel-acquisition! [!owner run-id]
+  #?(:clj (locking !owner (when (= run-id @!owner) (reset! !owner nil))) :cljs nil))
+
+(defn commit-acquisition! [!owner run-id write!]
+  #?(:clj
+     (locking !owner
+       (if (= run-id @!owner)
+         (write!)
+         (throw (ex-info "A newer Schedule acquisition owns this result." {:cancelled? true}))))
+     :cljs nil))
+
 (defn ingest-history-chunk!
   "Continue a complete-history replay from its acknowledged preceding chunk."
-  [user-id {:keys [deck-config fingerprint info reviews initial final?]}]
+  [user-id {:keys [deck-config fingerprint info reviews initial final?]} !owner run-id]
   #?(:clj
      (try
        (when (> (count reviews) 1000)
@@ -287,7 +301,7 @@
                        (dissoc :last_review_ms :due_ms)
                        (assoc :last_review_at (some-> (:last_review_ms row) long java.sql.Timestamp.)
                               :due_at (some-> (:due_ms row) long java.sql.Timestamp.)))]
-             (db/upsert-anki-card-states! user-id [row])))
+             (commit-acquisition! !owner run-id #(db/upsert-anki-card-states! user-id [row]))))
          {:ok true :state state})
        (catch Throwable error
          (log/log-error (str "[schedule] history chunk failed: " (.getMessage error)))

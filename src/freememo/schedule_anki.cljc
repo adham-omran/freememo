@@ -403,13 +403,13 @@
       An unreachable Anki is not an error state here. §8.2 requires the tab to
       serve cached state with a staleness marker, so the failure callback
       writes `{:status :unreachable}` and the caller decides what to render."
-     [note-ids push-deck !result !request]
+     [note-ids push-deck !result !request run-id]
      (reset! !result nil)
-     (owner/start! (acquire! note-ids push-deck #(request/request! !request %))
-      (fn [res] (reset! !result res))
+     (owner/start! (acquire! note-ids push-deck #(request/request! !request (assoc % :run-id run-id)))
+      (fn [res] (reset! !result (assoc res :run-id run-id)))
       (fn [err]
         (log/log-debug (str "[schedule-anki] unreachable: " (.-message err)))
-        (reset! !result {:status :unreachable :message (.-message err)})))))
+        (reset! !result {:status :unreachable :message (.-message err) :run-id run-id})))))
 
 (defn start-acquire!
   "Reactive-body-safe entry to `run-acquire!`.
@@ -421,6 +421,6 @@
 
    Start once inside a keyed frame with `e/snapshot`.
    Register the returned canceller with that frame's `e/on-unmount`."
-  [note-ids push-deck !result !request]
-  #?(:cljs (run-acquire! note-ids push-deck !result !request)
+  [note-ids push-deck !result !request run-id]
+  #?(:cljs (run-acquire! note-ids push-deck !result !request run-id)
      :clj nil))

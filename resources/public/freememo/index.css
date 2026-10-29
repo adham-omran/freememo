@@ -9733,3 +9733,4 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .graph-page { grid-template-rows: auto minmax(0, 1fr); }
 .graph-budget-notice { grid-column: 1 / -1; }
 .graph-budget-notice .audit-page-controls { margin: 4px 0; }
+.focus-reader-pages { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; padding: 4px 8px; }

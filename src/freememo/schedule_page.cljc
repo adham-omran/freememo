@@ -57,14 +57,14 @@
 ;; Acquisition (§2, §9.4.1)
 ;; ---------------------------------------------------------------------------
 
-(e/defn HistoryRequests [user-id !request]
+(e/defn HistoryRequests [user-id !request !owner run-id]
   (e/client
     (let [pending (e/watch !request)]
-      (e/for-by :id [item (if pending [pending] [])]
+      (e/for-by :id [item (if (= run-id (get-in pending [:data :run-id])) [pending] [])]
         (let [data (:data item)
               [t ?error] (e/Token (:id item))]
           (when t
-            (let [result (e/server (e/Offload #(sched/ingest-history-chunk! user-id data)))]
+            (let [result (e/server (e/Offload #(sched/ingest-history-chunk! user-id data !owner run-id)))]
               (case result
                 (do (e/on-unmount #(request/resolve! item result))
                     (t))))))))))
@@ -85,9 +85,8 @@
           push-deck (e/server (:push-deck inputs))
           !acq (atom nil)
           !request (atom nil)
+          !owner (e/server (atom nil))
           acq (e/watch !acq)]
-
-      (HistoryRequests user-id !request)
 
       ;; §8.4 — the fetch fires ONCE per mount, inside a keyed frame. A bare
       ;; call in this body would restart on every re-evaluation (CLAUDE.md,
@@ -95,7 +94,10 @@
       ;; user or of card set an honest unmount and mount instead.
       (e/for-by identity [_k [[user-id note-ids push-deck]]]
         (when (pos? (count note-ids))
-          (let [cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq !request))]
+          (let [run-id (e/snapshot (e/server (sched/start-acquisition! !owner)))
+                cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq !request run-id))]
+            (HistoryRequests user-id !request !owner run-id)
+            (e/server (e/on-unmount #(sched/cancel-acquisition! !owner run-id)))
             (e/on-unmount cancel!))))
 
       ;; §7.3 — the ingest is sequenced, never a `(token)` sibling of the
@@ -108,7 +110,11 @@
       ;; it readable below.
       (let [[t ?error] (e/Token acq)]
         (when t
-          (let [res (e/server (e/Offload #(sched/ingest-acquisition! user-id acq)))]
+          (let [res (e/server (e/Offload #(try
+                                          (sched/commit-acquisition! !owner (:run-id acq)
+                                            (fn [] (sched/ingest-acquisition! user-id acq)))
+                                          (catch Throwable error
+                                            {:ok false :error (.getMessage error)}))))]
             (if (e/server (:ok res))
               (t)
               (t (e/server (:error res))))))
