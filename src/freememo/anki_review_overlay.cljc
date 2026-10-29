@@ -5,6 +5,7 @@
    [missionary.core :as m]
    [freememo.anki-overlay-reads :as overlay-reads]
    [freememo.anki-digest :as digest]
+   [freememo.anki-sync-observation :as sync-observation]
    [freememo.task-request :as request]
    [freememo.task-owner :as owner]
    [freememo.anki-sync-helpers :as helpers]
@@ -60,7 +61,7 @@
 
 (e/defn AnkiOverlay [user-id manifest !status !payload !check-tick]
   (e/client
-    (let [sync-rev (e/server (e/watch (us/get-atom user-id :sync-mutations)))
+    (let [[sync-busy? sync-rev] (sync-observation/SyncObservation user-id)
           card-rev (e/server (e/watch (us/get-atom user-id :card-mutations)))
           payload (e/watch !payload)
           !requests (atom nil)
@@ -70,7 +71,7 @@
           action-refresh (e/watch (cs/get-atom :anki-overlay-refresh))]
       (OverlayRequests manifest !requests)
       (e/for-by identity [_key [[manifest-key sync-rev check-tick action-refresh]]]
-        (when (pos? note-count)
+        (when (and (not sync-busy?) (pos? note-count))
           (let [cancel! (e/snapshot
                           (start-fetch! note-count [sync-rev check-tick action-refresh] !requests !status !payload))]
             (e/on-unmount cancel!))))

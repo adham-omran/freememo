@@ -15,6 +15,7 @@
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-review :as review]
    [freememo.anki-review-overlay :as review-overlay]
+   [freememo.anki-sync-observation :as sync-observation]
    [freememo.anki-reconcile-client :as rc]
    [freememo.card-components :as cc
     :refer [card-row-html set-inner-html! DeleteCardButton
@@ -1703,6 +1704,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
           !check-tick (atom 0)
+          sync-revision (e/server (second (sync-observation/SyncObservation user-id)))
           ;; Overlay computed UPSTREAM of the filtered query: its per-card flag
           ;; map feeds the rows (icons) AND, split into id-sets, the query opts.
           ;; The manifest is filter-independent (own query), so this is an
@@ -1710,7 +1712,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           manifest (e/server
                      (let [rev (+ refresh
                                  (e/watch (us/get-atom user-id :card-mutations))
-                                 (e/watch (us/get-atom user-id :sync-mutations)))]
+                                 sync-revision)]
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (review-overlay/AnkiOverlay
                          user-id manifest !ov-status !ov-payload !check-tick)
@@ -1751,7 +1753,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           snapshot (e/server
                      (let [revision [refresh
                                      (e/watch (us/get-atom user-id :card-mutations))
-                                     (e/watch (us/get-atom user-id :sync-mutations))
+                                     sync-revision
                                      (e/watch (us/get-atom user-id :tree-mutations))]]
                        (e/Offload #(load-user-cards* revision user-id))))
           result (e/server
