@@ -15,6 +15,8 @@
    #?(:clj [freememo.repo-markdown :as repo-md])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.work-run :as run])
+   #?(:clj [freememo.generation-queue :as queue])
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled])))
 
@@ -44,7 +46,10 @@
      ([user-id topic-id root-topic-id kind generated-cards]
       (save-cards-for-topic user-id topic-id root-topic-id kind generated-cards nil))
      ([user-id topic-id root-topic-id kind generated-cards entity-id]
-      (cards/save-cards user-id topic-id root-topic-id kind generated-cards true entity-id))))
+      (save-cards-for-topic user-id topic-id root-topic-id kind generated-cards entity-id nil))
+     ([user-id topic-id root-topic-id kind generated-cards entity-id commit!]
+      (cards/save-cards user-id topic-id root-topic-id kind generated-cards true entity-id
+        (or commit! (fn [write!] (write!)))))))
 
 ;; Get context from previous pages (for page-mode card generation)
 (defn get-context-pages* [root-topic-id page-number context-window]
@@ -171,7 +176,6 @@
 ;; Missionary card generation processor
 ;; ---------------------------------------------------------------------------
 
-#?(:clj (defonce card-gen-mbx (m/mbx)))
 ;; card-gen-status is per-user via (us/get-atom user-id :card-gen-status)
 ;; Shape: {topic-id {:active-id nil, :error nil, :pending 0}}
 
@@ -247,13 +251,9 @@
                               "overlapping" (cards/generate-overlapping-cards opts)
                               (cards/generate-cloze-cards opts))]
              (cond
-               ;; Checked between the model call and the insert, because that is
-               ;; the only point left where cancelling can be honoured. The call
-               ;; cannot be aborted — it goes through clj-http, whose socket read
-               ;; ignores Thread.interrupt(), and this m/ap branch hands out no
-               ;; per-item cancel handle anyway. So cancelling an in-flight
-               ;; generation means: the call is paid for, and no cards land.
-               (contains? @(us/get-atom user-id :card-gen-cancelled) topic-id)
+               ;; The HTTP request can outlive cancellation.
+               ;; Reject it here and at the insert after image preparation.
+               (and (:run item) (= :cancelled (run/state (:run item))))
                (do (log/log-info (str "Card gen cancelled before save topic=" topic-id))
                  {:success false :cancelled? true :error "Card generation cancelled"})
 
@@ -261,119 +261,124 @@
 
                :else
                (save-cards-for-topic user-id topic-id root-topic-id card-type
-                 (:cards gen-result) entity-id)))))
+                 (:cards gen-result) entity-id
+                 (when-let [attempt (:run item)] #(run/commit! attempt %)))))))
        (catch Exception e
          (log/log-error (str "generate-and-save! failed: " (.getMessage e)))
          {:success false :error (.getMessage e)}))))
 
+#?(:clj
+   (defn- capacity-limits []
+     (into {}
+       (for [[key env] [[:items "CARD_GEN_QUEUE_ITEMS"]
+                       [:user-items "CARD_GEN_QUEUE_USER_ITEMS"]
+                       [:bytes "CARD_GEN_QUEUE_BYTES"]
+                       [:user-bytes "CARD_GEN_QUEUE_USER_BYTES"]
+                       [:item-bytes "CARD_GEN_QUEUE_ITEM_BYTES"]]
+             :let [value (System/getenv env)] :when value]
+         (let [limit (parse-long value)]
+           (when-not (and limit (pos? limit))
+             (throw (ex-info "Generation capacity must be a positive integer" {:setting env})))
+           [key limit])))))
+
+#?(:clj (defonce card-gen-queue (queue/create (capacity-limits))))
+
+#?(:clj
+   (defn- sync-topic-status! [scheduler uid tid]
+     (locking (:state scheduler)
+       (let [state (queue/topic-state scheduler uid tid)]
+         (swap! (us/get-atom uid :card-gen-status) update tid
+           #(merge {:error nil} % state))
+         (when (zero? (:pending state))
+           (swap! (us/get-atom uid :card-gen-cancellers) dissoc tid)
+           (when-not (some #(and (= uid (:user-id (:item %)))
+                                (= tid (:topic-id (:item %))))
+                          (vals (:items @(:state scheduler))))
+             (swap! (us/get-atom uid :card-gen-cancelled) disj tid)))
+         state))))
+
+#?(:clj
+   (defn cancel-card-generation! [scheduler uid tid]
+     (locking (:state scheduler)
+       (queue/cancel-topic! scheduler uid tid)
+       (swap! (us/get-atom uid :card-gen-cancelled) conj tid)
+       (sync-topic-status! scheduler uid tid))
+     nil))
+
 (defn enqueue-card-gen! [item]
   #?(:clj
-     (let [tid (:topic-id item)
-           uid (:user-id item)]
-       (log/log-info (str "Card gen enqueued topic=" tid))
-       ;; A fresh enqueue clears any standing cancellation for this topic —
-       ;; otherwise a cancel would silently swallow every future run.
-       (swap! (us/get-atom uid :card-gen-cancelled) disj tid)
-       (swap! (us/get-atom uid :card-gen-status) update tid
-         (fn [s] (update (or s {:active-id nil :error nil :pending 0}) :pending inc)))
-       (swap! (us/get-atom uid :card-gen-cancellers) assoc tid
-         (fn [] (swap! (us/get-atom uid :card-gen-cancelled) conj tid) nil))
-       ;; After the status swap, so the Activity monitor opens this row now
-       ;; rather than up to one reporter tick later — a generation shorter than
-       ;; a tick was reaching the panel already reading "Done".
-       (us/work-started! uid)
-       (card-gen-mbx item)
-       :enqueued)
+     (let [attempt (run/start)
+           item (assoc item :request-id (:id item) :id (:id attempt) :run attempt)
+           tid (:topic-id item) uid (:user-id item)
+           outcome (queue/admit! card-gen-queue item
+                     (fn []
+                       (log/log-info (str "Card gen enqueued topic=" tid " run=" (:id attempt)))
+                       (swap! (us/get-atom uid :card-gen-cancelled) disj tid)
+                       (swap! (us/get-atom uid :card-gen-status) update tid assoc :error nil)
+                       (swap! (us/get-atom uid :card-gen-cancellers) assoc tid
+                         #(cancel-card-generation! card-gen-queue uid tid))
+                       (sync-topic-status! card-gen-queue uid tid)))]
+       (if (:ok outcome)
+         (do (us/work-started! uid) :enqueued)
+         (do (toasts/push! uid {:level :error :message (:error outcome)}) outcome)))
      :cljs nil))
 
 #?(:clj
-   (defn- forget-card-gen-item!
-     "Drop one outstanding item from a topic's counters, clearing the topic's
-      cancellation state once nothing of it is left.
-
-      Pre : called exactly once per dequeued item, run or skipped.
-      Post: `:pending` decremented; at zero the topic's canceller and its
-            standing cancellation are removed, so the next enqueue starts clean."
-     [uid tid]
-     (let [remaining (-> (swap! (us/get-atom uid :card-gen-status) update tid
-                           (fn [s] (-> s
-                                     (assoc :active-id nil)
-                                     (update :pending #(max 0 (dec (or % 0)))))))
-                       (get tid) :pending)]
-       (when (zero? (or remaining 0))
-         (swap! (us/get-atom uid :card-gen-cancellers) dissoc tid)
-         (swap! (us/get-atom uid :card-gen-cancelled) disj tid))
-       remaining)))
-
-;; Infinite flow that reads from the mailbox one item at a time
-#?(:clj
-   (defn mbx-flow []
-     (m/ap (loop []
-             (let [item (m/? card-gen-mbx)]
-               (m/amb item (recur)))))))
-
-#?(:clj
-   (defn- card-generation-task
-     "Run one queued card-generation item.
-      Pre:  `item` satisfies `generate-and-save!`.
-      Post: a Missionary task returns the exact generation result.
-      Inv:  the generation runs on the blocking executor, and no outer deadline
-            can replace a result after `generate-and-save!` saves cards."
-     [item]
+   (defn- card-generation-task [item]
      (m/via m/blk (generate-and-save! item))))
 
 #?(:clj
-   (defonce card-gen-processor-cancel
-     ((m/reduce
-        (fn [_ _] nil) nil
-        (m/ap
-          (let [item (m/?> 3 (mbx-flow))
-                tid (:topic-id item)
-                uid (:user-id item)
-                !status (us/get-atom uid :card-gen-status)]
-            ;; Checked at dequeue, and again inside `generate-and-save!` just
-            ;; before the insert. Here it is free and complete — an item still in
-            ;; the mailbox has spent nothing. There it is cooperative: the model
-            ;; call cannot be recalled, but the cards need not land.
-            (if (contains? @(us/get-atom uid :card-gen-cancelled) tid)
-              (do (log/log-info (str "Card gen skipped (cancelled) topic=" tid))
-                (forget-card-gen-item! uid tid))
-              (do
-                (swap! !status update tid assoc :active-id (:id item) :error nil)
-                ;; Apache HttpClient ignores Missionary's worker interruption.
-                ;; An outer timeout can therefore expire, wait while this call
-                ;; saves cards, and then replace its success with a timeout. The
-                ;; worker result is the only truthful completion signal.
-                (let [result (m/? (card-generation-task item))]
-                  (forget-card-gen-item! uid tid)
-                  (cond
-                    (:success result)
-                    (do (commands/bump! uid :generate)
-                      ;; The assistant panel asks for this: its jobs start
-                      ;; far from the toolbar's spinner and card table.
-                      (when (:success-toast? item)
-                        (let [n (count (:ids result))]
-                          (toasts/push! uid
-                            {:level :success
-                             :message (if (zero? n)
-                                        "No new cards: they were all duplicates."
-                                        (str "Added " n " card" (when (not= 1 n) "s") "."))})))
-                      (log/log-info (str "Card gen complete topic=" tid)))
+   (defn- settle-generation! [scheduler item result]
+     (let [uid (:user-id item) tid (:topic-id item)
+           result (if (= :cancelled (run/state (:run item)))
+                    {:success false :cancelled? true}
+                    result)]
+       (locking (:state scheduler)
+         (queue/finish! scheduler (:id item))
+         (sync-topic-status! scheduler uid tid)
+         (cond
+           (:success result)
+           (do (commands/bump! uid :generate)
+               (when (:success-toast? item)
+                 (let [n (count (:ids result))]
+                   (toasts/push! uid
+                     {:level :success
+                      :message (if (zero? n)
+                                 "No new cards: they were all duplicates."
+                                 (str "Added " n " card" (when (not= 1 n) "s") "."))})))
+               (log/log-info (str "Card gen complete topic=" tid)))
+           (:cancelled? result)
+           (log/log-info (str "Card gen cancelled topic=" tid))
+           :else
+           (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
+               (swap! (us/get-atom uid :card-gen-status) update tid assoc :error (:error result))
+               (toasts/push! uid
+                 {:level :error :message (:error result)
+                  :actions (if (= :insufficient-credits (:error-type result))
+                             [{:label "Top up credits" :nav :settings}] [])})))))))
 
-                    ;; A cancelled run is not a failure. Recording it in `:error`
-                    ;; would make the Activity monitor close the run as one, and
-                    ;; toast an error for something the user chose.
-                    (:cancelled? result)
-                    (log/log-info (str "Card gen cancelled topic=" tid))
+#?(:clj
+   (defn- generation-worker [scheduler]
+     (m/sp
+       (loop []
+         (let [item (m/? (queue/take-task scheduler))]
+           (sync-topic-status! scheduler (:user-id item) (:topic-id item))
+           (let [result (if (= :cancelled (run/state (:run item)))
+                          (do (log/log-info (str "Card gen skipped (cancelled) topic=" (:topic-id item)))
+                              {:success false :cancelled? true})
+                          (try
+                            (m/? (card-generation-task item))
+                            (catch Cancelled e (throw e))
+                            (catch Exception e {:success false :error (.getMessage e)})))]
+             (settle-generation! scheduler item result))
+           (recur))))))
 
-                    :else
-                    (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
-                      (swap! !status update tid assoc :error (:error result))
-                      (toasts/push! uid
-                        {:level :error
-                         :message (:error result)
-                         :actions (if (= :insufficient-credits (:error-type result))
-                                    [{:label "Top up credits" :nav :settings}]
-                                    [])})))))))))
+#?(:clj
+   (defn start-generation-processor! [scheduler]
+     ((m/join vector (generation-worker scheduler) (generation-worker scheduler)
+        (generation-worker scheduler))
       (fn [_] nil)
       (fn [e] (log/log-error (str "Card gen processor crashed: " e))))))
+
+#?(:clj
+   (defonce card-gen-processor-cancel (start-generation-processor! card-gen-queue)))

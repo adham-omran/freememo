@@ -56,3 +56,20 @@
                   #(swap! !seen conj %) (fn [_] (swap! !seen conj :failed)))]
       (stop!)
       (is (= [:ready] @!seen)))))
+
+(deftest simultaneous-consumers-settle-independently
+  (let [first-callbacks (atom nil) second-callbacks (atom nil)
+        first-result (atom nil) second-result (atom nil)
+        first-cancels (atom 0) second-cancels (atom 0)
+        first-stop! (owner/start! (controlled-task first-callbacks first-cancels)
+                      #(reset! first-result %) #(reset! first-result :failed))
+        second-stop! (owner/start! (controlled-task second-callbacks second-cancels)
+                       #(reset! second-result %) #(reset! second-result :failed))]
+    (first-stop!)
+    ((:success @first-callbacks) :late-first)
+    ((:success @second-callbacks) :second)
+    (is (nil? @first-result))
+    (is (= :second @second-result))
+    (is (= 1 @first-cancels))
+    (is (zero? @second-cancels))
+    (second-stop!)))

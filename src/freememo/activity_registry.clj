@@ -194,9 +194,7 @@
     :tier :server :subject :topic :work-key id->key
     :state-key :card-gen-status
     :canceller-key :card-gen-cancellers :cancelled-key :card-gen-cancelled
-    ;; `forget-card-gen-item!` leaves the entry behind with `:pending` 0 and its
-    ;; `:error` intact, which is exactly what makes the outcome readable after
-    ;; the work is gone.
+    ;; The owner retains errors after its pending count reaches zero.
     :error-fn (fn [uid work-key]
                 (:error (get @(us/get-atom uid :card-gen-status) (key->id work-key))))
     ;; `:card-gen-status` is keyed by TOPIC and aggregates that topic's runs into
@@ -211,17 +209,16 @@
     ;; would do nothing. That reasoning was incomplete: the call cannot be
     ;; recalled, but the CARDS can be left uninserted, and not receiving cards
     ;; you asked to abandon is the part still available.
-    ;; `generate-and-save!` reads `:card-gen-cancelled` immediately before its
-    ;; insert — the same cooperative shape a page scan uses, for the same
-    ;; reason: neither request can be aborted.
+    ;; Each generation attempt checks its own guard at the card insert.
+    ;; The topic marker only hides canceled work from discovery.
     ;;
     ;; The phase carries the outstanding count, because this entry AGGREGATES.
     ;; Three generations on one page are one row, and without the count three
     ;; runs and one read identically — which is exactly what a user who ran
     ;; three and saw one activity reported.
-    :entry->state (fn [{:keys [active-id pending]}]
+    :entry->state (fn [{:keys [active-id active-count pending]}]
                     (let [pending (or pending 0)
-                          queued (- pending (if active-id 1 0))]
+                          queued (- pending (or active-count (if active-id 1 0)))]
                       (cond
                         (some? active-id)
                         {:phase (if (pos? queued)

@@ -158,15 +158,16 @@
                :topic-id id :root-topic-id root-id
                :page-number (:topics/page_number topic)
                :is-code? code? :user-id user-id})]
-        (helpers/enqueue-card-gen!
-          {:id (str (random-uuid))
-           :content content :context context
-           :card-type (settings/get-card-type user-id)
-           :card-count (settings/get-card-count user-id)
-           :user-id user-id :enc-key (enc-key-for user-id)
-           :topic-id id :root-topic-id root-id
-           :pre-prompt nil :pre-prompt-mode nil})
-        {:ok? true}))))
+        (let [outcome (helpers/enqueue-card-gen!
+                        {:id (str (random-uuid))
+                         :content content :context context
+                         :card-type (settings/get-card-type user-id)
+                         :card-count (settings/get-card-count user-id)
+                         :user-id user-id :enc-key (enc-key-for user-id)
+                         :topic-id id :root-topic-id root-id
+                         :pre-prompt nil :pre-prompt-mode nil})]
+          (if (= :enqueued outcome) {:ok? true}
+              {:ok? false :error (:error outcome)}))))))
 
 (defmethod opt/run-command! :generate-cards-for-topic [user-id {:keys [payload]}]
   (let [topic (owned-topic user-id (first (subject-ids payload)))]

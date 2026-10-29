@@ -2182,7 +2182,7 @@
       (nil? page) {:error "Topic not found."}
       (str/blank? (text/strip-html (or content ""))) {:error "There is no text to make cards from."}
       :else
-      (do (card-gen/enqueue-card-gen!
+      (let [outcome (card-gen/enqueue-card-gen!
             {:id (str (random-uuid))
              :content content
              :context (when (settings/get-context-enabled user-id) context-text)
@@ -2198,8 +2198,8 @@
                               root-id)
              :pre-prompt nil
              :pre-prompt-mode nil
-             :success-toast? true})
-        {:ok true}))))
+             :success-toast? true})]
+        (if (= :enqueued outcome) {:ok true} outcome)))))
 
 (defn selection->cards!
   "Queue cards from text selected in one settled answer. The whole answer is the

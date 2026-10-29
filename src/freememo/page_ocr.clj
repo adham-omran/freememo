@@ -16,6 +16,8 @@
    topic-id is the root PDF topic ID.
    Returns {:success true :text ...} or {:success false :error ...}
    DPI defaults to 150 if not provided.
+   `:commit!` receives the final write thunk. Attempt owners use it to serialize
+   cancellation and deadline checks with the page write.
 
    `:cancelled?` is a 0-arity predicate consulted immediately BEFORE the save,
    and that placement is the whole of it. Cancelling a scan cannot abort the OCR
@@ -36,7 +38,7 @@
    (extract-page-text user-id topic-id page-number enc-key 150 {}))
   ([user-id topic-id page-number enc-key dpi]
    (extract-page-text user-id topic-id page-number enc-key dpi {}))
-  ([user-id topic-id page-number enc-key dpi {:keys [cancelled?]}]
+  ([user-id topic-id page-number enc-key dpi {:keys [cancelled? commit!]}]
    (try
      (let [file-row (db/get-topic-file topic-id)]
        (if-not file-row
@@ -53,8 +55,9 @@
                {:success false :cancelled? true :error "Scan cancelled"})
 
              (:success result)
-             (do (db/save-page-text! topic-id page-number (:text result))
-               {:success true :text (:text result)})
+             (let [save! #(do (db/save-page-text! topic-id page-number (:text result))
+                             {:success true :text (:text result)})]
+               (if commit! (commit! save!) (save!)))
 
              :else result))))
      (catch Exception e
