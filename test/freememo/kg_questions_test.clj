@@ -7,6 +7,7 @@
    the rewrite exists to remove."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.db :as db]
+            [honey.sql :as sql]
             [freememo.kg-questions :as kgq]
             [freememo.question-curation :as curate]))
 
@@ -125,8 +126,10 @@
     (is (= [:raw "'{}'::text[]"] (text-array-value [])))
     (is (= [:raw "'{}'::text[]"] (text-array-value nil)))))
 
-(deftest non-empty-arrays-use-the-array-constructor
+(deftest non-empty-arrays-preserve-values-and-bind-ids-once
   (is (= [:array [1 2 3]] (int-array-value [1 2 3])))
   (is (= [:array [7]] (int-array-value '(7))))
-  (is (= [:array [1099511627777]] (id-array-value [1099511627777])))
+  (let [[_ & parameters] (sql/format {:select [[(id-array-value [1099511627777]) :ids]]})]
+    (is (= 1 (count parameters)))
+    (is (= [1099511627777] (vec (first parameters)))))
   (is (= [:array ["a" "b"]] (text-array-value ["a" "b"]))))
