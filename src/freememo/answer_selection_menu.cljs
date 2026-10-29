@@ -162,8 +162,7 @@
                                    [inc-btn "+" "More cards to generate" 1]]]
       (set! (.-type b) "button")
       (set! (.-textContent b) label)
-      (.setAttribute b "title" title)
-      (.setAttribute b "aria-label" title)
+      (tooltip/set-tooltip! b title :aria? true)
       ;; Keep the selection, as action-button does.
       (.addEventListener b "mousedown" #(.preventDefault %))
       (.addEventListener b "click" (fn [_] (step-count! delta))))
