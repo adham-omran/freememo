@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
+   [freememo.anki-reads :as reads]
    [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.client-state :as cs]
@@ -24,7 +25,7 @@
        (log/log-debug (str "[anki-overlay] fetch start gen=" my-gen
                         " notes=" (count note-ids)))
        ((m/sp
-          (let [notes (m/? (helpers/anki-call! "notesInfo" {:notes note-ids}))
+          (let [notes (m/? (reads/read-notes! helpers/anki-call! note-ids))
                 notes-clj (js->clj notes :keywordize-keys true)
                 pairs (map vector note-ids notes-clj)
                 absent (into []

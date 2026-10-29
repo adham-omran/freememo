@@ -7,7 +7,7 @@
 
    Phase order, and why it is this order:
 
-     1. `scan!`        one notesInfo over every note the server knows about
+     1. `scan!`        bounded notesInfo requests over known notes
      2. (server plans from the digests this produced)
      then, per batch of `anki-reconcile/batch-size` cards:
      3. `write!`       addNote / updateNote for the batch's creates and pushes
@@ -25,6 +25,7 @@
    on a run with nothing to do."
   (:require
    [missionary.core :as m]
+   [freememo.anki-reads :as reads]
    [freememo.anki-digest :as digest]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.logging :as log]))
@@ -41,7 +42,7 @@
 
 #?(:cljs
    (defn scan!
-     "Read every note the server knows about, in one notesInfo call.
+     "Read known notes through sequential, bounded notesInfo requests.
 
       pre : `note-ids` is the union of the pushed-card manifest and the
             outstanding tombstones. `kind-by-note` maps note id to the local
@@ -60,7 +61,7 @@
      (if (empty? note-ids)
        (m/sp {:digests {} :mods {} :absent [] :notes-by-id {}})
        (m/sp
-         (let [notes (js->clj (m/? (helpers/anki-call! "notesInfo" {:notes (vec note-ids)}))
+         (let [notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
                        :keywordize-keys true)
                pairs (map vector note-ids notes)
                present (into [] (keep (fn [[_ n]] (when (:noteId n) n))) pairs)]
@@ -115,7 +116,7 @@
                                             #(get kind-by-card (:card-id %))))
                               pairs)
                card-by-note (into {} (map (juxt :anki-note-id :card-id)) pairs)
-               notes (js->clj (m/? (helpers/anki-call! "notesInfo" {:notes note-ids}))
+               notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
                        :keywordize-keys true)]
            (into []
              (keep (fn [n]
