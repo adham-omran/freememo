@@ -12,6 +12,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.bounded-page :as page]
+   [freememo.graph-lifecycle :as lifecycle]
    #?(:clj [freememo.entity-options :as entity-options])
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
@@ -161,11 +162,12 @@
 
 (defn schedule-graph-init! [!ctx container payload on-select opts]
   #?(:cljs
-     (js/setTimeout
-       (fn []
-         (vendor/with! :graph
-           (fn [] (reset! !ctx (render/init! container payload on-select opts)))))
-       0)
+     (lifecycle/start! !ctx
+       (fn [ready!]
+         (let [timer (js/setTimeout #(vendor/with! :graph ready!) 0)]
+           #(js/clearTimeout timer)))
+       #(render/init! container payload on-select opts)
+       render/destroy!)
      :clj nil))
 
 (defn apply-filters! [ctx source pred-set connectedness]
@@ -437,18 +439,15 @@
           (e/for-by identity [_key [[kg-bump (:selection payload)]]]
             (dom/div
               (dom/props {:class "graph-render-canvas"})
-              (schedule-graph-init! !ctx dom/node payload
+              (let [cancel! (e/snapshot (schedule-graph-init! !ctx dom/node payload
                 (fn [id]
                   (reset! !selected-id id)
                   (reset! !view-mode (if id :neighborhood :overview)))
                 {:on-counts (fn [counts]
                               (when (not= counts @!stats)
                                 (reset! !stats counts)))
-                 :minimap-container @!minimap-node})
-              (e/on-unmount
-                (fn []
-                  (destroy-graph! @!ctx)
-                  (reset! !ctx nil))))))
+                 :minimap-container @!minimap-node}))]
+                (e/on-unmount cancel!)))))
         (case (apply-filters! ctx source preds connectedness) nil)
         (case (set-view! ctx view-mode selected-id depth) nil)
         (GraphToolbar ctx stats view-mode depth (source-title payload source)
@@ -463,7 +462,7 @@
 
 (e/defn ConnectedFacts [facts selected-id !linked-entity navigate!]
   (e/client
-    (let [row-count (count facts)]
+    (let [row-count (e/server (count facts))]
       (dom/div
         (dom/props {:class "graph-inspector-facts tape-scroll"
                     :style {:--row-height (str fact-row-height "px")
@@ -475,7 +474,7 @@
           (dom/table
             (dom/props {:aria-label "Connected facts" :style {:width "100%"}})
             (e/for [i (Tape offset limit)]
-              (let [fact (nth facts i nil)]
+              (let [fact (e/server (nth facts i nil))]
                 (when fact
                   (dom/tr
                     (dom/props {:class "graph-inspector-fact-row"
@@ -497,8 +496,11 @@
     (when selected-id
       (let [card (e/server
                    (e/Offload #(graph-entity-card* kg-bump user-id selected-id)))
-            facts (:facts card)
-            document-count (count (into #{} (keep :graph_topic_id) facts))
+            facts (e/server (:facts card))
+            label (e/server (:label card))
+            aliases (e/server (:aliases card))
+            fact-count (e/server (count facts))
+            document-count (e/server (count (into #{} (keep :graph_topic_id) facts)))
             !linked-entity (atom nil)
             linked-entity (e/watch !linked-entity)]
         (when linked-entity
@@ -511,7 +513,7 @@
             (dom/div
               (dom/div (dom/props {:class "graph-inspector-kicker"})
                 (dom/text "Selected concept"))
-              (dom/h2 (dom/props {:dir "auto"}) (dom/text (:label card))))
+              (dom/h2 (dom/props {:dir "auto"}) (dom/text label)))
             (dom/button
               (dom/props {:type "button" :class "icon-btn"
                           :aria-label "Close concept details"})
@@ -524,12 +526,12 @@
                 nil)))
           (dom/p
             (dom/props {:class "graph-inspector-summary"})
-            (dom/text (str (item-count-label (count facts) "fact") " across "
+            (dom/text (str (item-count-label fact-count "fact") " across "
                         (item-count-label document-count "document"))))
-          (when (seq (:aliases card))
+          (when (seq aliases)
             (dom/p
               (dom/props {:class "graph-inspector-aliases" :dir "auto"})
-              (dom/text (str "Also: " (str/join ", " (:aliases card))))))
+              (dom/text (str "Also: " (str/join ", " aliases)))))
           (dom/button
             (dom/props {:type "button" :class "btn btn-primary graph-open-facts"})
             (dom/text "Open Facts")
@@ -537,7 +539,7 @@
           (dom/div
             (dom/props {:class "graph-inspector-section-heading"})
             (dom/strong (dom/text "Connected facts"))
-            (dom/span (dom/text (count facts))))
+            (dom/span (dom/text fact-count)))
           (ConnectedFacts facts selected-id !linked-entity navigate!))))))
 
 (e/defn GraphEmptyState [navigate!]
