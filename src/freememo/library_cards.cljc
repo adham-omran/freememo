@@ -297,9 +297,10 @@
        (let [q (str/lower-case (str/trim text))]
          (filterv
            (fn [c]
-             (let [hay (str/lower-case
-                         (str (str/join (map member-text (:members c)))
-                           (or (:root_title c) "")))]
+             (let [hay (or (:search-text c)
+                           (str/lower-case
+                             (str (str/join (map member-text (:members c)))
+                               (or (:root_title c) ""))))]
                (str/includes? hay q)))
            cards)))))
 
@@ -398,51 +399,63 @@
          :member-states states
          :sync-state (if (= 1 (count (set states))) (first states) :mixed)))))
 
-(defn query-user-cards* [_rev user-id opts]
+(defn load-user-cards* [revision user-id]
   #?(:clj
      (try
        (let [card-revision @(us/get-atom user-id :card-mutations)
-             {:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
-             ;; Collapse BEFORE filtering. Filtering first would leave
-             ;; :member-ids holding only the members that matched, and the row
-             ;; would then delete a subset of its own group.
-             ;; Timed alone, not with the whole thunk: gate 6.0 of
-             ;; plans/server-query-performance.md asks for this call's time.
-             all (mapv with-sync-states
-                   (rows/collapse-groups
-                     (read-region/timed-read :library-cards-rows
-                       #(db/get-user-flashcards user-id))))
-             ;; Read only when the facet is on, so the ordinary view costs no
-             ;; extra query — same rule `OverlayIds` follows on the client.
-             conflict-ids (when (contains? origins "conflict")
-                            (set (db/list-anki-conflicts user-id)))
-             filtered (-> all
-                        (filter-cards-kinds kinds)
-                        (filter-cards-origins origins overlay-ids conflict-ids)
-                        (filter-cards-flags flags overlay-ids)
-                        (filter-cards-text text))
-             sorted (sort-user-cards filtered sort-col sort-dir)
-             states (into [] (mapcat :member-states) sorted)]
-         {:success true :card-revision card-revision
-          ;; The filters and sort this result was read with, for the
-          ;; row-motion/arrivals! scope.
-          :view-key [text kinds origins flags sort-col sort-dir]
-          ;; Only the trimmed summary crosses the wire; counts/ids/manifest
-          ;; below still derive from the full `sorted`/`all` rows.
-          :cards (mapv card-list-summary sorted)
-          :count (count sorted)
-          :card-count (rows/card-count sorted)
-          ;; The filtered+sorted set as [row-key member-ids] pairs. Select-all
-          ;; needs the keys and the bulk actions need the ids, so ONE value
-          ;; serves both and the two cannot drift. Ints and keywords only;
-          ;; content stays server-side.
-          :filtered-rows (mapv (juxt :row-key :member-ids) sorted)
-          ;; Card counts, not row counts — they describe what Push acts on.
-          :unpushed (count (filterv #(= :unpushed %) states))
-          :modified (count (filterv #(= :modified %) states))})
+             all (->> (read-region/timed-read :library-cards-rows
+                        {:route "library/cards" :phase "snapshot"}
+                        #(db/get-user-flashcards user-id))
+                   rows/collapse-groups
+                   (mapv (fn [row]
+                           (assoc (with-sync-states row)
+                             :search-text (str/lower-case
+                                            (str (str/join (map member-text (:members row)))
+                                              (or (:root_title row) "")))))))]
+         {:success true :revision revision :card-revision card-revision
+          :rows (sort-user-cards all :added :desc)})
        (catch Exception e
-         (tel/error! {:id ::query-user-cards :data {:user-id user-id}} e)
+         (tel/error! {:id ::load-user-cards :data {:user-id user-id}} e)
          {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+(defn query-loaded-cards* [snapshot user-id opts]
+  #?(:clj
+     (if-not (:success snapshot)
+       snapshot
+       (try
+         (let [{:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
+               conflict-ids (when (contains? origins "conflict")
+                              (set (db/list-anki-conflicts user-id)))
+               filtered (-> (:rows snapshot)
+                          (filter-cards-kinds kinds)
+                          (filter-cards-origins origins overlay-ids conflict-ids)
+                          (filter-cards-flags flags overlay-ids)
+                          (filter-cards-text text))
+               sorted (if (and (= sort-col :added) (= sort-dir :desc))
+                        filtered
+                        (sort-user-cards filtered sort-col sort-dir))
+               states (into [] (mapcat :member-states) sorted)]
+           {:success true :card-revision (:card-revision snapshot)
+            :view-key [text kinds origins flags sort-col sort-dir]
+            :cards sorted
+            :count (count sorted)
+            :card-count (rows/card-count sorted)
+            :filtered-rows (mapv (juxt :row-key :member-ids) sorted)
+            :unpushed (count (filterv #(= :unpushed %) states))
+            :modified (count (filterv #(= :modified %) states))})
+         (catch Exception e
+           (tel/error! {:id ::query-user-cards :data {:user-id user-id}} e)
+           {:success false :error (.getMessage e)})))
+     :cljs nil))
+
+(defn query-user-cards* [revision user-id opts]
+  (query-loaded-cards* (load-user-cards* revision user-id) user-id opts))
+
+(defn window-card-summaries* [window]
+  #?(:clj
+     (mapv (fn [row]
+             (assoc (card-list-summary row) :pos (:pos row) :fresh? (:fresh? row))) window)
      :cljs nil))
 
 ;; Filter-independent overlay manifest. Separate from query-user-cards* so it
@@ -1506,7 +1519,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
                                     (visible-row-keys cards-vec visible-indexes)))
                 window (e/server
                          (e/diff-by :row-key
-                           (window-cards cards-vec visible-indexes offset limit arrived)))]
+                           (window-card-summaries*
+                             (window-cards cards-vec visible-indexes offset limit arrived))))]
             (e/for [card window]
               (LibraryCardRow card navigate! !editing-card !diff-card !selected
                 selected user-id (:pos card) anki-overlay !stats))))
@@ -1734,13 +1748,15 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; view entry (~1 MB at 3k cards). A bare (e/server ...) form is
           ;; sited-by-use: only the fields the client actually reads cross
           ;; the wire (counts, filtered-ids, manifest, window rows).
+          snapshot (e/server
+                     (let [revision [refresh
+                                     (e/watch (us/get-atom user-id :card-mutations))
+                                     (e/watch (us/get-atom user-id :sync-mutations))
+                                     (e/watch (us/get-atom user-id :tree-mutations))]]
+                       (e/Offload #(load-user-cards* revision user-id))))
           result (e/server
-                   (let [rev (+ refresh
-                               (e/watch (us/get-atom user-id :card-mutations))
-                               (e/watch (us/get-atom user-id :sync-mutations))
-                               (e/watch (us/get-atom user-id :tree-mutations)))]
-                     (e/Offload #(assoc (query-user-cards* rev user-id opts)
-                                   :opts-hash opts-hash))))
+                   (e/Offload #(assoc (query-loaded-cards* snapshot user-id opts)
+                                 :opts-hash opts-hash)))
           success? (e/server (:success result))
           ;; True while the rows on screen belong to a PREVIOUS filter set.
           ;; Deliberately blind to :refresh / :card-mutations / :sync-mutations
