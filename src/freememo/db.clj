@@ -7792,11 +7792,16 @@
    SENT, read before an Anki round trip in which the card may have been edited.
    Copying that digest into `local_current_digest` would erase the edit; the
    column is recomputed from the row instead, in the same transaction, so the
-   two disagree exactly when an edit landed during the round trip."
+   two disagree exactly when an edit landed during the round trip.
+   The four-argument form uses the caller's transaction without committing it."
   ([user-id entries] (set-card-baselines! user-id entries {}))
-  ([user-id entries {:keys [restamp-current?]}]
-  (when (seq entries)
-    (let [sql-head (str "UPDATE flashcards AS f SET "
+  ([user-id entries opts]
+   (when (seq entries)
+     (jdbc/with-transaction [tx ds]
+       (set-card-baselines! tx user-id entries opts))))
+  ([tx user-id entries {:keys [restamp-current?]}]
+   (when (seq entries)
+     (let [sql-head (str "UPDATE flashcards AS f SET "
                      "anki_baseline_digest = v.anki_digest, "
                      "local_baseline_digest = v.local_digest, "
                      (when-not restamp-current? "local_current_digest = v.local_digest, ")
@@ -7810,19 +7815,18 @@
           ;; Two parameters sit outside the VALUES list: the version and the
           ;; ownership id.
           batch-size (quot (- max-statement-params 2) baseline-value-columns)]
-      (jdbc/with-transaction [tx ds]
-        (doseq [batch (partition-all batch-size (dedupe-last-by :card-id entries))]
-          (jdbc/execute-one! tx
-            (-> [(str sql-head
+       (doseq [batch (partition-all batch-size (dedupe-last-by :card-id entries))]
+         (jdbc/execute-one! tx
+           (-> [(str sql-head
                    (str/join "," (repeat (count batch)
                                    "(?::bigint, ?::char(64), ?::char(64), ?::bigint)"))
                    sql-tail)
                  digest/digest-version]
               (into (mapcat (juxt :card-id :anki-digest :local-digest :anki-mod)) batch)
               (conj user-id))))
-        (when restamp-current?
-          (restamp-card-digests! tx (mapv :card-id entries)))))
-    (count entries))))
+       (when restamp-current?
+         (restamp-card-digests! tx (mapv :card-id entries))))
+     (count entries))))
 
 (defn list-anki-tombstones
   "Every outstanding tombstone for `user-id`, oldest first.
@@ -7922,6 +7926,44 @@
       (when (pos? (or (:next.jdbc/update-count result) 0))
         (restamp-card-digests! tx [card-id]))
       result)))
+
+(defn apply-reconcile-pull!
+  "Apply sanitized pull fields only if the locked row still matches the plan.
+   Content, current digest, and both baselines commit in one transaction.
+   Returns :applied, :conflict, :unchanged, or :missing."
+  [user-id card-id expected update-map anki-digest]
+  (jdbc/with-transaction [tx ds]
+    (if-let [card (some-> (jdbc/execute-one! tx
+                           ["SELECT f.* FROM flashcards f
+                             JOIN topics root ON root.id=f.root_topic_id
+                             WHERE f.id=? AND root.user_id=? FOR UPDATE OF f"
+                            card-id user-id])
+                   parse-digest-jsonb)]
+      (cond
+        (or (nil? (:local-digest expected))
+            (not= (:note-id expected) (:flashcards/anki_note_id card))
+            (not= (:local-digest expected) (digest/local-digest card)))
+        :conflict
+
+        (nil? update-map) :unchanged
+
+        :else
+        (let [fields (if (seq (:io-fields update-map))
+                       {:io_fields [:|| [:coalesce :io_fields [:cast "{}" :jsonb]]
+                                    (->jsonb (:io-fields update-map))]
+                        :anki_synced_at [:now]}
+                       (assoc (select-keys update-map [:question :answer :cloze])
+                         :updated_at [:now]))]
+          (jdbc/execute-one! tx
+            (sql/format {:update :flashcards :set fields :where [:= :id card-id]}))
+          (restamp-card-digests! tx [card-id])
+          (let [local-digest (:flashcards/local_current_digest
+                              (jdbc/execute-one! tx
+                                ["SELECT local_current_digest FROM flashcards WHERE id=?" card-id]))]
+            (set-card-baselines! tx user-id
+              [{:card-id card-id :anki-digest anki-digest :local-digest local-digest}] {}))
+          :applied))
+      :missing)))
 
 ;; ---------------------------------------------------------------------------
 ;; Card edit history — write-behind version log (plans/card-edit-history.md).

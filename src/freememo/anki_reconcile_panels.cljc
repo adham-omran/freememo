@@ -285,6 +285,7 @@
                 (let [finished (e/watch (:!finished-note-ids recon))]
                   (when finished
                     (let [outcome {:pull-card-ids (:pull-card-ids p)
+                                   :pull-versions (:pull-versions p)
                                    :pull-notes (rc/notes-for (:notes-by-id scan) (:pull-note-ids p))
                                    :digests (:digests scan)
                                    :backfill (:backfill p)

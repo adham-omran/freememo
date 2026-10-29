@@ -74,6 +74,7 @@
            :kind-by-card       so `read-back!` can digest by the right fields
            :pull-card-ids      what `apply-pulls!` will write
            :pull-note-ids      which notes the client must send back for it
+           :pull-versions      local digest and note ID captured when planning
            :backfill           [{:card-id :note-id}] for `:needs-baseline`
            :conflict-card-ids  the exact set `set-conflicts!` will store
            :note-ids-to-delete tombstones whose note must go
@@ -106,6 +107,9 @@
       :kind-by-card       (into {} (map (juxt :card-id :kind)) writes)
       :pull-card-ids      (mapv :card-id (get by-outcome :pull))
       :pull-note-ids      (mapv :note-id (get by-outcome :pull))
+      :pull-versions      (into {} (map (fn [{:keys [card-id local-digest note-id]}]
+                                         [card-id {:local-digest local-digest :note-id note-id}]))
+                            (get by-outcome :pull))
       :backfill           (mapv #(select-keys % [:card-id :note-id])
                             (get by-outcome :needs-baseline))
       :conflict-card-ids  (mapv :card-id (get by-outcome :conflict))
@@ -229,67 +233,41 @@
       (seq errors) (assoc :error (str/join "; " errors)))))
 
 (defn- apply-pull-chunk!
-  "One chunk of `apply-pulls!`. Returns the count applied, or throws.
-
-   Each content write commits on its own, through `db/update-flashcard!`, and the
-   chunk's baselines commit after them. A failure between the two leaves pulled
-   content with the old baselines, as it did before chunking."
-  [user-id card-ids notes-by-id digests]
-  (let [cards (db/get-cards-for-reconcile user-id (vec card-ids))
-        applied
-        (into []
-          (keep (fn [card]
-                  (let [nid (:flashcards/anki_note_id card)
-                        note (get notes-by-id nid)
-                        upd (some-> (when note
-                                      (helpers/note->pull-update card (:fields note)))
-                              sync-server/sanitized-pull-update)]
-                    (when upd
-                      (let [{:keys [question answer cloze io-fields]} upd]
-                        (if (seq io-fields)
-                          (db/merge-flashcard-io-fields! user-id (:flashcards/id card) io-fields)
-                          (let [flds (cond-> {}
-                                       question (assoc :question question)
-                                       answer   (assoc :answer answer)
-                                       cloze    (assoc :cloze cloze))]
-                            (when (seq flds)
-                              (db/update-flashcard! user-id (:flashcards/id card) flds))))
-                        {:card-id (:flashcards/id card) :anki-digest (get digests nid)})))))
-          cards)
-        locals (fresh-local-digests user-id (map :card-id applied))]
-    (db/set-card-baselines! user-id
-      (mapv (fn [{:keys [card-id anki-digest]}]
-              {:card-id card-id :anki-digest anki-digest
-               :local-digest (get locals card-id)})
-        applied))
-    (count applied)))
+  "Apply one pull chunk with the digest and note ID captured during planning."
+  [user-id card-ids notes-by-id digests versions !conflicts]
+  (reduce
+    (fn [result card]
+      (let [card-id (:flashcards/id card)
+            expected (get versions card-id)
+            nid (:note-id expected)
+            note (get notes-by-id nid)
+            update-map (some-> (when note
+                                (helpers/note->pull-update card (:fields note)))
+                         sync-server/sanitized-pull-update)
+            verdict (when note
+                      (db/apply-reconcile-pull! user-id card-id expected update-map
+                        (get digests nid)))]
+        (case verdict
+          :applied (update result :count inc)
+          :conflict (do (swap! !conflicts conj card-id) result)
+          result)))
+    {:count 0}
+    (db/get-cards-for-reconcile user-id (vec card-ids))))
 
 (defn apply-pulls!
-  "Write Anki's content into the local cards, then stamp both baselines.
-
-   pre : `card-ids` are the plan's `:pull` decisions. `notes-by-id` holds the
-         notesInfo note for each of those cards' notes — the client sends only
-         these, not the whole batch. `digests` is the scan's digest map.
-   post: content applied, baselines stamped from the row as written.
-         Returns {:success true :count n}.
-
-   The update is built HERE, not on the client, so `note->pull-update` runs once
-   for the whole app. `sync-server/sanitized-pull-update` is the last step before
-   the write, for the reason it documents: `db/update-flashcard!` is a bare UPDATE
-   with no sanitisation, and pull is the only path by which HTML this app did not
-   author reaches `flashcards`.
-
-   A card whose tracked fields turn out not to differ is skipped entirely,
-   baseline included. Stamping one would record agreement with content this run
-   never compared.
-
-   Chunked by `write-chunks!`, so a failed chunk keeps the others."
-  [user-id card-ids notes-by-id digests]
-  (let [result (write-chunks! ::apply-pulls!
-                 #(apply-pull-chunk! user-id % notes-by-id digests)
+  "Apply planned Anki content without replacing newer local edits.
+   `versions` carries each planned pull's local digest and note ID.
+   Sanitization precedes the owned transactional write.
+   Raced edits become conflicts and keep their previous baselines."
+  [user-id card-ids notes-by-id digests versions]
+  (let [!conflicts (atom [])
+        result (write-chunks! ::apply-pulls!
+                 (fn [chunk]
+                   (let [applied (apply-pull-chunk! user-id chunk notes-by-id digests versions !conflicts)]
+                     (:count applied)))
                  card-ids)]
     (when (pos? (:count result)) (commands/bump! user-id :anki-sync))
-    result))
+    (assoc result :conflict-card-ids @!conflicts)))
 
 (defn backfill-baselines!
   "Give `:needs-baseline` cards a baseline from the current state of both sides.
@@ -461,6 +439,7 @@
    pre : `outcome` =
            {:pull-card-ids     [n …]
             :pull-notes        {note-id note}
+            :pull-versions     {card-id {:local-digest hex :note-id n}}
             :digests           {note-id hex}
             :backfill          [{:card-id :note-id} …]
             :conflict-card-ids [n …]
@@ -483,18 +462,19 @@
    the rest still run. A failure in one phase must not strand the baselines of
    another, or the next run would re-do work it cannot see was done."
   [user-id {:keys [root-id] :as outcome}]
-  (let [{:keys [pull-card-ids pull-notes digests backfill
+  (let [{:keys [pull-card-ids pull-notes digests backfill pull-versions
                 conflict-card-ids finished-note-ids]}
         (confine-outcome user-id root-id outcome)
-        steps [[:pulls       #(apply-pulls! user-id pull-card-ids pull-notes digests)]
-               [:backfilled  #(backfill-baselines! user-id
+        pulls (apply-pulls! user-id pull-card-ids pull-notes digests pull-versions)
+        conflicts (vec (distinct (concat conflict-card-ids (:conflict-card-ids pulls))))
+        steps [[:backfilled  #(backfill-baselines! user-id
                                 (mapv (fn [{:keys [card-id note-id]}]
                                         {:card-id card-id
                                          :anki-digest (get digests note-id)})
                                   backfill))]
-               [:conflicts   #(set-conflicts! user-id conflict-card-ids root-id)]
+               [:conflicts   #(set-conflicts! user-id conflicts root-id)]
                [:tombstones  #(finish-tombstones! user-id finished-note-ids)]]
-        results (reduce (fn [acc [k f]] (assoc acc k (f))) {} steps)
+        results (reduce (fn [acc [k f]] (assoc acc k (f))) {:pulls pulls} steps)
         failures (into {} (remove (comp :success val)) results)]
     (tel/log! {:level :info :id ::finish-run!
                :data {:user-id user-id
