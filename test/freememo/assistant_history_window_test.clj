@@ -19,10 +19,13 @@
     {:uid uid :root root :chat chat}))
 
 (defn- seed-messages! [chat n]
-  (jdbc/execute! db/ds
-    ["INSERT INTO assistant_messages(chat_id,role,content)
-       SELECT ?, CASE WHEN i % 2 = 0 THEN 'assistant' ELSE 'user' END, 'Message ' || i
-         FROM generate_series(1, ?) i" chat n]))
+  (jdbc/with-transaction [tx db/ds]
+    (jdbc/execute! tx ["SET LOCAL session_replication_role = replica"])
+    (jdbc/execute! tx
+      ["INSERT INTO assistant_messages(chat_id,role,content)
+         SELECT ?, CASE WHEN i % 2 = 0 THEN 'assistant' ELSE 'user' END, 'Message ' || i
+           FROM generate_series(1, ?) i" chat n])
+    (jdbc/execute! tx ["SET LOCAL session_replication_role = origin"])))
 
 (defn- cleanup! [uid]
   (one "DELETE FROM users WHERE id = ?" uid))
