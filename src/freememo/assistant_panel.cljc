@@ -99,10 +99,12 @@
           reference-documents
           (e/server
             (if (and at-open? (some? mention-query))
-              (let [query (e/Task (m/sleep 200 mention-query))
-                    result (e/Offload
-                             #(hash-map :query query
-                                :rows (assistant/referenceable-docs user-id root-topic-id query)))]
+              (let [query (first (e/as-vec (e/Task (m/sleep 200 mention-query))))
+                    result (first (e/as-vec
+                                    (when (some? query)
+                                      (e/Offload
+                                        #(hash-map :query query
+                                           :rows (assistant/referenceable-docs user-id root-topic-id query))))))]
                 (if (= mention-query (:query result)) (:rows result) []))
               []))
           reference-document-count (e/server (count reference-documents))

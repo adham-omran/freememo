@@ -527,8 +527,10 @@
           offset (if (= query (:query page-state)) (:offset page-state) 0)
           rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           result (e/server
-                   (let [q (e/Task (m/sleep 200 query))]
-                     (e/Offload #(do rev (history/chat-page user-id root-topic-id q offset)))))
+                   (let [q (first (e/as-vec (e/Task (m/sleep 200 query))))]
+                     (first (e/as-vec
+                              (when (some? q)
+                                (e/Offload #(do rev (history/chat-page user-id root-topic-id q offset))))))))
           current-result? (and (= query (:query result)) (= offset (:offset result)))
           chat-options (if current-result? (:rows result) [])
           !menu (atom nil)
