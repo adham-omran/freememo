@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
    [freememo.anki-reads :as reads]
+   [freememo.task-owner :as owner]
    [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.client-state :as cs]
@@ -12,19 +13,17 @@
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.user-state :as us])))
 
-(defonce !anki-fetch-gen (atom 0))
-
 (defn start-fetch!
   "Read mark, suspension, remark, and field state from AnkiConnect.
-   The latest request owns the result atoms."
+   Return a canceller that rejects callbacks after frame teardown."
   [manifest _trigger !status !payload]
   #?(:cljs
-     (let [my-gen (swap! !anki-fetch-gen inc)
+     (let [my-gen (random-uuid)
            note-ids (mapv :note-id manifest)]
        (reset! !status :checking)
        (log/log-debug (str "[anki-overlay] fetch start gen=" my-gen
                         " notes=" (count note-ids)))
-       ((m/sp
+       (owner/start! (m/sp
           (let [notes (m/? (reads/read-notes! helpers/anki-call! note-ids))
                 notes-clj (js->clj notes :keywordize-keys true)
                 pairs (map vector note-ids notes-clj)
@@ -60,17 +59,15 @@
                         present)
              :absent absent}))
         (fn [result]
-          (when (= my-gen @!anki-fetch-gen)
-            (log/log-debug (str "[anki-overlay] fetch done gen=" my-gen
-                             " present=" (count (:present result))
-                             " absent=" (count (:absent result))))
-            (reset! !payload result)
-            (reset! !status :ready)))
+          (log/log-debug (str "[anki-overlay] fetch done gen=" my-gen
+                          " present=" (count (:present result))
+                          " absent=" (count (:absent result))))
+          (reset! !payload result)
+          (reset! !status :ready))
         (fn [err]
-          (when (= my-gen @!anki-fetch-gen)
-            (log/log-debug (str "[anki-overlay] fetch failed gen=" my-gen
-                             " error=" (.-message err)))
-            (reset! !status :unavailable)))))
+          (log/log-debug (str "[anki-overlay] fetch failed gen=" my-gen
+                          " error=" (.-message err)))
+          (reset! !status :unavailable))))
      :clj nil))
 
 (e/defn AnkiOverlay [user-id manifest !status !payload !check-tick]
@@ -80,8 +77,11 @@
           payload (e/watch !payload)
           check-tick (e/watch !check-tick)
           action-refresh (e/watch (cs/get-atom :anki-overlay-refresh))]
-      (when (seq manifest)
-        (start-fetch! manifest [sync-rev check-tick action-refresh] !status !payload))
+      (e/for-by identity [_key [[manifest sync-rev check-tick action-refresh]]]
+        (when (seq manifest)
+          (let [cancel! (e/snapshot
+                          (start-fetch! manifest [sync-rev check-tick action-refresh] !status !payload))]
+            (e/on-unmount cancel!))))
       ;; `e/as-vec` is load-bearing, and it must be on the CLIENT. When the
       ;; payload arrives, the `when` mounts a new server form, and the client
       ;; has no value for it until the apply call returns and its answer
