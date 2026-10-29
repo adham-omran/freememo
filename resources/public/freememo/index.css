@@ -9756,3 +9756,5 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .search-result-badge-video { background: var(--color-badge-video); }
 .search-result-badge-supermemo { background: var(--color-badge-supermemo); }
 .search-result-badge-occlusion { background: var(--color-badge-occlusion); }
+
+.search-results-body .search-result-row[hidden] { display: none; }

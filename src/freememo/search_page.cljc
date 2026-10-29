@@ -118,7 +118,40 @@
   ;; id when kind="page", so no special branching is needed.
   (navigate! :viewer (nav/nav-topic (:id row) :search)))
 
-(e/defn ResultRow [row i navigate!]
+(defn result-slot-state
+  "Keep one hidden result in a slot for the same account."
+  [previous user-id incoming]
+  {:user-id user-id
+   :visible? (some? incoming)
+   :row (or incoming (when (= user-id (:user-id previous)) (:row previous)))})
+
+(defn install-result-row-guard!
+  "Reject events from hidden retained results."
+  [node]
+  #?(:cljs
+     (let [events ["click" "keydown" "contextmenu" "focusin"]
+           guard (fn [event]
+                   (when (.-hidden node)
+                     (.preventDefault event)
+                     (.stopImmediatePropagation event)))]
+       (doseq [event events] (.addEventListener node event guard true))
+       (fn [] (doseq [event events] (.removeEventListener node event guard true))))
+     :clj nil))
+
+(defn sync-result-row-focus!
+  "Clear hidden focus targets and publish the current result after recycling."
+  [node visible? target]
+  #?(:cljs
+     (if visible?
+       (when (.contains node (.-activeElement js/document))
+         (menu-surface/publish-focus-target! node target))
+       (do
+         (when (.contains node (.-activeElement js/document))
+           (.blur (.-activeElement js/document)))
+         (menu-surface/retract-focus-target! node)))
+     :clj nil))
+
+(e/defn ResultRow [row i navigate! visible?]
   (e/client
     (let [{:keys [title kind snippet source-title]} row
           [badge-text badge-class] (kind-badge kind)
@@ -132,7 +165,10 @@
                     :deletable? (not= "page" kind)}
                    :search)]
       (dom/tr
-        (dom/props {:class "search-result-row" :style {:--order i}})
+        (dom/props {:class "search-result-row" :hidden (not visible?) :inert (not visible?)
+                    :style {:--order i}})
+        (e/on-unmount (e/snapshot (install-result-row-guard! dom/node)))
+        (case (sync-result-row-focus! dom/node visible? target) nil)
         (menu-surface/RowMenu target)
         (dom/On "click" open-result! nil)
         ;; Column 1: kind badge + title
@@ -166,6 +202,14 @@
             ;; centering before it lands leaves the <mark> off-centre.
             (math/set-html! dom/node snippet #(snippet-center! dom/node))))))))
 
+(e/defn ResultSlot [incoming i navigate! user-id]
+  (e/client
+    (let [{:keys [row visible?]}
+          (e/with-cycle [previous nil]
+            (result-slot-state previous user-id incoming))]
+      (when row
+        (ResultRow row i navigate! visible?)))))
+
 ;; Always-mounted: SearchPage renders this unconditionally, never gated by a
 ;; cond branch. row-count drives the Tape window; 0 → an empty (but mounted)
 ;; differential. Two regressions drove this shape:
@@ -180,7 +224,7 @@
 ;;    offset-independent `results`, so work-skipping holds rows steady.
 ;; The empty-state message is a sibling overlay in SearchPage, never a branch
 ;; that swaps this table out.
-(e/defn SearchResultsTable [results row-count navigate! reset-key]
+(e/defn SearchResultsTable [results row-count navigate! reset-key user-id]
   (e/client
     (let [rc (or row-count 0)
           row-height 36
@@ -208,8 +252,7 @@
               (dom/props {:class "search-results-body"})
               (e/for [i (Tape offset limit)]
                 (let [row (e/server (nth results i nil))]
-                  (when row
-                    (ResultRow row i navigate!)))))))))))
+                  (ResultSlot row i navigate! user-id))))))))))
 
 (e/defn SearchPage [user-id navigate!]
   (e/client
@@ -308,7 +351,7 @@
         (dom/div
           (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                               :min-height "0" :position "relative"}})
-          (SearchResultsTable results (or result-count 0) navigate! [mode kind query-debounced])
+          (SearchResultsTable results (or result-count 0) navigate! [mode kind query-debounced] user-id)
           (when (or (not valid?)
                   (and valid? (not loading?) (= 0 result-count)))
             (dom/div
