@@ -13,9 +13,15 @@
 ;; BOTH peers — so CLJS log calls obey Telemere's min-levels instead of
 ;; printing unconditionally to the browser console.
 
-(defn log-info  [msg] (tel/log! :info  msg))
-(defn log-debug [msg] (tel/log! :debug msg))
-(defn log-warn  [msg] (tel/log! :warn  msg))
+(defn log-info
+  ([msg] (tel/log! :info msg))
+  ([msg data] (tel/log! {:level :info :data data} msg)))
+(defn log-debug
+  ([msg] (tel/log! :debug msg))
+  ([msg data] (tel/log! {:level :debug :data data} msg)))
+(defn log-warn
+  ([msg] (tel/log! :warn msg))
+  ([msg data] (tel/log! {:level :warn :data data} msg)))
 (defn log-error [msg] (tel/log! :error msg))
 (defn log-trace [msg] (tel/log! :trace msg))
 

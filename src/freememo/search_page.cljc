@@ -15,7 +15,8 @@
    [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
-   #?(:clj [freememo.search :as search])))
+   #?(:clj [freememo.search :as search])
+   #?(:clj [freememo.read-region :as read-region])))
 
 ;; Server wrapper — plain defn with reader conditional, so :refer works from cljs
 ;;
@@ -29,7 +30,9 @@
 ;; read by operators and rendered into alert mail. Length, mode, kind filter and
 ;; result count answer what the trail is for without carrying any of it.
 (defn run-search* [user-id query mode kind-filter]
-  #?(:clj (let [rows (search/search-content user-id query mode kind-filter)]
+  #?(:clj (let [rows (read-region/timed-read :search-results
+                       {:route "search" :phase (name mode)}
+                       #(search/search-content user-id query mode kind-filter))]
             ;; :kind-filter, not :kind — :kind is one of interaction!'s reserved
             ;; base keys and names the interaction type, not a topic kind.
             (log/interaction! user-id nil :search
