@@ -11,7 +11,7 @@
 
    ARRIVE — the page the reader is returned to after the editor installs a
    body. Every install puts the editor at scrollTop 0, which in this mode is
-   page 1 whatever page was asked for. Four entrances reach that: a deep link
+   the range's first page. Four entrances reach that: a deep link
    at `/viewer/topic/<root>/<page>`, turning the mode on while reading,
    reopening the document in-app, and an OCR scan finishing mid-read. They share
    one cause, so the trigger is `rich-text-editor/!content-generation` — the

@@ -70,15 +70,11 @@
 ;; Shape: "section-id" or nil.
 (defonce !pending-anchor (atom nil))
 
-;; Set to the current HTML on every user edit (immediate, no debounce — other
-;; consumers need the live value: bottom_panel.cljc's ToolbarBar derives
-;; card-gen context from it, rich_text_editor_component.cljc gates its
-;; in-place content refresh on it). editor_pane.cljc's auto-save watches this
-;; but debounces the actual DB write to an idle pause; it does not save on
-;; every change here.
-;; nil means "no pending user edits" — the auto-save guard checks for non-nil.
-;; Reset to nil on init/page-switch so navigating doesn't trigger a save.
-;; Shape: {:html "..." :topic-id N}
+;; Each user edit publishes stored HTML and its immutable save scope.
+;; Toolbar consumers read the live value. EditorPane saves each edit off the reactor.
+;; A saved snapshot remains until another body installs. Its acknowledgement
+;; prevents repeated saves after navigation or a component remount.
+;; Shape: {:html string :topic-id id :save-scope map :edit-id string}.
 (defonce !dirty-html (atom nil))
 (defonce !saved-edit-id (atom nil))
 
@@ -593,7 +589,9 @@
            (when (or changed? (nil? dirty))
              (swap! !editor-state assoc :save-scope scope)
              (set-content! html content-topic-id changed?)
-             (when changed? (reset! !dirty-html nil))))))))
+             (when changed?
+               (reset! !dirty-html nil)
+               (reset! !last-selection nil))))))))
 
 (defn install-saved-content!
   "Pre: before-html and after-html describe one committed change to topic-id.
