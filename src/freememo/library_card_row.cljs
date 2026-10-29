@@ -1,5 +1,5 @@
 (ns freememo.library-card-row
-  "Own display descendants and current delegated actions for one Library row."
+  "Own row cells, local selection, and current delegated actions."
   (:require [freememo.context-menu-surface :as menu]
             [freememo.icon-paths :as icons]
             [freememo.math :as math]
@@ -37,6 +37,8 @@
   (when-let [callback (get-in state [:actions (keyword action)])]
     (callback)))
 
+(declare sync-cell!)
+
 (defn create!
   "Install one delegated listener set. Each event reads the current row model."
   [row]
@@ -48,7 +50,7 @@
                   (.preventDefault event)
                   (.stopImmediatePropagation event)))
         click (fn [event]
-                (when-not (closest-target event "input")
+                (when-not (= "selection" (.get actions (.-target event)))
                   (let [action (or (action-for row actions event) "edit")]
                     (invoke! @!state (if (and (= action "diff") (not (:diff? @!state))) "edit" action) event))))
         keydown (fn [event]
@@ -57,20 +59,36 @@
                     (when-let [action (.get actions (.-target event))]
                       (.preventDefault event)
                       (invoke! @!state action event))))
-        events ["click" "keydown" "contextmenu" "focusin"]]
+        change (fn [event]
+                 (when (= "selection" (.get actions (.-target event)))
+                   (when-let [select! (get-in @!state [:actions :select])]
+                     (select! (boolean (.. event -target -checked))))))
+        contextmenu (fn [event] (menu/open-menu! event (:target @!state)))
+        focusin (fn [_] (menu/publish-focus-target! row (:target @!state)))
+        focusout (fn [event] (menu/focus-left! row event))
+        events ["click" "change" "keydown" "contextmenu" "focusin"]]
     (doseq [event events] (.addEventListener row event guard true))
     (.addEventListener row "click" click)
     (.addEventListener row "keydown" keydown)
+    (.addEventListener row "change" change)
+    (.addEventListener row "contextmenu" contextmenu)
+    (.addEventListener row "focusin" focusin)
+    (.addEventListener row "focusout" focusout)
     {:node row :!state !state :!cells !cells :actions actions
      :dispose! (fn []
                  (doseq [event events] (.removeEventListener row event guard true))
                  (.removeEventListener row "click" click)
                  (.removeEventListener row "keydown" keydown)
+                 (.removeEventListener row "change" change)
+                 (.removeEventListener row "contextmenu" contextmenu)
+                 (.removeEventListener row "focusin" focusin)
+                 (.removeEventListener row "focusout" focusout)
                  (menu/retract-focus-target! row)
                  (reset! !state nil)
-                 (reset! !cells {}))}))
+                 (reset! !cells {})
+                 (.replaceChildren row))}))
 
-(defn sync-row! [{:keys [node !state]} model]
+(defn sync-row! [{:keys [node !state !cells] :as owner} model]
   (reset! !state model)
   (set! (.-className node) (:class model))
   (set! (.-hidden node) (not (:visible? model)))
@@ -84,10 +102,25 @@
     (do
       (when (.contains node (.-activeElement js/document))
         (.blur (.-activeElement js/document)))
-      (menu/retract-focus-target! node))))
+      (menu/retract-focus-target! node)))
+  (doseq [role [:selection :diff :kind :front :back :doc :added :stats :delete]]
+    (let [cell (or (get-in @!cells [role :node])
+                   (let [cell (element "td" "")]
+                     (.appendChild node cell)
+                     cell))]
+      (sync-cell! owner role cell model))))
 
 (defn- build-cell! [role cell actions]
   (case role
+    :selection
+    (let [input (element "input" "")]
+      (set! (.-className cell) "card-cell-center")
+      (.setAttribute input "type" "checkbox")
+      (.setAttribute input "aria-label" "Select card")
+      (.set actions input "selection")
+      (.appendChild cell input)
+      {:node cell :input input})
+
     :diff
     (let [direction (element "span" "")
           marked (element "span" "card-cell-glyph")
@@ -164,6 +197,10 @@
                    (swap! !cells assoc role view)
                    view))]
     (case role
+      :selection
+      (do (set! (.-checked (:input view)) (boolean (:selected? model)))
+          (set! (.-disabled (:input view)) (not (:visible? model))))
+
       :diff
       (let [{:keys [direction marked remarked suspended]} view
             flags (:flags model)

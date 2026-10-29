@@ -66,6 +66,10 @@
     (is (= 2 (:id @(:diff h))))
     ((get-in current [:actions :stats]))
     (is (= {:card 2} @(:stats h)))
+    ((get-in current [:actions :select]) true)
+    (is (= {[:card 2] [2]} @(:selected h)))
+    ((get-in current [:actions :select]) false)
+    (is (= {} @(:selected h)))
     (reset! (:selected h) {[:card 1] [1] [:card 2] [2]})
     (with-redefs [opt/enqueue-delete-card! #(swap! deletes conj %)]
       ((get-in current [:actions :delete])))

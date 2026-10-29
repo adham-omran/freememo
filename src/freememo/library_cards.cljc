@@ -5,9 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-forms5 :as forms]
    #?(:cljs [freememo.library-card-row :as row-view])
-   [freememo.context-menu-surface :as menu-surface]
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -561,11 +559,15 @@
 
 (defn selected-card-ids
   "The selection's flashcard ids — every member of every selected row.
-   Pre: `selected` is the row-key → member-ids map RowSelectionInput maintains.
+   Pre: `selected` holds the row keys and captured member IDs from local selection.
    Post: the delete / push / pull unit. A group contributes ALL of its cards,
    which is what makes a row act as a whole."
   [selected]
   (into [] (mapcat identity) (vals selected)))
+
+;; Row selection changes client state. The command dispatcher owns server writes.
+(defn set-row-selected! [!selected row-key member-ids selected?]
+  (swap! !selected #(if selected? (assoc % row-key member-ids) (dissoc % row-key))))
 
 (defn selection-subjects
   "Build the shared multi-selection context target once per view."
@@ -630,6 +632,7 @@
                             :history-scope (when-not group-row? [:card id])}])
               :surface {:origin :library :edit-card! edit-card!}}
      :actions {:edit #(edit-card! nil)
+               :select #(set-row-selected! !selected row-key member-ids %)
                :document #(navigate! :viewer (nav/nav-topic topic-id :library))
                :diff #(when diff-payload (reset! !diff-card diff-payload))
                :stats #(when (contains? #{"basic" "cloze"} kind) (reset! !stats {:card id}))
@@ -642,33 +645,8 @@
 (defn sync-native-row! [owner model]
   #?(:cljs (row-view/sync-row! owner model) :clj nil))
 
-(defn sync-native-cell! [owner role node model]
-  #?(:cljs (row-view/sync-cell! owner role node model) :clj nil))
-
 (defn release-row-owner! [owner]
   #?(:cljs ((:dispose! owner)) :clj nil))
-
-(defn set-row-selected! [!selected row-key member-ids selected?]
-  (swap! !selected #(if selected? (assoc % row-key member-ids) (dissoc % row-key))))
-
-(e/defn RowSelectionInput [model !selected]
-  (e/client
-    (let [checked (:selected? model)
-          visible? (:visible? model)
-          value (forms/Checkbox checked :aria-label "Select card" :disabled (not visible?))]
-      (when (and visible? (not= checked value))
-        (case (set-row-selected! !selected (:row-key model) (:member-ids model) value) nil)))))
-
-(e/defn RowDisplayCells [owner model]
-  (e/client
-    (dom/td (case (sync-native-cell! owner :diff dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :kind dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :front dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :back dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :doc dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :added dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :stats dom/node model) nil))
-    (dom/td (case (sync-native-cell! owner :delete dom/node model) nil))))
 
 (e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected selected-subjects user-id i visible? anki-overlay !stats]
   (e/client
@@ -677,12 +655,7 @@
       (dom/tr
         (let [owner (e/snapshot (make-row-owner! dom/node))]
           (e/on-unmount #(release-row-owner! owner))
-          (case (sync-native-row! owner model) nil)
-          (menu-surface/RowMenu (:target model))
-          (dom/td
-            (dom/props {:class "card-cell-center"})
-            (RowSelectionInput model !selected))
-          (RowDisplayCells owner model))))))
+          (case (sync-native-row! owner model) nil))))))
 
 
 ;; ---------------------------------------------------------------------------
