@@ -3,7 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
-   [freememo.anki-reads :as reads]
+   [freememo.anki-overlay-reads :as overlay-reads]
    [freememo.task-owner :as owner]
    [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
@@ -23,41 +23,7 @@
        (reset! !status :checking)
        (log/log-debug (str "[anki-overlay] fetch start gen=" my-gen
                         " notes=" (count note-ids)))
-       (owner/start! (m/sp
-          (let [notes (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                notes-clj (js->clj notes :keywordize-keys true)
-                pairs (map vector note-ids notes-clj)
-                absent (into []
-                         (keep (fn [[nid note]]
-                                 (when (or (nil? note) (empty? note) (nil? (:noteId note)))
-                                   nid)))
-                         pairs)
-                present (into []
-                          (keep (fn [[nid note]]
-                                  (when (and (map? note) (:noteId note))
-                                    {:note-id nid
-                                     :stripped-fields (mapv (comp helpers/strip-html
-                                                              math/anki->stored-html)
-                                                        (helpers/ordered-field-values (:fields note)))
-                                     :tags (vec (:tags note))
-                                     :remark (review/note-remark (:fields note))
-                                     :card-ids (vec (:cards note))})))
-                          pairs)
-                all-card-ids (into [] (mapcat :card-ids) present)
-                suspended-flags (if (seq all-card-ids)
-                                  (vec (js->clj (m/? (helpers/anki-call! "areSuspended"
-                                                       {:cards all-card-ids}))))
-                                  [])
-                card-id->suspended (zipmap all-card-ids suspended-flags)]
-            {:present (mapv (fn [{:keys [card-ids] :as note}]
-                              (-> note
-                                (dissoc :card-ids)
-                                (assoc :suspended
-                                  {:total (count card-ids)
-                                   :suspended (count (filter #(true? (get card-id->suspended %))
-                                                       card-ids))})))
-                        present)
-             :absent absent}))
+       (owner/start! (overlay-reads/read-overlay! helpers/anki-call! note-ids)
         (fn [result]
           (log/log-debug (str "[anki-overlay] fetch done gen=" my-gen
                           " present=" (count (:present result))

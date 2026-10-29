@@ -17,6 +17,7 @@
    [hyperfiddle.router5 :as r]
    [freememo.schedule :as sched]
    [freememo.schedule-anki :as sa]
+   [freememo.task-request :as request]
    [freememo.schedule-forecast :as fc]
    [freememo.schedule-detail :refer [ScheduleForecast]]
    [freememo.a11y :as a11y]
@@ -56,6 +57,17 @@
 ;; Acquisition (§2, §9.4.1)
 ;; ---------------------------------------------------------------------------
 
+(e/defn HistoryRequests [user-id !request]
+  (e/client
+    (let [pending (e/watch !request)]
+      (e/for-by :id [item (if pending [pending] [])]
+        (let [data (:data item)
+              [t ?error] (e/Token (:id item))]
+          (when t
+            (let [result (e/server (e/Offload #(sched/ingest-history-chunk! user-id data)))]
+              (e/on-unmount #(request/resolve! item result))
+              (t))))))))
+
 (e/defn AnkiSync [user-id]
   (e/client
     ;; The whole acquire-then-ingest cycle. Mounted once per tab visit.
@@ -71,7 +83,10 @@
           note-ids (e/server (:note-ids inputs))
           push-deck (e/server (:push-deck inputs))
           !acq (atom nil)
+          !request (atom nil)
           acq (e/watch !acq)]
+
+      (HistoryRequests user-id !request)
 
       ;; §8.4 — the fetch fires ONCE per mount, inside a keyed frame. A bare
       ;; call in this body would restart on every re-evaluation (CLAUDE.md,
@@ -79,7 +94,7 @@
       ;; user or of card set an honest unmount and mount instead.
       (e/for-by identity [_k [[user-id note-ids push-deck]]]
         (when (pos? (count note-ids))
-          (let [cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq))]
+          (let [cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq !request))]
             (e/on-unmount cancel!))))
 
       ;; §7.3 — the ingest is sequenced, never a `(token)` sibling of the

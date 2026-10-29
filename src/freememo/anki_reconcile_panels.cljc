@@ -30,6 +30,7 @@
    [freememo.anki-lease-client :as lc]
    [freememo.anki-reconcile-client :as rc]
    [freememo.anki-reconcile :as rec]
+   [freememo.task-request :as request]
    [freememo.logging :as log]
    #?(:clj [freememo.anki-reconcile-server :as recon])
    #?(:clj [freememo.anki-sync-server :as sync])
@@ -52,6 +53,22 @@
 
 (defn finish-run!* [user-id run-id outcome]
   #?(:clj (recon/finish-run! user-id run-id outcome) :cljs nil))
+
+(defn finish-request!* [user-id run-id root-id data]
+  #?(:clj (recon/finish-request! user-id run-id root-id data) :cljs nil))
+
+(e/defn FinishRequests [user-id recon]
+  (e/client
+    (let [pending (e/watch (:!io-request recon))
+          run-id (e/watch (:!run-id recon))
+          root-id (e/watch (:!root-id recon))]
+      (e/for-by :id [item (if pending [pending] [])]
+        (let [data (:data item)
+              [t ?error] (e/Token (:id item))]
+          (when t
+            (let [result (e/server (e/Offload #(finish-request!* user-id run-id root-id data)))]
+              (e/on-unmount #(request/resolve! item result))
+              (t))))))))
 
 (defn toast!* [user-id level message]
   #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
@@ -281,22 +298,27 @@
             (if (not= :continue verdict)
               (do (e/on-unmount #(halt! recon verdict))
                   (t))
-              (case (rc/run-deletes! (:note-ids-to-delete p) (:note-ids-to-drop p) recon)
+              (case (rc/run-finish-io! p scan recon)
                 (let [finished (e/watch (:!finished-note-ids recon))]
                   (when finished
-                    (let [outcome {:pull-card-ids (:pull-card-ids p)
-                                   :pull-versions (:pull-versions p)
-                                   :pull-notes (rc/notes-for (:notes-by-id scan) (:pull-note-ids p))
+                    (let [io-result (e/watch (:!finish-io recon))
+                          outcome {:pull-card-ids []
+                                   :pull-versions {}
+                                   :pull-notes {}
                                    :digests (:digests scan)
                                    :backfill (:backfill p)
-                                   :conflict-card-ids (:conflict-card-ids p)
+                                   :conflict-card-ids (vec (concat (:conflict-card-ids p)
+                                                           (get-in io-result [:pulls :conflict-card-ids])))
                                    :finished-note-ids finished
                                    :root-id root-id}
                           result (e/server (e/Offload #(finish-run!* user-id run-id outcome)))]
                       (if (:verdict result)
                         (do (e/on-unmount #(halt! recon (:verdict result)))
                             (t))
-                        (case (reset! (:!result recon) result)
+                        (case (reset! (:!result recon)
+                                (-> result
+                                  (assoc-in [:counts :pulls] (get-in io-result [:pulls :count] 0))
+                                  (update-in [:counts :tombstones] + (:deleted io-result))))
                           (do (e/on-unmount #(reset! (:!phase recon) :done))
                               (t)))))))))))))))
 
@@ -353,6 +375,7 @@
       (ReconcileScan user-id recon)
       (ReconcilePlan user-id recon)
       (ReconcileBatch user-id recon)
+      (FinishRequests user-id recon)
       (ReconcileFinish user-id recon)
       (ReconcileOutcome user-id recon)
       (when (contains? #{:batch :finishing} phase)
@@ -373,6 +396,8 @@
    :!batch-out (atom nil)
    :!tally (atom {:written 0 :errors []})
    :!finished-note-ids (atom nil)
+   :!finish-io (atom nil)
+   :!io-request (atom nil)
    :!result (atom nil)
    :!error (atom nil)
    :!dry-run? (atom false)
@@ -413,5 +438,7 @@
          (reset! (:!batch-out recon) nil)
          (reset! (:!tally recon) {:written 0 :errors []})
          (reset! (:!finished-note-ids recon) nil)
+         (reset! (:!finish-io recon) nil)
+         (reset! (:!io-request recon) nil)
          (reset! (:!phase recon) :claiming)
          :started))))

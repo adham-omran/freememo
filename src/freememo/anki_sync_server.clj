@@ -351,21 +351,22 @@
                           (db/get-flashcards-by-anki-note-ids user-id note-ids))
           per-card
           (into {}
-            (keep (fn [{:keys [note-id stripped-fields tags remark suspended]}]
+            (keep (fn [{:keys [note-id stripped-fields field-fingerprints tags remark suspended]}]
                     (when-let [card (get local-by-note note-id)]
                       (let [kind (:flashcards/kind card)
                             basic? (= "basic" kind)
+                            equal-field? (fn [i html]
+                                           (if field-fingerprints
+                                             (= (get field-fingerprints i (digest/text-fingerprint nil))
+                                               (digest/text-fingerprint
+                                                 (helpers/strip-html (math/stored->compare-html html kind))))
+                                             (stripped= (get stripped-fields i) html kind)))
                             anki-modified?
                             (cond
-                              ;; Occlusion content diff is owned by the pull
-                              ;; path (io_fields); score + overlapping fields are
-                              ;; FM-derived (media, or the expanded list) with no
-                              ;; single-field inverse. The overlay only surfaces
-                              ;; marked/suspended for these rows.
                               (contains? #{"occlusion" "score" "overlapping"} kind) false
-                              basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card) kind))
-                                       (not (stripped= (second stripped-fields) (:flashcards/answer card) kind)))
-                              :else (not (stripped= (first stripped-fields) (:flashcards/cloze card) kind)))
+                              basic? (or (not (equal-field? 0 (:flashcards/question card)))
+                                       (not (equal-field? 1 (:flashcards/answer card))))
+                              :else (not (equal-field? 0 (:flashcards/cloze card))))
                             flags (review/overlay-flags
                                     anki-modified? tags remark suspended)]
                         (when (seq flags)

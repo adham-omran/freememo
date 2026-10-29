@@ -53,7 +53,7 @@
   ([user-id root-id]
    (let [manifest (db/get-pushed-card-manifest user-id root-id)
          kinds (into {} (map (juxt :flashcards/anki_note_id :flashcards/kind))
-                 (db/get-cards-for-reconcile user-id nil root-id))
+                 (db/get-reconcile-note-kinds user-id root-id))
          tombstone-ids (if (some? root-id)
                          []
                          (mapv :anki_note_tombstones/anki_note_id
@@ -106,6 +106,7 @@
       :write-card-ids     (mapv :card-id writes)
       :kind-by-card       (into {} (map (juxt :card-id :kind)) writes)
       :pull-card-ids      (mapv :card-id (get by-outcome :pull))
+      :pull-kind-by-card  (into {} (map (juxt :card-id :kind)) (get by-outcome :pull))
       :pull-note-ids      (mapv :note-id (get by-outcome :pull))
       :pull-versions      (into {} (map (fn [{:keys [card-id local-digest note-id]}]
                                          [card-id {:local-digest local-digest :note-id note-id}]))
@@ -209,7 +210,7 @@
    cost little more than seven. The bound is what a stop keeps. A stop during
    the finish phase loses only the chunk it was in. 5,000 is an inference, to be
    checked against per-chunk times from a real run."
-  5000)
+  500)
 
 (defn- write-chunks!
   "Apply `write-chunk!` to `xs` in chunks of `finish-chunk-size`.
@@ -233,26 +234,22 @@
       (seq errors) (assoc :error (str/join "; " errors)))))
 
 (defn- apply-pull-chunk!
-  "Apply one pull chunk with the digest and note ID captured during planning."
+  "Apply one set-based pull chunk under the planned digest and note ID."
   [user-id card-ids notes-by-id digests versions !conflicts]
-  (reduce
-    (fn [result card]
-      (let [card-id (:flashcards/id card)
-            expected (get versions card-id)
-            nid (:note-id expected)
-            note (get notes-by-id nid)
-            update-map (some-> (when note
-                                (helpers/note->pull-update card (:fields note)))
-                         sync-server/sanitized-pull-update)
-            verdict (when note
-                      (db/apply-reconcile-pull! user-id card-id expected update-map
-                        (get digests nid)))]
-        (case verdict
-          :applied (update result :count inc)
-          :conflict (do (swap! !conflicts conj card-id) result)
-          result)))
-    {:count 0}
-    (db/get-cards-for-reconcile user-id (vec card-ids))))
+  (let [entries (into []
+                  (keep (fn [card]
+                          (let [card-id (:flashcards/id card)
+                                expected (get versions card-id)
+                                nid (:note-id expected)]
+                            (when-let [note (get notes-by-id nid)]
+                              {:card-id card-id :expected expected
+                               :update-map (some-> (helpers/note->pull-update card (:fields note))
+                                             sync-server/sanitized-pull-update)
+                               :anki-digest (get digests nid)}))))
+                  (db/get-cards-for-reconcile user-id (vec card-ids)))
+        result (db/apply-reconcile-pulls! user-id entries)]
+    (swap! !conflicts into (:conflict-card-ids result))
+    result))
 
 (defn apply-pulls!
   "Apply planned Anki content without replacing newer local edits.
@@ -263,8 +260,7 @@
   (let [!conflicts (atom [])
         result (write-chunks! ::apply-pulls!
                  (fn [chunk]
-                   (let [applied (apply-pull-chunk! user-id chunk notes-by-id digests versions !conflicts)]
-                     (:count applied)))
+                   (:count (apply-pull-chunk! user-id chunk notes-by-id digests versions !conflicts)))
                  card-ids)]
     (when (pos? (:count result)) (commands/bump! user-id :anki-sync))
     (assoc result :conflict-card-ids @!conflicts)))
@@ -504,3 +500,21 @@
         :cancelled? (= :cancel verdict)
         :counts {}
         :report "Sync stopped before finish writes."}))))
+
+(defn finish-request!
+  "Check each new chunk and record deletions that already succeeded in Anki."
+  [user-id run-id root-id {:keys [op card-ids notes digests versions note-ids]}]
+  (if (= :deleted op)
+    (if (some? root-id)
+      {:success false :error "A branch sync cannot delete tombstones."}
+      (finish-tombstones! user-id note-ids))
+    (let [verdict (lease/report-progress! user-id run-id {:phase "finishing"})]
+      (if (not= :continue verdict)
+        {:verdict verdict}
+        (case op
+          :checkpoint {:verdict :continue}
+          :pull (let [owned-ids (if (some? root-id)
+                                 (db/card-ids-in-subtree user-id root-id card-ids)
+                                 card-ids)]
+                  (apply-pulls! user-id owned-ids notes digests versions))
+          {:success false :error "Unknown sync request."})))))

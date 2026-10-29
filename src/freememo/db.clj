@@ -1175,6 +1175,16 @@
                       REFERENCES undo_log(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_staged_delete
                       ON assistant_chats(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_live_history
+                      ON assistant_chats(user_id, root_topic_id, pinned_at DESC NULLS LAST,
+                        (coalesce(updated_at,created_at)) DESC, id DESC)
+                      WHERE staged_delete_id IS NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_live_title_search
+                      ON topics USING GIN (lower(coalesce(title,'Untitled')) gin_trgm_ops)
+                      WHERE parent_id IS NULL AND staged_delete_id IS NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_live_title_search
+                      ON assistant_chats USING GIN (lower(coalesce(title,'Untitled')) gin_trgm_ops)
+                      WHERE staged_delete_id IS NULL"])
 )
 
 (defn- setup-schema-kg!
@@ -7663,6 +7673,18 @@
                                (some? root-id)
                                (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
 
+(defn get-reconcile-note-kinds
+  "Read only linked note IDs and kinds for an owned reconcile scope."
+  [user-id root-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:f.anki_note_id :f.kind]
+                 :from [[:flashcards :f]]
+                 :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                 :where (cond-> [:and [:= :root.user_id user-id]
+                                 [:not= :f.anki_note_id nil]]
+                          (some? root-id)
+                          (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))})))
+
 (defn card-ids-in-subtree
   "The subset of `card-ids` that `user-id` owns and that sit under topic
    `root-id` or a descendant. Returns a vector; empty `card-ids` → [].
@@ -7924,6 +7946,57 @@
       (when (pos? (or (:next.jdbc/update-count result) 0))
         (restamp-card-digests! tx [card-id]))
       result)))
+
+(defn apply-reconcile-pulls!
+  "Apply one bounded pull batch under owned row locks and planned versions.
+   Content and digest baselines share one set-based statement and transaction."
+  [user-id entries]
+  (when (> (count entries) 500)
+    (throw (ex-info "A pull batch exceeds 500 cards." {:count (count entries)})))
+  (if (empty? entries)
+    {:count 0 :conflict-card-ids []}
+    (jdbc/with-transaction [tx ds]
+      (let [rows (into {}
+                   (map (fn [row] [(:flashcards/id row) (parse-digest-jsonb row)]))
+                   (jdbc/execute! tx
+                     ["SELECT f.* FROM flashcards f JOIN topics root ON root.id=f.root_topic_id
+                       WHERE f.id=ANY(?) AND root.user_id=? ORDER BY f.id FOR UPDATE OF f"
+                      (long-array (map :card-id entries)) user-id]))
+            classified
+            (reduce (fn [acc {:keys [card-id expected update-map anki-digest]}]
+                      (if-let [card (get rows card-id)]
+                        (if (or (nil? (:local-digest expected))
+                                (not= (:note-id expected) (:flashcards/anki_note_id card))
+                                (not= (:local-digest expected) (digest/local-digest card)))
+                          (update acc :conflict-card-ids conj card-id)
+                          (if update-map
+                            (let [changed (reduce-kv
+                                            (fn [row k v]
+                                              (assoc row (keyword "flashcards" (name k)) v))
+                                            card (select-keys update-map [:question :answer :cloze]))
+                                  changed (if (seq (:io-fields update-map))
+                                            (update changed :flashcards/io_fields merge (:io-fields update-map))
+                                            changed)]
+                              (update acc :updates conj
+                                [card-id (:flashcards/question changed) (:flashcards/answer changed)
+                                 (:flashcards/cloze changed) (->jsonb (:flashcards/io_fields changed))
+                                 (digest/local-digest changed) anki-digest]))
+                            acc))
+                        acc))
+              {:updates [] :conflict-card-ids []} (dedupe-last-by :card-id entries))
+            updates (:updates classified)]
+        (when (seq updates)
+          (jdbc/execute-one! tx
+            (into [(str "UPDATE flashcards AS f SET question=v.question, answer=v.answer, cloze=v.cloze, "
+                     "io_fields=v.io_fields, local_current_digest=v.local_digest, "
+                     "local_baseline_digest=v.local_digest, anki_baseline_digest=v.anki_digest, "
+                     "baseline_digest_version=" digest/digest-version ", updated_at=NOW(), anki_synced_at=NOW() "
+                     "FROM (VALUES "
+                     (str/join "," (repeat (count updates)
+                                      "(?::bigint,?::text,?::text,?::text,?::jsonb,?::char(64),?::char(64))"))
+                     ") AS v(id,question,answer,cloze,io_fields,local_digest,anki_digest) WHERE f.id=v.id")]
+              (mapcat identity updates))))
+        {:count (count updates) :conflict-card-ids (:conflict-card-ids classified)}))))
 
 (defn apply-reconcile-pull!
   "Apply sanitized pull fields only if the locked row still matches the plan.

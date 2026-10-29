@@ -26,6 +26,8 @@
   (:require
    [missionary.core :as m]
    [freememo.anki-reads :as reads]
+   [freememo.task-request :as request]
+   [freememo.anki-finish-io :as finish-io]
    [freememo.anki-digest :as digest]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.logging :as log]))
@@ -40,38 +42,27 @@
      :digest  (digest/anki-digest (:fields note) (get kind-by-note note-id))
      :mod     (:mod note)}))
 
+(defn scan-notes!
+  "Compute compact scan state and release each validated note batch."
+  [call! note-ids kind-by-note]
+  (reads/reduce-notes! call!
+    (fn [result ids notes]
+      (reduce (fn [acc [nid note]]
+                (if (:noteId note)
+                  (let [entry (note-digest-entry note kind-by-note)]
+                    (-> acc
+                      (assoc-in [:digests nid] (:digest entry))
+                      (assoc-in [:mods nid] (:mod entry))))
+                  (update acc :absent conj nid)))
+        result (map vector ids notes)))
+    {:digests {} :mods {} :absent []} note-ids))
+
 #?(:cljs
-   (defn scan!
-     "Read known notes through sequential, bounded notesInfo requests.
-
-      pre : `note-ids` is the union of the pushed-card manifest and the
-            outstanding tombstones. `kind-by-note` maps note id to the local
-            card's kind — a tombstone's note has no card, so it maps to nil and
-            digests over every field, which is the conservative reading.
-      post: task of {:digests {note-id hex} :mods {note-id n} :absent [note-id]
-                     :notes-by-id {note-id note}}.
-
-      A note id AnkiConnect does not report comes back as an empty entry rather
-      than a gap, so `absent` is derived by position against the request.
-
-      `:notes-by-id` keeps the batch so `pull-entries` can build its updates from
-      it. Holding it costs what the Library overlay already holds — 0.94 MB at
-      1477 notes, measured — and the alternative is a second full notesInfo."
-     [note-ids kind-by-note]
-     (if (empty? note-ids)
-       (m/sp {:digests {} :mods {} :absent [] :notes-by-id {}})
-       (m/sp
-         (let [notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                       :keywordize-keys true)
-               pairs (map vector note-ids notes)
-               present (into [] (keep (fn [[_ n]] (when (:noteId n) n))) pairs)]
-           (log/log-debug (str "[reconcile] scanned " (count note-ids) " notes"))
-           {:digests (into {} (map (fn [n] (let [e (note-digest-entry n kind-by-note)]
-                                             [(:note-id e) (:digest e)])))
-                       present)
-            :mods    (into {} (map (juxt :noteId :mod)) present)
-            :notes-by-id (into {} (map (juxt :noteId identity)) present)
-            :absent  (into [] (keep (fn [[nid n]] (when-not (:noteId n) nid)) pairs))})))))
+   (defn scan! [note-ids kind-by-note]
+     (m/sp
+       (let [result (m/? (scan-notes! helpers/anki-call! note-ids kind-by-note))]
+         (log/log-debug (str "[reconcile] scanned " (count note-ids) " notes"))
+         result))))
 
 #?(:cljs
    (defn write!
@@ -249,6 +240,25 @@
              (vec (concat deleted note-ids-to-drop))))
          (fn [err] (fail! recon (str "Anki delete failed: " (.-message err)))))
        nil)
+     :clj nil))
+
+(defn run-finish-io!
+  "Read and commit pulls and deletes through bounded acknowledged requests."
+  [plan scan recon]
+  #?(:cljs
+     (let [g (swap! !run-gen inc)]
+       (run-task! recon
+         (finish-io/finish! helpers/anki-call!
+           #(request/request! (:!io-request recon) %) plan scan)
+         g
+         (fn [result]
+           (if-let [verdict (:verdict result)]
+             (if (= :cancel verdict)
+               (reset! (:!phase recon) :cancelled)
+               (fail! recon "Another tab took over this sync."))
+             (do (reset! (:!finish-io recon) result)
+                 (reset! (:!finished-note-ids recon) (:finished-note-ids result)))))
+         (fn [err] (fail! recon (str "Anki finish failed: " (.-message err))))))
      :clj nil))
 
 (defn notes-for

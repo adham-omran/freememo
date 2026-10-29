@@ -64,8 +64,8 @@
   (with-card
     (fn [uid cid nid]
       (let [outcome (planned-outcome uid nid)
-            apply! db/apply-reconcile-pull!]
-        (with-redefs [db/apply-reconcile-pull!
+            apply! db/apply-reconcile-pulls!]
+        (with-redefs [db/apply-reconcile-pulls!
                       (fn [& args]
                         (db/update-flashcard! uid cid {:answer "<p>edit at the write boundary</p>"})
                         (apply apply! args))]
@@ -79,8 +79,14 @@
   (with-card
     (fn [uid cid nid]
       (let [outcome (planned-outcome uid nid)
-            before (first (db/get-cards-for-reconcile uid [cid]))]
-        (with-redefs [db/set-card-baselines! (fn [& _] (throw (ex-info "Simulated baseline failure" {})))]
+            before (first (db/get-cards-for-reconcile uid [cid]))
+            execute! jdbc/execute-one!]
+        (with-redefs [jdbc/execute-one!
+                      (fn [connectable statement & options]
+                        (if (and (string? (first statement))
+                                 (.startsWith (first statement) "UPDATE flashcards AS f SET question=v.question"))
+                          (throw (ex-info "Simulated atomic write failure" {}))
+                          (apply execute! connectable statement options)))]
           (let [result (recon/finish-run! uid outcome)
                 after (first (db/get-cards-for-reconcile uid [cid]))]
             (is (false? (:success result)))

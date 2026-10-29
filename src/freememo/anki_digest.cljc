@@ -91,6 +91,11 @@
    boundary collapsed."
   "\u001f")
 
+(defn text-fingerprint
+  "Hash overlay text without transferring its field body."
+  [text]
+  (sha256-hex (or text "")))
+
 (defn- digest-of
   "Digest a card's comparable parts. `kind` leads the input, so a kind change is
    a change on both sides even when every field survives it."
