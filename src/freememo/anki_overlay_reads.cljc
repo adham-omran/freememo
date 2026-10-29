@@ -15,7 +15,7 @@
   (digest/text-tuple-fingerprint
     (map (comp fields/strip-html math/anki->stored-html)
       (take (if (= kind "basic") 2 1)
-        (concat (fields/ordered-field-values (:fields note)) (repeat "")))))))
+        (concat (fields/ordered-field-values (:fields note)) (repeat ""))))))
 
 (defn read-overlay!
   ([call! note-ids] (read-overlay! call! note-ids {}))
