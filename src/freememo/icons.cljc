@@ -22,6 +22,15 @@
    [hyperfiddle.electric-svg3 :as svg]
    [freememo.tooltip :as tooltip]))
 
+(defn install-icon!
+  "Update icon geometry and its tooltip on the same SVG root."
+  [node glyph size class title]
+  #?(:cljs
+     (do
+       (icon-dom/install! node glyph size class title)
+       (tooltip/set-tooltip! node (when title title) :aria? true))
+     :clj nil))
+
 ;; Pre:  `name` is a keyword present in `icon-paths/paths`. `size` defaults to 16.
 ;;       `title` is optional but recommended for icon-only buttons (sets
 ;;       data-tooltip + aria-label).
@@ -32,5 +41,4 @@
                       :or {size 16}}]
   (e/client
     (svg/svg
-      (case (icon-dom/install! dom/node name size class title)
-        (tooltip/Tooltip! (when title title) :aria? true)))))
+      (case (install-icon! dom/node name size class title) nil))))
