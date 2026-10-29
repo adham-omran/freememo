@@ -54,7 +54,7 @@
         keydown (fn [event]
                   (when (and (#{"Enter" " "} (.-key event))
                              (not (closest-target event "button,input")))
-                    (when-let [action (action-for row actions event)]
+                    (when-let [action (.get actions (.-target event))]
                       (.preventDefault event)
                       (invoke! @!state action event))))
         events ["click" "keydown" "contextmenu" "focusin"]]
@@ -74,7 +74,7 @@
   (reset! !state model)
   (set! (.-className node) (:class model))
   (set! (.-hidden node) (not (:visible? model)))
-  (set! (.-inert node) (not (:visible? model)))
+  (attr! node "inert" (when-not (:visible? model) ""))
   (attr! node "data-row-key" (when (:visible? model) (pr-str (:row-key model))))
   (attr! node "data-enter" (when (:fresh? model) "1"))
   (.setProperty (.-style node) "--order" (str (:pos model)))
