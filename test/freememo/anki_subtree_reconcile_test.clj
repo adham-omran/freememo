@@ -76,7 +76,7 @@
     (is (= (wk 12) (subtree/work-key 12))))
   (is (= :topic (:subject (registry/activity-type :anki-reconcile)))
     "a branch run names its root as the subject")
-  (is (= :pushed (:tier (registry/activity-type :anki-reconcile)))))
+  (is (= :server (:tier (registry/activity-type :anki-reconcile)))))
 
 ;; ---------------------------------------------------------------------------
 ;; A world with two roots. Needs PostgreSQL.
@@ -84,7 +84,6 @@
 
 (def ^:private plain {:builder-fn rs/as-unqualified-maps})
 (def ^:private a-hex (apply str (repeat 64 "a")))
-(def ^:private c-hex (apply str (repeat 64 "c")))
 
 (defn- one [sql & params] (jdbc/execute-one! db/ds (into [sql] params) plain))
 (defn- rows [sql & params] (jdbc/execute! db/ds (into [sql] params) plain))
@@ -124,6 +123,20 @@
 (defn- tombstone-notes [uid]
   (set (map :anki_note_id (rows "SELECT anki_note_id FROM anki_note_tombstones
                                   WHERE user_id = ?" uid))))
+
+(defn- pull-outcome
+  "Plan real note-field pulls and retain their local digest and note identities."
+  [{:keys [uid ca ca1 cb cb1 note tomb]} card-ids]
+  (let [notes (into {} (map (fn [card-id]
+                             [(note card-id)
+                              {:fields {:Front {:value (:question (card-state card-id)) :order 0}
+                                        :Back {:value "pulled answer" :order 1}}}]))
+                card-ids)
+        digests (merge (into {tomb a-hex} (map (fn [card-id] [(note card-id) a-hex]))
+                         [ca ca1 cb cb1])
+                  (update-vals notes #(digest/anki-digest (:fields %) "basic")))]
+    (merge (recon/plan uid digests #{})
+      {:digests digests :pull-notes notes})))
 
 (defn- with-world
   "Build the two-root world, call `f` with its ids, delete the user after."
@@ -209,7 +222,8 @@
 
 (deftest ^:db a-branch-run-leaves-the-other-root-untouched
   (with-db [w]
-    (let [{:keys [uid a ca ca1 cb cb1 note tomb]} w]
+    (let [{:keys [uid a ca ca1 cb cb1 note tomb]} w
+          outcome (pull-outcome w [ca cb])]
       ;; B1 already carries a conflict flag from an earlier full run. A1 does too.
       (db/set-anki-conflicts! uid [ca1 cb1])
       (let [b-before  (mapv card-state [cb cb1])
@@ -217,17 +231,12 @@
             ca-before (card-state ca)
             result
             (recon/finish-run! uid
-              ;; Everything the client might send, including ids and notes that
-              ;; the plan never produced for this branch.
-              {:root-id           a
-               :writes            [{:card-id ca :note-id (note ca) :anki-digest c-hex :anki-mod 9}
-                                   {:card-id cb :note-id (note cb) :anki-digest c-hex :anki-mod 9}]
-               :pull-card-ids     []
-               :pull-notes        {}
-               :digests           {(note ca) c-hex (note cb) c-hex (note cb1) c-hex}
-               :backfill          [{:card-id cb1 :note-id (note cb1)}]
-               :conflict-card-ids [cb]
-               :finished-note-ids [tomb]})]
+              ;; Include other-root IDs to exercise the finish boundary's scope gate.
+              (assoc outcome
+                :root-id a
+                :backfill [{:card-id cb1 :note-id (note cb1)}]
+                :conflict-card-ids [cb]
+                :finished-note-ids [tomb]))]
         (is (:success result))
         (testing "no baseline, digest, note id, flag or timestamp of root B moved"
           (is (= b-before (mapv card-state [cb cb1]))))
@@ -235,7 +244,7 @@
           (is (= #{tomb} (tombstone-notes uid))))
         (testing "A was written"
           (let [after (card-state ca)]
-            (is (= c-hex (:anki_baseline_digest after)))
+            (is (= (get (:digests outcome) (note ca)) (:anki_baseline_digest after)))
             (is (not= (:anki_baseline_digest ca-before) (:anki_baseline_digest after)))
             (is (= (:local_baseline_digest after) (:local_current_digest after)))))
         (testing "A's conflicts are replaced by the branch's list, and only A's"
@@ -247,20 +256,16 @@
 
 (deftest ^:db a-full-run-still-covers-everything
   (with-db [w]
-    (let [{:keys [uid ca ca1 cb cb1 note tomb]} w]
+    (let [{:keys [uid ca ca1 cb cb1 note tomb]} w
+          outcome (pull-outcome w [ca cb])]
       (db/set-anki-conflicts! uid [ca1 cb1])
       (let [result (recon/finish-run! uid
-                     {:writes            [{:card-id ca :note-id (note ca) :anki-digest c-hex :anki-mod 9}
-                                          {:card-id cb :note-id (note cb) :anki-digest c-hex :anki-mod 9}]
-                      :pull-card-ids     []
-                      :pull-notes        {}
-                      :digests           {}
-                      :backfill          []
-                      :conflict-card-ids []
-                      :finished-note-ids [tomb]})]
+                     (assoc outcome :backfill [] :conflict-card-ids []
+                       :finished-note-ids [tomb]))]
         (is (:success result))
-        (is (= c-hex (:anki_baseline_digest (card-state ca))))
-        (is (= c-hex (:anki_baseline_digest (card-state cb))) "no root id, no confinement")
+        (is (= (get (:digests outcome) (note ca)) (:anki_baseline_digest (card-state ca))))
+        (is (= (get (:digests outcome) (note cb)) (:anki_baseline_digest (card-state cb)))
+          "no root id, no confinement")
         (is (nil? (:anki_conflict_at (card-state cb1))) "the whole conflict set is replaced")
         (is (nil? (:anki_conflict_at (card-state ca1))))
         (is (= #{} (tombstone-notes uid)))))))
