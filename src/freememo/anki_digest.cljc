@@ -96,6 +96,13 @@
   [text]
   (sha256-hex (or text "")))
 
+(defn text-tuple-fingerprint
+  "Hash length-prefixed text fields without ambiguous field boundaries."
+  [parts]
+  (text-fingerprint (apply str (map (fn [part]
+                                    (let [value (or part "")]
+                                      (str (count value) ":" value))) parts))))
+
 (defn- digest-of
   "Digest a card's comparable parts. `kind` leads the input, so a kind change is
    a change on both sides even when every field survives it."

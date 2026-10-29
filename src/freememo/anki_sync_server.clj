@@ -351,7 +351,7 @@
                           (db/get-flashcards-by-anki-note-ids user-id note-ids))
           per-card
           (into {}
-            (keep (fn [{:keys [note-id stripped-fields field-fingerprints tags remark suspended]}]
+            (keep (fn [{:keys [note-id stripped-fields field-fingerprints fingerprint tags remark suspended]}]
                     (when-let [card (get local-by-note note-id)]
                       (let [kind (:flashcards/kind card)
                             basic? (= "basic" kind)
@@ -364,6 +364,12 @@
                             anki-modified?
                             (cond
                               (contains? #{"occlusion" "score" "overlapping"} kind) false
+                              fingerprint
+                              (not= fingerprint
+                                (digest/text-tuple-fingerprint
+                                  (map #(helpers/strip-html (math/stored->compare-html % kind))
+                                    (if basic? [(:flashcards/question card) (:flashcards/answer card)]
+                                      [(:flashcards/cloze card)]))))
                               basic? (or (not (equal-field? 0 (:flashcards/question card)))
                                        (not (equal-field? 1 (:flashcards/answer card))))
                               :else (not (equal-field? 0 (:flashcards/cloze card))))

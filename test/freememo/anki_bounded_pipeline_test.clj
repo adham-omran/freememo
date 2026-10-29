@@ -50,6 +50,27 @@
     (is (= [123] (:absent result)))
     (is (= 1000 (count (:digests result))))))
 
+(deftest typed-overlay-sends-one-content-fingerprint-and-only-active-flags
+  (let [result (await! (overlay/read-overlay!
+                         (fn [action {:keys [notes cards]}]
+                           (m/sp
+                             (case action
+                               "notesInfo" (mapv #(assoc (note %) :tags [] :fields
+                                                   {:Front {:order 0 :value "Question"}
+                                                    :Back {:order 1 :value "Answer"}}) notes)
+                               "areSuspended" (mapv (constantly false) cards))))
+                         [1] {1 "basic"}))
+        state (first (:present result))]
+    (is (= #{:note-id :fingerprint} (set (keys state))))
+    (is (= (digest/text-tuple-fingerprint ["Question" "Answer"]) (:fingerprint state)))
+    (is (< (count (pr-str state)) 120))
+    (is (= (digest/text-tuple-fingerprint ["Question" ""])
+          (overlay/note-fingerprint {:fields {:Front {:order 0 :value "Question"}}} "basic")))
+    (is (not= (digest/text-tuple-fingerprint ["ab" "c"])
+          (digest/text-tuple-fingerprint ["a" "bc"])))
+    (is (= (digest/text-tuple-fingerprint ["😀" ""])
+          (digest/text-tuple-fingerprint ["😀" nil])))))
+
 (deftest cancellation-stops-the-next-delete-and-keeps-the-first-record
   (let [calls (atom []) checks (atom 0)
         result (await! (finish/finish!

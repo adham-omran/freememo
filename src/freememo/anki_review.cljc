@@ -32,7 +32,8 @@
       (mapcat :members)
       (keep (fn [card]
               (when-some [note-id (:flashcards/anki_note_id card)]
-                {:card-id (:flashcards/id card) :note-id note-id}))))
+                (cond-> {:card-id (:flashcards/id card) :note-id note-id}
+                  (:flashcards/kind card) (assoc :kind (:flashcards/kind card)))))))
     display-rows))
 
 (defn overlay->filter-ids

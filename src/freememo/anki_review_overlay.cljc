@@ -26,8 +26,10 @@
          (m/sp
            (loop [offset 0 result {:present [] :absent []}]
              (if (< offset note-count)
-               (let [ids (m/? (request/request! !requests {:offset offset}))
-                     chunk (m/? (overlay-reads/read-overlay! helpers/anki-call! ids))]
+               (let [targets (m/? (request/request! !requests {:offset offset}))
+                     ids (mapv :note-id targets)
+                     kinds (into {} (map (juxt :note-id :kind)) targets)
+                     chunk (m/? (overlay-reads/read-overlay! helpers/anki-call! ids kinds))]
                  (recur (+ offset 500)
                    (-> result (update :present into (:present chunk))
                      (update :absent into (:absent chunk)))))
@@ -51,7 +53,7 @@
         (let [offset (get-in item [:data :offset])
               [t ?error] (e/Token (:id item))]
           (when t
-            (let [ids (e/server (mapv :note-id (take 500 (drop offset manifest))))]
+            (let [ids (e/server (mapv #(select-keys % [:note-id :kind]) (take 500 (drop offset manifest))))]
               (case ids
                 (do (e/on-unmount #(request/resolve! item ids))
                     (t))))))))))

@@ -52,8 +52,7 @@
   ([user-id] (scan-targets user-id nil))
   ([user-id root-id]
    (let [manifest (db/get-pushed-card-manifest user-id root-id)
-         kinds (into {} (map (juxt :flashcards/anki_note_id :flashcards/kind))
-                 (db/get-reconcile-note-kinds user-id root-id))
+         kinds (into {} (map (juxt :note-id :kind)) manifest)
          tombstone-ids (if (some? root-id)
                          []
                          (mapv :anki_note_tombstones/anki_note_id

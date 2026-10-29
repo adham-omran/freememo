@@ -7543,7 +7543,7 @@
     :select [:id] :from [:subtree]}])
 
 (defn get-pushed-card-manifest
-  "Card-id/note-id pairs for every pushed card the user owns (anki_note_id NOT
+  "Card IDs, note IDs, and kinds for every pushed card the user owns (anki_note_id NOT
    NULL). Filter-independent — this is the Anki overlay's fetch set, so it must
    not narrow with the /library/cards filters. Empty → [].
 
@@ -7552,9 +7552,10 @@
    1-arity."
   ([user-id] (get-pushed-card-manifest user-id nil))
   ([user-id root-id]
-   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
+   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)
+                  :kind (:flashcards/kind r)})
      (jdbc/execute! ds
-       (sql/format {:select [:f.id :f.anki_note_id]
+       (sql/format {:select [:f.id :f.anki_note_id :f.kind]
                     :from [[:flashcards :f]]
                     :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                     :where (cond-> [:and
@@ -7670,17 +7671,6 @@
                                (some? root-id)
                                (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
 
-(defn get-reconcile-note-kinds
-  "Read only linked note IDs and kinds for an owned reconcile scope."
-  [user-id root-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:f.anki_note_id :f.kind]
-                 :from [[:flashcards :f]]
-                 :join [[:topics :root] [:= :f.root_topic_id :root.id]]
-                 :where (cond-> [:and [:= :root.user_id user-id]
-                                 [:not= :f.anki_note_id nil]]
-                          (some? root-id)
-                          (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))})))
 
 (defn card-ids-in-subtree
   "The subset of `card-ids` that `user-id` owns and that sit under topic
