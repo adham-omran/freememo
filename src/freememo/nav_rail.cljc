@@ -24,6 +24,7 @@
    [freememo.activity-panel :refer [ActivityNavButton]]
    [freememo.command-bus :as bus]
    [freememo.motion :as motion]
+   [freememo.nav-item-dom :as item-dom]
    [freememo.commands :as commands]
    [freememo.help-content :as help]
    [freememo.icons :as icons]
@@ -363,28 +364,19 @@
 (e/defn RailIcon [icon]
   (e/client
     (dom/span
-      (dom/props {:class "nav-rail__icon"})
-      (icons/Icon icon :size 18))))
+      (case (item-dom/icon! dom/node icon 18) nil))))
 
 (e/defn RailLabel [text]
   (e/client
     (dom/span
-      (dom/props {:class "nav-rail__label"})
-      (dom/span (dom/text text)))))
+      (case (item-dom/label! dom/node text nil) nil))))
 
 (e/defn RailItem
-  "One navigating row. `extra-class` is nil or one more class token. An item
-   with `:tour` carries it as its `data-tour` spotlight anchor."
+  "Keep navigation handlers in Electric and render display children together."
   [{:keys [label icon tour]} active? extra-class on-click]
   (e/client
     (dom/button
-      (dom/props {:class (str "nav-rail__item"
-                           (when extra-class (str " " extra-class))
-                           (when active? " is-active"))
-                  :aria-current (when active? "page")})
-      (dom/props {:data-tour tour})
-      (RailIcon icon)
-      (RailLabel label)
+      (case (item-dom/item! dom/node label icon tour active? extra-class) nil)
       (dom/On "click" (fn [_] (on-click)) nil))))
 
 (e/defn ContinueItem
@@ -398,11 +390,8 @@
                   :aria-current (when active? "page")})
       (RailIcon icon)
       (dom/span
-        (dom/props {:class "nav-rail__label"})
-        (dom/span (dom/text label))
-        (dom/span
-          (dom/props {:class "nav-rail__sub"})
-          (dom/text (if target (:title target) "Nothing open yet"))))
+        (case (item-dom/label! dom/node label
+                {:subtext (if target (:title target) "Nothing open yet")}) nil))
       (dom/On "click" (fn [_] (open-continue! navigate! target)) nil))))
 
 (defn dot-text
@@ -418,11 +407,8 @@
   (e/client
     (when (pos? (or due 0))
       (dom/span
-        (dom/props {:class class})
-        (dom/text text)
-        (dom/span (dom/props {:class "nav-rail__sr"}) (dom/text " due"))
-        ;; Flashes when Done or Next in this tab changed the count.
-        (motion/flash-own-change! dom/node :user due)))))
+        (case (item-dom/due! dom/node text class)
+          (motion/flash-own-change! dom/node :user due))))))
 
 (e/defn LearnItem
   "Learn, carrying the count of topics due (W2)."
@@ -432,8 +418,7 @@
       (dom/props {:class (str "nav-rail__item" (when active? " is-active"))
                   :aria-current (when active? "page")})
       (dom/span
-        (dom/props {:class "nav-rail__icon"})
-        (icons/Icon icon :size 18)
+        (case (item-dom/icon! dom/node icon 18) nil)
         (DueCount due (dot-text (or due 0)) "nav-rail__dot"))
       (RailLabel label)
       (DueCount due (str due) "nav-rail__count")
@@ -459,11 +444,8 @@
                   :aria-pressed (str (boolean kept?))})
       (RailIcon :panel-left)
       (dom/span
-        (dom/props {:class "nav-rail__label"})
-        (dom/span
-          (dom/props {:class "nav-rail__keep-row"})
-          (dom/text "Keep open")
-          (dom/kbd (dom/text (commands/display-chord :toggle-nav-rail)))))
+        (case (item-dom/label! dom/node "Keep open"
+                {:shortcut (commands/display-chord :toggle-nav-rail)}) nil))
       (dom/On "click" (fn [_] (on-click)) nil))))
 
 (e/defn PhoneBar

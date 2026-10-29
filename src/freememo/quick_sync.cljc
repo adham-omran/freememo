@@ -76,4 +76,5 @@
                           (unwatch!))))
         (dom/On "click" (fn [_] (start-run! nil)) nil))
       (QuickSyncBusyToast user-id !busy-bump)
-      (recon/ReconcileExecutor user-id state))))
+      (when (some? (e/watch (:!phase state)))
+        (recon/ReconcileExecutor user-id state)))))
