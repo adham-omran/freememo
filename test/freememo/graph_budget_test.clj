@@ -55,6 +55,14 @@
     (is (empty? (:edges (queries/elements other {:entity-id hub}))))
     (is (empty? (:nodes (queries/elements other {:entity-id hub}))))))
 
+(deftest a-selected-isolated-concept-remains-visible
+  (let [{:keys [user-id]} (seed!)
+        isolated (:id (one "INSERT INTO kg_entities(user_id,label) VALUES (?, 'An isolated concept') RETURNING id" user-id))
+        elements (queries/elements user-id {:entity-id isolated})]
+    (is (= [isolated] (mapv :id (:nodes elements))))
+    (is (empty? (:edges elements)))
+    (is (= 0 (get-in elements [:budget :total-edges])))))
+
 (deftest cache-selection-and-layout-input-remain-bounded
   (let [{:keys [user-id hub]} (seed!)
         cached (atom nil)

@@ -73,12 +73,13 @@
   "Apply scope filters, then the k-core and selected view. Store JS sets for
    constant-time reducer lookups. Return the new visible counts."
   [!ui]
-  (let [{:keys [model source pred-set min-degree view-mode selected depth]} @!ui
+  (let [{:keys [model source pred-set min-degree view-mode selected depth standalone-node-ids]} @!ui
         {:keys [node-ids edge-ids]} (graph-state/visible-subgraph
                                      model {:source source :pred-set pred-set
                                             :min-degree min-degree
                                             :view-mode view-mode
-                                            :selected selected :depth depth})
+                                            :selected selected :depth depth
+                                            :standalone-node-ids standalone-node-ids})
         vnodes (js/Set.)
         vedges (js/Set.)
         counts {:nodes (count node-ids) :edges (count edge-ids)}]
@@ -539,6 +540,7 @@
                        :view-mode :overview :depth 1
                        :vnodes nil :vedges nil
                        :model (payload-model payload)
+                       :standalone-node-ids (into #{} (keep (fn [[id _ degree]] (when (zero? degree) (str id)))) (:nodes payload))
                        :counts {:nodes 0 :edges 0}
                        :on-select on-select
                        :on-counts (:on-counts opts)

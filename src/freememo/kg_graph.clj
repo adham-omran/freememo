@@ -3,7 +3,7 @@
    Graphviz sfdp, cache the positioned render payload per (user, scope), and
    serve it to freememo.graph-page.
 
-   Node = a kg_entity in ≥1 approved entity→entity fact. Edge = such a fact,
+   Overview nodes have an approved entity→entity fact. A selected concept can stand alone. Edge = such a fact,
    labeled by predicate. Literal-object facts are attributes, surfaced only in
    the side panel (db/kg-entity-card) — never graph edges.
 
@@ -138,7 +138,7 @@
       :predicates [[pred-id label] …]     ; index = pred-idx above
       :docs       [[topic-id title] …]
       :layout-revision <integer>}
-   Isolated nodes cannot occur (edges-only). Empty graph → empty vectors."
+   A selected concept can have no edges. Empty graph → empty vectors."
   [user-id elements]
   (let [t0 (System/currentTimeMillis)
         {:keys [nodes edges predicates docs]} elements

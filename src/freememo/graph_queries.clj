@@ -19,7 +19,8 @@
         edges (jdbc/execute! db/ds
                              (into [(str "SELECT subject_entity_id AS s, object_entity_id AS t, predicate_id AS p, graph_topic_id AS topic FROM kg_facts WHERE " where " ORDER BY id LIMIT ? OFFSET ?")]
                                    (conj args edge-limit (* page edge-limit))) opts)
-        ids (long-array (distinct (mapcat (juxt :s :t) edges)))
+        ids (long-array (distinct (cond-> (mapcat (juxt :s :t) edges)
+                                   entity-id (concat [entity-id]))))
         predicates (long-array (distinct (map :p edges)))
         docs (long-array (distinct (map :topic edges)))]
     {:nodes (jdbc/execute! db/ds
