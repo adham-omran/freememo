@@ -11,6 +11,8 @@
    [freememo.segmented :as seg]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
+   [freememo.bounded-page :as page]
+   #?(:clj [freememo.entity-options :as entity-options])
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.electric3 :as e]
@@ -108,7 +110,7 @@
 
 (defn graph-payload*
   "Return the cached positioned graph for one user and mutation version."
-  [version user-id]
+  [version user-id selection]
   #?(:clj
      (do
        (tel/log! {:level :info :id ::payload.enter
@@ -116,7 +118,7 @@
          "graph-page: graph payload requested")
        (let [started-at (System/currentTimeMillis)]
          (try
-           (let [payload (kgg/get-or-compute user-id "all" version)]
+           (let [payload (kgg/get-bounded user-id version selection)]
              (tel/log! {:level :info :id ::payload.exit
                         :data {:user-id user-id
                                :nodes (count (:nodes payload))
@@ -137,6 +139,21 @@
 (defn graph-entity-card* [_version user-id entity-id]
   #?(:clj (db/kg-entity-card user-id entity-id)
      :cljs nil))
+
+(defn entity-options* [_version user-id request]
+  #?(:clj {:request request :options (entity-options/search-options user-id nil (:query request))}
+     :cljs nil))
+
+(defn selected-entity* [_version user-id id]
+  #?(:clj (entity-options/selected-option user-id id) :cljs nil))
+
+(e/defn GraphSearch [user-id version !selected]
+  (typeahead/SearchTypeahead !selected
+    (e/fn Search [request]
+      (e/server (e/Offload #(entity-options* version user-id request))))
+    (e/fn Selected [id]
+      (e/server (e/Offload #(selected-entity* version user-id id))))
+    [user-id version] "Search all concepts…" nil false))
 
 ;; ---------------------------------------------------------------------------
 ;; Sigma bridge
@@ -417,7 +434,7 @@
             nil))
         (dom/div
           (dom/props {:class "graph-render-surface"})
-          (e/for-by identity [_key [[kg-bump node-count]]]
+          (e/for-by identity [_key [[kg-bump (:selection payload)]]]
             (dom/div
               (dom/props {:class "graph-render-canvas"})
               (schedule-graph-init! !ctx dom/node payload
@@ -543,13 +560,15 @@
 (e/defn GraphPage [user-id navigate!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          payload (e/server (e/Offload #(graph-payload* kg-bump user-id)))
+          !selected-id (atom nil) selected-id (e/watch !selected-id)
+          !edge-page (atom 0) edge-page (e/watch !edge-page)
+          selection {:entity-id selected-id :page edge-page}
+          payload (e/server (e/Offload #(graph-payload* kg-bump user-id selection)))
           node-count (count (:nodes payload))
           max-degree (reduce (fn [m node] (max m (nth node 2 0))) 1 (:nodes payload))
           max-connectedness (max 1 (min 10 max-degree))
           compact? (e/watch viewport/!compact?)
           !ctx (atom nil) ctx (e/watch !ctx)
-          !selected-id (atom nil) selected-id (e/watch !selected-id)
           !source (atom :all) source (e/watch !source)
           !preds (atom nil) preds (e/watch !preds)
           !connectedness (atom 1) connectedness (e/watch !connectedness)
@@ -559,9 +578,27 @@
           stats (e/watch !stats)
           !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)]
       (if (zero? node-count)
-        (GraphEmptyState navigate!)
+        (dom/div
+          (GraphSearch user-id kg-bump !selected-id)
+          (when selected-id
+            (dom/button
+              (dom/props {:type "button" :class "btn"})
+              (dom/text "Show all concepts")
+              (dom/On "click" (fn [_] (reset! !edge-page 0) (reset! !selected-id nil)) nil)))
+          (GraphEmptyState navigate!))
         (dom/div
           (dom/props {:class "graph-page"})
+          (dom/div
+            (dom/props {:class "graph-budget-notice"})
+            (GraphSearch user-id kg-bump !selected-id)
+            (dom/p (dom/text (str "This view shows up to " (get-in payload [:budget :edges])
+                               " relations. Search a concept to inspect its connections.")))
+            (when selected-id
+              (dom/button
+                (dom/props {:type "button" :class "btn btn-sm"})
+                (dom/text "Show all concepts")
+                (dom/On "click" (fn [_] (reset! !edge-page 0) (reset! !selected-id nil)) nil)))
+            (page/PageControls !edge-page (get-in payload [:budget :total-edges] 0) 500 "Graph relations"))
           (FiltersPanel payload !selected-id selected-id !source !preds preds
             !connectedness connectedness max-connectedness
             !view-mode view-mode filters-open?)

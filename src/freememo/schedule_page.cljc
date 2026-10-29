@@ -25,7 +25,7 @@
    [freememo.navigation :as nav]
    [freememo.page-title :refer [PageTitle]]
    [freememo.tooltip :as tooltip]
-   [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
    [clojure.string :as str]
    #?(:clj [freememo.curriculum :as curriculum])
    #?(:clj [freememo.user-state :as us])))
@@ -137,29 +137,8 @@
 ;; New-schedule form (§7.4)
 ;; ---------------------------------------------------------------------------
 
-(e/defn DocumentSelect [!doc-id docs]
-  (e/client
-    ;; `Typeahead`, not a `<select>`. This is the widget's canonical case
-    ;; (CLAUDE.md, 'Typeahead Is Id-Keyed; Suggest Is Free Text'): the option
-    ;; list IS the domain of legal values — a schedule over a document that
-    ;; does not exist is meaningless — and the domain is genuinely id-keyed,
-    ;; because a topic id is distinct from its title and two documents may
-    ;; share one. It is a better fit than the Anki deck field, which has to
-    ;; pass the label as the id because Anki exposes no deck id.
-    ;;
-    ;; A plain select also stops scaling: a library is unbounded, and picking
-    ;; one book out of hundreds by scrolling is the problem typeahead exists
-    ;; to remove.
-    ;;
-    ;; Options MUST be {:id :label}. A seq of strings fails SILENTLY here —
-    ;; `(:label "text")` is nil, so rows paint blank and selecting one writes
-    ;; nil, CLEARING the field instead of setting it.
-    (typeahead/Typeahead !doc-id
-      (mapv (fn [d] {:id (:id d)
-                     :label (str (:title d) " — " (:pages d) " pages")})
-        docs)
-      "Search your documents…" nil false)
-    (e/amb)))
+(e/defn DocumentSelect [!doc-id refresh user-id]
+  (picker/DocumentPicker !doc-id refresh user-id :schedule nil "Search your documents…"))
 
 (e/defn FieldLabel [text]
   (e/client
@@ -172,7 +151,6 @@
 (e/defn NewScheduleForm [user-id navigate! !open?]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          docs (e/server (sched/documents-for-picker refresh user-id))
           !doc-id (atom nil)
           commits (forms/Form!
                     {:target-date "" :first-page "1" :last-page ""
@@ -180,7 +158,7 @@
                     (e/fn Fields [{:keys [target-date first-page last-page capacity]}]
                       (e/amb
                         (FieldLabel "Document")
-                        (DocumentSelect !doc-id docs)
+                        (DocumentSelect !doc-id refresh user-id)
 
                         (FieldLabel "Target date")
                         (forms/Input! :target-date (or target-date "") :type "date"

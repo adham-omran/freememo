@@ -18,6 +18,7 @@
    [freememo.tape-table :as tape]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.entity-options :as entity-options])
@@ -143,9 +144,8 @@
           !confirm-delete (atom nil) confirm-delete (e/watch !confirm-delete)
           !editing (atom nil)               ; the question map being edited, or nil
           !stats (atom nil)                 ; {:question id} whose stats are open
-          docs (e/server (e/Offload #(scope/list-source-docs* kg-bump user-id)))
+          selected-source (e/server (e/Offload #(picker/selected* kg-bump user-id :source source-id)))
           selected-entity (e/server (e/Offload #(selected-entity-option* kg-bump user-id entity-id)))
-          doc-options (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
           ;; Select 34px, Kind 84px, Facts 50px, State 110px. Actions 104px: Edit
           ;; (~44px) and ⋯ (~38px) with the cell's 4px gap inside 10px padding.
           grid-cols "34px minmax(180px,1.4fr) minmax(180px,1.4fr) 84px 50px 110px 104px"]
@@ -166,7 +166,7 @@
                 (dom/props {:class "knowledge-filters"})
                 (scope/SearchInput "Search questions…" query !query search-epoch)
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
-                  (typeahead/Typeahead !source-id doc-options "Filter by source…" nil nil))
+                  (picker/DocumentPicker !source-id kg-bump user-id :source nil "Filter by source…"))
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
                   (typeahead/SearchTypeahead !entity-id
                     (e/fn Search [request]
@@ -185,7 +185,7 @@
                     (tape/FilterLabel (str "Search: " query) clear-search!))
                   (when (some? source-id)
                     (tape/FilterLabel
-                      (str "Source: " (or (some #(when (= source-id (:id %)) (:label %)) doc-options) source-id))
+                      (str "Source: " (or (:label selected-source) source-id))
                       (fn [] (reset! !source-id nil))))
                   (when (some? entity-id)
                     (tape/FilterLabel

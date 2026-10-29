@@ -9698,3 +9698,38 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
   padding: 8px;
   flex-shrink: 0;
 }
+/* Bounded audit widgets share one static property per cell. */
+.picker-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; flex: 1; }
+.typeahead-option-cell {
+  padding: 5px 8px; cursor: pointer; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.typeahead-option-cell.is-active { background: var(--color-highlight); }
+.audit-tape-row { border-bottom: 1px solid var(--color-bg-subtle); }
+.status-tape-row { cursor: pointer; }
+.status-document-cell {
+  padding: 4px 10px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; display: flex; align-items: center; gap: 8px;
+}
+.status-kind-badge { flex-shrink: 0; }
+.status-number-cell { padding: 4px 6px; text-align: center; }
+.status-number-cell.is-complete { color: var(--color-success-dark); }
+.status-number-cell.is-started { color: var(--color-text-primary); }
+.status-number-cell.is-muted { color: var(--color-text-secondary); }
+.zotero-item-cell {
+  padding: 6px 12px; cursor: pointer; display: flex; flex-direction: column;
+  justify-content: center; overflow: hidden;
+}
+.zotero-item-title {
+  font-size: 14px; font-weight: 500; color: var(--color-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zotero-item-meta {
+  font-size: 12px; color: var(--color-text-secondary); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audit-page-controls { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.graph-budget-notice { padding: 8px 12px; color: var(--color-text-secondary); }
+.graph-page { grid-template-rows: auto minmax(0, 1fr); }
+.graph-budget-notice { grid-column: 1 / -1; }
+.graph-budget-notice .audit-page-controls { margin: 4px 0; }

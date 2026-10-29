@@ -14,7 +14,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [freememo.scroll :refer [Scroll-window]]
    [freememo.row-motion :as row-motion]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
@@ -470,7 +470,7 @@
                         :style {:flex "1" :overflow-y "auto" :min-height "0"
                                 :scrollbar-gutter "stable"}})
             (reset! !scroll-node dom/node)
-            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
+            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1.5 :reset-key page-topic-id})
                   ;; Row ids of the last window, for row-motion/arrivals!. The
                   ;; open page and the offset are in the scope: a page turn or
                   ;; a scroll shows rows, it does not add them.
@@ -482,8 +482,8 @@
                 (dom/props {:style {:width "100%"
                                     :font-size "13px"}})
                 (e/on-unmount (row-motion/install! dom/node))
-                (if (pos? row-count)
-                  (let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
+                (do
+(let [arrived (e/server (row-motion/arrivals! !seen [(:page-topic-id built) offset]
                                             (panel-row-ids rows)))
                         window (e/server
                                  (e/diff-by (comp :topics/id :topic)
@@ -492,12 +492,13 @@
                       (HierarchyRow (:pos row) row navigate! !nav-target
                         !drag-src drag-src forbidden !drop-cmd
                         !expanded-set !scroll-node)))
-                  (dom/tr
+(when (zero? row-count)
+(dom/tr
                     (dom/props {:style {:--order 1 :height "auto"}})
                     (dom/td
                       (dom/props {:style {:padding "16px 12px" :text-align "center"
                                           :color "var(--color-text-secondary)" :font-size "13px"}})
-                      (dom/text "No items."))))))))))))
+                      (dom/text "No items.")))))))))))))
 
 (e/defn HierarchySidePanel [user-id page-topic-id root-topic-id navigate! !nav-target]
   (e/client

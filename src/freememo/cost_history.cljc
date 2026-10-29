@@ -16,6 +16,8 @@
    [freememo.tape-table :as tape]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
+   [freememo.typeahead :as typeahead]
+   #?(:clj [freememo.option-queries :as options])
    [clojure.string :as str]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.credits :as credits])
@@ -112,8 +114,14 @@
      :cljs []))
 
 (defn facets* [_refresh user-id]
-  #?(:clj (db/credit-transaction-facets user-id)
+  #?(:clj (select-keys (db/credit-transaction-facets user-id) [:endpoints])
      :cljs {:endpoints [] :models []}))
+
+(defn model-options* [_refresh user-id request]
+  #?(:clj (options/model-options user-id request) :cljs nil))
+
+(defn selected-model* [_refresh user-id id]
+  #?(:clj (options/selected-model user-id id) :cljs nil))
 
 ;; ── Row + section ───────────────────────────────────────────────────────────
 
@@ -184,8 +192,7 @@
           refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           facets (e/server (e/Offload #(facets* refresh user-id)))
           endpoints (:endpoints facets)
-          models (:models facets)
-          filters {:kind kind :endpoint endpoint :model model :q q-debounced
+          filters {:kind kind :endpoint endpoint :model (or model "") :q q-debounced
                    :since-days (get preset->days preset)
                    :min-amount (parse-min-amount min-amount-debounced)}
           results (e/server (e/Offload #(list-transactions* refresh user-id filters)))
@@ -215,12 +222,12 @@
               (dom/option (dom/props {:value ep}) (dom/text (endpoint-label ep))))
             (set! (.-value dom/node) endpoint)
             (dom/On "change" (fn [e] (reset! !endpoint (-> e .-target .-value))) nil))
-          (dom/select (dom/props {:class "input" :aria-label "Model"})
-            (dom/option (dom/props {:value ""}) (dom/text "All models"))
-            (e/for [m (e/diff-by identity models)]
-              (dom/option (dom/props {:value m}) (dom/text (model-label m))))
-            (set! (.-value dom/node) model)
-            (dom/On "change" (fn [e] (reset! !model (-> e .-target .-value))) nil))
+          (typeahead/SearchTypeahead !model
+            (e/fn Search [request]
+              (e/server (e/Offload #(model-options* refresh user-id request))))
+            (e/fn Selected [id]
+              (e/server (e/Offload #(selected-model* refresh user-id id))))
+            [refresh user-id] "All models" nil false)
           (dom/select (dom/props {:class "input" :aria-label "Date range"})
             (e/for [[v label _] (e/diff-by first date-presets)]
               (dom/option (dom/props {:value v}) (dom/text label)))

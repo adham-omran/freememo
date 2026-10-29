@@ -12,6 +12,7 @@
    packs components and distributes leaf fans. Positions are raw Graphviz points.
    The client camera fits them, so the server does no normalization."
   (:require [freememo.db :as db]
+            [freememo.graph-queries :as queries]
             [clojure.string :as str]
             [taoensso.telemere :as tel]))
 
@@ -129,7 +130,7 @@
             "kg-graph sfdp: failed. See :stderr for the cause")
           (throw t))))))
 
-(defn compute-payload
+(defn elements->payload
   "Assemble + lay out the edges-only graph for `user-id`.
    Post: wire-ready
      {:nodes      [[id label degree x y] …]
@@ -138,9 +139,9 @@
       :docs       [[topic-id title] …]
       :layout-revision <integer>}
    Isolated nodes cannot occur (edges-only). Empty graph → empty vectors."
-  [user-id]
+  [user-id elements]
   (let [t0 (System/currentTimeMillis)
-        {:keys [nodes edges predicates docs]} (db/kg-graph-elements user-id)
+        {:keys [nodes edges predicates docs]} elements
         _ (tel/log! {:level :info :id ::compute.elements
                      :data {:user-id user-id :nodes (count nodes) :edges (count edges)
                             :predicates (count predicates) :docs (count docs)
@@ -166,6 +167,22 @@
                       :total-ms (- (System/currentTimeMillis) t0)}}
       "kg-graph compute: payload assembled")
     payload))
+
+(defn compute-payload [user-id]
+  (elements->payload user-id (db/kg-graph-elements user-id)))
+
+(defn get-bounded
+  "Cache one bounded page per user. Concept search reaches connections outside the current page."
+  [user-id version selection]
+  (let [cached (db/read-graph-layout user-id "bounded")]
+    (if (and (current-cache? cached version)
+          (= selection (get-in cached [:payload :selection])))
+      (:payload cached)
+      (let [elements (queries/elements user-id selection)
+            payload (assoc (elements->payload user-id elements)
+                      :budget (:budget elements) :selection selection)]
+        (db/write-graph-layout! user-id "bounded" version payload)
+        payload))))
 
 (defn get-or-compute
   "Serve the cached payload when its data version and layout revision match.

@@ -26,7 +26,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.router5 :as r]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [clojure.string :as str]
    [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
@@ -180,10 +181,11 @@
                           :aria-pressed (if (= mode k) "true" "false")})
               (dom/text label)
               (dom/On "click" (fn [_] (reset! !mode k) (reset! !count-str dflt)) nil))))
-        (if (e/server (empty? docs))
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text "No questions yet — distill a document and generate questions in Knowledge."))
-          (dom/div
+        (do
+(when (e/server (empty? docs))
+(dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
+            (dom/text "No questions yet — distill a document and generate questions in Knowledge.")))
+(dom/div
             ;; Virtualized 1-col material list (Scroll-window/Tape; shared by quiz+exam
             ;; modes). Bounded height gives the virtual viewport its bounds; reuses the
             ;; .tape-scroll table CSS (per-row transform via --order; --count table height).
@@ -193,7 +195,7 @@
                                   :border-radius "var(--radius-sm)"}})
               (let [row-count (e/server (count docs))
                     [offset limit] (Scroll-window quiz-material-row-height row-count dom/node
-                                     {:overquery-factor 2})]
+                                     {:overquery-factor 1.5 :reset-key user-id})]
                 (dom/props {:class "tape-scroll"
                             :style {:--count row-count
                                     :--grid-cols "1fr"

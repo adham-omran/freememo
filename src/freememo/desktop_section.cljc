@@ -17,7 +17,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
-   [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
+   [freememo.bounded-page :as page]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-link :as link])
@@ -198,9 +199,11 @@
 (e/defn DesktopSyncBody [user-id]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
-          status (e/server (sync-status* refresh))
-          conflicts (e/server (conflicts* refresh))
-          roots (e/server (root-topics* refresh user-id))
+          status (e/server (e/Offload #(sync-status* refresh)))
+          conflicts (e/server (e/Offload #(conflicts* refresh)))
+          conflict-count (e/server (count conflicts))
+          !conflict-page (atom 0)
+          conflict-page (e/watch !conflict-page)
           !parent (atom nil)
           parent (e/watch !parent)]
       (dom/section
@@ -221,21 +224,22 @@
         (dom/props {:class "settings-group"})
         (group/GroupHeading "Sync conflicts")
         (dom/p (dom/props {:class "hint"})
-          (dom/text (if (zero? (count conflicts))
+          (dom/text (if (zero? conflict-count)
                       "Nothing was left out of a sync."
                       "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
         (dom/div
           (dom/props {:class "field"})
           (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
           ;; An empty field is no selection, which restores at the top level.
-          (typeahead/Typeahead !parent
-            (mapv (fn [{:keys [id title]}] {:id id :label title}) roots)
-            "Top level. Type to choose a document." nil false))
-        (dom/table
+          (picker/DocumentPicker !parent refresh user-id :source nil
+            "Top level. Type to choose a document."))
+        (dom/div
+(dom/table
           (dom/props {:style {:width "100%" :font-size "13px"}})
           (dom/tbody
-            (e/for [c (e/diff-by :id conflicts)]
-              (ConflictRow user-id c parent))))))))
+            (e/for [c (e/server (e/diff-by :id (page/page-items conflicts conflict-page 20)))]
+              (ConflictRow user-id c parent))))
+(page/PageControls !conflict-page conflict-count 20 "Sync conflicts"))))))
 
 ;; ── Server body ────────────────────────────────────────────────────
 

@@ -5,7 +5,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
    [hyperfiddle.electric-svg3 :as svg]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
@@ -580,7 +581,7 @@
                                       :min-height (if (zero? item-count) "72px" "0")
                                       :position "relative" :scrollbar-gutter "stable"}})
                   (let [[offset limit] (Scroll-window row-height item-count dom/node
-                                         {:overquery-factor 2})]
+                                         {:overquery-factor 2 :reset-key user-id})]
                     (dom/props {:class "tape-scroll"
                                 :style {:--count item-count
                                         :--grid-cols grid-cols

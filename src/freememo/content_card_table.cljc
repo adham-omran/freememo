@@ -290,8 +290,8 @@
               ;; only forgets it once every one of them is present. Row ids
               ;; alone would leave the pending row up forever.
               present-ids (e/server (set (mapcat :member-ids all-rows)))
-              overlay-entries (opt/visible-pending-cards pending-map topic-id present-ids)
-              landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)
+              overlay-entries (e/server (opt/visible-pending-cards pending-map topic-id present-ids))
+              landed-tempids (e/server (opt/landed-pending-tempids pending-map topic-id present-ids))
               pending-count (count overlay-entries)
               ;; Cards that already have a row on screen: a pending row now, or
               ;; one that has landed. Their saved row replaces that row in place.

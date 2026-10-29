@@ -5,7 +5,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
    [freememo.a11y :as a11y]
@@ -191,7 +192,7 @@
 ;;    offset-independent `results`, so work-skipping holds rows steady.
 ;; The empty-state message is a sibling overlay in SearchPage, never a branch
 ;; that swaps this table out.
-(e/defn SearchResultsTable [results row-count navigate!]
+(e/defn SearchResultsTable [results row-count navigate! reset-key]
   (e/client
     (let [rc (or row-count 0)
           row-height 36
@@ -216,7 +217,7 @@
         ;; Scrollable body — permanently mounted; empties to 0 rows, never unmounts
         (dom/div
           (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 2})]
+          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 1.5 :reset-key reset-key})]
             (dom/props {:class "tape-scroll"
                         :style {:--count rc :--grid-cols grid-cols :--row-height (str row-height "px")}})
             (dom/table
@@ -323,7 +324,7 @@
         (dom/div
           (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                               :min-height "0" :position "relative"}})
-          (SearchResultsTable results (or result-count 0) navigate!)
+          (SearchResultsTable results (or result-count 0) navigate! [mode kind query-debounced])
           (when (or (not valid?)
                   (and valid? (not loading?) (= 0 result-count)))
             (dom/div

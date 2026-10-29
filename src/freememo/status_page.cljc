@@ -3,7 +3,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.a11y :as a11y]
    [freememo.navigation :as nav]
@@ -178,13 +179,13 @@
             ;; Scrollable body
             (dom/div
               (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})]
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1.5 :reset-key [kind-filter status-filter sort-col sort-dir]})]
                 (dom/props {:class "tape-scroll"
                             :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
                 (dom/table
                   (dom/props {:style {:width "100%" :font-size "13px"}})
-                  (if (pos? item-count)
-                    (e/for [i (Tape offset limit)]
+                  (do
+(e/for [i (Tape offset limit)]
                       (let [item (e/server (nth sorted i nil))]
                         (when item
                           (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
@@ -192,39 +193,38 @@
                                 is-pdf? (= kind "pdf")
                                 open! (fn [_] (navigate! :viewer (nav/nav-topic id :status)))]
                             (dom/tr
-                              (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
-                                                  :cursor "pointer" :--order i}})
+                              (dom/props {:class "audit-tape-row status-tape-row" :style {:--order i}})
                               (dom/On "click" open! nil)
                               ;; Document + badge
                               (dom/td
-                                (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
-                                                    :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
+                                (dom/props {:class "status-document-cell"})
                                 (a11y/KeyActivate {:label (str "Open " title)} open!)
                                 (dom/span
-                                  (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
+                                  (dom/props {:class "type-badge status-kind-badge" :style {:background badge-color}})
                                   (dom/text badge-text))
                                 (dom/span
-                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
+                                  (dom/props {:class "tape-cell-text"})
                                   (tooltip/Tooltip! title)
                                   (dom/text title)))
                               ;; Done
                               (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center"
-                                                    :color (cond
-                                                             (and (pos? total-items) (= done-items total-items)) "var(--color-success-dark)"
-                                                             (pos? done-items) "var(--color-text-primary)"
-                                                             :else "var(--color-text-secondary)")}})
+                                (dom/props {:class (str "status-number-cell "
+                                          (cond
+                                            (and (pos? total-items) (= done-items total-items)) "is-complete"
+                                            (pos? done-items) "is-started"
+                                            :else "is-muted"))})
                                 (dom/text (str done-items " / " total-items)))
                               ;; Synced
                               (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
+                                (dom/props {:class "status-number-cell is-muted"})
                                 (dom/text (if (pos? total-cards)
                                             (str synced-cards " / " total-cards)
                                             "\u2013"))))))))
-                    (dom/tr
+(when (zero? item-count)
+(dom/tr
                       (dom/props {:style {:height "auto"}})
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-secondary)" :font-size "13px"}})
-                        (dom/text "No documents yet")))))
+                        (dom/text "No documents yet"))))))
                 ))))))))
