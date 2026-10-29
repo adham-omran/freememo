@@ -5,6 +5,12 @@
             [freememo.page-merge :as page-merge]
             [next.jdbc :as jdbc]))
 
+(defn page-metadata [root-id]
+  (jdbc/execute! db/ds
+    ["SELECT id,page_number,status FROM topics
+      WHERE parent_id=? AND kind='page' AND staged_delete_id IS NULL
+      ORDER BY page_number" root-id]))
+
 (defn read-window [user-id root-id [start end :as page-range]]
   (let [rows (jdbc/execute! db/ds
                ["SELECT p.id,p.page_number,p.content FROM topics p JOIN topics r ON r.id=p.parent_id

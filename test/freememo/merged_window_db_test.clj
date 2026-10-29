@@ -4,6 +4,7 @@
             [next.jdbc :as jdbc]
             [freememo.db :as db]
             [freememo.editor-pane :as editor-pane]
+            [freememo.topic-state :as topic-state]
             [freememo.merged-window-db :as window-db]
             [freememo.merged-window :as window]))
 
@@ -63,3 +64,24 @@
                       :html (str/replace (:html body) "Body 1 " "Foreign edit ")})]
         (is (false? (:success result)))
         (is (= body (window-db/read-window uid root [1 20])))))))
+
+(deftest page-status-metadata-does-not-read-the-883-page-bodies
+  (with-document
+    (fn [_ root]
+      (let [statements (atom [])
+            execute! jdbc/execute!
+            rows (with-redefs [jdbc/execute!
+                               (fn [connection statement & options]
+                                 (swap! statements conj (first statement))
+                                 (apply execute! connection statement options))]
+                   (window-db/page-metadata root))
+            info (topic-state/get-page-info* 0 0 root 440)]
+        (is (= 883 (count rows)))
+        (is (= (vec (range 1 884)) (mapv :topics/page_number rows)))
+        (is (every? #(= #{:topics/id :topics/page_number :topics/status} (set (keys %))) rows))
+        (is (every? #(= "active" (:topics/status %)) rows))
+        (is (every? #(not (re-find #"(?i)SELECT\s+\*|\bcontent(?:_text)?\b" %)) @statements))
+        (is (= {:done 0 :total 883 :current-done? false}
+              (select-keys info [:done :total :current-done?])))
+        (is (= (:topics/id (nth rows 439)) (:topic-id info)))
+        (is (str/ends-with? (:remaining-tooltip info) "and 863 more"))))))

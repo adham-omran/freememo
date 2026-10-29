@@ -109,7 +109,7 @@
   [_refresh _meta-refresh pdf-root-id page-number]
   #?(:clj
      (when (and pdf-root-id page-number)
-       (let [pages (db/list-pages pdf-root-id)
+       (let [pages (merged-db/page-metadata pdf-root-id)
              remaining (sort (map :topics/page_number
                                (remove #(= "done" (:topics/status %)) pages)))
              current-page (first (filter #(= (:topics/page_number %) page-number) pages))]
