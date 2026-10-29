@@ -1,6 +1,7 @@
 (ns freememo.assistant-history-window-test
   "Bounded transcript queries against PostgreSQL, including inherited forks."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [freememo.assistant :as assistant]
             [freememo.assistant-history :as history]
             [freememo.db :as db]
@@ -132,6 +133,29 @@
               late {:assistant_messages/id 1 :assistant_run/status "streaming"
                     :assistant_messages/content "Partial"}]
           (is (= [terminal] (assistant/transcript-rows {:rows [terminal]} late)))))
+      (finally (cleanup! uid)))))
+
+(deftest active-run-summary-does-not-read-retained-snapshots
+  (let [{:keys [uid chat]} (fixture!)
+        execute-one! jdbc/execute-one!
+        columns (atom [])]
+    (try
+      (let [run-id (str (random-uuid))
+            session (:assistant_chats/provider_session_id (db/get-assistant-chat uid chat))]
+        (db/create-assistant-answer-run! chat "Question" "summary-client"
+          {:run-uuid run-id :provider-session-id session :requested-model "test"
+           :request-snapshot {:retained (apply str (repeat 300000 "x"))}
+           :source-snapshot [] :evidence []})
+        (with-redefs [jdbc/execute-one!
+                      (fn [connection statement & options]
+                        (let [row (apply execute-one! connection statement options)]
+                          (when (str/includes? (first statement) "FROM assistant_runs r")
+                            (swap! columns conj (set (keys row))))
+                          row))]
+          (is (= {:run_uuid run-id :kind "answer" :status "queued"}
+                (assistant/active-run* 0 uid chat))))
+        (is (= [#{:run_uuid :kind :status}] @columns))
+        (is (nil? (assistant/active-run* 0 (inc uid) chat))))
       (finally (cleanup! uid)))))
 
 (deftest a-submitted-turn-keeps-the-latest-page-after-echo-retirement

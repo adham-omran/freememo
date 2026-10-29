@@ -2745,8 +2745,7 @@
    context… and offers Stop (plans/assistant-chat-forks.md §4.5.4)."
   [_rev user-id chat-id]
   (when chat-id
-    (or (some-> (db/get-active-assistant-run user-id chat-id)
-          (select-keys [:run_uuid :kind :status]))
+    (or (history/active-run-summary user-id chat-id)
       (when (and (preparing? chat-id) (db/get-assistant-chat user-id chat-id))
         {:run_uuid nil :kind "compact" :status "preparing"}))))
 

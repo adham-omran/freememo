@@ -173,6 +173,17 @@
        user-id (long-array ids)] read-options)
     []))
 
+(defn active-run-summary
+  "Read active UI metadata without loading retained prompts or source snapshots."
+  [user-id chat-id]
+  (jdbc/execute-one! db/ds
+    ["SELECT r.run_uuid,r.kind,r.status FROM assistant_runs r
+       JOIN assistant_chats c ON c.id=r.chat_id
+      WHERE c.user_id=? AND c.id=? AND c.staged_delete_id IS NULL
+        AND r.status IN ('queued','streaming','stop-requested')
+      ORDER BY r.id DESC LIMIT 1" user-id chat-id]
+    read-options))
+
 (defn active-message-id
   "Read only the active answer ID on a stream publication."
   [user-id chat-id]
