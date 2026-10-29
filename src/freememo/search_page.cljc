@@ -4,16 +4,13 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.context-menu-surface :as menu-surface]
+   [freememo.search-result-row :as result-row]
    [freememo.scroll :refer [Scroll-window]]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
-   [freememo.a11y :as a11y]
    [freememo.logging :as log]
-   [freememo.math :as math]
    [freememo.navigation :as nav]
-   [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.search :as search])
    #?(:clj [freememo.read-region :as read-region])))
@@ -125,82 +122,12 @@
    :visible? (some? incoming)
    :row (or incoming (when (= user-id (:user-id previous)) (:row previous)))})
 
-(defn install-result-row-guard!
-  "Reject events from hidden retained results."
-  [node]
-  #?(:cljs
-     (let [events ["click" "keydown" "contextmenu" "focusin"]
-           guard (fn [event]
-                   (when (.-hidden node)
-                     (.preventDefault event)
-                     (.stopImmediatePropagation event)))]
-       (doseq [event events] (.addEventListener node event guard true))
-       (fn [] (doseq [event events] (.removeEventListener node event guard true))))
-     :clj nil))
-
-(defn sync-result-row-focus!
-  "Clear hidden focus targets and publish the current result after recycling."
-  [node visible? target]
-  #?(:cljs
-     (if visible?
-       (when (.contains node (.-activeElement js/document))
-         (menu-surface/publish-focus-target! node target))
-       (do
-         (when (.contains node (.-activeElement js/document))
-           (.blur (.-activeElement js/document)))
-         (menu-surface/retract-focus-target! node)))
-     :clj nil))
-
 (e/defn ResultRow [row i navigate! visible?]
   (e/client
-    (let [{:keys [title kind snippet source-title]} row
-          [badge-text badge-class] (kind-badge kind)
-          open-result! (fn [_] (click-nav! navigate! row))
-          ;; Context menu (plans/custom-context-menu.md 4.2.1). A result knows
-          ;; its parent but not its status or children, so the rows that test
-          ;; those stay hidden.
-          target (menu-surface/topic-row-target
-                   {:topic-id (:id row) :title (or title "") :topic-kind kind
-                    :root? (nil? (:parent-id row))
-                    :deletable? (not= "page" kind)}
-                   :search)]
-      (dom/tr
-        (dom/props {:class "search-result-row" :hidden (not visible?) :inert (not visible?)
-                    :style {:--order i}})
-        (e/on-unmount (e/snapshot (install-result-row-guard! dom/node)))
-        (case (sync-result-row-focus! dom/node visible? target) nil)
-        (menu-surface/RowMenu target)
-        (dom/On "click" open-result! nil)
-        ;; Column 1: kind badge + title
-        (dom/td
-          (dom/props {:class "search-result-document"})
-          (a11y/KeyActivate {:label (str "Open " (or title "untitled result"))}
-            open-result!)
-          (dom/span
-            (dom/props {:class (str "type-badge " badge-class)})
-            (dom/text badge-text))
-          (dom/span
-            (dom/props {:class "search-result-title"})
-            (tooltip/Tooltip! (or title "(untitled)"))
-            (dom/text (or title "(untitled)"))))
-        ;; Column 2: source (root topic's title)
-        (dom/td
-          (dom/props {:class "search-result-source"})
-          (dom/span
-            (dom/props {:class "search-result-source-label"})
-            (tooltip/Tooltip! (or source-title ""))
-            (dom/text (or source-title ""))))
-        ;; Column 3: snippet (HTML with <mark>; scroll-centered on mark)
-        (dom/td
-          (dom/props {:class "search-result-snippet"})
-          (dom/div
-            (dom/props {:dir "auto" :class "search-result-snippet-text"})
-            ;; Snippets are built from `content_text` (plain text + <mark>), so a
-            ;; stored `\(TeX\)` arrives here as literal text and needs typesetting
-            ;; like any other display site. Centering runs in the after-render
-            ;; callback: KaTeX renders async and changes the line's width, so
-            ;; centering before it lands leaves the <mark> off-centre.
-            (math/set-html! dom/node snippet #(snippet-center! dom/node))))))))
+    (dom/tr
+      (let [owner (e/snapshot (result-row/mount! dom/node snippet-center!))]
+        (e/on-unmount #(result-row/dispose! owner))
+        (case (result-row/update! owner row i visible? (kind-badge (:kind row)) navigate!) nil)))))
 
 (e/defn ResultSlot [incoming i navigate! user-id]
   (e/client
