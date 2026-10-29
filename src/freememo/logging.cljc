@@ -192,7 +192,9 @@
            error (:error signal)
            coords (:coords cleaned)]
        (json-compatible-value
-         (cond-> (dissoc cleaned :inst :ns :msg_ :coords)
+         (cond-> (assoc (dissoc cleaned :inst :ns :msg_ :coords)
+                  :server-build (or (System/getenv "READ_BUILD_REVISION") (config/git-commit))
+                  :process-id (.pid (java.lang.ProcessHandle/current)))
            (:inst cleaned) (assoc :timestamp (str (:inst cleaned)))
            (:ns cleaned) (assoc :logger (:ns cleaned))
            (:msg_ cleaned) (assoc :message (:msg_ cleaned))

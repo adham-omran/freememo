@@ -37,6 +37,9 @@
       (is (= "freememo.logging-test" (:logger record)))
       (is (integer? (:line record)))
       (is (integer? (:column record))))
+    (testing "build and process context"
+      (is (not (str/blank? (:server-build record))))
+      (is (pos-int? (:process-id record))))
     (testing "structured values"
       (is (= "value" (get-in record [:data :keyword])))
       (is (= "sample/value" (get-in record [:data :symbol])))
@@ -50,6 +53,8 @@
         {:keys [output record]} (parsed-record signal)]
     (is (= 1 (count (str/split-lines output))))
     (is (= "error" (:level record)))
+    (is (not (str/blank? (:server-build record))))
+    (is (pos-int? (:process-id record)))
     (is (= "clojure.lang.ExceptionInfo"
           (get-in record [:error :chain 0 :type])))
     (is (= "test" (get-in record [:error :chain 0 :data :reason])))
