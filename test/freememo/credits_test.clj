@@ -63,3 +63,21 @@
   (testing "exam grading"
     (is (= "Exam grading"
           (cost-history/endpoint-label "curriculum.exam-grade")))))
+
+(deftest request-base-url-prefers-the-configured-origin
+  (let [proxied {:scheme :http
+                 :headers {"x-forwarded-proto" "http" "host" "freememo.net"}}]
+    (testing "a configured origin wins over the proxy's http scheme"
+      (with-redefs [config/env-or-config (fn [env-var _path]
+                                           (when (= "APP_BASE_URL" env-var)
+                                             "https://freememo.net/"))]
+        (is (= "https://freememo.net" (credits/request-base-url proxied)))))
+    (testing "with no configured origin, the request decides"
+      (with-redefs [config/env-or-config (constantly nil)]
+        (is (= "http://freememo.net" (credits/request-base-url proxied)))
+        (is (= "http://localhost:8080"
+               (credits/request-base-url {:scheme :http :server-name "localhost"
+                                          :server-port 8080 :headers {}})))))
+    (testing "a blank configured origin is ignored"
+      (with-redefs [config/env-or-config (constantly "  ")]
+        (is (= "http://freememo.net" (credits/request-base-url proxied)))))))

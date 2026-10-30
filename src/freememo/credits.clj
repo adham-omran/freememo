@@ -14,18 +14,26 @@
    [taoensso.telemere :as tel]))
 
 (defn request-base-url
-  "Public origin for an incoming Ring request — `https://freememo.net` in prod,
-   `http://localhost:8080` in dev. Used for Wayl webhook + redirection URLs so
-   neither path needs a config knob. Honors X-Forwarded-Proto + Host when a
-   reverse proxy is in front; falls back to :scheme + :server-* otherwise."
+  "Public origin for Wayl webhook + redirection URLs — `https://freememo.net`
+   in prod, `http://localhost:8080` in dev.
+   APP_BASE_URL (or :deployment :app-base-url) wins when set, with any trailing
+   slash removed. Production sets it because the request cannot tell the
+   scheme: the Cloudflare tunnel ends TLS, and Caddy then sends
+   X-Forwarded-Proto `http`. From 2026-08-26 to 2026-10-30 every Wayl link
+   carried http:// URLs for that reason.
+   With no configured value, the origin comes from X-Forwarded-Proto + Host,
+   else from :scheme + :server-*."
   [request]
-  (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
-                   (name (or (:scheme request) :http)))
-        host (or (get-in request [:headers "host"])
-                 (str (:server-name request)
-                   (when-let [port (:server-port request)]
-                     (str ":" port))))]
-    (str scheme "://" host)))
+  (if-let [configured (some-> (config/env-or-config "APP_BASE_URL" [:deployment :app-base-url])
+                              str str/trim not-empty (str/replace #"/+$" ""))]
+    configured
+    (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
+                     (name (or (:scheme request) :http)))
+          host (or (get-in request [:headers "host"])
+                   (str (:server-name request)
+                     (when-let [port (:server-port request)]
+                       (str ":" port))))]
+      (str scheme "://" host))))
 
 ;; ── Pure cost computation (§5.2) ──
 
