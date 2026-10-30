@@ -486,7 +486,7 @@
              :detail "Curriculum → New curriculum. Name it and set a target date, daily study minutes, study days, or a useful combination."
              :commands #{}}
             {:label "Add blocks and materials"
-             :detail "Add blocks in study order. In an unlocked block, Add material searches all imported sources. Use the type filters to narrow the list."
+             :detail "Add blocks in study order. In an unlocked block, Add material searches your imported documents and the topics you made yourself. A topic you made must hold text. Use the type filters to narrow the list."
              :commands #{}}
             {:label "Order the work"
              :detail "Use the arrow controls to move blocks and materials. Edit a material's minute estimate when the default is wrong."

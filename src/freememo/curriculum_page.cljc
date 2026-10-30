@@ -282,17 +282,17 @@
             (token (e/server (:error response)))))))))
 
 (e/defn MaterialPicker [!topic-id refresh user-id kind]
-  (picker/DocumentPicker !topic-id refresh user-id :curriculum kind "Search imported material…"))
+  (picker/DocumentPicker !topic-id refresh user-id :curriculum kind "Search your material…"))
 
 (def material-kind-filters
   "The Add-material kind row. `nil` is every kind, and it is the default —
-   the search reaches all imported material before the row is touched.
+   the search reaches all material before the row is touched.
 
-   No `poem` row (poem-reader-spec row 2.4.2). `curriculum/add-material!` does
-   not accept the kind, and this row must not offer a filter for material the
-   server would refuse."
+   One row per kind in `curriculum/material-condition`, and no other. No `poem`
+   row (poem-reader-spec row 2.4.2): the server does not accept the kind, and
+   this row must not offer a filter for material the server would refuse."
   [[nil "All"] ["pdf" "PDF"] ["markdown" "Markdown"]
-   ["web" "Web"] ["wikipedia" "Wikipedia"]])
+   ["web" "Web"] ["wikipedia" "Wikipedia"] ["basic" "My topics"]])
 
 (e/defn AddMaterialWizard [user-id block-id navigate! !open?]
   (e/client
@@ -317,7 +317,7 @@
                 (dom/div
                   (dom/props {:class "curriculum-picker-step"})
                   (dom/label (dom/props {:class "curriculum-field-label"})
-                    (dom/text "Search all imported material"))
+                    (dom/text "Search your documents and topics"))
                   (MaterialPicker !topic-id refresh user-id kind)
                   (dom/p (dom/props {:class "curriculum-help"})
                     (dom/text "The material is missing? ")
@@ -353,7 +353,7 @@
               :Parse (e/fn [fields _]
                        (let [topic-id (e/watch !topic-id)]
                          (if-not topic-id
-                           (ex-info "Choose imported material." {})
+                           (ex-info "Choose material." {})
                            [`AddMaterial {:topic-id topic-id
                                           :minutes (parse-positive-int (:minutes fields))}])))
               :type :command :show-buttons false))]
@@ -634,7 +634,7 @@
             (dom/div
               (if (zero? material-count)
                 (dom/p (dom/props {:class "curriculum-help"})
-                  (dom/text "Add imported material to this block."))
+                  (dom/text "Add a document or one of your topics to this block."))
                 (MaterialList user-id block material-count navigate! refresh))
               (if add-material?
                 (AddMaterialWizard user-id (:id block) navigate! !add-material?)
@@ -879,7 +879,7 @@
             (dom/header (dom/props {:class "curriculum-page-header"})
               (dom/div
                 (dom/h1 (dom/text "Curriculum"))
-                (dom/p (dom/text "Turn imported material into an ordered, scheduled course of study.")))
+                (dom/p (dom/text "Turn your documents and topics into an ordered, scheduled course of study.")))
               (when-not new-open?
                 (dom/button
                   (dom/props {:type "button" :class "btn btn-primary"})
