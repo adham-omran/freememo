@@ -9758,3 +9758,47 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .search-result-badge-occlusion { background: var(--color-badge-occlusion); }
 
 .search-results-body .search-result-row[hidden] { display: none; }
+
+/* Variable-height lists retain the viewport while rows enter and leave. */
+.measured-list-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  overflow-anchor: none;
+}
+.measured-list-space { position: relative; }
+.measured-list-row { display: flow-root; box-sizing: border-box; }
+.focus-reader-column .ql-editor { overflow-anchor: none; }
+.curriculum-block-scroll { max-height: 70vh; }
+.curriculum-material-scroll, .sync-conflict-scroll { max-height: 480px; }
+.sync-conflict-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) minmax(170px, auto);
+  gap: 12px;
+  padding: 10px 4px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border);
+}
+.sync-conflict-row > * { min-width: 0; overflow-wrap: anywhere; }
+.assistant-panel__rows--windowed { display: block; width: 100%; }
+.assistant-transcript__window-row { padding-bottom: 12px; box-sizing: border-box; }
+.graph-relation-explorer-scroll { max-height: 144px; min-height: 72px; overflow-y: auto; font-size: 13px; }
+.graph-relation-explorer-cell { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.graph-relation-concept {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  text-align: start;
+  cursor: pointer;
+  font: inherit;
+}
+.graph-relation-predicate { max-width: 25%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-relation-explorer > p { font-size: 12px; margin: 4px 0; }
+@media (max-width: 700px) {
+  .sync-conflict-row { grid-template-columns: 1fr; }
+  .curriculum-material-actions { grid-column: 2; flex-wrap: wrap; }
+}

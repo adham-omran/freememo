@@ -86,3 +86,50 @@
           (is (= ["bounded" "bounded"] @writes))
           (is (not= (:selection first-page) (:selection next-page)))
           (is (<= (count (:nodes next-page)) queries/node-limit)))))))
+
+(deftest continuous-relations-reach-every-fact-with-bounded-results
+  (let [{:keys [user-id]} (seed!)
+        total (queries/relation-count user-id {})
+        windows (mapv #(queries/relation-window user-id {} % 100) (range 0 total 100))
+        rows (vec (mapcat identity windows))]
+    (is (= 1001 total (count rows)))
+    (is (every? #(<= (count %) 100) windows))
+    (is (= (count rows) (count (set (map :id rows)))))
+    (is (apply < (map :id rows)))
+    (is (= [] (queries/relation-window user-id {} total 100)))
+    (is (= 100 (count (queries/relation-window user-id {} 0 10000))))))
+
+(deftest continuous-relations-apply-source-and-predicate-scope
+  (let [{:keys [user-id]} (seed!)
+        row (first (queries/relation-window user-id {} 0 1))
+        fact (one "SELECT predicate_id,graph_topic_id FROM kg_facts WHERE id = ?" (:id row))
+        predicate (:predicate_id fact)
+        source (:graph_topic_id fact)]
+    (is (= 1001 (queries/relation-count user-id {:source source})))
+    (is (= 0 (queries/relation-count user-id {:source -1})))
+    (is (= 1001 (queries/relation-count user-id {:predicates {:mode :include :ids #{predicate}}})))
+    (is (= 0 (queries/relation-count user-id {:predicates {:mode :include :ids #{}}})))
+    (is (= [] (queries/relation-window user-id {:predicates {:mode :exclude :ids #{predicate}}} 0 20)))
+    (is (= 1001 (queries/relation-count user-id {:predicates {:mode :exclude :ids #{}}})))))
+
+(deftest relation-identity-preserves-parallel-facts
+  (let [{:keys [user-id]} (seed!)
+        row (first (queries/relation-window user-id {} 0 1))
+        other-topic (:id (one "INSERT INTO topics(user_id,title) VALUES (?, 'Parallel source') RETURNING id" user-id))
+        duplicate (one "INSERT INTO kg_facts(user_id,subject_entity_id,predicate_id,object_entity_id,graph_topic_id,status) SELECT user_id,subject_entity_id,predicate_id,object_entity_id,?,status FROM kg_facts WHERE id = ? RETURNING id" other-topic (:id row))
+        payload (with-redefs-fn {(ns-resolve 'freememo.kg-graph 'run-sfdp) (constantly {})}
+                  #(graph/elements->payload user-id
+                     (queries/elements user-id {:entity-id (:object_id row)})))]
+    (is (= 2 (count (:edges payload))))
+    (is (= #{(:id row) (:id duplicate)} (set (map #(nth % 4) (:edges payload)))))))
+
+(deftest predicate-catalog-keeps-excluded-choices-reachable
+(let [{:keys [user-id]} (seed!)
+      option (first (queries/predicate-window user-id :all "" 0 10))]
+    (is (= 1 (queries/predicate-count user-id :all "")))
+    (is (= "connects" (:label option)))
+    (is (= 1001 (:count option)))
+    (is (= [] (queries/predicate-window user-id :all "absent predicate" 0 10)))
+    (is (= 0 (queries/predicate-count user-id -1 "")))
+    (is (= 0 (queries/relation-count user-id {:predicates {:mode :exclude :ids #{(:id option)}}})))
+    (is (= [option] (queries/predicate-window user-id :all "" 0 10)))))

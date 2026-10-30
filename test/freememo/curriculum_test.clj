@@ -112,6 +112,51 @@
     (when (db-up?) (db/setup-schema))
     (run)))
 
+(deftest curriculum-windows-preserve-order-ownership-and-deletion
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable. Integration assertions skipped.")
+    (let [tag (str "window-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")] opts))
+          curriculum-id (curriculum/create-curriculum! user-id {:title "Windows" :daily-minutes 30})
+          topic-ids (atom [])]
+      (try
+        (let [block-ids (mapv #(curriculum/add-block! user-id curriculum-id (str "Block " %)) (range 7))
+              block-id (first block-ids)
+              material-ids (mapv (fn [index]
+                                   (let [topic-id (:id (jdbc/execute-one! db/ds
+                                                        ["INSERT INTO topics (user_id, title, kind, content_text)
+                                                          VALUES (?, ?, 'markdown', 'body') RETURNING id"
+                                                         user-id (str "Material " index)] opts))]
+                                     (swap! topic-ids conj topic-id)
+                                     (curriculum/add-material! user-id block-id topic-id 30)))
+                             (range 12))
+              header (curriculum/curriculum-overview 0 user-id curriculum-id)
+              blocks (curriculum/curriculum-block-window 0 user-id curriculum-id 4 3)
+              materials (curriculum/curriculum-material-window 0 user-id block-id 9 3)]
+          (is (= 7 (:block-count header)))
+          (is (not (contains? header :blocks)))
+          (is (= [4 5 6] (mapv first blocks)))
+          (is (= (subvec block-ids 4) (mapv (comp :id second) blocks)))
+          (is (= 12 (:material_count (second (first (curriculum/curriculum-block-window 0 user-id curriculum-id 0 1))))))
+          (is (= [9 10 11] (mapv first materials)))
+          (is (= (subvec material-ids 9) (mapv (comp :id second) materials)))
+          (is (every? #(and (= 0 (:anki_cards %)) (= 0.0 (:anki_stability %))) (map second materials)))
+          (is (empty? (curriculum/curriculum-block-window 0 -1 curriculum-id 0 10)))
+          (is (empty? (curriculum/curriculum-material-window 0 -1 block-id 0 10)))
+          (curriculum/move-material! user-id (nth material-ids 10) -1)
+          (is (= (nth material-ids 10)
+                (:id (second (first (curriculum/curriculum-material-window 1 user-id block-id 9 1))))))
+          (curriculum/stage-curriculum-for-deletion! user-id curriculum-id)
+          (is (nil? (curriculum/curriculum-overview 1 user-id curriculum-id)))
+          (is (empty? (curriculum/curriculum-block-window 1 user-id curriculum-id 0 10)))
+          (is (empty? (curriculum/curriculum-material-window 1 user-id block-id 0 10))))
+        (finally
+          (doseq [topic-id @topic-ids]
+            (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id]))
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
 (deftest moving-one-step-writes-positions-a-check-constraint-accepts
   ;; `curriculum_materials.position` carries CHECK (position >= 0) and
   ;; UNIQUE (block_id, position). `resequence!` parks rows before it writes the

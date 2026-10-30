@@ -65,7 +65,15 @@
           (is (= (mapv :assistant_messages/id expected) (mapv :assistant_messages/id actual)))
           (is (= (mapv :assistant_messages/inherited? expected)
                 (mapv :assistant_messages/inherited? actual)))
-          (is (false? (:more? older)))))
+          (is (false? (:more? older)))
+          (let [index (assistant/transcript-index* 0 uid child)
+                indices (vec (range (count (:events index))))
+                window (assistant/transcript-window* uid index indices)
+                indexed (mapv #(get (:rows window) %) indices)]
+            (is (= (mapv :assistant_messages/id expected)
+                   (mapv :assistant_messages/id indexed)))
+            (is (= (mapv :assistant_messages/inherited? expected)
+                   (mapv :assistant_messages/inherited? indexed))))))
       (finally (cleanup! uid)))))
 
 (deftest chat-and-document-search-reach-options-outside-the-first-page
@@ -158,13 +166,11 @@
         (is (nil? (assistant/active-run* 0 (inc uid) chat))))
       (finally (cleanup! uid)))))
 
-(deftest a-submitted-turn-keeps-the-latest-page-after-echo-retirement
+(deftest a-rendered-durable-row-retires-its-optimistic-echo
   (require 'freememo.assistant-transcript)
-  (let [echo (atom {:id "submitted" :text "Question"})
-        page (atom {:chat 7 :before [2 300 0 150] :trail [nil]})]
-    ((resolve 'freememo.assistant-transcript/retire-echo!) echo page 7 nil)
-    (is (nil? @echo))
-    (is (= {:chat 7 :before nil :trail []} @page))))
+  (let [echo (atom {:id "submitted" :text "Question"})]
+    ((resolve 'freememo.assistant-transcript/retire-echo!) echo nil)
+    (is (nil? @echo))))
 
 (deftest a-retained-transcript-page-cannot-belong-to-another-request
   (let [page {:scope [7 nil] :rows [{:assistant_messages/id 1}]
@@ -208,4 +214,75 @@
           (is (= 50 (count options)))
           (is (some #(= child (:id %)) options))
           (is (some #(= chat (:id %)) options))))
+      (finally (cleanup! uid)))))
+
+(deftest indexed-transcript-windows-reverse-without-loading-all-bodies
+  (let [{:keys [uid chat]} (fixture!)]
+    (try
+      (seed-messages! chat 10000)
+      (let [index (assistant/transcript-index* 0 uid chat)
+            events (:events index)
+            indices [0 1 49 50 4999 5000 9950 9999]
+            window (assistant/transcript-window* uid index indices)
+            rows (assistant/transcript-window-rows window index chat indices nil)]
+        (is (= 10000 (count events)))
+        (is (every? #(nil? (:content %)) events))
+        (is (= [chat indices] (:scope window)))
+        (is (= (set indices) (set (keys (:rows window)))))
+        (is (= indices (mapv :window/index rows)))
+        (is (not-any? #(or (contains? % :window/top) (contains? % :window/height)) rows)
+          "Server content must not replace newer client geometry.")
+        (doseq [i indices]
+          (let [row (assistant/transcript-window-row window chat indices i nil)]
+            (is (= (:message_id (nth events i)) (:assistant_messages/id row)))
+            (is (= ((juxt :section :position :kind :event_id) (nth events i))
+                   (:transcript/key row)))))
+        (is (nil? (assistant/transcript-window-row window (inc chat) indices 0 nil)))
+        (is (nil? (assistant/transcript-window-row window chat [0] 0 nil)))
+        (is (empty? (:events (assistant/transcript-index* 0 (inc uid) chat)))))
+      (finally (cleanup! uid)))))
+
+(deftest indexed-window-preserves-terminal-answers
+  (let [terminal {:assistant_messages/id 1 :assistant_run/status "completed"
+                  :assistant_messages/content "Final" :transcript/key [2 2 0 1]}
+        result {:scope [7 [0]] :rows {0 terminal}}
+        late {:assistant_messages/id 1 :assistant_run/status "streaming"
+              :assistant_messages/content "Partial"}]
+    (is (= terminal (assistant/transcript-window-row result 7 [0] 0 late)))
+    (is (= (assoc late :transcript/key [2 2 0 1])
+           (assistant/transcript-window-row
+             (assoc-in result [:rows 0 :assistant_run/status] "streaming") 7 [0] 0 late)))))
+
+(deftest body-revisions-refresh-a-terminal-answer-without-new-events
+  (let [{:keys [uid chat]} (fixture!)]
+    (try
+      (let [run-id (str (random-uuid))
+            session (:assistant_chats/provider_session_id (db/get-assistant-chat uid chat))
+            created (db/create-assistant-answer-run!
+                      chat "Question" (str (random-uuid))
+                      {:run-uuid run-id :provider-session-id session :requested-model "test"
+                       :request-snapshot {} :source-snapshot [] :evidence []})
+            before (assistant/transcript-index* 0 uid chat)
+            indices (vec (range (count (:events before))))
+            queued (assistant/transcript-window* uid before indices)]
+        (is (:created created))
+        (db/append-assistant-run-text! run-id "The durable final answer.")
+        (db/complete-assistant-answer-run! run-id)
+        (let [after (assistant/transcript-index* 1 uid chat)
+              complete (assistant/transcript-window* uid after indices)
+              answer (some #(when (= (:assistant-message-id created) (:assistant_messages/id %)) %)
+                       (vals (:rows complete)))]
+          (is (= (:events before) (:events after)))
+          (is (not= before after) "A body revision must invalidate the reactive body read.")
+          (is (not= (:rows queued) (:rows complete)))
+          (is (= "completed" (:assistant_run/status answer)))
+          (is (= "The durable final answer." (:assistant_messages/content answer)))
+          (let [live (assistant/live-transcript-row* 1 uid chat)
+                queued-index (last indices)
+                settled (assistant/transcript-window-row queued chat indices queued-index live)]
+            (is (= "completed" (:assistant_run/status live)))
+            (is (nil? (assistant/live-transcript-row* 1 (inc uid) chat)))
+            (is (= "The durable final answer." (:assistant_messages/content live)))
+            (is (= "completed" (:assistant_run/status settled)))
+            (is (= "The durable final answer." (:assistant_messages/content settled))))))
       (finally (cleanup! uid)))))

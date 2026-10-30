@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.editor-actions :as editor-actions]
    [freememo.logging :as log]
    [freememo.merged-window :as merged-window]
    [freememo.rich-text-editor :as editor]))
@@ -39,8 +40,10 @@
             ;; the current page. Page metadata must not reinstall that body.
             save-scope {:user-id dctx/user-id :topic-id body-doc-id
                         :editor-doc-id body-doc-id :merged? dctx/merged?
-                        :pdf-root-id dctx/merged-root-id
-                        :page-numbers dctx/merged-page-numbers
+                        :pdf-root-id dctx/merged-root-id :source-root-id dctx/pdf-root-id
+                        :page-numbers dctx/merged-page-numbers :requested-page dctx/current-page
+                        :read-request dctx/merged-read-request
+                        :expected-read-request dctx/merged-expected-read-request
                         :body-key (merged-window/body-key body-doc-id dctx/merged? dctx/merged-page-numbers)}
             node dom/node
             ;; Store timer-id in atom so the e/on-unmount closure is constant
@@ -48,7 +51,9 @@
             ;; re-mount the on-unmount input, spuriously firing destroy-editor!.
             !timer-id (atom nil)]
         ;; Init once — Quill persists for the component's lifetime.
-        (when-not (some? (:editor @editor/!editor-state))
+        (when (and (not (some? (:editor @editor/!editor-state)))
+                   (or (not dctx/merged?)
+                       (merged-window/snapshot-current? dctx/merged-read-request dctx/merged-expected-read-request)))
           (log/log-debug (str "Editor init doc-id=" doc-id " html-len=" (count initial-html)))
           ;; Electric can retain the initial nil state above. A changed save
           ;; scope can then schedule another callback during ordinary scrolling.
@@ -87,5 +92,5 @@
                 ready? (e/watch editor/!editor-ready?)
                 saved-edit-id (e/watch editor/!saved-edit-id)]
             (when (and ready? (or (nil? dirty) (some? (:edit-id dirty))))
-              (editor/install-body! initial-html body-doc-id
-                save-scope saved-edit-id))))))))
+              (editor/install-body-after-work! initial-html body-doc-id
+                save-scope saved-edit-id (e/watch editor-actions/!pending-editor-work-revision)))))))))

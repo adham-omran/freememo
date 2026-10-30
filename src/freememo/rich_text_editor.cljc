@@ -13,6 +13,7 @@
    [freememo.motion :as motion]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.command-bus :as bus])
+   #?(:cljs [freememo.focus-window :as focus-window])
    #?(:cljs [freememo.editor-links :as editor-links])
    #?(:cljs [freememo.reading-position :as rp])
    #?(:cljs [freememo.format-menu :as format-menu])
@@ -198,8 +199,9 @@
      :cljs
      (do
        (reset! !editor-ready? false)
+       (reset! merged-window/!blocked-range nil)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown focus-anchor-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -223,6 +225,7 @@
            ;; Remove the scroll listener that reports the merged document's
            ;; current page.
            (when page-marker-teardown (page-marker-teardown))
+           (when focus-anchor-teardown (focus-anchor-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -319,6 +322,33 @@
        (.observe obs root #js {:childList true :subtree true})
        obs)))
 
+(defn report-viewport-edge! [ed page reader-direction]
+  #?(:clj nil
+     :cljs
+     (let [^js ed ed
+           state @!editor-state
+           scope (:save-scope state)
+           ^js root (.-root ed)
+           pages (:page-numbers scope)
+           distance (- (.-scrollHeight root) (.-clientHeight root) (.-scrollTop root))
+           capacity (if (< (count (or (:html @!dirty-html) (:installed-body-html state))) 262144)
+                      (min merged-window/max-page-limit
+                        (+ 4 (long (js/Math.ceil
+                                     (/ (* (.-clientHeight root) (max 1 (count pages)))
+                                        (max 1 (.-scrollHeight root)))))))
+                      merged-window/page-limit)
+           direction (cond
+                       (and (:merged? scope) (<= distance 200)
+                            (or (= reader-direction :forward)
+                                (and (nil? reader-direction)
+                                     (<= (.-scrollHeight root) (+ (.-clientHeight root) 200))))) :forward
+                       (and (:merged? scope) (= reader-direction :backward)
+                            (<= (.-scrollTop root) 200)) :backward)]
+       (reset! merged-window/!viewport-edge
+         (when direction
+           {:root-id (:pdf-root-id scope) :range [(first pages) (last pages)]
+            :page page :direction direction :capacity capacity})))))
+
 (defn- build-editor!
   "Construct the singleton Quill editor. Called by init-editor! once the KaTeX
    wait has settled; `math?` is that outcome.
@@ -357,7 +387,8 @@
                       ;; ancestor — otherwise it is positioned past the
                       ;; pane edge and clipped by the PDF pane. QuillField
                       ;; has no such ancestor and omits :bounds.
-                      (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
+                      (clj->js (assoc-in (quill-field/quill-config "Enter text..." {:bounds container})
+                                 [:modules :history] {:userOnly true})))
                         ;; Cmd/Ctrl+\\ clears selected formatting in this editor.
                         (editor-actions/install-clear-format-binding!))
            _redo (quill-field/install-cmd-y-redo! editor)
@@ -412,14 +443,17 @@
        ;; mousedown for buttons; Safari/Firefox on macOS do not).
        (.on editor "selection-change"
          (fn [^js range _old _source]
-           (when (and range (> (.-length range) 0))
-             (reset! !last-selection {:index (.-index range)
-                                      :length (.-length range)}))))
+           (swap! editor-actions/!pending-editor-work-revision inc)
+           (when range
+             (reset! !last-selection
+               (when (pos? (.-length range))
+                 {:index (.-index range) :length (.-length range)})))))
        ;; Bubble theme has no fixed `.ql-toolbar` to relocate — its formatting
        ;; controls live in the floating tooltip shown on selection. So no
        ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
        (reset! !editor-state {:editor editor :container container
                               :topic-id topic-id :save-scope save-scope :toolbar nil
+                              :installed-body-html initial-html
                               ;; The KaTeX-wait outcome, recorded rather than
                               ;; re-derived: set-content! needs it to decide
                               ;; whether to promote stored math to blots, and
@@ -430,6 +464,9 @@
                               ;; line correct.
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
+                              :focus-anchor-teardown
+                              (focus-window/install-resize-anchor! editor
+                                #(get-in @!editor-state [:save-scope :merged?]))
                               :link-actions-teardown (editor-links/install! editor
                                                        {:!import !import-url
                                                         :!navigate !navigate-topic
@@ -474,7 +511,8 @@
                                   (reset! editor-actions/!scrolled-page
                                     {:doc-id (:topic-id @!editor-state)
                                      :body-key (get-in @!editor-state [:save-scope :body-key])
-                                     :page page})))})
+                                     :page page}))
+                                report-viewport-edge!)})
        (reset! !editor-ready? true)
        ;; Content is in the DOM (setContents above) and !editor-state is set, so
        ;; a reader woken by this bump can find the editor and its markers.
@@ -575,6 +613,13 @@
              (rp/installed! "editor" content-topic-id (.-root ed))))
          true)))))
 
+(defn patch-overlapping-body! [state html scope]
+  #?(:clj nil
+     :cljs
+     (when (focus-window/overlapping? (:save-scope state) scope)
+       (focus-window/patch! (:editor state) (:math? state) html
+         (:save-scope state) scope !last-selection))))
+
 (defn install-body!
   "Replace a loaded page range only after its latest edit has saved."
   [html content-topic-id scope saved-edit-id]
@@ -585,13 +630,29 @@
              old-key (get-in state [:save-scope :body-key])
              new-key (:body-key scope)
              changed? (not= old-key new-key)]
-         (when (merged-window/install-allowed? dirty saved-edit-id)
+         (when (and (or (not (:merged? scope))
+                        (merged-window/snapshot-current? (:read-request scope) (:expected-read-request scope)))
+                    (not (and (= old-key new-key)
+                              (= html (:installed-body-html state))))
+                    (merged-window/install-allowed? dirty saved-edit-id))
            (when (or changed? (nil? dirty))
-             (swap! !editor-state assoc :save-scope scope)
-             (set-content! html content-topic-id changed?)
-             (when changed?
-               (reset! !dirty-html nil)
-               (reset! !last-selection nil))))))))
+             (let [overlap? (and changed? (get-in state [:save-scope :merged?])
+                                (:merged? scope)
+                                (= (get-in state [:save-scope :pdf-root-id]) (:pdf-root-id scope))
+                                (or (nil? (:requested-page scope))
+                                    (some #{(:requested-page scope)} (get-in state [:save-scope :page-numbers])))
+                                (some (set (get-in state [:save-scope :page-numbers])) (:page-numbers scope)))
+                   patched? (when overlap? (patch-overlapping-body! state html scope))]
+               (when (or (not overlap?) patched?)
+                 (swap! !editor-state assoc :save-scope scope :installed-body-html html)
+                 (reset! merged-window/!blocked-range nil)
+                 (when-not patched? (set-content! html content-topic-id true))
+                 (when changed?
+                   (reset! !dirty-html nil)
+                   (when-not patched? (reset! !last-selection nil)))))))))))
+
+(defn install-body-after-work! [html content-topic-id scope saved-edit-id _work-revision]
+  (install-body! html content-topic-id scope saved-edit-id))
 
 (defn install-saved-content!
   "Pre: before-html and after-html describe one committed change to topic-id.

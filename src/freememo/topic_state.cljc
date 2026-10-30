@@ -137,9 +137,11 @@
      :cljs nil))
 
 (defn get-merged-document*
-  "Read one bounded Focus reader range. The page list owns later saves."
-  [_refresh user-id pdf-root-id page-range]
-  #?(:clj (when pdf-root-id (merged-db/read-window user-id pdf-root-id page-range))
+  "Read a bounded window after the request's save fence resolves."
+  [_refresh user-id request]
+  #?(:clj (when (and (:ready? request) (:root-id request) (= user-id (:user-id request)))
+            (assoc (merged-db/read-window user-id (:root-id request) (:range request))
+              :read-request (merged-window/snapshot-tag request)))
      :cljs nil))
 
 (defn save-merged-document!*
@@ -697,11 +699,18 @@
           ;; Bound unconditionally, the Offload always has a value: nil for
           ;; every PDF outside the mode, which costs no database work because
           ;; the gate is the thunk's first act.
-          requested-range (merged-window/page-range current-page total)
+          !continuous-range (atom nil)
+          requested-range (merged-window/continuous-range! !continuous-range pdf-root-id current-page total
+                            (e/watch merged-window/!viewport-edge))
+          !read-request (atom nil)
+          read-request (merged-window/read-request! !read-request user-id pdf-root-id requested-range
+                         (:save-scope (e/watch editor/!editor-state))
+                         (e/watch editor/!dirty-html) (e/watch editor/!saved-edit-id))
+          expected-read-request (merged-window/snapshot-tag read-request)
           merged-doc (e/server
                        (e/Offload #(when merged?
-                                     (get-merged-document* refresh user-id pdf-root-id requested-range))))
-          merged-view (e/server (select-keys merged-doc [:html :page-numbers :root-id :range]))
+                                     (get-merged-document* refresh user-id read-request))))
+          merged-view (e/server (select-keys merged-doc [:html :page-numbers :root-id :range :read-request]))
           merged-html (:html merged-view)
           merged-page-numbers (:page-numbers merged-view)
           ;; Gate inside the thunk, for the reason merged-doc above records: a
@@ -770,6 +779,8 @@
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
        :effective-content-topic-id effective-content-topic-id
        :merged? merged? :merged-page-numbers merged-page-numbers
+       :merged-read-request (:read-request merged-view)
+       :merged-expected-read-request expected-read-request
        :merged-range (:range merged-view)
        :merged-root-id (:root-id merged-view)
        :editor-doc-id editor-doc-id

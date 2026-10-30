@@ -57,12 +57,12 @@
 (deftest cache-revision-invalidates-old-layouts
   (let [current-cache? (private-fn 'current-cache?)]
     (is (true? (current-cache? {:version 7
-                                :payload {:layout-revision 2}}
+                                :payload {:layout-revision 3}}
                  7)))
     (is (false? (current-cache? {:version 7
                                  :payload {}}
                   7)))
     (is (false? (current-cache? {:version 6
-                                 :payload {:layout-revision 2}}
+                                 :payload {:layout-revision 3}}
                   7)))
     (is (false? (current-cache? nil 7)))))

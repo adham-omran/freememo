@@ -16,7 +16,7 @@
                ["SELECT p.id,p.page_number,p.content FROM topics p JOIN topics r ON r.id=p.parent_id
                  WHERE r.user_id=? AND p.parent_id=? AND p.kind='page' AND p.staged_delete_id IS NULL AND r.staged_delete_id IS NULL
                    AND p.page_number BETWEEN ? AND ?
-                 ORDER BY p.page_number LIMIT ?" user-id root-id start end window/page-limit])]
+                 ORDER BY p.page_number LIMIT ?" user-id root-id start end (min window/max-page-limit (inc (- end start)))])]
     {:html (page-merge/merge-pages rows)
      :page-numbers (mapv :topics/page_number rows)
      :root-id root-id :range page-range}))

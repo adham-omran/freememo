@@ -3,8 +3,8 @@
 
 (deftest graph-long-lists-use-virtual-scroll
   (let [source (slurp "src/freememo/graph_page.cljc")]
-    (is (= 2 (count (re-seq #"\(Scroll-window" source)))
-      "Relations and connected facts each own one scroll window.")
+    (is (= 3 (count (re-seq #"\(Scroll-window" source)))
+      "Relation filters, connected facts, and the explorer each own a scroll window.")
     (is (re-find #"graph-relation-list tape-scroll" source))
     (is (re-find #"graph-inspector-facts tape-scroll" source))
     (is (re-find #":reset-key \[source query\]" source)

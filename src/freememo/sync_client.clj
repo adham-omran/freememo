@@ -790,22 +790,42 @@
 (def ^:private table-labels
   {"topics" "Document" "flashcards" "Card" "media" "Image" "sources" "Source"})
 
+(defn- conflict-summary [{:keys [id table_name reason title question]}]
+  (let [plain-question (some-> question (str/replace #"<[^>]*>" ""))]
+    {:id id
+     :label (str (get table-labels table_name table_name) ": "
+              (or (not-empty title)
+                (when plain-question (subs plain-question 0 (min 80 (count plain-question))))
+                "(untitled)"))
+     :reason (case reason
+               "deleted-elsewhere" "Its document was deleted on another device."
+               "parent-deleted" "Its parent was deleted on another device."
+               "storage-quota" "Your freememo.net storage is full."
+               reason)}))
+
 (defn open-conflicts
-  "5.2 — the rows a sync left out, newest first, with a label a person reads."
+  "Read all unresolved conflict summaries for non-UI callers."
   []
-  (mapv (fn [{:keys [id table_name reason title question]}]
-          {:id id
-           :label (str (get table-labels table_name table_name) ": "
-                    (or (not-empty title) (some-> question (str/replace #"<[^>]*>" "") (subs 0 (min 80 (count question))))
-                      "(untitled)"))
-           :reason (case reason
-                     "deleted-elsewhere" "Its document was deleted on another device."
-                     "parent-deleted" "Its parent was deleted on another device."
-                     "storage-quota" "Your freememo.net storage is full."
-                     reason)})
+  (mapv conflict-summary
     (jdbc/execute! db/ds ["SELECT id, table_name, reason, row_data->>'title' AS title,
                                   row_data->>'question' AS question
                            FROM sync_conflicts WHERE resolved_at IS NULL ORDER BY id DESC"] opts)))
+
+(defn open-conflict-count
+  "Count unresolved conflicts without loading their contents."
+  []
+  (:count (jdbc/execute-one! db/ds
+            ["SELECT count(*)::int AS count FROM sync_conflicts WHERE resolved_at IS NULL"] opts)))
+
+(defn open-conflict-window
+  "Read one bounded range of unresolved conflict summaries."
+  [offset limit]
+  (mapv conflict-summary
+    (jdbc/execute! db/ds
+      ["SELECT id, table_name, reason, row_data->>'title' AS title,
+               left(row_data->>'question', 160) AS question
+          FROM sync_conflicts WHERE resolved_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?"
+       (min 100 (max 0 (long limit))) (max 0 (long offset))] opts)))
 
 (defn restore-conflict!
   "5.2 — put a left-out row back as a new local write, so the next sync

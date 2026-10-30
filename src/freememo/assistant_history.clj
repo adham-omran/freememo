@@ -117,6 +117,27 @@
     WHERE (?::bigint IS NULL OR (section, position, kind, event_id) < (?, ?, ?, ?))
     ORDER BY section DESC, position DESC, kind DESC, event_id DESC LIMIT ?")
 
+(defn transcript-index
+  "Read timeline identities without message bodies. Keep this projection on the server."
+  [user-id chat-id]
+  (if-not chat-id
+    []
+    (let [sql (subs timeline-sql 0 (.indexOf timeline-sql "   SELECT * FROM events"))]
+      (jdbc/execute! db/ds
+        [(str sql " SELECT * FROM events ORDER BY section, position, kind, event_id")
+         chat-id user-id]
+        read-options))))
+
+(defn chat-index
+  "Read owned chat metadata for the server-side tree projection."
+  [user-id root-topic-id]
+  (mapv chat-option
+    (jdbc/execute! db/ds
+      [(str "SELECT " chat-columns " FROM assistant_chats
+              WHERE user_id = ? AND root_topic_id = ? AND staged_delete_id IS NULL
+              ORDER BY coalesce(updated_at, created_at) DESC, id DESC")
+       user-id root-topic-id] read-options)))
+
 (defn transcript-page
   "Read at most 50 events. Cursor includes all tie breakers, including checkpoint identity."
   [user-id chat-id before]
@@ -193,5 +214,17 @@
          JOIN assistant_chats c ON c.id = r.chat_id
         WHERE c.user_id = ? AND c.id = ? AND c.staged_delete_id IS NULL
           AND r.status IN ('queued', 'streaming', 'stop-requested')
+        ORDER BY r.id DESC LIMIT 1"
+       user-id chat-id] read-options)))
+
+(defn latest-answer-message-id
+  "Keep the newest answer available through its terminal transition."
+  [user-id chat-id]
+  (:assistant_message_id
+    (jdbc/execute-one! db/ds
+      ["SELECT r.assistant_message_id FROM assistant_runs r
+         JOIN assistant_chats c ON c.id = r.chat_id
+        WHERE c.user_id = ? AND c.id = ? AND c.staged_delete_id IS NULL
+          AND r.assistant_message_id IS NOT NULL
         ORDER BY r.id DESC LIMIT 1"
        user-id chat-id] read-options)))

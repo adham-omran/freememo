@@ -17,7 +17,7 @@
             [taoensso.telemere :as tel]))
 
 (def ^:private sfdp-bin "sfdp")
-(def ^:private layout-revision 2)
+(def ^:private layout-revision 3)
 
 ;; prism0 runs only Prism's scaling phase. It does not run the costly iterative
 ;; overlap pass that took about 90 seconds on a 5,000-node graph. The pack margin
@@ -157,7 +157,7 @@
                                 (let [[x y] (get pos id [0.0 0.0])]
                                   [id label (get degree id 0) x y]))
                           nodes)
-                 :edges (mapv (fn [{:keys [s t p topic]}] [s t (get pred-idx p) topic]) edges)
+                 :edges (mapv (fn [{:keys [s t p topic id]}] [s t (get pred-idx p) topic id]) edges)
                  :predicates (mapv (fn [{:keys [id label]}] [id label]) predicates)
                  :docs (mapv (fn [{:keys [id title]}] [id title]) docs)
                  :layout-revision layout-revision}]

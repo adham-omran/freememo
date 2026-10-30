@@ -41,16 +41,15 @@
 
 (defn- payload-model
   [payload]
-  (mapv (fn [[i [s t pidx topic]]]
-          {:id (str i) :source (str s) :target (str t)
+  (mapv (fn [[i [s t pidx topic fact-id]]]
+          {:id (str (or fact-id i)) :source (str s) :target (str t)
            :pred pidx :topic topic})
     (map-indexed vector (:edges payload))))
 
 (defn- build-graphology
   "payload {:nodes [[id label degree x y]…] :edges [[s t pred-idx topic]…]} →
    a directed multigraph with fixed positions and degree-scaled sizes.
-   Edge key = the edge's index in payload, so predicate/source filters address
-   edges by key. Endpoint-guarded so a malformed edge cannot throw."
+   Edge keys use durable fact IDs. Older cached payloads use their row index. Endpoint-guarded so a malformed edge cannot throw."
   [Graph payload]
   (let [^js g (new Graph #js {:type "directed" :multi true})
         predicate-labels (mapv second (:predicates payload))]
@@ -60,10 +59,10 @@
              :x x :y y
              :overviewX x :overviewY y
              :size (+ 3 (* 1.4 (js/Math.sqrt (max 1 (or degree 1)))))}))
-    (doseq [[i [s t pidx topic]] (map-indexed vector (:edges payload))]
+    (doseq [[i [s t pidx topic fact-id]] (map-indexed vector (:edges payload))]
       (let [sk (str s) tk (str t)]
         (when (and (.hasNode g sk) (.hasNode g tk))
-          (.addDirectedEdgeWithKey g (str i) sk tk
+          (.addDirectedEdgeWithKey g (str (or fact-id i)) sk tk
             #js {:pred pidx :topic topic
                  :type "arrow"
                  :label (str (get predicate-labels pidx ""))}))))

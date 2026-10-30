@@ -2696,6 +2696,61 @@
                      :assistant_event/type "fork" :assistant_messages/content chat_title}))
           events)))))
 
+(defn transcript-index*
+  "Read ordered event identities away from the session reactor."
+  [revision user-id chat-id]
+  {:chat chat-id :revision revision :events (history/transcript-index user-id chat-id)})
+
+(defn transcript-window*
+  "Project requested window bodies, including interaction pins, from the server-owned index."
+  [user-id index indices]
+  (let [indices (vec (distinct indices))
+        events (mapv #(nth (:events index) % nil) indices)
+        messages (history-message-views user-id (keep :message_id events))
+        checkpoints (into {} (map (juxt :id identity))
+                      (history/checkpoints user-id (keep :checkpoint_id events)))]
+    {:scope [(:chat index) indices]
+     :rows (into {}
+             (map (fn [i {:keys [kind message_id checkpoint_id inherited chat_title] :as event}]
+                    [i (when event
+                         (assoc
+                           (case (long kind)
+                             0 (cond-> (get messages message_id)
+                                 inherited (assoc :assistant_messages/inherited? true))
+                             1 (transcript-message-view
+                                 (checkpoint-event (assoc (get checkpoints checkpoint_id) :chat_title chat_title)))
+                             2 {:assistant_messages/id "fork" :assistant_messages/role "event"
+                                :assistant_event/type "fork" :assistant_messages/content chat_title})
+                           :transcript/key ((juxt :section :position :kind :event_id) event)))])
+               indices events))}))
+
+(defn transcript-window-row
+  "Retain overlapping identities during a fetch. Never accept another chat or a moved event."
+  ([result chat-id indices index live-row]
+   (when (= [chat-id indices] (:scope result))
+     (transcript-window-row result chat-id indices index live-row
+       (get-in result [:rows index :transcript/key]))))
+  ([result chat-id _indices index live-row expected-key]
+   (let [row (get (:rows result) index)]
+     (when (and row (= chat-id (first (:scope result)))
+                (= expected-key (:transcript/key row)))
+       (if (and (:assistant_messages/id live-row)
+                (= (:assistant_messages/id row) (:assistant_messages/id live-row))
+                (#{"queued" "streaming" "stop-requested"} (:assistant_run/status row)))
+         (assoc live-row :transcript/key (:transcript/key row))
+         row)))))
+
+(defn transcript-window-rows
+  "Transfer indexed content. The client owns measured row positions."
+  [result projection chat-id indices live-row]
+  (into []
+    (keep (fn [index]
+            (let [key (some-> (nth (:events projection) index nil)
+                        ((juxt :section :position :kind :event_id)))]
+              (when-let [row (transcript-window-row result chat-id nil index live-row key)]
+                (assoc row :window/index index)))))
+    indices))
+
 (defn current-transcript-page
   "Keep same-chat rows during paging and hide rows from another chat."
   [page chat-id before]
@@ -2705,9 +2760,9 @@
     :else {:rows [] :more? false :cursor nil :pending? true}))
 
 (defn live-transcript-row*
-  "Read and project only the active answer when a stream publication arrives."
+  "Project the newest answer through settlement while the durable window refreshes."
   [_stream-rev user-id chat-id]
-  (when-let [id (and chat-id (history/active-message-id user-id chat-id))]
+  (when-let [id (and chat-id (history/latest-answer-message-id user-id chat-id))]
     (get (history-message-views user-id [id]) id)))
 
 (defn transcript-rows

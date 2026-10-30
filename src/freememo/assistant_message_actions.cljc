@@ -39,7 +39,8 @@
               (let [click (dom/On "click" identity nil)
                     [generate-token _] (e/Token click)
                     generating? (some? generate-token)]
-                (dom/props {:disabled (or sending? generating?)})
+                (dom/props {:disabled (or sending? generating?)
+                            :aria-busy (str generating?)})
                 (dom/text (if generating? "✦…" "✦"))
                 (when generate-token
                   (case (e/server
@@ -70,6 +71,7 @@
               (dom/text "↻")
               (let [retry-click (dom/On "click" identity nil)
                     [retry-token _] (e/Token retry-click)]
+                (dom/props {:aria-busy (str (some? retry-token))})
                 (when retry-token
                   (let [result (e/server
                                  (e/Offload

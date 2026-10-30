@@ -27,6 +27,7 @@
    [freememo.icons :as icons]
    [freememo.interaction-trail :as trail]
    [freememo.modal-shell :as modal-shell]
+   [freememo.measured-list :as measured]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.user-state :as us])))
@@ -76,10 +77,11 @@
    always sits in its root's section and a pin on a fork marks it in place.
    Only chats whose title matches `query`, and their ancestors, appear
    (§4.6.4), so a matched fork still shows the path to it."
-  [chats query now-ms]
-  (let [today-start (local-day-start-ms now-ms 0)
-        week-start (local-day-start-ms now-ms 7)
-        by-id (into {} (map (juxt :id identity)) chats)
+  ([chats query now-ms]
+   (history-sections chats query now-ms
+     [(local-day-start-ms now-ms 0) (local-day-start-ms now-ms 7)]))
+  ([chats query _now-ms [today-start week-start]]
+   (let [by-id (into {} (map (juxt :id identity)) chats)
         shown-ids (into #{}
                     (comp (filter #(title-matches? query %))
                       (mapcat #(cons (:id %) (map :id (tree/lineage by-id (:id %))))))
@@ -93,10 +95,83 @@
      :today (expand (filter #(>= (:activity-ms %) today-start) unpinned))
      :week (expand (filter #(and (< (:activity-ms %) today-start)
                               (>= (:activity-ms %) week-start)) unpinned))
-     :older (expand (filter #(< (:activity-ms %) week-start) unpinned))}))
+     :older (expand (filter #(< (:activity-ms %) week-start) unpinned))})))
 
 (def ^:private section-labels
   [[:pinned "Pinned"] [:today "Today"] [:week "Previous 7 days"] [:older "Older"]])
+
+(defn history-projection
+  "Flatten the complete server-owned forest before windowing. Keep ancestors and fork order."
+  ([chats query now-ms]
+   (history-projection chats query now-ms
+     [(local-day-start-ms now-ms 0) (local-day-start-ms now-ms 7)]))
+  ([chats query now-ms boundaries]
+   (let [sections (history-sections chats query now-ms boundaries)]
+    (->> section-labels
+      (mapcat (fn [[section label]]
+                (map-indexed (fn [i chat]
+                               (cond-> (assoc chat :history/section section)
+                                 (zero? i) (assoc :history/section-label label)))
+                  (get sections section))))
+      (map-indexed #(assoc %2 :history/index %1))
+      vec))))
+
+(defn history-browse-order
+  "Capture sort fields separately from the metadata that rows display."
+  [chats]
+  (into {} (map-indexed (fn [rank chat]
+                         [(:id chat) {:rank rank :pinned-ms (:pinned-ms chat)
+                                      :activity-ms (:activity-ms chat)}])) chats))
+
+(defn frozen-history-projection
+  "Keep existing roots in their captured sections. New forks retain their root context."
+  [chats query now-ms boundaries order]
+  (let [by-id (into {} (map (juxt :id identity)) chats)
+        children (group-by :parent-id chats)
+        roots (filter #(and (contains? order (:id %))
+                            (not (contains? by-id (:parent-id %)))) chats)
+        shown (loop [todo (vec roots) seen #{}]
+                (if-let [chat (peek todo)]
+                  (if (contains? seen (:id chat))
+                    (recur (pop todo) seen)
+                    (recur (into (pop todo) (get children (:id chat))) (conj seen (:id chat))))
+                  seen))
+        ordered (->> chats
+                  (filter #(contains? shown (:id %)))
+                  (sort-by #(if-let [frozen (get order (:id %))]
+                              [0 (:rank frozen)] [1 (:id %)]))
+                  (mapv (fn [chat]
+                          (if-let [frozen (get order (:id chat))]
+                            (merge chat (dissoc frozen :rank))
+                            chat))))]
+    (mapv #(merge % (get by-id (:id %)))
+      (history-projection ordered query now-ms boundaries))))
+
+(defn history-browse-order*
+  "Capture one server-owned browse generation. Reopening or changing search starts another."
+  [user-id root-topic-id query]
+  #?(:clj {:scope [root-topic-id query]
+           :order (history-browse-order (history/chat-index user-id root-topic-id))}
+     :cljs nil))
+
+(defn history-projection*
+  "Refresh row metadata while preserving the current browse generation."
+  [_rev user-id root-topic-id query now-ms boundaries browse]
+  #?(:clj {:scope [root-topic-id query]
+           :rows (if (= [root-topic-id query] (:scope browse))
+                   (frozen-history-projection (history/chat-index user-id root-topic-id)
+                     query now-ms boundaries (:order browse))
+                   [])}
+     :cljs nil))
+
+(defn history-window-rows
+  "Read requested rows from the owned projection. Keep geometry on the client."
+  [result root-topic-id query indices]
+  (if (= [root-topic-id query] (:scope result))
+    (into []
+      (keep #(nth (:rows result) % nil))
+      indices)
+    []))
 
 (defn relative-time-label
   "A compact age for a history row: now, 5m, 3h, 2d, 4w, 6mo, 2y."
@@ -244,8 +319,14 @@
   #?(:clj nil
      :cljs (when-let [chat-id (row-chat-id (.-target event))]
              (case (.-key event)
-               "ArrowDown" (do (.preventDefault event) (focus-row-at! container (.-target event) 1))
-               "ArrowUp" (do (.preventDefault event) (focus-row-at! container (.-target event) -1))
+               "ArrowDown" (do (.preventDefault event)
+                                (if-let [move! (:move! handlers)]
+                                  (move! (.-target event) 1)
+                                  (focus-row-at! container (.-target event) 1)))
+               "ArrowUp" (do (.preventDefault event)
+                              (if-let [move! (:move! handlers)]
+                                (move! (.-target event) -1)
+                                (focus-row-at! container (.-target event) -1)))
                "Enter" (do (.preventDefault event) ((:open! handlers) chat-id))
                "F2" (do (.preventDefault event) ((:rename! handlers) chat-id))
                ("Delete" "Backspace") (do (.preventDefault event)
@@ -441,6 +522,7 @@
                              (when excluded? " assistant-history__row--excluded"))
                     :tabindex "0" :role "button"
                     :data-chat-id (str chat-id)
+                    :data-history-index (:history/index chat)
                     :aria-current (when active? "true")})
         ;; The fork lines (plans/assistant-history-fork-guides.md §3.2): one
         ;; span per tree level, keyed by that level, in an element of its own
@@ -511,52 +593,69 @@
           (HistoryRow chat active now-ms editing-id view-node open!
             !menu !editing-id !chat-action))))))
 
+(defn move-window-focus!
+  "Mount the neighboring logical chat before moving keyboard focus."
+  [scroller row step record-count]
+  #?(:cljs
+     (let [i (+ (js/parseInt (.getAttribute row "data-history-index") 10) step)]
+       (when (<= 0 i (dec record-count))
+         (let [selector (str "[data-history-index=\"" i "\"]")
+               !observer (atom nil)
+               !timer (atom nil)
+               stop! (fn []
+                       (when-let [observer @!observer] (.disconnect observer))
+                       (when-let [timer @!timer] (js/clearTimeout timer)))
+               focus! (fn []
+                        (when-let [target (.querySelector scroller selector)]
+                          (.focus target)
+                          (stop!)
+                          true))]
+           (when-not (focus!)
+             (measured/jump! scroller i :start)
+             (reset! !observer (js/MutationObserver. (fn [_ _] (focus!))))
+             (.observe @!observer scroller #js {:childList true :subtree true})
+             (reset! !timer (js/setTimeout stop! 3000))))))
+     :clj nil)
+  nil)
+
 (e/defn HistoryList
-  "Search bar, sections and empty states. Mounted only while the view is open,
-   so each open starts with an empty query and a fresh clock.
-   Pre: called directly inside the history view's container, which is
-   `dom/node` here."
+  "Search the complete forest and transfer only measured window rows."
   [user-id root-topic-id active new-chat! !active !history-open? !error !chat-action]
   (e/client
     (let [view-node dom/node
           now-ms (e/snapshot (current-time-ms))
+          boundaries [(local-day-start-ms now-ms 0) (local-day-start-ms now-ms 7)]
           !query (atom "")
           query (e/watch !query)
-          !page (atom {:query "" :offset 0})
-          page-state (e/watch !page)
-          offset (if (= query (:query page-state)) (:offset page-state) 0)
           rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
+          debounced-query (e/server (first (e/as-vec (e/Task (m/sleep 200 query)))))
+          ;; The keyed frame owns this order. For-by returns one vector of results.
+          browse (e/server
+                   (first
+                     (e/for-by identity [scope (if (some? debounced-query)
+                                                [[root-topic-id debounced-query]] [])]
+                       (e/Offload #(history-browse-order* user-id (first scope) (second scope))))))
           result (e/server
-                   (let [q (first (e/as-vec (e/Task (m/sleep 200 query))))]
-                     (first (e/as-vec
-                              (when (some? q)
-                                (e/Offload #(do rev (history/chat-page user-id root-topic-id q offset))))))))
-          current-result? (and (= query (:query result)) (= offset (:offset result)))
-          chat-options (if current-result? (:rows result) [])
+                   (first (e/as-vec
+                            (when (some? debounced-query)
+                              (e/Offload #(history-projection* rev user-id root-topic-id
+                                            debounced-query now-ms boundaries browse))))))
+          record-count (e/server
+                         (if (= [root-topic-id query] (:scope result)) (count (:rows result)) 0))
           !menu (atom nil)
           menu (e/watch !menu)
           !editing-id (atom nil)
           editing-id (e/watch !editing-id)
-          sections (history-sections
-                     (let [ids (set (map :id chat-options))]
-                       (mapv #(if (ids (:parent-id %)) % (assoc % :parent-id nil)) chat-options))
-                     "" now-ms)
-          listed? (boolean (some seq (vals sections)))
           open! (fn [chat-id]
                   (trail/record! :assistant {:action :select-chat :chat-id chat-id})
                   (reset! !active chat-id)
                   (reset! !error nil)
                   (request-chat-action! !chat-action :open chat-id)
-                  (reset! !history-open? false))
-          handlers {:open! open!
-                    :rename! (fn [chat-id] (reset! !editing-id chat-id))
-                    :delete! (fn [chat-id] (request-chat-action! !chat-action :delete chat-id))}]
-      ;; A press anywhere outside the open menu closes it.
+                  (reset! !history-open? false))]
       (dom/On "mousedown"
         (fn [event]
           (when (and @!menu (not (.closest (.-target event) ".assistant-history__menu")))
-            (reset! !menu nil)))
-        nil)
+            (reset! !menu nil))) nil)
       (dom/div
         (dom/props {:class "assistant-panel__bar assistant-history__bar"})
         (dom/button
@@ -573,37 +672,51 @@
             (fn [event]
               (when (= "ArrowDown" (.-key event))
                 (.preventDefault event)
-                (focus-first-history-row! view-node)))
-            nil))
+                (focus-first-history-row! view-node))) nil))
         (dom/button
           (dom/props {:class "btn btn-secondary assistant-panel__new" :type "button"})
           (tooltip/Tooltip! "Start a new chat about this page")
           (dom/text "＋ New")
           (dom/On "click" (fn [_] (new-chat!)) nil)))
       (dom/div
-        (dom/props {:class "assistant-history__list"})
-        (dom/On "keydown" (fn [event] (history-list-keydown! view-node event handlers)) nil)
-        (e/for [[section-key label] (e/diff-by first section-labels)]
-          (HistorySection section-key label (get sections section-key) active now-ms
-            editing-id view-node open! !menu !editing-id !chat-action))
-        ;; Always mounted and hidden by a class, the tape_table shape: the
-        ;; sections above never swap with it.
-        (dom/div
-          (dom/props {:class (str "assistant-history__empty"
-                               (when listed? " assistant-history__empty--hidden"))})
-          (dom/text (if (seq chat-options)
-                      "No chats match."
-                      "Chats about this document appear here."))))
-      (dom/div
-        (dom/props {:class "assistant-history__paging"})
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-sm" :disabled (zero? offset)})
-          (dom/text "Previous chats")
-          (dom/On "click" (fn [_] (reset! !page {:query query :offset (max 0 (- offset 50))})) nil))
-        (dom/button
-          (dom/props {:type "button" :class "btn btn-sm" :disabled (not (and current-result? (:more? result)))})
-          (dom/text "More chats")
-          (dom/On "click" (fn [_] (reset! !page {:query query :offset (+ offset 50)})) nil)))
+        (dom/props {:class "assistant-history__list measured-list-scroll"})
+        (let [scroller dom/node
+              handlers {:open! open!
+                        :rename! (fn [chat-id] (reset! !editing-id chat-id))
+                        :delete! (fn [chat-id] (request-chat-action! !chat-action :delete chat-id))
+                        :move! (fn [row step] (move-window-focus! scroller row step record-count))}
+              window (measured/Window scroller record-count
+                       {:estimate-height 48 :reset-key [root-topic-id query] :max-mounted 150})
+              indices (mapv :index (:rows window))
+              tops (into {} (map (juxt :index :top)) (:rows window))]
+          (dom/On "keydown" (fn [event] (history-list-keydown! view-node event handlers)) nil)
+          (dom/div
+            (dom/props {:class "measured-list-space"
+                        :style {:position "relative" :height (str (:height window) "px")}})
+            (e/for [chat (e/server
+                           (e/diff-by :id
+                             (history-window-rows result root-topic-id query indices)))]
+              (let [index (:history/index chat)]
+                (when (contains? tops index)
+                  (dom/div
+                    (dom/props {:class "measured-list-row" :data-row-key (str (:id chat))
+                                :data-window-pin (when (or (= editing-id (:id chat))
+                                                           (= (:chat-id menu) (:id chat))) "true")
+                                :style {:position "absolute" :top "0" :transform (str "translateY(" (get tops index) "px)")
+                                        :left 0 :right 0}})
+                    (measured/Observe scroller index dom/node)
+                    (when-let [label (:history/section-label chat)]
+                      (dom/div
+                        (dom/props {:class "assistant-history__section-label"})
+                        (dom/text label)))
+                    (HistoryRow chat active now-ms editing-id view-node open!
+                      !menu !editing-id !chat-action))))))
+          (dom/div
+            (dom/props {:class (str "assistant-history__empty"
+                                 (when (pos? record-count) " assistant-history__empty--hidden"))})
+            (dom/text (if (str/blank? query)
+                        "Chats about this document appear here."
+                        "No chats match.")))))
       (when menu
         (HistoryRowMenu menu view-node !menu !editing-id !chat-action)))))
 

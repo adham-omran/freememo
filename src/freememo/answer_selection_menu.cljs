@@ -26,6 +26,7 @@
    that `math/set-html!` owns. A browser without the API shows none."
   (:require [clojure.string :as str]
             [freememo.assistant-evidence :as evidence]
+            [freememo.measured-list :as measured]
             [freememo.command-bus :as bus]
             [freememo.gen-settings :as gs]
             [freememo.math :as math]
@@ -272,15 +273,29 @@
         (build-menu)
         watch-key (keyword (gensym "answer-selection-count"))
         !capture (atom nil)
+        !pinned-index (atom nil)
+        release-pin! (fn []
+                       (when-let [index @!pinned-index]
+                         (measured/pin! transcript index false)
+                         (reset! !pinned-index nil)))
         ;; nil while hidden, :actions for the three buttons, :note for the field.
         !mode (atom nil)
         hide! (fn []
+                (release-pin!)
                 (reset! !mode nil)
                 (reset! !capture nil)
                 (set! (.-value input) "")
                 (set! (.. root -style -display) "none"))
         place-now! #(when-let [c @!capture] (place! root transcript (:range c)))
         show-actions! (fn [c]
+                        (release-pin!)
+                        (when-let [row (some-> (.querySelector transcript
+                                                 (str answer-selector "[data-message-id=\""
+                                                      (:message-id c) "\"]"))
+                                         (.closest "[data-measured-index]"))]
+                          (let [index (js/parseInt (.getAttribute row "data-measured-index") 10)]
+                            (reset! !pinned-index index)
+                            (measured/pin! transcript index true)))
                         (reset! !capture c)
                         (reset! !mode :actions)
                         (set! (.. actions -style -display) "flex")
@@ -347,6 +362,7 @@
     (.addEventListener js/document "keydown" on-key)
     (.addEventListener js/window "resize" reposition)
     (fn teardown []
+      (release-pin!)
       (.removeEventListener transcript "mouseup" on-up)
       (.removeEventListener transcript "keyup" on-up)
       (.removeEventListener transcript "scroll" reposition)

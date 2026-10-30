@@ -9,6 +9,10 @@
 (def ^:dynamic *selection*)
 (def ^:dynamic *installs*)
 
+(def *blocked-range* (atom nil))
+(def ^:dynamic *patch-result* nil)
+(defn patch-body! [& _] *patch-result*)
+
 (defn replace-body! [html topic force?]
   (swap! *installs* conj [html topic force?]))
 
@@ -32,7 +36,10 @@
               (eval (walk/postwalk-replace
                       {'!editor-state '*editor-state* '!dirty-html '*dirty*
                        '!last-selection '*selection* 'set-content! 'replace-body!
-                       'merged-window/install-allowed? 'window/install-allowed?}
+                       'merged-window/install-allowed? 'window/install-allowed?
+                       'merged-window/snapshot-current? 'window/snapshot-current?
+                       'patch-overlapping-body! 'patch-body!
+                       'merged-window/!blocked-range '*blocked-range*}
                       (cljs-form (cons 'fn (drop 3 form))))))
             :else (recur)))))))
 
@@ -63,3 +70,59 @@
     (is (= [] @*installs*))
     (is (= {:index 10 :length 5} @*selection*))
     (is (= {:edit-id "saved"} @*dirty*))))
+
+(deftest an-overlap-patch-keeps-the-transformed-selection
+  (with-editor {:edit-id "saved"}
+    (binding [*patch-result* true]
+      (reset! *editor-state* {:save-scope {:body-key :first :merged? true :pdf-root-id 9
+                                          :page-numbers (vec (range 1 21))}})
+      (let [scope {:body-key :second :merged? true :pdf-root-id 9
+                   :page-numbers (vec (range 11 31))}]
+        ((actual-installer) "next body" 9 scope "saved")
+        (is (= [] @*installs*))
+        (is (= scope (:save-scope @*editor-state*)))
+        (is (= {:index 10 :length 5} @*selection*))
+        (is (nil? @*dirty*))))))
+
+(deftest an-overlap-patch-waits-for-composition-or-upload
+  (with-editor {:edit-id "saved"}
+    (reset! *editor-state* {:save-scope {:body-key :first :merged? true :pdf-root-id 9
+                                        :page-numbers (vec (range 1 21))}})
+    ((actual-installer) "next body" 9 {:body-key :second :merged? true :pdf-root-id 9
+                                     :page-numbers (vec (range 11 31))} "saved")
+    (is (= [] @*installs*))
+    (is (= :first (get-in @*editor-state* [:save-scope :body-key])))
+    (is (= {:edit-id "saved"} @*dirty*))))
+
+(deftest settlement-retries-do-not-reinstall-an-installed-snapshot
+  (with-editor nil
+    (reset! *editor-state* {:save-scope {:body-key :first}
+                            :installed-body-html "current server snapshot"})
+    ((actual-installer) "current server snapshot" 9 {:body-key :first} nil)
+    (is (= [] @*installs*))
+    (is (= {:index 10 :length 5} @*selection*))))
+
+(deftest a-new-server-snapshot-still-installs-in-the-same-range
+  (with-editor nil
+    (reset! *editor-state* {:save-scope {:body-key :first}
+                            :installed-body-html "old server snapshot"})
+    ((actual-installer) "new server snapshot" 9 {:body-key :first} nil)
+    (is (= [["new server snapshot" 9 true]] @*installs*))
+    (is (= "new server snapshot" (:installed-body-html @*editor-state*)))))
+
+(deftest an-explicit-jump-outside-the-installed-window-reloads-saved-content
+  (with-editor {:edit-id "saved"}
+    (binding [*patch-result* true]
+      (reset! *editor-state* {:save-scope {:body-key :first :merged? true :pdf-root-id 9
+                                          :page-numbers (vec (range 1 21))}})
+      ((actual-installer) "next body" 9 {:body-key :second :merged? true :pdf-root-id 9
+                                        :page-numbers (vec (range 11 31)) :requested-page 27} "saved")
+      (is (= [["next body" 9 true]] @*installs*))
+      (is (nil? @*selection*)))))
+
+(deftest a-window-snapshot-from-before-the-save-fence-does-not-install
+  (with-editor {:edit-id "B"}
+    ((actual-installer) "stale body" 9 {:body-key :second :merged? true
+                                       :read-request {:fence "A"} :expected-read-request {:fence "B"}} "B")
+    (is (= [] @*installs*))
+    (is (= :first (get-in @*editor-state* [:save-scope :body-key])))))

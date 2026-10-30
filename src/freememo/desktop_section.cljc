@@ -18,7 +18,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
    [freememo.document-picker :as picker]
-   [freememo.bounded-page :as page]
+   [freememo.measured-list :as measured]
+   [freememo.window-ranges :as ranges]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-link :as link])
@@ -66,19 +67,28 @@
 (defn choose-full-sync!* [direction]
   #?(:clj (sync-client/choose-full-sync! (keyword direction)) :cljs nil))
 
-(defn conflicts* [_refresh]
-  #?(:clj (sync-client/open-conflicts) :cljs []))
+(defn conflict-count* [_refresh]
+  #?(:clj (sync-client/open-conflict-count) :cljs 0))
+
+(defn conflict-rows* [_refresh indices]
+  #?(:clj (into [] (mapcat (fn [[offset limit]]
+                            (mapv vector (range offset (+ offset limit))
+                              (sync-client/open-conflict-window offset limit))))
+            (ranges/index-ranges indices))
+     :cljs []))
 
 (defn restore-conflict!* [user-id conflict-id parent-id]
-  #?(:clj (let [r (sync-client/restore-conflict! conflict-id parent-id)]
-            (commands/bump-channels! user-id #{:desktop-mutations :refresh :tree-mutations :card-mutations})
-            r)
+  #?(:clj (sync-client/restore-conflict! conflict-id parent-id)
      :cljs nil))
 
 (defn discard-conflict!* [user-id conflict-id]
-  #?(:clj (let [r (sync-client/discard-conflict! conflict-id)]
-            (commands/bump-channels! user-id #{:desktop-mutations})
-            r)
+  #?(:clj (sync-client/discard-conflict! conflict-id)
+     :cljs nil))
+
+(defn refresh-conflicts!* [user-id restored?]
+  #?(:clj (commands/bump-channels! user-id
+            (if restored? #{:desktop-mutations :refresh :tree-mutations :card-mutations}
+              #{:desktop-mutations}))
      :cljs nil))
 
 (defn root-topics* [_refresh user-id]
@@ -178,32 +188,40 @@
 
 (e/defn ConflictRow [user-id conflict parent-id]
   (e/client
-    (dom/tr
-      (dom/td (dom/text (:label conflict)))
-      (dom/td (dom/text (:reason conflict)))
-      (dom/td
+    (dom/div
+      (dom/props {:class "sync-conflict-row" :role "row"})
+      (dom/div (dom/props {:role "cell"}) (dom/text (:label conflict)))
+      (dom/div (dom/props {:role "cell"}) (dom/text (:reason conflict)))
+      (dom/div
+        (dom/props {:role "cell"})
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary"})
           (dom/text "Restore")
           (let [[t ?error] (e/Token (dom/On "click" identity nil))]
+            (dom/props {:disabled (some? t) :aria-busy (some? t) :aria-invalid (some? ?error)})
             (when t
               (let [r (e/server (e/Offload #(restore-conflict!* user-id (:id conflict) parent-id)))]
-                (case r (if (:ok r) (t) (t (:error r))))))))
+                (case r
+                  (if (:ok r)
+                    (case (e/server (e/on-unmount #(refresh-conflicts!* user-id true))) (t))
+                    (t (:error r))))))
+            (when ?error
+              (dom/span (dom/props {:role "alert" :class "curriculum-inline-error"})
+                (dom/text ?error)))))
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary" :style {:margin-left "6px"}})
           (dom/text "Discard")
           (let [[t _] (e/Token (dom/On "click" identity nil))]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
             (when t
-              (case (e/server (e/Offload #(discard-conflict!* user-id (:id conflict)))) (t)))))))))
+              (case (e/server (e/Offload #(discard-conflict!* user-id (:id conflict))))
+                (case (e/server (e/on-unmount #(refresh-conflicts!* user-id false))) (t))))))))))
 
 (e/defn DesktopSyncBody [user-id]
   (e/client
    (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
          status (e/server (e/Offload #(sync-status* refresh)))
-         conflicts (e/server (e/Offload #(conflicts* refresh)))
-         conflict-count (e/server (count conflicts))
-         !conflict-page (atom 0)
-         conflict-page (e/watch !conflict-page)
+         conflict-count (e/server (e/Offload #(conflict-count* refresh)))
          !parent (atom nil)
          parent (e/watch !parent)]
      (dom/section
@@ -234,12 +252,25 @@
        (picker/DocumentPicker !parent refresh user-id :source nil
                               "Top level. Type to choose a document."))
       (dom/div
-       (dom/table
-        (dom/props {:style {:width "100%" :font-size "13px"}})
-        (dom/tbody
-         (e/for [c (e/server (e/diff-by :id (page/page-items conflicts conflict-page 20)))]
-           (ConflictRow user-id c parent))))
-       (page/PageControls !conflict-page conflict-count 20 "Sync conflicts"))))))
+        (dom/props {:class "measured-list-scroll sync-conflict-scroll" :role "table"
+                    :aria-label "Sync conflicts" :aria-rowcount conflict-count :tabindex "0"})
+        (let [scroller dom/node
+              window (measured/Window scroller conflict-count
+                       {:estimate-height 80 :reset-key [:sync-conflicts user-id]})
+              indices (mapv :index (:rows window))
+              rows (e/server (e/Offload #(conflict-rows* refresh indices)))
+              tops (into {} (map (juxt :index :top)) (:rows window))]
+          (dom/div
+            (dom/props {:class "measured-list-space" :role "rowgroup"
+                        :style {:height (str (:height window) "px")}})
+            (e/for [[index conflict]
+                    (e/server (e/diff-by (comp :id second) (filterv some? rows)))]
+              (when (contains? tops index)
+                (dom/div
+                (dom/props {:class "measured-list-row" :role "presentation" :data-row-key (str (:id conflict))
+                            :style {:position "absolute" :top 0 :transform (str "translateY(" (get tops index 0) "px)") :left 0 :right 0}})
+                (measured/Observe scroller index dom/node)
+                (ConflictRow user-id conflict parent)))))))))))
 
 ;; ── Server body ────────────────────────────────────────────────────
 

@@ -1212,6 +1212,69 @@
        JOIN curriculum_exam_forms f ON f.id = s.form_id
       WHERE s.user_id = ? AND g.passed" user-id] opts))
 
+(defn curriculum-overview
+  "Read the curriculum header and counts without material or exam bodies."
+  [_refresh user-id curriculum-id]
+  (when-let [curriculum (own-curriculum db/ds user-id curriculum-id)]
+    (let [{:keys [block_count complete]} (jdbc/execute-one! db/ds
+                                          ["SELECT count(*)::int AS block_count,
+                                                   COALESCE(bool_and(completed_at IS NOT NULL), false) AS complete
+                                              FROM curriculum_blocks WHERE curriculum_id = ?"
+                                           curriculum-id] opts)]
+      (assoc curriculum :block-count block_count :complete? (and (pos? block_count) complete)))))
+
+(declare subject-form-rows)
+
+(defn- subject-exam-summary [user-id subject]
+  (form-summary db/ds user-id (subject-form-rows db/ds user-id subject)))
+
+(defn curriculum-block-window
+  "Read a bounded range of block cards. Materials have a separate window."
+  [_refresh user-id curriculum-id offset limit]
+  (let [offset (max 0 (long offset))
+        limit (min 100 (max 0 (long limit)))]
+    (mapv (fn [index block]
+            [index (assoc block :exam (subject-exam-summary user-id {:block-id (:id block)}))])
+      (range offset (+ offset limit))
+      (jdbc/execute! db/ds
+        ["SELECT b.*, (SELECT count(*)::int FROM curriculum_materials m WHERE m.block_id = b.id) AS material_count
+            FROM curriculum_blocks b JOIN curricula c ON c.id = b.curriculum_id
+           WHERE c.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL
+           ORDER BY b.position, b.id LIMIT ? OFFSET ?"
+         curriculum-id user-id limit offset] opts))))
+
+(defn curriculum-material-window
+  "Read readiness and exam summaries only for the requested material range."
+  [_refresh user-id block-id offset limit]
+  (let [offset (max 0 (long offset))
+        limit (min 100 (max 0 (long limit)))
+        materials (jdbc/execute! db/ds
+                    ["SELECT m.*, t.title, t.kind,
+                             (SELECT count(a.anki_card_id)::int
+                                FROM flashcards f JOIN anki_card_states a ON a.flashcard_id = f.id AND a.user_id = ?
+                               WHERE f.root_topic_id = m.topic_id) AS anki_cards,
+                             (SELECT COALESCE(avg(a.stability), 0)::double precision
+                                FROM flashcards f JOIN anki_card_states a ON a.flashcard_id = f.id AND a.user_id = ?
+                               WHERE f.root_topic_id = m.topic_id) AS anki_stability,
+                             EXISTS (SELECT 1 FROM curriculum_exam_forms ef
+                                      JOIN curriculum_exam_sittings s ON s.form_id = ef.id AND s.user_id = ?
+                                      JOIN curriculum_grade_revisions g ON g.sitting_id = s.id
+                                     WHERE ef.material_id = m.id AND g.passed) AS \"exam-passed?\",
+                             (SELECT g.raw_score FROM curriculum_exam_forms ef
+                                JOIN curriculum_exam_sittings s ON s.form_id = ef.id AND s.user_id = ?
+                                JOIN curriculum_grade_revisions g ON g.sitting_id = s.id
+                               WHERE ef.material_id = m.id ORDER BY g.created_at DESC LIMIT 1) AS \"latest-exam-score\"
+                        FROM curriculum_materials m
+                        JOIN curriculum_blocks b ON b.id = m.block_id
+                        JOIN curricula c ON c.id = b.curriculum_id
+                        JOIN topics t ON t.id = m.topic_id
+                       WHERE b.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL
+                       ORDER BY m.position, m.id LIMIT ? OFFSET ?"
+                     user-id user-id user-id user-id block-id user-id limit offset] opts)]
+    (mapv (fn [index material]
+            [index (assoc material :exam (subject-exam-summary user-id {:material-id (:id material)}))])
+      (range offset (+ offset limit)) materials)))
+
 (defn curriculum-detail
   "Return one curriculum with nested blocks, materials, readiness, and forms.
 

@@ -1,29 +1,22 @@
 (ns freememo.merged-window-navigation
-  "Navigation between bounded Focus reader page ranges."
+  "Loaded-range status for continuous Focus reading."
   (:require [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
-            [freememo.doc-context :as dctx]))
+            [freememo.doc-context :as dctx]
+            [freememo.merged-window :as window]))
 
 (e/defn MergedWindowNavigation []
   (e/client
     (when dctx/merged?
-      (let [[start end] dctx/merged-range
-            total dctx/total
-            on-page-change! dctx/on-page-change!]
-        (when (and start end (> total (- (inc end) start)))
-          (dom/div
-            (dom/props {:class "toolbar-group focus-reader-pages"
-                        :aria-label "Focus reader page range"})
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :disabled (<= start 1) :aria-label "Previous page range"})
-              (dom/text "Previous pages")
-              (dom/On "click" (fn [_] (on-page-change! (max 1 (dec start)))) nil))
+      (let [blocked (e/watch window/!blocked-range)
+            blocked (when (= dctx/merged-root-id (:root-id blocked)) blocked)
+            [start end] (or (:range blocked) dctx/merged-range)]
+        (dom/span
+          (dom/props {:class "toolbar-group focus-reader-pages"
+                      :role "status" :aria-live "polite"})
+          (dom/text (str "Pages " start "–" end " of " dctx/total
+                        ". Scroll to load adjacent pages. Undo covers loaded pages."))
+          (when blocked
             (dom/span
-              (dom/props {:aria-live "polite"})
-              (dom/text (str "Pages " start "–" end " of " total)))
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :disabled (>= end total) :aria-label "Next page range"})
-              (dom/text "Next pages")
-              (dom/On "click" (fn [_] (on-page-change! (min total (inc end)))) nil))))))))
+              (dom/props {:class "focus-reader-range-note"})
+              (dom/text "Use the page field to load earlier pages after editing above a page marker."))))))))
