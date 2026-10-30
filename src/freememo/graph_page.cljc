@@ -341,7 +341,6 @@
     (dom/aside
       (dom/props {:class (str "graph-filters" (when-not open? " is-closed"))
                   :aria-label "Graph filters" :aria-hidden (str (not open?))})
-      (ConceptPicker payload !selected-id !view-mode)
       (ViewPicker !view-mode view-mode selected-id)
       (DocumentPicker payload !source)
       (ConnectednessControl !connectedness connectedness max-connectedness)
@@ -556,17 +555,42 @@
             (dom/span (dom/text fact-count)))
           (ConnectedFacts facts selected-id !linked-entity navigate!))))))
 
-(e/defn RelationExplorer [version user-id source preds !selected-id !view-mode]
+(defn close-relations! [!open? !button]
+  (reset! !open? false)
+  #?(:cljs (when-let [^js button @!button]
+             (.focus button #js {:preventScroll true}))
+     :clj nil)
+  nil)
+
+(defn close-relations-on-selection! [_selected-id !open?]
+  (reset! !open? false)
+  nil)
+
+(e/defn RelationExplorer [version user-id source preds !selected-id !view-mode close!]
   (e/client
     (let [scope {:source source :predicates preds}
           total (e/server (e/Offload #(relation-count* version user-id scope)))]
-      (dom/section
-        (dom/props {:class "graph-relation-explorer" :aria-label "Browse all graph relations"})
+      (dom/aside
+        (dom/props {:id "graph-relations-panel"
+                    :class "graph-inspector graph-relation-explorer"
+                    :aria-label "Browse all graph relations"})
+        (dom/On "keydown"
+          (fn [event]
+            (when (= "Escape" (.-key event))
+              (.preventDefault event)
+              (.stopPropagation event)
+              (close!))) nil)
         (dom/div
-          (dom/props {:class "graph-inspector-section-heading"})
-          (dom/strong (dom/text "Browse relations"))
-          (dom/span (dom/text (str total))))
-        (dom/p (dom/text "Scroll to browse all matching relations. Select a concept to show its neighborhood."))
+          (dom/props {:class "graph-inspector-header graph-inspector-section-heading"})
+          (dom/div
+            (dom/props {:class "graph-relation-explorer-heading"})
+            (dom/h2 (dom/text "Relations"))
+            (dom/span (dom/props {:class "graph-relations-count"}) (dom/text total)))
+          (dom/button
+            (dom/props {:type "button" :class "icon-btn" :aria-label "Close relations"})
+            (icons/Icon :x :size 17)
+            (dom/On "click" (fn [_] (close!)) nil)))
+        (dom/p (dom/text "Select a concept to inspect its connections."))
         (dom/div
           (dom/props {:class "tape-scroll graph-relation-explorer-scroll" :tabindex "0" :style {:position "relative" :--row-height "36px" :--grid-cols "1fr"}})
           (let [[offset limit] (Scroll-window 36 total dom/node {:overquery-factor 1.5 :reset-key scope})
@@ -583,14 +607,22 @@
                     (dom/button
                       (dom/props {:class "graph-relation-concept" :dir "auto" :title (:subject_label row) :aria-label (str "Inspect " (:subject_label row))})
                       (dom/text (:subject_label row))
-                      (dom/On "click" (fn [_] (reset! !selected-id (:subject_id row)) (reset! !view-mode :neighborhood)) nil))
+                      (dom/On "click"
+                        (fn [_]
+                          (reset! !selected-id (:subject_id row))
+                          (reset! !view-mode :neighborhood)
+                          (close!)) nil))
                     (dom/span
                       (dom/props {:class "graph-relation-predicate" :title (:predicate_label row)})
                       (dom/text (:predicate_label row)))
                     (dom/button
                       (dom/props {:class "graph-relation-concept" :dir "auto" :title (:object_label row) :aria-label (str "Inspect " (:object_label row))})
                       (dom/text (:object_label row))
-                      (dom/On "click" (fn [_] (reset! !selected-id (:object_id row)) (reset! !view-mode :neighborhood)) nil)))))))
+                      (dom/On "click"
+                        (fn [_]
+                          (reset! !selected-id (:object_id row))
+                          (reset! !view-mode :neighborhood)
+                          (close!)) nil)))))))
           (when (zero? total)
             (dom/p
               (dom/props {:class "graph-filter-empty graph-virtual-empty"})
@@ -631,9 +663,13 @@
           !depth (atom 2) depth (e/watch !depth)
           !stats (atom {:nodes node-count :edges (count (:edges payload))})
           stats (e/watch !stats)
-          !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)]
+          !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)
+          !relations-open? (atom false) relations-open? (e/watch !relations-open?)
+          !relations-button (atom nil)
+          close-relations (fn [] (close-relations! !relations-open? !relations-button))]
       (case (when (not= connectedness (filter/connectedness connectedness max-connectedness))
               (reset! !connectedness (filter/connectedness connectedness max-connectedness))) nil)
+      (case (close-relations-on-selection! selected-id !relations-open?) nil)
       (if (zero? node-count)
         (dom/div
           (GraphSearch user-id kg-bump !selected-id)
@@ -649,23 +685,45 @@
           (GraphEmptyState navigate!))
         (dom/div
           (dom/props {:class "graph-page"})
+          (dom/On "keydown"
+            (fn [event]
+              (when (and @!relations-open? (= "Escape" (.-key event)))
+                (.preventDefault event)
+                (.stopPropagation event)
+                (close-relations))) nil)
           (dom/div
-            (dom/props {:class "graph-budget-notice"})
-            (GraphSearch user-id kg-bump !selected-id)
-            (dom/p (dom/text (str "Canvas: " (count (:edges payload)) " of "
-                               (get-in payload [:budget :total-edges])
-                               " relations. Browse all relations below or search a concept.")))
+            (dom/props {:class "graph-page-header"})
+            (dom/div
+              (dom/props {:class "graph-page-search"})
+              (dom/On "focusin" (fn [_] (reset! !relations-open? false)) nil)
+              (GraphSearch user-id kg-bump !selected-id))
+            (dom/span
+              (dom/props {:class "graph-scope-summary"})
+              (dom/text (str (count (:edges payload)) " of "
+                          (get-in payload [:budget :total-edges]) " shown")))
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-secondary graph-relations-toggle"
+                          :aria-label "Browse relations"
+                          :aria-controls "graph-relations-panel"
+                          :aria-expanded (str relations-open?)})
+              (reset! !relations-button dom/node)
+              (icons/Icon :list :size 16)
+              (dom/span (dom/props {:class "graph-action-label"}) (dom/text "Browse relations"))
+              (dom/On "click" (fn [_] (swap! !relations-open? not)) nil))
             (when selected-id
               (dom/button
-                (dom/props {:type "button" :class "btn btn-sm"})
-                (dom/text "Show all concepts")
-                (dom/On "click" (fn [_] (reset! !selected-id nil)) nil)))
-            (RelationExplorer kg-bump user-id source preds !selected-id !view-mode))
+                (dom/props {:type "button" :class "btn btn-secondary graph-show-all"
+                            :aria-label "Show all concepts"})
+                (icons/Icon :arrow-left :size 16)
+                (dom/span (dom/props {:class "graph-action-label"}) (dom/text "All concepts"))
+                (dom/On "click" (fn [_] (reset! !selected-id nil)) nil))))
           (FiltersPanel kg-bump user-id payload !selected-id selected-id !source !preds preds
             !connectedness connectedness max-connectedness
             !view-mode view-mode filters-open?)
           (GraphScene payload kg-bump !ctx ctx !selected-id selected-id
             !view-mode view-mode !depth depth !source source !preds preds
             !connectedness connectedness stats !stats filters-open? !filters-open?)
-          (GraphInspector kg-bump user-id navigate! !selected-id selected-id
-            !view-mode))))))
+          (if relations-open?
+            (RelationExplorer kg-bump user-id source preds !selected-id !view-mode close-relations)
+            (GraphInspector kg-bump user-id navigate! !selected-id selected-id
+              !view-mode)))))))

@@ -16,7 +16,8 @@
    (extern-less) methods.
 
    ctx = {:renderer <Sigma> :graph <graphology.Graph> :ui <atom>
-          :stop-theme-colours! <0-arg fn> and optional minimap functions}.
+          :stop-theme-colours! <0-arg fn> :stop-container-size! <0-arg fn>
+          and optional minimap functions}.
    :stop-theme-colours! detaches the theme listeners that keep canvas-drawn
    labels and hover chrome readable — destroy! owns calling it; nothing else may."
   (:require [clojure.string :as str]
@@ -519,6 +520,21 @@
                 (when (= (.-parentNode canvas) container)
                   (.removeChild container canvas)))})))
 
+(defn- track-container-size! [^js renderer ^js container]
+  (let [!alive? (atom true)
+        !size (atom [(.-clientWidth container) (.-clientHeight container)])
+        ^js observer (when (exists? js/ResizeObserver)
+                       (js/ResizeObserver.
+                         (fn [_]
+                           (let [size [(.-clientWidth container) (.-clientHeight container)]]
+                             (when (and @!alive? (every? pos? size) (not= size @!size))
+                               (reset! !size size)
+                               (.scheduleRefresh renderer))))))]
+    (when observer (.observe observer container))
+    (fn []
+      (reset! !alive? false)
+      (when observer (.disconnect observer)))))
+
 (defn init!
   "Create a sigma renderer over `container` for `payload`. Wires clickNode →
    (on-select entity-id-int), clickStage → (on-select nil), and hover
@@ -560,8 +576,10 @@
                                 :nodeReducer (node-reducer g !ui)
                                 :edgeReducer (edge-reducer g !ui)})
             stop-theme-colours! (track-theme-colours! renderer container !ui)
+            stop-container-size! (track-container-size! renderer container)
             base-ctx {:renderer renderer :graph g :ui !ui
-                      :stop-theme-colours! stop-theme-colours!}
+                      :stop-theme-colours! stop-theme-colours!
+                      :stop-container-size! stop-container-size!}
             hop-rings (start-hop-rings! renderer g !ui)
             minimap (when-let [minimap-container (:minimap-container opts)]
                       (start-minimap! base-ctx minimap-container))
@@ -674,8 +692,9 @@
         (:nodes payload)))))
 
 (defn destroy!
-  "Stop custom drawing and theme listeners, then kill the renderer."
+  "Stop resize, drawing, and theme listeners, then kill the renderer."
   [ctx]
+  (when-let [stop! (:stop-container-size! ctx)] (stop!))
   (when-let [stop! (:stop-minimap! ctx)] (stop!))
   (when-let [stop! (:stop-hop-rings! ctx)] (stop!))
   (when-let [stop! (:stop-theme-colours! ctx)] (stop!))
