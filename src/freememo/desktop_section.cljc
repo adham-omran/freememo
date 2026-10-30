@@ -102,11 +102,11 @@
   #?(:clj (license/access db/ds user-id desktop-version/desktop-major) :cljs nil))
 
 (defn price-label*
-  "The license price in credits, or nil while no license is for sale: the
-   trial is open, or the price is unconfigured."
-  [_refresh]
+  "The license price for the session's country, or nil while no license is for
+   sale: the trial is open, or the price is unconfigured."
+  [_refresh country]
   #?(:clj (when-not license/trial-open?
-            (some-> (license/price-iqd) (str " credits")))
+            (license/price-label country))
      :cljs nil))
 
 (defn devices* [_refresh user-id]
@@ -279,7 +279,7 @@
     (let [refresh (+ (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
                     (e/server (e/watch (us/get-atom user-id :credits-refresh))))
           summary (e/server (e/Offload #(license-summary* refresh user-id)))
-          price (e/server (price-label* refresh))
+          price (e/server (price-label* refresh client-country))
           devices (e/server (e/Offload #(devices* refresh user-id)))
           !error (atom nil)
           error (e/watch !error)]

@@ -20,6 +20,7 @@
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [freememo.config :as config]
+            [freememo.credits :as credits]
             [freememo.db :as db]
             [freememo.desktop-version :as desktop-version]
             [freememo.wayl :as wayl])
@@ -40,6 +41,16 @@
   []
   (when-let [usd (config/desktop-license-usd)]
     (some-> (config/fx-iqd-per-usd) (* usd) Math/ceil long)))
+
+(defn price-label
+  "The license price as this country sees it: \"60,800 credits\" in Iraq,
+   \"$40 (60,800 credits)\" elsewhere. nil while the price is unconfigured."
+  [country-code]
+  (when-let [iqd (price-iqd)]
+    (let [in-credits (str (credits/group-digits iqd) " credits")]
+      (if (credits/iqd-display? country-code)
+        in-credits
+        (str (credits/usd-str (config/desktop-license-usd)) " (" in-credits ")")))))
 
 (def ^:private operations
   {:full #{:meta :graves :upload :download :blob :finish :full-upload :full-download :ai}

@@ -252,6 +252,12 @@
   []
   (:presets (credits-config) []))
 
+(defn presets-usd
+  "Top-up amounts in whole USD, shown to every country but Iraq. Empty vector
+   when unconfigured."
+  []
+  (:presets-usd (credits-config) []))
+
 (defn signup-grant
   "One-time IQD grant for new users. 0 when unconfigured."
   []
