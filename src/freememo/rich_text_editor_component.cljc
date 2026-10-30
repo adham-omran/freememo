@@ -35,7 +35,9 @@
             ;; below is about the document, so all three use this.
             doc-id (or dctx/editor-doc-id topic-id)
             body-doc-id (if dctx/merged? dctx/merged-root-id dctx/effective-content-topic-id)
-            save-scope {:user-id dctx/user-id :topic-id dctx/effective-content-topic-id
+            ;; A merged body belongs to its root, even when scrolling changes
+            ;; the current page. Page metadata must not reinstall that body.
+            save-scope {:user-id dctx/user-id :topic-id body-doc-id
                         :editor-doc-id body-doc-id :merged? dctx/merged?
                         :pdf-root-id dctx/merged-root-id
                         :page-numbers dctx/merged-page-numbers
@@ -48,7 +50,15 @@
         ;; Init once — Quill persists for the component's lifetime.
         (when-not (some? (:editor @editor/!editor-state))
           (log/log-debug (str "Editor init doc-id=" doc-id " html-len=" (count initial-html)))
-          (reset! !timer-id (js/setTimeout (fn [] (editor/init-editor-with-scope! node (or initial-html "") doc-id save-scope)) 0)))
+          ;; Electric can retain the initial nil state above. A changed save
+          ;; scope can then schedule another callback during ordinary scrolling.
+          ;; Read the live editor inside the callback before initializing it.
+          (reset! !timer-id
+            (js/setTimeout
+              (fn []
+                (when (and (.-isConnected node) (nil? (editor/current-editor)))
+                  (editor/init-editor-with-scope! node (or initial-html "") doc-id save-scope)))
+              0)))
         (e/on-unmount (fn []
                         (when-let [t @!timer-id] (js/clearTimeout t))
                         (editor/destroy-editor!)))
@@ -77,5 +87,5 @@
                 ready? (e/watch editor/!editor-ready?)
                 saved-edit-id (e/watch editor/!saved-edit-id)]
             (when (and ready? (or (nil? dirty) (some? (:edit-id dirty))))
-              (editor/install-body! initial-html dctx/effective-content-topic-id
+              (editor/install-body! initial-html body-doc-id
                 save-scope saved-edit-id))))))))
