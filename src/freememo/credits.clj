@@ -205,6 +205,70 @@
           :else
           {:ok true :credited false :wayl-status s})))))
 
+;; ── Abandoned checkouts ──
+
+(def abandon-after-minutes
+  "Age at which a pending order counts as abandoned. Every completed payment
+   so far finished within 5 minutes of its link being created."
+  30)
+
+(def abandon-lookback-hours
+  "The sweep ignores pending orders older than this, so a deploy does not mail
+   about every order that was abandoned before the sweep existed."
+  24)
+
+(defn- sweep-order!
+  "Check one pending order at Wayl. Credit it when Wayl reports it paid; else
+   mail about it once. Returns the outcome keyword."
+  [{:keys [reference-id user-id kind amount-iqd created-at email display-name tries paid]}]
+  (let [r (reconcile-order! reference-id)]
+    (cond
+      (not (:ok r))
+      ;; wayl/get-link-status already mailed the lookup failure. The order
+      ;; stays unmarked, so the next sweep tries it again.
+      :lookup-failed
+
+      (or (:credited r) (:licensed r))
+      (do (commands/bump! user-id :credits-granted)
+          (tel/log! {:level :info :id ::sweep-credited
+                     :data {:reference-id reference-id :user-id user-id :email email
+                            :kind kind :amount-iqd amount-iqd}}
+            "Paid checkout credited by the sweep: the buyer never reached the return page")
+          :credited)
+
+      (= :already (:reason r))
+      :already-complete
+
+      :else
+      (do (tel/log! {:level :info :id ::checkout-abandoned
+                     :data {:reference-id reference-id :user-id user-id
+                            :email email :name display-name
+                            :kind kind :amount-iqd amount-iqd :created-at (str created-at)
+                            :wayl-status (:wayl-status r)
+                            :orders-by-user tries :paid-orders-by-user paid}}
+            "Checkout abandoned: the user went to Wayl and did not pay")
+          (db/mark-order-abandon-alerted! reference-id)
+          :abandoned))))
+
+(defn sweep-abandoned-checkouts!
+  "Hourly sweep job. Each pending order between `abandon-after-minutes` and
+   `abandon-lookback-hours` old is checked at Wayl once more: a paid one is
+   credited (the buyer closed the tab before the return page), and an unpaid
+   one logs ::checkout-abandoned, which freememo.logging mails, once per order.
+   Returns the outcome per reference-id. No-op when credits are off."
+  []
+  (when (config/credits-enabled?)
+    (into {}
+      (for [o (db/unalerted-pending-orders abandon-after-minutes abandon-lookback-hours)]
+        [(:reference_id o)
+         (sweep-order! {:reference-id (:reference_id o) :user-id (:user_id o)
+                        :kind (:kind o) :amount-iqd (:amount_iqd o)
+                        :created-at (:created_at o) :email (:email o)
+                        :display-name (:display_name o)
+                        :tries (:tries o) :paid (:paid o)})]))))
+
+(db/register-sweep-job! ::abandoned-checkouts #'sweep-abandoned-checkouts!)
+
 ;; ── USD display formatting ──
 
 (defn iqd->usd-str

@@ -5,7 +5,9 @@
    [freememo.cost-history :as cost-history]
    [freememo.credits :as credits]
    [freememo.db :as db]
-   [freememo.user-state :as us]))
+   [freememo.user-state :as us]
+   [freememo.commands :as commands]
+   [freememo.wayl :as wayl]))
 
 (deftest completed-cost-charge-refreshes-ai-costs
   (let [user-id 987654327
@@ -81,3 +83,48 @@
     (testing "a blank configured origin is ignored"
       (with-redefs [config/env-or-config (constantly "  ")]
         (is (= "http://freememo.net" (credits/request-base-url proxied)))))))
+
+(deftest sweep-mails-once-per-abandoned-checkout
+  (let [order (fn [ref] {:reference_id ref :user_id 50 :kind "credits"
+                         :amount_iqd 50000 :created_at "2026-10-30T12:33"
+                         :email "buyer@example.com" :display_name "Buyer"
+                         :tries 2 :paid 0})
+        statuses {"fm-unpaid" {:ok true :status "Created"}
+                  "fm-paid" {:ok true :status "Complete"}
+                  "fm-done" {:ok true :status "Complete"}
+                  "fm-down" {:ok false :error "Could not reach payment provider"}}
+        marked (atom [])
+        bumps (atom [])]
+    (with-redefs [config/credits-enabled? (constantly true)
+                  db/unalerted-pending-orders
+                  (fn [min-age max-age]
+                    (is (= [credits/abandon-after-minutes credits/abandon-lookback-hours]
+                           [min-age max-age]))
+                    (map order ["fm-unpaid" "fm-paid" "fm-done" "fm-down"]))
+                  wayl/get-link-status (fn [ref] (statuses ref))
+                  db/complete-credit-order! (fn [ref]
+                                              (if (= "fm-paid" ref)
+                                                {:credited true :amount 50000 :user-id 50}
+                                                {:credited false :reason :already}))
+                  db/fail-credit-order! (fn [_] nil)
+                  db/mark-order-abandon-alerted! (fn [ref] (swap! marked conj ref))
+                  commands/bump! (fn [user-id ch] (swap! bumps conj [user-id ch]))]
+      (is (= {"fm-unpaid" :abandoned
+              "fm-paid" :credited
+              "fm-done" :already-complete
+              "fm-down" :lookup-failed}
+             (credits/sweep-abandoned-checkouts!)))
+      (testing "only the unpaid order is marked, so a failed lookup is retried"
+        (is (= ["fm-unpaid"] @marked)))
+      (testing "a paid order the buyer never returned from is credited"
+        (is (= [[50 :credits-granted]] @bumps))))))
+
+(deftest sweep-does-nothing-when-credits-are-off
+  (with-redefs [config/credits-enabled? (constantly false)
+                db/unalerted-pending-orders (fn [& _] (throw (ex-info "must not query" {})))]
+    (is (nil? (credits/sweep-abandoned-checkouts!)))))
+
+(deftest abandoned-checkout-ids-are-mailed
+  (let [src (slurp "src/freememo/logging.cljc")]
+    (is (re-find #":freememo\.credits/checkout-abandoned" src))
+    (is (re-find #":freememo\.credits/sweep-credited" src))))
