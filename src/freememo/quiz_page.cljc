@@ -574,8 +574,9 @@
           (dom/On "click" (fn [_] (reset! !view :dashboard)) nil))))))
 
 (e/defn QuestionTurn
-  "One question item's turn: the wording, the curation controls, then either the
-   answer box or the graded feedback. Unchanged behaviour — extracted from
+  "One question item's turn: the wording, the curation controls, then the answer box,
+   the graded feedback, or — when the grade was refused for credits — the 1-4
+   self-rating bar (freememo.quiz-card-turn/SelfRateFallback). Extracted from
    ReviewFlow so the card branch does not grow that method (`:prod` bytecode limits
    bite per method).
 
@@ -605,9 +606,17 @@
           (dom/text (str (:question qdata))))
         ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
         ;; so it leaves as a completed review that will not come back.
+        ;; A refused grade wrote no review, so a suspend there is still a skip.
         (curate/CurationBar user-id qdata
-          (if (nil? feedback) skip! leave-suspended!) !editing)
-        (if (nil? feedback)
+          (if (or (nil? feedback) (some? (:self-rate feedback))) skip! leave-suspended!)
+          !editing)
+        (cond
+          (some? (:self-rate feedback))
+          (card-turn/SelfRateFallback user-id [:question qid] (:answer feedback)
+            (get-in feedback [:self-rate :reference-answer]) false
+            (fn [requeue?] (advance! true requeue?)) started-at)
+
+          (nil? feedback)
           (dom/div
             ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
             ;; via e/amb — never `do` here, it would swallow whichever token
@@ -640,11 +649,10 @@
                                   (e/Offload #(review-answer!* user-id qid answer ms)))]
                         (case res ; wait on the value — do would race the token
                           (do (reset! !grading? false)
-                            (when (:success (:result res))
-                              (reset! !feedback {:result (:result res)
-                                                 :answer answer
-                                                 :schedule (:schedule res)}))
+                            (reset! !feedback (card-turn/graded-feedback res answer))
                             (t))))))))))
+
+          :else
           (dom/div
             ;; The verdict rises in as the result of the answer. Here, not in
             ;; QuizFeedback: the dashboard history renders that too.
@@ -662,7 +670,7 @@
                 (fn [_]
                   (advance! true (boolean (get-in feedback [:schedule :due-today?]))))
                 nil))))
-        ;; Sibling of the answer/feedback `if` — must mount for the whole turn.
+        ;; Sibling of the answer/feedback `cond` — must mount for the whole turn.
         (fb/EntityCardPopover user-id !entity-card entity-card)))))
 
 (e/defn ReviewFlow
@@ -737,14 +745,19 @@
             ;; revealed. The tally changes on every answered exit, so the pair always
             ;; changes. Skips do not bump it, but they do drop the item, so the ref
             ;; changes instead.
-            (e/for-by identity [_k [[item reviewed]]]
-              (if (= :card (first item))
+            ;;
+            ;; The body reads the frame's OWN key, never the outer `item`. The outer
+            ;; value changes before the old frame unmounts, so a card frame reading it
+            ;; was handed the next item — a question — and ran card-turn* with no ord,
+            ;; which crashed the server process (NPE in db/live-ord?).
+            (e/for-by identity [[turn-item _] [[item reviewed]]]
+              (if (= :card (first turn-item))
                 ;; A rating or a graded answer counts; the skip is reachable only when
                 ;; the card has vanished, and must not inflate the tally.
-                (card-turn/CardTurn user-id item !feedback feedback
+                (card-turn/CardTurn user-id turn-item !feedback feedback
                   (fn [requeue?] (advance! true requeue?))
                   (fn [] (advance! false false)))
-                (QuestionTurn user-id (second item) !feedback feedback !draft draft
+                (QuestionTurn user-id (second turn-item) !feedback feedback !draft draft
                   !grading? grading? !entity-card entity-card !editing
                   navigate-source! advance!)))))))))
 

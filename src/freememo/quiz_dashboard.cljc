@@ -328,6 +328,7 @@
                 {:id question_id :question live_question
                  :reference_answer reference_answer}))
             (fb/QuizFeedback {:verdict verdict
+                              :rating rating
                               :explanation explanation
                               :reference-answer reference_answer
                               :matched-keywords []
