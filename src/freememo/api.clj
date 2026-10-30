@@ -1253,8 +1253,10 @@
 ;; ── Credits: checkout + Wayl webhook (§5.5 / §5.6) ──────────────────
 
 (defn credits-checkout-handler
-  "POST /api/credits/checkout — {amount_iqd}. Creates a Wayl top-up link.
-   Pre:  authenticated; credits enabled; amount is a configured preset.
+  "POST /api/credits/checkout — {amount}. Creates a Wayl top-up link.
+   Pre:  authenticated; credits enabled; amount is a top-up pack for the
+         client's country (`credits/top-up-packs`): IQD for Iraq, whole USD
+         elsewhere. `amount_iqd` is still read when `amount` is absent.
    Post: {:success true :url u} or {:success false :error msg}. Wayl URL has
          `currency=usd` appended when the client IP resolves to a non-IQ country
          (or to unknown — fallback is USD).
@@ -1262,7 +1264,9 @@
   [request]
   (if-let [user-id (require-auth request)]
     (try
-      (let [amount (some-> (get-in request [:params "amount_iqd"]) parse-long)
+      (let [amount (some-> (or (get-in request [:params "amount"])
+                               (get-in request [:params "amount_iqd"]))
+                     parse-long)
             ip (geo/client-ip request)
             country (geo/country-of ip)]
         (tel/log! {:level :debug :id ::credits-checkout-geo

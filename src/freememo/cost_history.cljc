@@ -20,7 +20,6 @@
    #?(:clj [freememo.option-queries :as options])
    [clojure.string :as str]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ── Display labels ──────────────────────────────────────────────────────────
@@ -99,16 +98,15 @@
 
 (defn list-transactions*
   "Server read enriched for display: adds :when-str (created_at → 'YYYY-MM-DD
-   HH:MM') and :usd-str (USD approx of |amount|), and drops the raw timestamp so
-   no java.sql.Timestamp crosses the wire. `_refresh` (a :credits-refresh watch)
+   HH:MM') and drops the raw timestamp so no java.sql.Timestamp crosses the
+   wire. `_refresh` (a :credits-refresh watch)
    forces a re-query on bump. `filters` is the map from list-credit-transactions."
   [_refresh user-id filters]
   #?(:clj (mapv (fn [r]
                   (-> r
                     (assoc :when-str (when-let [ts (:created_at r)]
                                        (let [s (str/replace (str ts) \T \space)]
-                                         (subs s 0 (min 16 (count s)))))
-                           :usd-str (credits/iqd->usd-str (Math/abs (long (:amount_iqd r)))))
+                                         (subs s 0 (min 16 (count s))))))
                     (dissoc :created_at)))
             (db/list-credit-transactions user-id filters))
      :cljs []))
@@ -141,7 +139,7 @@
   [row i]
   (e/client
     (let [{:keys [kind endpoint model amount_iqd balance_after
-                  input_tokens output_tokens cached_tokens when-str usd-str]} row
+                  input_tokens output_tokens cached_tokens when-str]} row
           [badge-text badge-class] (kind-badge kind)
           debit? (neg? (or amount_iqd 0))
           toks (str (or input_tokens 0) "/" (or output_tokens 0) "/" (or cached_tokens 0))]
@@ -161,9 +159,7 @@
         (dom/td (dom/props {:class "tape-cell-num tape-cell-strong"
                             :style {:color (if debit? "var(--color-danger-text)"
                                                       "var(--color-success-dark)")}})
-          (dom/span
-            (tooltip/Tooltip! (or usd-str ""))
-            (dom/text (str amount_iqd))))
+          (dom/text (str amount_iqd)))
         (dom/td (dom/props {:class "tape-cell-num"}) (dom/text (str balance_after)))
         (dom/td (dom/props {:class "tape-cell-num tape-cell-meta"})
           (if (= toks "0/0/0")
