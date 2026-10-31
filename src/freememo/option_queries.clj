@@ -1,6 +1,7 @@
 (ns freememo.option-queries
   "Bounded, owned option queries for user-defined domains."
   (:require [clojure.string :as str]
+            [freememo.curriculum :as curriculum]
             [freememo.db :as db]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
@@ -12,7 +13,7 @@
   (str "t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL"
        (case domain
          :schedule " AND t.kind = 'pdf' AND EXISTS (SELECT 1 FROM topics p WHERE p.parent_id = t.id AND p.kind = 'page' AND p.staged_delete_id IS NULL)"
-         :curriculum " AND t.kind IN ('pdf','markdown','web','wikipedia')"
+         :curriculum (str " AND " curriculum/material-condition)
          :playlist " AND t.kind = 'video-playlist'"
          "")
        (when kind " AND t.kind = ?")))

@@ -185,9 +185,7 @@
           {:sent 0 :reason :no-recipients})
 
       :else
-      (let [result (postal/send-message
-                     {:host (:host smtp) :port (:port smtp)
-                      :user (:user smtp) :pass (:pass smtp) :ssl true}
+      (let [result (postal/send-message (config/smtp-connection smtp)
                      (build-message smtp payload recipients))]
         (tel/log! {:level :info :id ::broadcast
                    :data {:version (:version payload)

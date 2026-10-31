@@ -38,6 +38,18 @@
                                                                              (is (= true (options/any-playlist? user-id)))
                                                                              (is (= false (options/any-playlist? other-user)))))
 
+(deftest curriculum-picker-offers-own-topics-that-hold-text
+  (let [user-id (user!)
+        topic! (fn [title kind text]
+                 (:id (one "INSERT INTO topics(user_id,title,kind,content_text) VALUES (?, ?, ?, ?) RETURNING id"
+                           user-id title kind text)))
+        pasted (topic! "Koket pasted" "basic" "Text pasted from a Word document.")
+        _blank (topic! "Koket blank" "basic" nil)
+        pdf (topic! "Koket pdf" "pdf" nil)]
+    (is (= #{pasted pdf} (set (map :id (:options (options/search user-id :curriculum nil {:query "Koket"}))))))
+    (is (= [pasted] (mapv :id (:options (options/search user-id :curriculum "basic" {:query "Koket"})))))
+    (is (= "Koket pasted" (:label (options/selected user-id :curriculum pasted))))))
+
 (deftest schedule-picker-preserves-supported-page-contract (let [user-id (user!) pdf (:id (one "INSERT INTO topics(user_id,title,kind) VALUES (?, 'Book with pages', 'pdf') RETURNING id" user-id))] (one "INSERT INTO topics(user_id,title,kind) VALUES (?, 'Book without pages', 'pdf')" user-id)
                                                                 (one "INSERT INTO topics(user_id,title,kind,parent_id,page_number) VALUES (?, 'Page', 'page', ?, 1)" user-id pdf)
                                                                 (let [request {:query "Book" :id (random-uuid)} result (options/search user-id :schedule nil request)] (is (= request (:request result))) (is (= [{:id pdf :kind "pdf" :label "Book with pages" :description "1 pages"}] (:options result))))))

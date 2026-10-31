@@ -384,14 +384,32 @@
                              curriculum-id])))
   (bump! user-id))
 
+(def material-condition
+  "The SQL test a topic, aliased `t`, must pass to be a curriculum material.
+   The picker query, `documents-for-picker` and `add-material!` all read it, so
+   the list a user picks from and the kinds the server accepts cannot differ.
+
+   A `basic` topic is one the user made in FreeMemo, often with text pasted in.
+   It qualifies only when it holds text, because a material with no text gives
+   its exam no evidence. The test reads `content_preview`, the stored 400-char
+   prefix of `content_text`, so a search over many topics never detoasts a
+   whole body.
+
+   `poem` is deliberately absent (poem-reader-spec row 2.4.2). A curriculum
+   material is read start to finish and marked studied; a poem is read one
+   verse at a time and has no such flow in v1. A new kind here also needs a row
+   in `curriculum-page/material-kind-filters`."
+  "(t.kind IN ('pdf','markdown','web','wikipedia')
+    OR (t.kind = 'basic' AND COALESCE(t.content_preview, '') ~ '\\S'))")
+
 (defn documents-for-picker
   "Return supported personal source materials."
   [_refresh user-id]
   (jdbc/execute! db/ds
-    ["SELECT id, title, kind FROM topics
-       WHERE user_id = ? AND parent_id IS NULL AND staged_delete_id IS NULL
-         AND kind IN ('pdf','markdown','web','wikipedia')
-       ORDER BY lower(title)" user-id]
+    [(str "SELECT t.id, t.title, t.kind FROM topics t
+            WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
+              AND " material-condition "
+            ORDER BY lower(t.title)") user-id]
     opts))
 
 (defn- estimate-material-minutes [tx topic-id]
@@ -414,16 +432,14 @@
         (jdbc/with-transaction [tx db/ds]
           (let [block (require-owned! (own-block tx user-id block-id) :block block-id)
                 topic (jdbc/execute-one! tx
-                        ["SELECT id, kind FROM topics
-                          WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL"
+                        [(str "SELECT t.id, t.kind, " material-condition " AS supported
+                                FROM topics t
+                               WHERE t.id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL")
                          topic-id user-id] opts)]
-            ;; `poem` is deliberately absent (poem-reader-spec row 2.4.2). A
-            ;; curriculum material is read start to finish and marked studied;
-            ;; a poem is read one verse at a time and has no such flow in v1.
-            ;; Adding it here also needs a row in
-            ;; `curriculum-page/material-kind-filters`.
-            (when-not (contains? #{"pdf" "markdown" "web" "wikipedia"} (:kind topic))
-              (throw (ex-info "Pick a PDF, Markdown document, or web article."
+            (when-not (:supported topic)
+              (throw (ex-info (if (= "basic" (:kind topic))
+                                "This topic has no text yet. Add text to it first."
+                                "Pick a PDF, Markdown document, web article, or one of your topics.")
                        {:type ::unsupported-material})))
             (let [{:keys [position]} (jdbc/execute-one! tx
                                      ["SELECT count(*)::int AS position

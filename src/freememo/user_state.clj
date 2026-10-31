@@ -136,6 +136,10 @@
           ;; the lease drops so the reporter closes the row as failed; cleared
           ;; by the next claim.
           :anki-run-errors  (atom {})
+          ;; "collection" -> what the last finished or cancelled sync did, in
+          ;; the words of its closing toast. Written before the lease drops so
+          ;; the reporter closes the row with it; cleared by the next claim.
+          :anki-run-results (atom {})
           :toasts           (atom []))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;

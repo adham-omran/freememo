@@ -121,7 +121,7 @@
              :detail "Wikipedia articles, mobile links included, and any public web page. An arXiv PDF link imports the arXiv abstract page. A link to a PDF or an EPUB asks you to confirm, as a file does."
              :commands #{}}
             {:label "What is refused"
-             :detail "Links to images, audio, video, JSON, XML, plain text and ZIP files. FreeMemo does not follow redirects, so paste the final address. Some sites block fetching: copy the page in your browser and use Paste."
+             :detail "Links to images, audio, video, JSON, XML, plain text and ZIP files. YouTube links are refused too: download the video and use Import → Video. FreeMemo does not follow redirects, so paste the final address. Some sites block fetching: copy the page in your browser and use Paste."
              :commands #{}}
             {:label "A link you imported before"
              :detail "FreeMemo opens the topic you already have. It makes no second copy."
@@ -486,7 +486,7 @@
              :detail "Curriculum → New curriculum. Name it and set a target date, daily study minutes, study days, or a useful combination."
              :commands #{}}
             {:label "Add blocks and materials"
-             :detail "Add blocks in study order. In an unlocked block, Add material searches all imported sources. Use the type filters to narrow the list."
+             :detail "Add blocks in study order. In an unlocked block, Add material searches your imported documents and the topics you made yourself. A topic you made must hold text. Use the type filters to narrow the list."
              :commands #{}}
             {:label "Order the work"
              :detail "Use the arrow controls to move blocks and materials. Edit a material's minute estimate when the default is wrong."
@@ -723,6 +723,9 @@
             {:label "Read documents"
              :detail "{prev-page} and {next-page} change pages. {scan} scans a page. {done} marks it done."
              :commands #{}}
+            {:label "See a document's source"
+             :detail "Point at the book icon in the toolbar to see the bibliography. {peek-bibliography} opens the same card, with Edit focused. Click the icon to edit the bibliography."
+             :commands #{:peek-bibliography}}
             {:label "Make cards"
              :detail "{extract} extracts selected text. {generate} generates cards. {add-new} opens a new card. {undo-newest} undoes the latest action."
              :commands #{:undo-newest}}

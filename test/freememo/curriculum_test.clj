@@ -157,6 +157,45 @@
             (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE id = ?" topic-id]))
           (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
 
+(deftest a-topic-the-user-made-is-material-only-when-it-holds-text
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable. Integration assertions skipped.")
+    (let [tag (str "own-topic-" (System/nanoTime))
+          user-id (:id (jdbc/execute-one! db/ds
+                         ["INSERT INTO users (username, email) VALUES (?, ?) RETURNING id"
+                          tag (str tag "@example.test")] opts))
+          topic! (fn [kind text]
+                   (:id (jdbc/execute-one! db/ds
+                          ["INSERT INTO topics (user_id, title, kind, content_text)
+                            VALUES (?, ?, ?, ?) RETURNING id"
+                           user-id (str kind " topic") kind text] opts)))
+          refusal (fn [block-id topic-id]
+                    (try (curriculum/add-material! user-id block-id topic-id nil)
+                         nil
+                         (catch clojure.lang.ExceptionInfo e (ex-message e))))]
+      (try
+        (let [curriculum-id (curriculum/create-curriculum! user-id {:title "Own topics" :daily-minutes 30})
+              block-id (curriculum/add-block! user-id curriculum-id "Block")
+              pasted (topic! "basic" "Text pasted from a Word document.")
+              blank (topic! "basic" nil)
+              spaces (topic! "basic" "  \n\t ")
+              epub (topic! "epub" "A chapter.")
+              picker-ids (set (map :id (curriculum/documents-for-picker 0 user-id)))]
+          (is (contains? picker-ids pasted))
+          (is (not-any? picker-ids [blank spaces epub]))
+          (is (some? (curriculum/add-material! user-id block-id pasted nil)))
+          (is (= "This topic has no text yet. Add text to it first." (refusal block-id blank)))
+          (is (= "This topic has no text yet. Add text to it first." (refusal block-id spaces)))
+          (is (= "Pick a PDF, Markdown document, web article, or one of your topics."
+                (refusal block-id epub)))
+          (is (= ["Text pasted from a Word document."]
+                (->> (curriculum/material-evidence db/ds user-id
+                       (:id (second (first (curriculum/curriculum-material-window 0 user-id block-id 0 1)))))
+                     :evidence (mapv :text)))))
+        (finally
+          (jdbc/execute-one! db/ds ["DELETE FROM topics WHERE user_id = ?" user-id])
+          (jdbc/execute-one! db/ds ["DELETE FROM users WHERE id = ?" user-id]))))))
+
 (deftest moving-one-step-writes-positions-a-check-constraint-accepts
   ;; `curriculum_materials.position` carries CHECK (position >= 0) and
   ;; UNIQUE (block_id, position). `resequence!` parks rows before it writes the

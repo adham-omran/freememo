@@ -363,7 +363,10 @@
     :canceller-key :anki-run-cancellers
     :entry->state (fn [entry] (lease/reading entry (System/currentTimeMillis)))
     :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :anki-run-errors) work-key))}
+                (get @(us/get-atom uid :anki-run-errors) work-key))
+    ;; The closing toast's text, so the row says what the sync did.
+    :summary-fn (fn [uid work-key]
+                  (get @(us/get-atom uid :anki-run-results) work-key))}
 
    ;; ── Account transfer. SERVER tier, not pushed. ─────────────────────────
    ;; An export streams on a Jetty request thread and an import runs in an
@@ -522,6 +525,16 @@
   [type uid work-key]
   (when-some [{:keys [error-fn]} (activity-type type)]
     (when error-fn (error-fn uid work-key))))
+
+(defn work-summary
+  "The owner's recorded summary of one finished piece of work, or nil.
+
+   What the run did, in words, for the Activity row of a success or a cancel.
+   Only the types with a `:summary-fn` publish one; the rest show their last
+   done/total, or nothing."
+  [type uid work-key]
+  (when-some [{:keys [summary-fn]} (activity-type type)]
+    (when summary-fn (summary-fn uid work-key))))
 
 (defn server-tier-types
   "The type strings the reporter is responsible for ticking. Pushed-tier rows are
