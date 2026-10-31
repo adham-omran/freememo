@@ -264,6 +264,10 @@
        :subject-tag "event"
        :min-level :info
        :ids #{:freememo.api/wayl-credited
+              ;; The abandoned-checkout sweep (freememo.credits): one mail per
+              ;; abandoned order, and one per paid order it had to credit.
+              :freememo.credits/checkout-abandoned
+              :freememo.credits/sweep-credited
               :freememo.google-oauth/user-signup
               :freememo.db/signup-grant
               :freememo.db/grandfather-grant}}

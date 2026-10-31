@@ -3435,6 +3435,10 @@
   (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
                       kind TEXT NOT NULL DEFAULT 'credits'
                       CHECK (kind IN ('credits', 'desktop_license'))"])
+  ;; Set once the abandoned-checkout sweep has mailed about a pending order,
+  ;; so each abandoned checkout mails once (credits/sweep-abandoned-checkouts!).
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      abandon_alerted_at TIMESTAMP"])
 
   (sync-schema/install! ds))
 
@@ -4869,6 +4873,34 @@
           ;; both no-ops. Same tx as the credit, so a rollback undoes both.
           (promote-to-paid-storage-tier! tx user-id quota/paid-quota-bytes)
           {:credited true :amount amount :user-id user-id})))))
+
+(defn unalerted-pending-orders
+  "Pending orders that are older than `min-age-minutes` and younger than
+   `max-age-hours`, and that the abandoned-checkout sweep has not mailed about.
+   Each row carries the buyer's email and name, and their order counts.
+   `created_at` is a TIMESTAMP written in the session time zone, so the bounds
+   use LOCALTIMESTAMP, which is in that zone too."
+  [min-age-minutes max-age-hours]
+  (jdbc/execute! ds
+    ["SELECT o.reference_id, o.user_id, o.kind, o.amount_iqd, o.created_at,
+             u.email, u.display_name,
+             (SELECT count(*) FROM credit_orders p WHERE p.user_id = o.user_id) AS tries,
+             (SELECT count(*) FROM credit_orders p
+               WHERE p.user_id = o.user_id AND p.status = 'complete') AS paid
+      FROM credit_orders o JOIN users u ON u.id = o.user_id
+      WHERE o.status = 'pending' AND o.abandon_alerted_at IS NULL
+        AND o.created_at < LOCALTIMESTAMP - CAST(? AS integer) * INTERVAL '1 minute'
+        AND o.created_at > LOCALTIMESTAMP - CAST(? AS integer) * INTERVAL '1 hour'
+      ORDER BY o.created_at"
+     min-age-minutes max-age-hours]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn mark-order-abandon-alerted!
+  "Record that the abandoned-checkout sweep mailed about this order."
+  [reference-id]
+  (jdbc/execute! ds
+    ["UPDATE credit_orders SET abandon_alerted_at = LOCALTIMESTAMP
+      WHERE reference_id = ?" reference-id]))
 
 (defn fail-credit-order!
   "Mark a pending order failed (provider error / Cancelled / Rejected / Returned).
