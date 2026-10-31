@@ -34,6 +34,14 @@
    (defn- slim-topic [t]
      (dissoc t :topics/content :topics/content_text)))
 
+;; The `topics` columns the panel reads, and nothing else. The subtree is the
+;; whole root, so `t.*` read every topic's `content` and `content_text` only
+;; for slim-topic to drop them. On a 59,000-topic SuperMemo root, that read
+;; pushed the container past its 3 GiB limit, and the kernel killed the JVM
+;; on a topic open or an expand click (502s on 2026-10-31).
+(def panel-topic-columns
+  [:id :parent_id :kind :title :page_number :status :dismissed :priority])
+
 (declare build-rows)
 
 (defn build-hierarchy-rows*
@@ -49,7 +57,7 @@
      (when (and user-id page-topic-id)
        (when-let [root-id (db/get-root-topic-id page-topic-id)]
          (when-let [scope-root (db/get-topic root-id)]
-           (let [items (mapv slim-topic (db/get-subtree user-id root-id))
+           (let [items (db/get-subtree user-id root-id panel-topic-columns)
                  children-map (group-by :topics/parent_id items)]
              (build-rows (slim-topic scope-root) page-topic-id
                children-map (set expanded-set) items)))))
