@@ -21,6 +21,8 @@
    ;; electric), so this require does NOT put a reactive compile on the main
    ;; thread — see load-app-namespaces! below.
    #?(:clj [freememo.activity-reporter :as activity-reporter])
+   ;; Electric-free too: db, config, typst and postal.
+   #?(:clj [freememo.receipt :as receipt])
 
    #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
@@ -177,6 +179,8 @@
      ;; setup-schema — it queries `activities`. Requiring this namespace is also
      ;; what registers the activity sweeps into the hourly sweep.
      (activity-reporter/start!)
+     ;; Payment receipts: a no-op sweep unless RECEIPTS_ENABLED=true and SMTP is set.
+     (receipt/start!)
 
      (def nrepl-server (start-nrepl-on-free-port! 7888 20))
 
