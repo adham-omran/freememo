@@ -328,7 +328,8 @@
 
    Release comes after the toast and before the local reset, so no tab can see
    the account free while this one still thinks it is running. The error goes
-   with it, so the Activity row closes as failed."
+   with it, so the Activity row closes as failed; otherwise the toast's text
+   goes as the row's summary."
   [user-id recon]
   (e/client
     (let [phase (e/watch (:!phase recon))]
@@ -347,7 +348,11 @@
           (when t
             (log/log-info (str "[reconcile] " (name phase) ": " msg))
             (case (e/server (toast!* user-id level msg))
-              (case (e/server (lc/release!* user-id run-id (when (= :error phase) err)))
+              ;; The toast's text is the row's summary too, so the panel and
+              ;; the toast cannot disagree about what the sync did.
+              (case (e/server (lc/release!* user-id run-id
+                                (when (= :error phase) err)
+                                (when-not (= :error phase) msg)))
                 (do (e/on-unmount #(reset-run! recon))
                     (t))))))))))
 

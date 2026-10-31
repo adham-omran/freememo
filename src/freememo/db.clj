@@ -2206,6 +2206,10 @@
   ;; Widen an activities table created before bytes were a progress unit.
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN done TYPE BIGINT"])
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN total TYPE BIGINT"])
+  ;; What a finished run did, in words: "12 sent to Anki, 3 pulled from Anki".
+  ;; `error` says why a run failed; nothing said what a success did, so a Done
+  ;; row read blank (plans/feedback-activity-biblio-youtube.md 3.1.1).
+  (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS summary TEXT"])
   ;; The idempotency contract of `activity/start!`: at most one in-flight run per
   ;; (user, type, work_key). Partial, so a completed run does not block a retry.
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_inflight
