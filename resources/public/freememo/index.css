@@ -871,6 +871,85 @@ html:has(> body > .app-shell) > body {
     display: none !important;
 }
 
+/* Bibliography peek (freememo.bibliography-peek). The trigger keeps its book
+   icon at every tier the meta group shows; only the citation text beside it
+   collapses, by the rule above. */
+.bib-peek-anchor {
+    display: inline-flex;
+    min-width: 0;
+}
+.bib-peek-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 280px;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-hint);
+    font: inherit;
+    cursor: pointer;
+}
+.bib-peek-trigger:hover,
+.bib-peek-trigger[aria-expanded="true"] {
+    border-color: var(--color-border);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+}
+.bib-peek-trigger svg { flex: none; }
+.bib-peek-trigger .toolbar-collapse-citation {
+    font-size: 12px;
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The UA [popover] rule centres the element with `inset: 0; margin: auto`, so
+   this rule resets it. Hidden until placed, so it never flashes at 0,0. */
+.bib-peek {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    z-index: 1100;
+    width: max-content;
+    max-width: min(380px, calc(100vw - 16px));
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card);
+    color: var(--color-text-primary);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.bib-peek:not([data-placed]) { visibility: hidden; }
+/* A long author list must not push Edit off-screen: the body scrolls and the
+   actions stay. On :popover-open only, since an author `display` would beat
+   the UA rule that hides a closed popover. */
+.bib-peek:popover-open {
+    display: flex;
+    flex-direction: column;
+    max-height: min(70vh, 480px);
+}
+.bib-peek-body { overflow-y: auto; min-height: 0; }
+.bib-peek-actions { flex-shrink: 0; }
+.bib-peek-title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+a.bib-peek-title { color: var(--color-primary-text); }
+.bib-peek-line { color: var(--color-text-secondary); }
+.bib-peek-muted { color: var(--color-text-hint); font-style: italic; }
+.bib-peek-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
 /* Document-meta group (Edit-Bib + progress + Mark-PDF-Done) hides at tier ≥2 */
 .toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-docmeta {
     display: none !important;
