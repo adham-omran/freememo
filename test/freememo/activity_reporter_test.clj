@@ -60,7 +60,32 @@
                   (fn [& args] (swap! terminations conj args))]
       (is (= {:opened 1 :refreshed 0 :closed 1}
             (reporter/tick-once!)))
-      (is (= [[8 450 "success" {:error nil}]] @terminations)))))
+      (is (= [[8 450 "success" {:error nil :summary nil}]] @terminations)))))
+
+(deftest reporter-closes-with-the-owner-summary-unless-it-failed
+  (doseq [[err summary expected]
+          [[nil "12 sent to Anki" ["success" {:error nil :summary "12 sent to Anki"}]]
+           ["boom" "12 sent to Anki" ["failure" {:error "boom" :summary nil}]]]]
+    (reset-local-activity-ownership!)
+    (let [state-reads (atom 0)
+          terminations (atom [])]
+      (with-redefs [us/users-with-state (constantly #{8})
+                    registry/server-tier-types (constantly #{"anki-reconcile"})
+                    registry/live-work
+                    (fn [_type _user-id] [{:work-key "collection" :subject-id nil}])
+                    registry/read-state
+                    (fn [& _args]
+                      (when (= 1 (swap! state-reads inc)) {:phase "writing"}))
+                    activity/start! (fn [& _args] 452)
+                    activity/live-rows-for-tick
+                    (fn [_types] [{:id 452 :user_id 8 :type "anki-reconcile"
+                                   :work_key "collection"}])
+                    registry/work-error (fn [& _args] err)
+                    registry/work-summary (fn [& _args] summary)
+                    activity/terminate!
+                    (fn [& args] (swap! terminations conj args))]
+        (reporter/tick-once!)
+        (is (= [(into [8 452] expected)] @terminations) (pr-str err))))))
 
 (def anki-row
   {:id 451 :user_id 8 :type "anki-reconcile" :work_key "collection"})

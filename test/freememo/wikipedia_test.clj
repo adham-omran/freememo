@@ -6,7 +6,8 @@
             [freememo.desktop-link :as desktop-link]
             [freememo.math :as math]
             [freememo.url-validate :as url-validate]
-            [freememo.wikipedia :as wikipedia])
+            [freememo.wikipedia :as wikipedia]
+            [freememo.youtube-url :as yt])
   (:import [org.jsoup Jsoup]))
 
 (defn- formula-html
@@ -173,3 +174,12 @@
     (is (= ["Surface \\(A\\)" "Volume \\(V\\)"]
           (mapv #(.text %) (.select doc "li"))))
     (is (.isEmpty (.select doc "math, img")))))
+
+(deftest a-youtube-link-is-refused-before-any-request
+  (with-redefs [http/get (fn [& _] (throw (ex-info "fetched" {})))
+                desktop-link/offline-message (constantly nil)]
+    (doseq [url ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                 "https://youtu.be/dQw4w9WgXcQ"]]
+      (is (= {:success false :error yt/rejection-message}
+            (wikipedia/fetch-url url))
+        url))))

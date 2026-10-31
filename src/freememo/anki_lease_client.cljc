@@ -10,7 +10,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.anki-lease :as lease])
+   #?(:clj [freememo.anki-subtree-request :as subtree])
    #?(:clj [freememo.user-state :as us])))
 
 (def heartbeat-ms
@@ -44,9 +46,16 @@
 
 (defn claim!*
   "`root-id` is the branch a branch run is scoped to, or nil for the whole
-   collection."
+   collection.
+
+   The newest ended Activity row is read BEFORE the claim, because the claim
+   nudges the reporter, which may open this run's row at once. `release!*`
+   hands it back, so a cancelled run's summary lands on this run's row only."
   [user-id root-id]
-  #?(:clj (lease/claim! user-id root-id) :cljs nil))
+  #?(:clj (lease/claim! user-id root-id
+            (activity/newest-ended-row-id user-id :anki-reconcile
+              (subtree/work-key root-id)))
+     :cljs nil))
 
 (defn heartbeat!*
   "`_tick` exists only to make each beat a new call; the server's own clock
@@ -57,8 +66,29 @@
 (defn report-progress!* [user-id run-id progress]
   #?(:clj (lease/report-progress! user-id run-id progress) :cljs nil))
 
-(defn release!* [user-id run-id error]
-  #?(:clj (lease/release! user-id run-id error) :cljs nil))
+(defn release!*
+  "End the run: record its outcome for the reporter, drop the lease, and put
+   `summary` on a row that already ended.
+
+   A Cancel terminates the row before the run drains its last batch, so the
+   reporter's close, which carries the summary for every other ending, finds
+   nothing to close. `record-summary!` is the path for that row; on a row still
+   in flight it changes nothing, and the reporter writes the same text.
+
+   The call lives here, not in `anki-lease`: `activity` reaches `anki-lease`
+   through the registry, so the lease requiring `activity` would be a cycle.
+
+   Pre : `summary` is nil or non-blank.
+   Post: as `lease/release!`; when it answers :released and `summary` is
+         non-nil, `activity/record-summary!` ran for this run's own row."
+  [user-id run-id error summary]
+  #?(:clj (let [{:keys [work-key activity-floor]} (lease/owned-run user-id run-id)
+                released (lease/release! user-id run-id error summary)]
+            (when (and (= :released released) work-key activity-floor summary)
+              (activity/record-summary! user-id :anki-reconcile work-key
+                activity-floor summary))
+            released)
+     :cljs nil))
 
 (defn busy?*
   "`_lease-map` and `_tick` are reactive dependencies only: the first re-runs

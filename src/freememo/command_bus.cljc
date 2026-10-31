@@ -59,6 +59,15 @@
   (swap! !ctx #(apply dissoc % ks))
   nil)
 
+(defn retract-ctx-value!
+  "Remove `k` from the command context iff it still holds `v`. Call from
+   e/on-unmount when another mount may publish the same key first — a toolbar
+   remounting between documents — so the old unmount cannot delete the new
+   publisher's value. Returns nil."
+  [k v]
+  (swap! !ctx #(if (identical? v (get % k)) (dissoc % k) %))
+  nil)
+
 ;; ── Focus target ───────────────────────────────────────────────────────────
 ;; The target the palette and the keyboard act on: what the focused surface
 ;; (a tree row, an editor) would hand the context menu. One at a time, and the
@@ -502,6 +511,16 @@
 (register-handler! :toggle-editor-pane
   (fn [ctx _payload]
     (when-let [toggle! (:toggle-editor-pane! ctx)]
+      (toggle!))))
+
+;; bibliography-peek/BibliographyPeek publishes :open-bibliography-peek! only
+;; while the document has a citation; an absent fn hides the command.
+(register-preparer! :peek-bibliography
+  (fn [ctx] (when (:open-bibliography-peek! ctx) {})))
+
+(register-handler! :peek-bibliography
+  (fn [ctx _payload]
+    (when-let [toggle! (:open-bibliography-peek! ctx)]
       (toggle!))))
 
 (register-handler! :search

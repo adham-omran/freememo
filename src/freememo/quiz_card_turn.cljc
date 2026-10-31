@@ -8,7 +8,11 @@
      Self arm  — reveal the answer and rate it 1-4. No LLM call, no verdict.
 
    `settings/card-quiz-llm-grading?` picks the arm, and the master LLM switch
-   outranks it, so a user with LLM features off always self-rates. Card text is
+   outranks it, so a user with LLM features off always self-rates. An empty credit
+   balance outranks it too (kg-grade/card-grading-arm): a card self-rates rather
+   than ask for an answer the gate will refuse. If credits run out mid-turn, the
+   refused grade falls back to the same 1-4 bar (SelfRateFallback), which the
+   question turn in freememo.quiz-page uses as well. Card text is
    stored HTML with `\\(TeX\\)` math, so every display site writes through
    `math/set-html!` rather than `dom/text` — a card carries formatting a question
    never does.
@@ -43,14 +47,16 @@
       The LLM arm withholds :answer so the learner cannot read the reference out of
       the DOM before submitting; it arrives with the grade instead. The self arm IS
       revealing the answer, so it ships up front.
-      Takes the settings bump so flipping the toggle switches arms without a reload.
-      Post: {:llm-grading? bool :card-id :ord :kind :prompt :answer?} or nil when the
-            card is gone, not owned, or its ord was edited away."
-     [_settings-bump user-id card-id ord]
+      Takes the settings bump so flipping the toggle switches arms without a reload,
+      and the credits bump so a top-up does the same (grade/card-grading-arm).
+      Post: {:llm-grading? bool :credits-out? bool :card-id :ord :kind :prompt
+             :answer?} or nil when the card is gone, not owned, or its ord was
+            edited away."
+     [_settings-bump _credits-bump user-id card-id ord]
      (when-let [item (db/get-card-item user-id card-id ord)]
-       (let [llm? (settings/card-quiz-llm-grading? user-id)]
-         (cond-> (assoc item :llm-grading? llm?)
-           llm? (dissoc :answer))))))
+       (let [{:keys [llm-grading?] :as arm} (grade/card-grading-arm user-id)]
+         (cond-> (merge item arm)
+           llm-grading? (dissoc :answer))))))
 
 #?(:clj
    (defn grade-card-answer!*
@@ -61,12 +67,19 @@
      (grade/review-card! user-id card-id ord answer duration-ms)))
 
 #?(:clj
-   (defn rate-card!*
-     "Self arm: record the learner's own 1-4 rating and advance the schedule.
-      Pre:  `duration-ms` spans mount to rating, so it includes the reveal.
+   (defn rate-item!*
+     "Record the learner's own 1-4 rating for one item and advance its schedule: the
+      card self arm, and the fallback for either item type when grading is refused for
+      credits.
+      Pre:  `item-ref` is [:card flashcard-id ord] or [:question id]. `duration-ms`
+            spans mount to rating, so it includes the reveal. `user-answer` is the
+            typed answer on the fallback, nil on the self arm.
       Post: {:result {:success bool} :schedule {:due-today? …}|nil}."
-     [user-id card-id ord rating duration-ms]
-     (grade/rate-card! user-id card-id ord rating duration-ms)))
+     [user-id item-ref rating duration-ms user-answer]
+     (let [[kind a b] item-ref]
+       (if (= :card kind)
+         (grade/rate-card! user-id a b rating duration-ms user-answer)
+         (grade/rate-question! user-id a rating duration-ms user-answer)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Views
@@ -143,6 +156,20 @@
         (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
           (dom/text user-answer))))))
 
+(defn graded-feedback
+  "What a turn shows once its grade call returns, shared by the card and question
+   turns.
+   Post: the graded map {:result :answer :schedule} on success; {:self-rate result
+         :answer} on a credit refusal, which the turn answers with SelfRateFallback;
+         nil on any other failure, which leaves the answer box up so Submit can be
+         tried again (the grader's toast says why)."
+  [res answer]
+  (let [result (:result res)]
+    (cond
+      (:success result) {:result result :answer answer :schedule (:schedule res)}
+      (= :insufficient-credits (:error-type result)) {:self-rate result :answer answer}
+      :else nil)))
+
 (e/defn AnswerForm
   "LLM arm, before the grade: the answer box and Submit.
 
@@ -176,10 +203,7 @@
                             (e/Offload #(grade-card-answer!* user-id card-id ord answer ms)))]
                   (case res ; wait on the value — `do` would race the token
                     (do (reset! !grading? false)
-                      (when (:success (:result res))
-                        (reset! !feedback {:result (:result res)
-                                           :answer answer
-                                           :schedule (:schedule res)}))
+                      (reset! !feedback (graded-feedback res answer))
                       (t))))))))))))
 
 (e/defn RatingBar
@@ -193,8 +217,11 @@
    `e/on-unmount` registered INSIDE the resolved branch — calling it as a sibling of
    `(t)` would tear the frame down mid-flight and the token would never be spent
    (CLAUDE.md, Token Lifecycle). A failed rating advances nothing: the item keeps its
-   place and its due date."
-  [user-id card-id ord !rating-busy? rating-busy? advance! started-at]
+   place and its due date.
+
+   `item-ref` is [:card flashcard-id ord] or [:question id]; `user-answer` is the typed
+   answer when this bar stands in for a refused grade, else nil."
+  [user-id item-ref user-answer !rating-busy? rating-busy? advance! started-at]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :gap "8px" :margin-top "12px"}})
@@ -214,7 +241,8 @@
         (reset! !rating-busy? true)
         (let [rating (second cmd)
               ms (timing/elapsed-ms started-at)
-              res (e/server (e/Offload #(rate-card!* user-id card-id ord rating ms)))]
+              res (e/server
+                    (e/Offload #(rate-item!* user-id item-ref rating ms user-answer)))]
           (case res
             (if (:success (:result res))
               (do (e/on-unmount
@@ -230,7 +258,7 @@
    client until a rating is pressed. `started-at` is the TURN's mark, not the
    reveal's: the recorded duration spans the reveal, because revealing is part of
    answering."
-  [user-id card-id ord answer advance! started-at]
+  [user-id item-ref answer advance! started-at]
   (e/client
     (let [!revealed? (atom false) revealed? (e/watch !revealed?)
           !rating-busy? (atom false) rating-busy? (e/watch !rating-busy?)]
@@ -248,7 +276,7 @@
           (dom/On "keydown" rating-key-press! nil)
           (dom/div (dom/props {:style label-style}) (dom/text "Answer"))
           (CardHtml answer "15px")
-          (RatingBar user-id card-id ord !rating-busy? rating-busy? advance! started-at))
+          (RatingBar user-id item-ref nil !rating-busy? rating-busy? advance! started-at))
         (dom/button
           (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
           (dom/text "Show answer")
@@ -256,14 +284,58 @@
           (e/snapshot (modal-shell/focus-on-mount! dom/node))
           (dom/On "click" (fn [_] (reset! !revealed? true)) nil))))))
 
-(e/defn LlmArm
-  "LLM arm: the answer box until a grade arrives, then the verdict and Next."
-  [user-id card-id ord !feedback feedback advance! started-at]
+(e/defn SelfRateFallback
+  "Stands in for a grade the credit gate refused, on either item type: the learner
+   compares what they typed with the reference answer and rates it 1-4, as on the
+   self arm. Nothing was charged and nothing was written by the refused call, so this
+   rating is the turn's only review row.
+
+   `html?` says how to render the reference: a card's answer is stored HTML, a
+   question's is plain text. `advance!` takes requeue?, as RatingBar's does."
+  [user-id item-ref user-answer reference-answer html? advance! started-at]
   (e/client
-    (let [!draft (atom "") draft (e/watch !draft)
+    (let [!rating-busy? (atom false) rating-busy? (e/watch !rating-busy?)]
+      (dom/div
+        ;; Bare 1-4 rate, as on the self arm. The answer box that had focus has just
+        ;; unmounted, so the region takes focus itself for the keys to reach it.
+        (dom/props {:tabindex "-1"})
+        (e/snapshot (modal-shell/focus-on-mount! dom/node))
+        (e/snapshot (motion/open-down! dom/node))
+        (dom/On "keydown" rating-key-press! nil)
+        (dom/p
+          (dom/props {:style {:font-size "13px" :margin "12px 0 0"
+                              :color "var(--color-text-secondary)"}})
+          (dom/text (str "AI grading needs credits, and your balance is empty. "
+                      "Compare your answer with the reference and rate it yourself. "
+                      "Top up in Settings to have AI grade again.")))
+        (dom/div (dom/props {:style label-style}) (dom/text "Reference answer"))
+        (if html?
+          (CardHtml reference-answer "15px")
+          (dom/p (dom/props {:dir "auto" :style {:font-size "15px" :margin "4px 0"}})
+            (dom/text (str reference-answer))))
+        (dom/div (dom/props {:style label-style}) (dom/text "Your answer"))
+        (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
+          (dom/text (str user-answer)))
+        (RatingBar user-id item-ref user-answer !rating-busy? rating-busy?
+          advance! started-at)))))
+
+(e/defn LlmArm
+  "LLM arm: the answer box until a grade arrives, then the verdict and Next — or,
+   when the grade was refused for credits, the self-rating fallback."
+  [user-id item-ref !feedback feedback advance! started-at]
+  (e/client
+    (let [[_ card-id ord] item-ref
+          !draft (atom "") draft (e/watch !draft)
           !grading? (atom false) grading? (e/watch !grading?)]
-      (if (nil? feedback)
+      (cond
+        (nil? feedback)
         (AnswerForm user-id card-id ord !draft draft !grading? grading? !feedback started-at)
+
+        (some? (:self-rate feedback))
+        (SelfRateFallback user-id item-ref (:answer feedback)
+          (get-in feedback [:self-rate :reference-answer]) true advance! started-at)
+
+        :else
         (dom/div
           ;; The verdict rises in as the result of the answer.
           (e/snapshot (motion/rise-in! dom/node))
@@ -317,6 +389,16 @@
             (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
               (dom/text (str user_answer)))))))))
 
+(defn arm-label
+  "The card turn's grading label. Says why when the setting asked for AI grading and
+   the credits refused it, so the switch to self-rating does not look like a setting
+   change."
+  [item]
+  (cond
+    (:llm-grading? item) "AI graded"
+    (:credits-out? item) "Self rated (no credits for AI grading)"
+    :else "Self rated"))
+
 (e/defn CardTurn
   "One card item's turn. Renders whichever arm the setting selects.
 
@@ -331,11 +413,13 @@
   (e/client
     (let [[_ card-id ord] item-ref
           settings-bump (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          credits-bump (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           ;; e/snapshot, so flipping the grading setting mid-turn re-renders the arm
           ;; without restarting the clock. ReviewFlow's keyed frame remounts this
           ;; component per item, which is what makes the mark per-turn.
           started-at (e/snapshot (timing/start-ms))
-          item (e/server (e/Offload #(card-turn* settings-bump user-id card-id ord)))]
+          item (e/server
+                 (e/Offload #(card-turn* settings-bump credits-bump user-id card-id ord)))]
       (if (nil? item)
         (dom/div
           (dom/p (dom/props {:style {:font-size "14px" :margin "14px 0"}})
@@ -357,8 +441,8 @@
               (dom/text (:kind item)))
             (dom/span
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-              (dom/text (if (:llm-grading? item) "AI graded" "Self rated"))))
+              (dom/text (arm-label item))))
           (CardHtml (:prompt item) "16px")
           (if (:llm-grading? item)
-            (LlmArm user-id card-id ord !feedback feedback advance! started-at)
-            (SelfArm user-id card-id ord (:answer item) advance! started-at)))))))
+            (LlmArm user-id item-ref !feedback feedback advance! started-at)
+            (SelfArm user-id item-ref (:answer item) advance! started-at)))))))

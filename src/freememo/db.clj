@@ -48,6 +48,7 @@
 (declare owns-topic?)
 (declare record-anki-tombstones! param-bounded-batches)
 (declare start-purge-scheduler!)
+(declare setup-schema-receipts!)
 (declare unsynced-sql)
 (declare ->jsonb)
 (declare pgobject->clj)
@@ -2206,6 +2207,10 @@
   ;; Widen an activities table created before bytes were a progress unit.
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN done TYPE BIGINT"])
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN total TYPE BIGINT"])
+  ;; What a finished run did, in words: "12 sent to Anki, 3 pulled from Anki".
+  ;; `error` says why a run failed; nothing said what a success did, so a Done
+  ;; row read blank (plans/feedback-activity-biblio-youtube.md 3.1.1).
+  (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS summary TEXT"])
   ;; The idempotency contract of `activity/start!`: at most one in-flight run per
   ;; (user, type, work_key). Partial, so a completed run does not block a retry.
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_inflight
@@ -3471,6 +3476,8 @@
   (setup-schema-flashcard-uniqueness!)
   ;; After every table exists: it converts ids and triggers all of them.
   (setup-schema-sync!)
+  ;; After setup-schema-sync!, which adds credit_orders.kind; the index reads it.
+  (setup-schema-receipts!)
 
   ((requiring-resolve 'freememo.comprehension/ensure-schema!))
 
@@ -4897,6 +4904,105 @@
   (jdbc/execute! ds
     ["UPDATE credit_orders SET abandon_alerted_at = LOCALTIMESTAMP
       WHERE reference_id = ?" reference-id]))
+
+;; ── Payment receipts (freememo.receipt) ──
+
+(defn- setup-schema-receipts!
+  "Receipt state on credit_orders. receipt_sent_at is set once an order needs no
+   further receipt work; receipt_skip_reason says why no mail went out, and is
+   NULL when one did. receipt_attempted_at is the last attempt that failed, and
+   spaces the retries."
+  []
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_sent_at TIMESTAMP"])
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_skip_reason TEXT
+                      CHECK (receipt_skip_reason IN ('no-email', 'gave-up'))"])
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_attempted_at TIMESTAMPTZ"])
+  ;; The sweep reads only these rows, once a minute, on every app color.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_orders_receipt_due
+                      ON credit_orders(id)
+                      WHERE status = 'complete' AND kind = 'credits'
+                        AND receipt_sent_at IS NULL"]))
+
+(def ^:private completed-at-instant-sql
+  ;; completed_at is a zone-less TIMESTAMP written by CURRENT_TIMESTAMP, so it
+  ;; holds wall time in the session's TimeZone. Reading it through that zone
+  ;; gives a timestamptz, the instant, whatever the server's zone is.
+  "(o.completed_at AT TIME ZONE current_setting('TimeZone'))")
+
+(def receipt-retry-interval
+  "How long a failed receipt waits before the next attempt. Over the 24 hours a
+   receipt is retried, that is at most 96 attempts, where the one-minute sweep
+   alone would make 1440 against an address the server keeps refusing."
+  "15 minutes")
+
+(defn settle-next-receipt!
+  "Lock one credit order that owes a receipt, let `settle` decide its outcome,
+   and record that outcome, in one transaction.
+
+   An order owes a receipt when it is a complete 'credits' order with no
+   receipt_sent_at, completed at or after `cutoff`, and with no failed attempt
+   in the last `receipt-retry-interval`. Orders are taken oldest id first, FOR
+   UPDATE SKIP LOCKED, so a second JVM sweeping at the same time takes a
+   different order or none. While `settle` runs, `complete-credit-order!` for
+   the same order (a redelivered webhook) waits on the row lock.
+
+   Pre:  cutoff is a java.time.Instant. (settle order) returns :sent, :no-email,
+         :gave-up or nil, and does not throw, where `order` is {:id :user-id
+         :reference-id :amount-iqd :completed-at :email :expired?}.
+         :completed-at is a java.time.Instant. :expired? is true when the order
+         completed 24 hours or more ago. `settle` bounds its own run time.
+   Post: nil when no order owes a receipt. Otherwise {:order-id :outcome}. A
+         non-nil outcome sets receipt_sent_at, with receipt_skip_reason
+         'no-email' or 'gave-up' for those outcomes and NULL for :sent. A nil
+         outcome sets receipt_attempted_at, which hides the order from this
+         function for `receipt-retry-interval`; a sweep loop therefore ends.
+   Invariant: the lock is held while `settle` runs, so the mail it sends and the
+         stamp commit together or not at all. A throwing `settle` breaks the
+         Pre: nothing is recorded, and a caller that loops takes the order again."
+  [cutoff settle]
+  (jdbc/with-transaction [tx ds]
+    ;; The session is idle while `settle` renders and mails. A server-wide idle
+    ;; timeout shorter than that would end it, roll back the stamp, and turn
+    ;; every slow send into a duplicate. `settle` bounds the wait instead.
+    (jdbc/execute! tx ["SET LOCAL idle_in_transaction_session_timeout = 0"])
+    (when-let [row (jdbc/execute-one! tx
+                     [(str "SELECT o.id, o.user_id, o.reference_id, o.amount_iqd, u.email, "
+                           completed-at-instant-sql " AS completed_at, "
+                           completed-at-instant-sql " <= now() - interval '24 hours' AS expired
+                      FROM credit_orders o JOIN users u ON u.id = o.user_id
+                      WHERE o.status = 'complete' AND o.kind = 'credits'
+                        AND o.receipt_sent_at IS NULL
+                        AND " completed-at-instant-sql " >= ?::timestamptz
+                        AND (o.receipt_attempted_at IS NULL
+                             OR o.receipt_attempted_at <= now() - ?::interval)
+                      ORDER BY o.id
+                      LIMIT 1
+                      FOR UPDATE OF o SKIP LOCKED")
+                      (str cutoff)
+                      receipt-retry-interval]
+                     {:builder-fn rs/as-unqualified-maps})]
+      (let [order {:id (:id row)
+                   :user-id (:user_id row)
+                   :reference-id (:reference_id row)
+                   :amount-iqd (:amount_iqd row)
+                   :completed-at (.toInstant ^java.sql.Timestamp (:completed_at row))
+                   :email (:email row)
+                   :expired? (boolean (:expired row))}
+            outcome (settle order)]
+        (if outcome
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET receipt_sent_at = CURRENT_TIMESTAMP,
+                                       receipt_skip_reason = ?
+              WHERE id = ?"
+             (case outcome :sent nil :no-email "no-email" :gave-up "gave-up")
+             (:id order)])
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET receipt_attempted_at = now() WHERE id = ?"
+             (:id order)]))
+        {:order-id (:id order) :outcome outcome}))))
 
 (defn fail-credit-order!
   "Mark a pending order failed (provider error / Cancelled / Rejected / Returned).

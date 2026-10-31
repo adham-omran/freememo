@@ -35,6 +35,7 @@
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.activity-reporter :as activity-reporter])
+   #?(:clj [freememo.receipt :as receipt])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.desktop :as desktop])
    #?(:clj [freememo.peer :as peer])))
@@ -199,6 +200,8 @@
        ;; setup-schema — it queries `activities`. Requiring this namespace is also
        ;; what registers the activity sweeps into the hourly sweep.
        (activity-reporter/start!)
+       ;; Payment receipts: a no-op sweep unless RECEIPTS_ENABLED=true and SMTP is set.
+       (receipt/start!)
        (install-exam-generation-shutdown-hook!)
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.

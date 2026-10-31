@@ -252,6 +252,8 @@
               :freememo.wayl/create-link
               :freememo.wayl/create-link-failed
               :freememo.wayl/get-link-status
+              ;; A buyer paid and got no receipt. Someone sends it by hand.
+              :freememo.receipt/receipt-gave-up
               ;; Deployment-hook failures, in the money pool because a configured
               ;; hook that stops measuring leaves downstream spending decisions
               ;; running on bad data. Neither raises anything user-visible.
@@ -320,7 +322,7 @@
       {:keys [handler-id subject-tag min-level ids limit]}]
      (tel/add-handler! handler-id
        (tel-postal/handler:postal
-         {:conn-opts {:host host :port port :user user :pass pass :ssl true}
+         {:conn-opts (config/smtp-connection {:host host :port port :user user :pass pass})
           :msg-opts  {:from from :to to}
           :subject-fn (alert-subject-fn subject-tag)
           :body-fn alert-email-body})
