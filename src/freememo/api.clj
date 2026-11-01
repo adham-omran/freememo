@@ -36,6 +36,7 @@
    [freememo.config :as config]
    [freememo.client-failure-http :as client-failure-http]
    [freememo.account-export :as account-export]
+   [freememo.card-export-http :as card-export-http]
    [freememo.ai-proxy :as ai-proxy]
    [freememo.desktop-auth :as desktop-auth]
    [freememo.sync-server :as sync-server]
@@ -1395,6 +1396,10 @@
    ;; No :body key — that cap governs REQUEST bodies, and this route's body is
    ;; the response (plans/user-data-export-import.md §5.3.4).
    {:method :get  :path    "/api/account/export" :handler #'account-export/download-handler}
+   ;; Card export (plans/card-export-csv-tsv.md). GET for a topic or every
+   ;; card; POST for the Library filter, whose opts are too large for a URL.
+   {:method :get  :path    "/api/cards/export"  :handler #'card-export-http/export-handler}
+   {:method :post :path    "/api/cards/export"  :handler #'card-export-http/export-handler :body :small}
    {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
    {:method :get  :path    "/api/video/status"  :handler #'upload-http/status-handler}

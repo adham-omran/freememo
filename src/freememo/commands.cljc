@@ -552,6 +552,11 @@
                        :when #{:viewer} :views #{}}
      :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
                               :when #{:viewer} :views #{}}
+     ;; Opens the Export cards dialog for the topic on screen and its
+     ;; descendants (plans/card-export-csv-tsv.md §6.3). Writes nothing. The
+     ;; preparer reads the topic DocumentMainColumn publishes.
+     :export-topic-cards {:label "Export cards…" :class :query :exec :client
+                          :when #{:viewer} :views #{}}
      ;; One settings row per document, read once at open and never re-queried,
      ;; so :views stays empty — the same reasoning as :toggle-focus-reader.
      ;; :when is the tab; command-bus's preparer narrows it to documents with a
@@ -660,6 +665,9 @@
                                  :table #{:topics :settings} :views #{}}
      :open-document-options {:label "Document options…" :class :nav
                              :target :topic :target-if #{:root} :menu [5 1]}
+     ;; The same dialog as :export-topic-cards, for a right-clicked topic.
+     :export-cards-for-topic {:label "Export topic cards…" :menu-label "Export cards…"
+                              :class :query :target :topic :menu [5 2]}
      :delete-topic      {:label "Delete topic…" :menu-label "Delete…" :class :mutation
                          :target :topic :arity :many :target-if #{:deletable}
                          :menu [9 1] :danger? true

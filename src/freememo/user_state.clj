@@ -98,6 +98,9 @@
           ;; user, so the set holds a constant rather than an id.
           :exporting-accounts (atom #{})
           :importing-accounts (atom #{})
+          ;; A card export download (freememo.card-export-http). Holds the
+          ;; constant "cards" for the same reason.
+          :exporting-cards (atom #{})
           ;; Git forge imports and updates (freememo.repo-import):
           ;; `host/owner/name` -> phase while the work runs. A map rather than a
           ;; set because the phase moves — cloning or fetching, resolving,

@@ -10,6 +10,7 @@
    Inside a pointer-events: none Overlay\"), and later in DOM order, so it
    paints over a card modal at the same z-index."
   (:require [hyperfiddle.electric3 :as e]
+            [freememo.card-export-modal :refer [CardExportModal]]
             [freememo.card-history-modal :refer [CardHistoryModal]]
             [freememo.document-options :refer [DocumentOptionsModal]]
             [freememo.occlusion-modal :refer [OcclusionModal]]))
@@ -56,4 +57,5 @@
         ;; and Edit, which need the viewer's bibliography modal.
         (DocumentOptionsModal user-id
           {:root-id topic-id :bib-id topic-id :review-id topic-id :item-id topic-id}
-          pdf? !document-options-open? nil false)))))
+          pdf? !document-options-open? nil false)))
+    (CardExportModal user-id)))

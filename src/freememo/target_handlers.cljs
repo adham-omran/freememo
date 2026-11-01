@@ -12,6 +12,7 @@
    through :show-error-toast, because the toast stack is server state."
   (:require [freememo.anki-subtree-request :as anki-subtree]
             [freememo.card-components :as card-components]
+            [freememo.card-export-modal :as card-export]
             [freememo.command-bus :as bus]
             [freememo.editor-actions :as editor-actions]
             [freememo.formula-ui :as formula-ui]
@@ -70,6 +71,21 @@
   (fn [_ctx target]
     (let [{:keys [topic-id topic-kind]} (subject target)]
       (modals/open-document-options! topic-id (= "pdf" topic-kind)))))
+
+(bus/register-handler! :export-cards-for-topic
+  (fn [_ctx target]
+    (card-export/open! {:scope :topic :topic-id (:topic-id (subject target))})))
+
+;; The palette entry acts on the topic on screen, which DocumentMainColumn
+;; publishes. No topic, no entry.
+(bus/register-preparer! :export-topic-cards
+  (fn [ctx]
+    (when-let [topic-id (:export-topic-id ctx)]
+      {:topic-id topic-id})))
+
+(bus/register-handler! :export-topic-cards
+  (fn [_ctx {:keys [topic-id]}]
+    (card-export/open! {:scope :topic :topic-id topic-id})))
 
 ;; A topic delete finishes in the browser: the deleted cards' Anki notes go
 ;; through AnkiConnect on localhost, and the cached PDF bytes live in

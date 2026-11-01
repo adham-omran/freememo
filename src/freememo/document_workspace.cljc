@@ -50,6 +50,12 @@
           editor-hidden? dctx/editor-hidden?]
       (bus/publish-ctx! {:toggle-card-table! toggle-card-table!})
       (e/on-unmount #(bus/retract-ctx! [:toggle-card-table!]))
+      ;; :export-topic-cards exports this topic and its descendants: the whole
+      ;; document in a PDF, else the topic on screen. Not dctx/topic-id — this
+      ;; column is outside both document_view frames that bind it, so it reads
+      ;; nil here and the palette entry never shows.
+      (bus/publish-ctx! {:export-topic-id (or dctx/pdf-root-id dctx/page-topic-id)})
+      (e/on-unmount #(bus/retract-ctx! [:export-topic-id]))
       (bus/publish-ctx! {:toggle-editor-pane! toggle-editor-pane!
                          :editor-hidden? editor-hidden?})
       (e/on-unmount #(bus/retract-ctx! [:toggle-editor-pane! :editor-hidden?]))

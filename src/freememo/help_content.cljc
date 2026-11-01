@@ -276,6 +276,24 @@
             {:label "Make cards"
              :detail "In the word view, بطاقة البيت (verse card) hides the second half of the verse. بطاقة المعنى (meaning card) and بطاقة الإعراب (analysis card) ask about the word. حفظ البيت (save verse) makes an extract. اشرح هذا البيت (explain this verse) shows the meaning and commentary of the verse."
              :commands #{}}]}
+   {:slug "export-cards"
+    :title "Export cards"
+    :intro "Save cards as a CSV or TSV file for Noji, Mnemosyne or a spreadsheet."
+    :steps [{:label "Export a topic"
+             :detail "On a topic, open {toggle-palette} and choose Export cards…. The file holds the cards of the topic and of every topic under it. Right-click a topic for the same dialog."
+             :commands #{:export-topic-cards}}
+            {:label "Export from the Library"
+             :detail "Library → Cards, then Export…. Choose the cards the filter shows, or all cards."
+             :commands #{}}
+            {:label "Import into Noji"
+             :detail "Choose Noji (CSV). In Noji, open a deck, choose Import Cards, and upload the file. Math becomes $$…$$."
+             :commands #{}}
+            {:label "Import into Mnemosyne"
+             :detail "Choose Mnemosyne (text). In Mnemosyne, choose File, Import, then Tab-separated text files. With Include images, unzip the file first, then import cards.txt from that folder. Math needs LaTeX on that computer."
+             :commands #{}}
+            {:label "What a file holds"
+             :detail "Each cloze deletion becomes its own card, with [...] on the front. Image occlusion and score cards are left out, because a text file cannot hold them. The dialog counts them before you download."
+             :commands #{}}]}
    {:slug "live-document"
     :title "Live Document"
     :intro "Photograph pages into a PDF you keep adding to."
@@ -692,7 +710,7 @@
              :commands #{:open-topic :open-topic-in-new-tab :rename-topic :move-topic-to-top-level
                          :set-topic-priority :mark-topic-done :generate-cards-for-topic
                          :sync-topic-with-anki :sync-topic-with-neoreader :open-document-options
-                         :dismiss :undismiss :delete-topic}}
+                         :export-cards-for-topic :dismiss :undismiss :delete-topic}}
             {:label "Act on a card"
              :detail "Right-click a card in Library → Cards or in a document's card table to edit it, see its history, open its topic or delete it. With several cards selected, Delete removes them all."
              :commands #{:open-card-editor :card-history :open-card-source-topic :delete-cards}}

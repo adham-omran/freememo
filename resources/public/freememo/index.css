@@ -1668,6 +1668,19 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     gap: 6px;
 }
 
+/* freememo.card-export-modal */
+.card-export { display: flex; flex-direction: column; gap: 14px; }
+.card-export h3 { margin: 0; font-size: 16px; font-weight: 500; overflow-wrap: anywhere; }
+.card-export__set { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.card-export__set legend { padding: 0; margin-bottom: 4px; font-weight: 600; font-size: 13px; }
+.card-export__set label,
+.card-export__check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.card-export__field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.card-export__field select { font-weight: 400; }
+.card-export__help { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.card-export__summary p { margin: 0 0 4px; font-size: 13px; }
+.card-export__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* Count cluster + selection cluster on ONE line, as two flex children, so the
    line wraps between them rather than mid-button-group. */
 .cards-summary {

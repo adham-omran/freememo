@@ -386,6 +386,15 @@
     :state-key :exporting-accounts :phase "exporting"
     :key-fn identity :owner-key->args (constantly [])}
 
+   ;; A card export download (freememo.card-export-http). Same shape as the
+   ;; account export: it streams on a request thread, one at a time per user.
+   :card-export
+   {:label "Exporting cards"
+    :tier :server :subject :none
+    :work-key (constantly "cards")
+    :state-key :exporting-cards :phase "exporting"
+    :key-fn identity :owner-key->args (constantly [])}
+
    :account-import
    {:label "Importing account"
     :tier :server :subject :none :work-key (constantly "account")

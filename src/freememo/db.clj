@@ -9479,6 +9479,21 @@
                  :from [:media]
                  :where [:= :id id]})))
 
+(defn media-mime-types-for-user
+  "Map {media-id mime-type} for those of `ids` that `user-id` owns.
+   Post: an id the user does not own, or that does not exist, is absent."
+  [user-id ids]
+  (if (empty? ids)
+    {}
+    (into {}
+      (map (juxt :id :mime_type))
+      (jdbc/execute! ds
+        (sql/format {:select [:id :mime_type]
+                     :from [:media]
+                     :where [:and [:= :user_id user-id]
+                             [:= :id [:any [:lift (long-array ids)]]]]})
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn upsert-media-row!
   "Insert media, or return the existing row's id if the same bytes are already
    stored for this user. Charges quota only on actual insert.

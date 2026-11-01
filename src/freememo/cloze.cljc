@@ -147,11 +147,17 @@
 (declare ^:private render-children)
 
 (defn- render-span
-  "One span: `blank` when it is the hidden ord, else its revealed answer text."
-  [text span target]
+  "One span: `(render-target text span)` when it is the target ord, else its
+   revealed answer text."
+  [text span target render-target]
   (if (= target (:n span))
-    blank
-    (strip-hint (render-children text span target))))
+    (render-target text span)
+    (strip-hint (render-children text span target render-target))))
+
+(defn- blank-span
+  "Render a target span as `blank` — the quiz prompt's hidden deletion."
+  [_text _span]
+  blank)
 
 (defn- splice
   "Replace each span in `spans` with `(render span)`, keeping the text between them.
@@ -167,10 +173,25 @@
     (str out (subs text cursor to))))
 
 (defn- render-children
-  "A span's inner text with every nested span rendered. `target` stays hidden at
-   any depth, so a nested deletion never leaks the answer of the item being asked."
-  [text {:keys [inner-start inner-end children]} target]
-  (splice text children inner-start inner-end #(render-span text % target)))
+  "A span's inner text with every nested span rendered. `target` renders through
+   `render-target` at any depth, so a nested deletion never leaks the answer of
+   the item being asked."
+  [text {:keys [inner-start inner-end children]} target render-target]
+  (splice text children inner-start inner-end
+    #(render-span text % target render-target)))
+
+(defn- render-ord
+  "`text` with every span bearing `n` rendered by `render-target` and every
+   other span revealed."
+  [text n render-target]
+  (let [s (or text "")
+        {:keys [spans]} (parse s)]
+    (splice s spans 0 (count s) #(render-span s % n render-target))))
+
+(defn- revealed-text
+  "A span's answer: its inner text with nested spans revealed and its hint dropped."
+  [text span]
+  (strip-hint (render-children text span nil blank-span)))
 
 (defn mask-ord
   "`text` with deletion `n` hidden and every other deletion revealed — Anki's
@@ -180,9 +201,34 @@
    post: contains `blank` once per span bearing `n`; contains no `{{cN::` marker
          for any span the scan resolved. Text outside every span is verbatim."
   [text n]
-  (let [s (or text "")
-        {:keys [spans]} (parse s)]
-    (splice s spans 0 (count s) #(render-span s % n))))
+  (render-ord text n blank-span))
+
+(defn- hint-span
+  "Render a target span as `[hint]` when it carries one, else as `blank`."
+  [text span]
+  (let [inner (render-children text span nil blank-span)
+        i (str/index-of inner "::")]
+    (if i (str "[" (subs inner (+ i 2)) "]") blank)))
+
+(defn front-for-ord
+  "`text` as Anki shows the front of deletion `n`: that deletion hidden as
+   `[hint]` when it has a hint, else as `blank`, and every other deletion
+   revealed.
+
+   pre : `text` is a string or nil; `n` is an int.
+   post: no `{{cN::` marker remains for any span the scan resolved. Text outside
+         every span is verbatim."
+  [text n]
+  (render-ord text n hint-span))
+
+(defn back-for-ord
+  "`text` with every deletion revealed, and deletion `n`'s answer passed through
+   `mark` — the back of deletion `n`. `identity` gives the plain full text.
+
+   pre : `text` is a string or nil; `n` is an int; `mark` is a string → string fn.
+   post: no `{{cN::` marker remains for any span the scan resolved."
+  [text n mark]
+  (render-ord text n (fn [t span] (mark (revealed-text t span)))))
 
 (defn answer-for-ord
   "The text deletion `n` hides — the reference answer for that quiz item.
@@ -198,4 +244,4 @@
         matching (filter #(= n (:n %))
                    (tree-seq :children :children {:children spans}))]
     (str/join " / "
-      (map #(str/trim (strip-hint (render-children s % nil))) matching))))
+      (map #(str/trim (revealed-text s %)) matching))))

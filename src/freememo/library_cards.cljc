@@ -21,6 +21,7 @@
     :refer [card-row-html set-inner-html!
             overlapping-row-html occlusion-row-html
             score-row-html try-delete-anki-notes!]]
+   [freememo.card-export-modal :as card-export]
    [freememo.card-rows :as rows]
    [freememo.optimistic :as opt]
    [freememo.client-state :as cs]
@@ -1116,13 +1117,27 @@
 ;; removed by the runtime when the result's children arrive (Electric v3
 ;; mount bug, observed on the documents→cards branch switch); nothing in
 ;; this view may mount before the query result exists.
+(e/defn CardsExportButton "
+Opens the Export cards dialog with the filter on screen. `opts` is the query
+opts the rows come from, so the dialog's filter scope is exactly these rows
+(plans/card-export-csv-tsv.md §1.3).
+"
+  [opts]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm btn-secondary cards-action" :type "button"})
+      (tooltip/Tooltip! "Export cards as CSV or TSV for Noji, Mnemosyne or a spreadsheet")
+      (icons/Icon :download :size 14)
+      (dom/text "Export…")
+      (dom/On "click" (fn [_] (card-export/open! {:scope :library :opts opts})) nil))))
+
 (e/defn CardsSearchRow "
 Toolbar row 1: view switcher, search box, Check Anki.
 Split out of CardsFilterBar for the 64 KB per-e/defn bytecode cap — each
 e/defn compiles to one JVM method, and the three rows as flat siblings under
 one body overflowed it in the :prod build (dev never emits that bytecode).
 "
-  [navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick]
+  [navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick opts]
   (e/client
     (dom/div
       (dom/props {:class "cards-toolbar-row"})
@@ -1157,7 +1172,8 @@ one body overflowed it in the :prod build (dev never emits that bytecode).
         (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
         (icons/Icon :refresh-cw :size 14)
         (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
-        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
+        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil))
+      (CardsExportButton opts))))
 
 (e/defn CardsKindFilterRow [kinds !kinds]
   (e/client
@@ -1196,7 +1212,7 @@ filter groups with separate atoms and separate query semantics.
             (fn [] (toggle-in! !flags v))))))))
 
 (e/defn CardsFilterBar [navigate! ov-status initial-text !text !text-debounced !text-timer
-                        !kinds !origins !flags !check-tick]
+                        !kinds !origins !flags !check-tick opts]
   (e/client
     (let [kinds (e/watch !kinds)
           origins (e/watch !origins)
@@ -1204,7 +1220,7 @@ filter groups with separate atoms and separate query semantics.
           anki-ready? (= ov-status :ready)]
       (dom/div
         (dom/props {:class "cards-toolbar"})
-        (CardsSearchRow navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick)
+        (CardsSearchRow navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick opts)
         (CardsKindFilterRow kinds !kinds)
         (CardsSyncFilterRow origins flags anki-ready? !origins !flags)))))
 
@@ -1658,7 +1674,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
       ;; re-mounted the view too — see OverlayIds.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status (:text initial) !text !text-debounced !text-timer
-          !kinds !origins !flags !check-tick)
+          !kinds !origins !flags !check-tick opts)
         (CardsResultRegion user-id navigate! result anki-overlay ov-status
           filters-active? filter-pending? scroll-reset-key
           !sort-col !sort-dir !editing-card)))))
