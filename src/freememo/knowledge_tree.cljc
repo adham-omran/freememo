@@ -109,6 +109,7 @@
    ["score" "Score"]
    ["video" "Video"]
    ["video-playlist" "Video playlist"]
+   ["youtube" "YouTube"]
    ["code" "Code"]
    ["supermemo" "SuperMemo"]
    ["poem" "Poem"]])

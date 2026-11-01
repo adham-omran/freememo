@@ -26,6 +26,7 @@
     "audio" ["Audio" "var(--color-badge-web)"]
     "video" ["Video" "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
+    "youtube" ["YouTube" "var(--color-badge-video)"]
     "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
     "poem" ["Poem" "var(--color-badge-epub)"]
     "code" ["Code" "var(--color-badge-web)"]

@@ -81,7 +81,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 51 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 52 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -97,6 +97,7 @@
    :topic_videos
    :topic_epubs
    :topic_code
+   :topic_youtube
    :repo_selections
    :video_transcripts
    :video_segments
@@ -230,7 +231,7 @@
    every exported table has a class from 1 to 5.
    `sync_classes_cover_every_table` asserts both."
   {:sources 2 :media 4 :topics 2 :poem_packages 2 :topic_files 2
-   :topic_videos 2 :topic_epubs 2 :topic_code 2 :repo_selections 2
+   :topic_videos 2 :topic_epubs 2 :topic_code 2 :topic_youtube 2 :repo_selections 2
    :video_transcripts 2 :video_segments 2 :topic_pins 2 :reading_positions 2
    :neoreader_highlights 1 :occlusion_groups 5 :score_groups 2 :flashcards 2
    :card_schedules 3 :card_versions 1 :topic_versions 1 :topic_repetitions 1
@@ -376,6 +377,9 @@
    ;; drops it as well — the same pair topics/content_preview forms.
    :topic_code {:where (str "t.topic_id IN (" owned-topics ")")
                 :params 1 :order "t.topic_id" :drop-keys ["source_preview"]}
+
+   :topic_youtube {:where (str "t.topic_id IN (" owned-topics ")")
+                   :params 1 :order "t.topic_id"}
 
    :repo_selections {:where (str "t.topic_id IN (" owned-topics ")")
                      :params 1 :order "t.topic_id"}

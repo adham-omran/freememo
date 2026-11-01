@@ -33,15 +33,22 @@
    `sendBeacon` rather than fetch: this fires on pause and on unmount, and a
    fetch issued during teardown is cancelled with the page. The browser queues
    a beacon independently and delivers it after navigation. Same-origin, so the
-   session cookie rides along."
-  [topic-id pos-ms]
-  #?(:cljs (when (and topic-id pos-ms (.-sendBeacon js/navigator))
-             (let [body (str "topic_id=" topic-id "&pos_ms=" (js/Math.round pos-ms))
-                   blob (js/Blob. #js [body]
-                          #js {:type "application/x-www-form-urlencoded"})]
-               (.sendBeacon js/navigator "/api/video/position" blob))
-             nil)
-     :clj nil))
+   session cookie rides along.
+
+   `duration-ms`, when given, is a YouTube topic's length as its player reports
+   it (plans/youtube-kind.md 3.9). The server stores it only while none is
+   stored."
+  ([topic-id pos-ms] (save-position! topic-id pos-ms nil))
+  ([topic-id pos-ms duration-ms]
+   #?(:cljs (when (and topic-id pos-ms (.-sendBeacon js/navigator))
+              (let [body (str "topic_id=" topic-id "&pos_ms=" (js/Math.round pos-ms)
+                              (when duration-ms
+                                (str "&duration_ms=" (js/Math.round duration-ms))))
+                    blob (js/Blob. #js [body]
+                           #js {:type "application/x-www-form-urlencoded"})]
+                (.sendBeacon js/navigator "/api/video/position" blob))
+              nil)
+      :clj nil)))
 
 (defn element-time-ms
   "currentTime of a media element in ms, or nil."

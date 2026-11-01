@@ -12,7 +12,7 @@
 
 (def all
   #{"basic" "pdf" "page" "epub" "web" "wikipedia" "markdown" "supermemo"
-    "video" "video-playlist" "audio" "score" "poem" "code" "repo" "commit" "dir"
+    "video" "video-playlist" "youtube" "audio" "score" "poem" "code" "repo" "commit" "dir"
     "gdoc" "gdoc-snapshot"})
 
 (def home-kinds

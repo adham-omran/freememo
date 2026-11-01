@@ -76,6 +76,7 @@
    ;; Both are phase-1 tables, unlike the blob tables above: their rows travel
    ;; as ordinary JSON, so the topic id in each needs translating like any other.
    :topic_code {:topic_id :topics}
+   :topic_youtube {:topic_id :topics}
    :repo_selections {:topic_id :topics}
    :topic_pins {:topic_id :topics :media_id :media}
    :reading_positions {:topic_id :topics}
@@ -152,6 +153,7 @@
    ;; topic_id is the PRIMARY KEY of both tables. A row whose topic did not
    ;; translate has no identity at all, so it is dropped and reported.
    :topic_code #{:topic_id}
+   :topic_youtube #{:topic_id}
    :repo_selections #{:topic_id}
    :occlusion_groups #{:image_media_id}
    :score_groups #{:clip_media_id}

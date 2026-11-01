@@ -9688,3 +9688,58 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .commit-card__sha { font-size: 12px; overflow-wrap: anywhere; }
 .commit-card__walk { align-self: flex-start; }
 .commit-card__refusal { margin: 0; }
+
+/* ── YouTube topic pane (plans/youtube-kind.md 3.11, 6.2) ─────────────────
+   The player keeps at least 200×200 with nothing in front of it, as the
+   embedded player's terms require. The frame's only child is the player's
+   iframe, which freememo.youtube-player inserts. */
+.youtube-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: var(--sp-2);
+}
+.youtube-frame {
+  flex: 1 1 auto;
+  min-width: 200px;
+  min-height: 200px;
+  background: #000;
+}
+.youtube-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.youtube-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 10px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-toolbar);
+  flex-shrink: 0;
+}
+.youtube-time {
+  width: 7em;
+}
+.youtube-link {
+  margin-left: auto;
+  font-size: 12px;
+}
+.youtube-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 6px 10px;
+  font-size: 13px;
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-light);
+}
+.youtube-desktop {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+}

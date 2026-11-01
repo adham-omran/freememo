@@ -33,6 +33,8 @@
             [freememo.kg-code :as kg-code]
             [freememo.sphinx-import :as sphinx-import]
             [freememo.supermemo-import :as sm-import]
+            [freememo.youtube-import :as youtube-import]
+            [freememo.youtube-url :as youtube-url]
             [clojure.string :as str]
             [freememo.wikipedia :as wiki]))
 
@@ -46,9 +48,11 @@
          enough to run on the click path, which is why the duplicate answer is
          immediate while a real import is not."
   [user-id url]
-  (when-let [src (db/find-source-by-url user-id url)]
-    (when-let [t (db/find-web-topic-by-source-id user-id (:sources/id src))]
-      {:topic-id (:topics/id t) :title (:topics/title t)})))
+  (if (youtube-url/parse url)
+    (youtube-import/existing-topic user-id url)
+    (when-let [src (db/find-source-by-url user-id url)]
+      (when-let [t (db/find-web-topic-by-source-id user-id (:sources/id src))]
+        {:topic-id (:topics/id t) :title (:topics/title t)}))))
 
 (defn- attach-biblio-best-effort!
   "Best-effort biblio attach — log and swallow exceptions so a biblio
@@ -62,58 +66,76 @@
   "Fetch a URL and either import as a web topic or stage as binary.
    Pre  : user-id is a logged-in user; url is non-blank.
    Post : returns one of:
-            {:ok true :flow :imported       :topic-id N :title S}
+            {:ok true :flow :imported       :topic-id N :title S :warning S?}
             {:ok true :flow :already-exists :topic-id N :title S}
             {:ok true :flow :staged :dispatch :pdf|:epub
                        :upload-id S :filename S :flow-label S}
             {:ok false :error S}.
    Invariant: a topic with the canonical URL is created at most once
-   (dedupe via sources.url → topics.source_id)."
+   (dedupe via sources.url → topics.source_id; a YouTube video dedupes by
+   its video id).
+
+   A YouTube URL is answered before the page fetch: the video streams from
+   YouTube, so there is nothing to fetch (plans/youtube-kind.md 2.1)."
   [user-id url]
   (try
-    (let [r (wiki/fetch-url url)]
-      (cond
-        (false? (:success r))
-        {:ok false :error (:error r)}
+    (if-let [parsed (youtube-url/parse url)]
+      (youtube-import/import! user-id parsed)
+      (let [r (wiki/fetch-url url)]
+        (cond
+          (false? (:success r))
+          {:ok false :error (:error r)}
 
-        (:dispatch r)
-        (let [{:keys [^bytes bytes filename]} r
-              flow (:dispatch r)
-              upload-id (staging/stage! user-id bytes filename flow)]
-          {:ok true :flow :staged :dispatch flow
-           :upload-id upload-id :filename filename
-           :flow-label (case flow :pdf "PDF" :epub "EPUB" (name flow))})
+          (:dispatch r)
+          (let [{:keys [^bytes bytes filename]} r
+                flow (:dispatch r)
+                upload-id (staging/stage! user-id bytes filename flow)]
+            {:ok true :flow :staged :dispatch flow
+             :upload-id upload-id :filename filename
+             :flow-label (case flow :pdf "PDF" :epub "EPUB" (name flow))})
 
-        :else
-        (let [canonical-url (or (get-in r [:biblio :local :URL]) (:url r) url)
-              existing-source (db/find-source-by-url user-id canonical-url)
-              existing-topic  (when existing-source
-                                (db/find-web-topic-by-source-id user-id (:sources/id existing-source)))]
-          (if existing-topic
-            {:ok true :flow :already-exists
-             :topic-id (:topics/id existing-topic)
-             :title (:topics/title existing-topic)}
-            (let [html (:html (image-rehost/rehost-html-images!
-                                 {:html (:html r) :base-url (:url r) :user-id user-id}))
-                  topic-id (db/create-web-topic! user-id (:title r) html
-                             {:url (:url r)
-                              :source-type (:source-type r)
-                              :issued-date-parts (:issued-date-parts r)})]
-              (when topic-id
-                (attach-biblio-best-effort! user-id topic-id (:biblio r))
-                (commands/bump! user-id :import-document))
-              {:ok true :flow :imported :topic-id topic-id
-               :title (:topics/title (db/get-topic topic-id))})))))
+          :else
+          (let [canonical-url (or (get-in r [:biblio :local :URL]) (:url r) url)
+                existing-source (db/find-source-by-url user-id canonical-url)
+                existing-topic  (when existing-source
+                                  (db/find-web-topic-by-source-id user-id (:sources/id existing-source)))]
+            (if existing-topic
+              {:ok true :flow :already-exists
+               :topic-id (:topics/id existing-topic)
+               :title (:topics/title existing-topic)}
+              (let [html (:html (image-rehost/rehost-html-images!
+                                   {:html (:html r) :base-url (:url r) :user-id user-id}))
+                    topic-id (db/create-web-topic! user-id (:title r) html
+                               {:url (:url r)
+                                :source-type (:source-type r)
+                                :issued-date-parts (:issued-date-parts r)})]
+                (when topic-id
+                  (attach-biblio-best-effort! user-id topic-id (:biblio r))
+                  (commands/bump! user-id :import-document))
+                {:ok true :flow :imported :topic-id topic-id
+                 :title (:topics/title (db/get-topic topic-id))}))))))
     (catch Exception e
       (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
 
 (defn import-url!*
   "Pre: user-id is authenticated and url is non-blank.
-   Post: the shared import records its result and activity outcome.
-   Invariant: every URL entry point uses this lifecycle."
+   Post: the shared import records its result and activity outcome. A result
+         with :warning has also reached the user as a warning toast.
+   Invariant: every URL entry point uses this lifecycle.
+
+   The warning toast is pushed here because every link entry point passes
+   through: the Import modal and a clicked link both see it once
+   (plans/youtube-kind.md 2.3.1)."
   [user-id url]
-  (import-activity/run-url! user-id url #(fetch-and-import-url!* user-id url)))
+  (let [r (import-activity/run-url! user-id url #(fetch-and-import-url!* user-id url))]
+    (when (:warning r)
+      (toasts/push! user-id
+        {:level :warning
+         :message (:warning r)
+         :actions [{:label "Open"
+                    :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]}))
+    r))
 
 (defn import-html!*
   "Pre: title and content are non-blank. run-id is nil or owns HTML review.
@@ -161,6 +183,11 @@
                         (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
                         {:ok false :error (.getMessage e)}))]
               (cond
+                ;; Imported with a warning: `import-url!*` already pushed the
+                ;; warning toast, which carries the same Open action.
+                (and (:ok r) (:topic-id r) (:warning r))
+                nil
+
                 (and (:ok r) (:topic-id r))
                 (toasts/push! user-id
                   {:level :success

@@ -794,11 +794,16 @@
      ;; topic, so the tree is what changes.
      :extract-video   {:label "Extract video range" :class :mutation :palette-hidden true
                        :table #{:topics :video_segments} :views #{:tree-mutations}}
+     ;; YouTube clip extract (plans/youtube-kind.md 4.4). Same shape as
+     ;; :extract-video: a new child topic, so only the tree re-reads.
+     :extract-clip    {:label "Extract YouTube clip" :class :mutation :palette-hidden true
+                       :table #{:topics :topic_youtube} :views #{:tree-mutations}}
      :save-video-position {:label "Save video position" :class :mutation :palette-hidden true
                            ;; No :views — the position is written on pause and
                            ;; unmount and read only on the next mount. Bumping
                            ;; here would re-render the player mid-playback.
-                           :table #{:topic_videos} :views #{}}
+                           ;; One beacon route serves uploaded and YouTube video.
+                           :table #{:topic_videos :topic_youtube} :views #{}}
      ;; Same shape as :save-video-position, for the same reason: a beacon on a
      ;; scroll pause and on leave, read only on the next mount
      ;; (plans/reading-position-memory.md §4 4.5, 4.6).

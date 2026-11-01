@@ -30,7 +30,9 @@
    [freememo.desktop-version :as desktop-version]
    [freememo.sync-schema :as sync-schema]
    [freememo.text :as text]
-   [freememo.topic-kinds :as topic-kinds])
+   [freememo.topic-kinds :as topic-kinds]
+   [freememo.youtube-clip :as youtube-clip]
+   [freememo.youtube-url :as youtube-url])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
 
@@ -1670,6 +1672,27 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_video_segments_topic
                       ON video_segments(topic_id)"])
+
+  ;; One row per kind='youtube' topic (plans/youtube-kind.md 1.2). No bytes:
+  ;; the video streams from YouTube's embedded player, so usage_bytes never
+  ;; moves. A NULL range is the root video; a range is a clip. Each clip
+  ;; carries its own video_id (decision C1), so a clip plays without reading
+  ;; its parent. The 11-character id format is a convention Google does not
+  ;; document.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_youtube (
+      topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+      video_id TEXT NOT NULL CHECK (video_id ~ '^[A-Za-z0-9_-]{11}$'),
+      start_ms INTEGER,
+      end_ms INTEGER,
+      duration_ms INTEGER,
+      last_pos_ms INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK ((start_ms IS NULL) = (end_ms IS NULL)),
+      CHECK (start_ms IS NULL OR (start_ms >= 0 AND start_ms < end_ms))
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_youtube_video
+                      ON topic_youtube(video_id)"])
 
   ;; Chunked-upload sessions (§4.3). The large object is created — and the
   ;; quota reserved — at init, so an abandoned session leaks BOTH until the
@@ -5185,14 +5208,18 @@
     (log/audit! {:id ::topic-created :user-id user-id :action :create
                  :entity :document :entity-id topic-id})))
 
-(defn create-topic!
-  "Create a topic. attrs is a map with keys:
-   :user-id :kind :title :parent-id :content :page-number
-   :source-id :status :priority :extract?
-   :source-id attaches an existing `sources` row (bibliography).
-   :extract? true marks a topic the user made with Extract (`is_extract`).
-   Returns the created row with :topics/id."
-  [attrs]
+(defn insert-topic!
+  "The INSERT behind `create-topic!`, on `conn`, with NO audit signal.
+
+   For a caller that creates a topic together with rows that must commit with
+   it. The audit is a log line, not a row, so the caller emits it with
+   `audit-doc-created!` after the commit: inside the transaction, a rollback
+   would leave a \"created\" line for a topic that does not exist.
+
+   Pre:  attrs as `create-topic!` takes them; `conn` is `ds` or an open
+         transaction.
+   Post: the created row with :topics/id."
+  [conn attrs]
   (let [clean-title (input/prettify-title (input/sanitize-title (:title attrs)))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
@@ -5206,11 +5233,21 @@
                           :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
               (:source-id attrs) (assoc :source_id (:source-id attrs))
-              (:extract? attrs) (assoc :is_extract true))
-        created (jdbc/execute-one! ds
-                  (sql/format {:insert-into :topics
-                               :values [row]
-                               :returning [:*]}))]
+              (:extract? attrs) (assoc :is_extract true))]
+    (jdbc/execute-one! conn
+      (sql/format {:insert-into :topics
+                   :values [row]
+                   :returning [:*]}))))
+
+(defn create-topic!
+  "Create a topic. attrs is a map with keys:
+   :user-id :kind :title :parent-id :content :page-number
+   :source-id :status :priority :extract?
+   :source-id attaches an existing `sources` row (bibliography).
+   :extract? true marks a topic the user made with Extract (`is_extract`).
+   Returns the created row with :topics/id."
+  [attrs]
+  (let [created (insert-topic! ds attrs)]
     (audit-doc-created! (:user-id attrs) (:topics/id created))
     created))
 
@@ -10787,6 +10824,159 @@
         ["INSERT INTO video_segments (topic_id, start_ms, end_ms) VALUES (?, ?, ?)"
          extract-id (int start-ms) (int end-ms)])
       {:success true :id extract-id})))
+
+;; ── YouTube topics (plans/youtube-kind.md) ─────────────────────────────────
+
+(defn get-topic-youtube
+  "The topic_youtube row of a topic, or nil. Unqualified keys."
+  [topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT topic_id, video_id, start_ms, end_ms, duration_ms, last_pos_ms
+      FROM topic_youtube WHERE topic_id = ?" topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn- get-topic-youtube-for-user
+  "The topic_youtube row of `topic-id` joined to its topic, scoped to
+   `user-id`; nil when the topic is missing, staged for deletion, or owned by
+   somebody else. The ownership gate for a clip's parent."
+  [conn user-id topic-id]
+  (jdbc/execute-one! conn
+    ["SELECT ty.topic_id, ty.video_id, ty.start_ms, ty.end_ms, ty.duration_ms,
+             t.title
+      FROM topic_youtube ty JOIN topics t ON ty.topic_id = t.id
+      WHERE ty.topic_id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn find-youtube-root
+  "The user's root video for `video-id`, or nil (plans/youtube-kind.md 2.4).
+
+   Only a root counts: a clip of the same video is a different topic. A topic
+   staged for deletion is excluded, because staging keeps its topic_youtube
+   row, and a paste after a delete must make a new topic, not point at a
+   hidden one.
+
+   Post: {:topic-id N :title S} or nil."
+  [user-id video-id]
+  (some-> (jdbc/execute-one! ds
+            ["SELECT t.id, t.title
+              FROM topic_youtube ty JOIN topics t ON ty.topic_id = t.id
+              WHERE t.user_id = ? AND ty.video_id = ? AND ty.start_ms IS NULL
+                AND t.staged_delete_id IS NULL
+              ORDER BY t.id LIMIT 1"
+             user-id video-id]
+            {:builder-fn rs/as-unqualified-maps})
+          (as-> r {:topic-id (:id r) :title (:title r)})))
+
+(defn create-youtube-topic!
+  "Create a root YouTube topic with its bibliography source, in one
+   transaction (plans/youtube-kind.md 2.5, 2.7).
+
+   Pre:  `video-id` satisfies `youtube-url/video-id?`; `title` is non-blank;
+         `channel` is a string or nil; `start-ms` is the URL's start time or
+         nil. The caller has checked `find-youtube-root`.
+   Post: {:topic-id N :title S}. The source, the topic and its topic_youtube
+         row all exist, or none does. The audit line follows the commit.
+   Blame: a malformed video-id is a caller bug, and the table CHECK rejects it."
+  [user-id {:keys [video-id title channel start-ms]}]
+  (let [clean-title (input/prettify-title (input/sanitize-title title))
+        _ (input/check-length! :title clean-title input/title-max)
+        url (youtube-url/watch-url video-id)
+        csl (cond-> {:type "motion_picture"
+                     :title clean-title
+                     :URL url
+                     :container-title "YouTube"
+                     :accessed {:date-parts (now-date-parts)}}
+              (not (str/blank? channel)) (assoc :author [{:literal channel}]))
+        created
+        (jdbc/with-transaction [tx ds]
+          (let [source (jdbc/execute-one! tx
+                         (sql/format {:insert-into :sources
+                                      :values [{:user_id user-id
+                                                :csl_type "motion_picture"
+                                                :csl (->jsonb csl)
+                                                :url url
+                                                :title clean-title
+                                                :container_title "YouTube"}]
+                                      :returning [:id]}))
+                topic (insert-topic! tx {:user-id user-id
+                                         :kind "youtube"
+                                         :title (available-import-title tx user-id clean-title)
+                                         ;; "" not NULL: the notes editor mounts
+                                         ;; on an empty body.
+                                         :content ""
+                                         :source-id (:sources/id source)})
+                topic-id (:topics/id topic)]
+            (jdbc/execute! tx
+              ["INSERT INTO topic_youtube (topic_id, video_id, last_pos_ms)
+                VALUES (?, ?, ?)"
+               topic-id video-id (int (max 0 (or start-ms 0)))])
+            {:topic-id topic-id :title (:topics/title topic)}))]
+    (audit-doc-created! user-id (:topic-id created))
+    created))
+
+(defn create-youtube-clip!
+  "Create a clip: a child YouTube topic over [start-ms, end-ms) of its parent
+   (plans/youtube-kind.md 4.2, 4.3).
+
+   The parent may be a root video or a clip (decision N1). The clip stores the
+   parent's video_id (decision C1), starts with empty content, and is an
+   extract. The topic and its topic_youtube row commit together, because a
+   clip with no row has nothing to play.
+
+   Pre:  `parent-id` is a YouTube topic.
+   Post: {:success true :id N}, or {:success false :error S} with no topic
+         created. The audit line follows the commit.
+   Blame: an error answer is the caller's bad range or a topic the user does
+          not own."
+  [user-id parent-id start-ms end-ms title]
+  (if-let [parent (get-topic-youtube-for-user ds user-id parent-id)]
+    (if-let [error (youtube-clip/range-error start-ms end-ms (:duration_ms parent)
+                     {:start-ms (:start_ms parent) :end-ms (:end_ms parent)})]
+      {:success false :error error}
+      ;; Cloned before the transaction, as `create-video-extract!` does: the
+      ;; clone owns its connection. A failure after it leaves one unreferenced
+      ;; sources row and no topic.
+      (let [inherited (clone-source! user-id (resolve-effective-source-id parent-id))
+            clip-id
+            (jdbc/with-transaction [tx ds]
+              (let [topic (insert-topic! tx {:parent-id parent-id
+                                             :user-id user-id
+                                             :kind "youtube"
+                                             :title title
+                                             :content ""
+                                             :source-id inherited
+                                             :extract? true})
+                    topic-id (:topics/id topic)]
+                (jdbc/execute! tx
+                  ["INSERT INTO topic_youtube (topic_id, video_id, start_ms, end_ms,
+                                               duration_ms, last_pos_ms)
+                    VALUES (?, ?, ?, ?, ?, ?)"
+                   topic-id (:video_id parent) (int start-ms) (int end-ms)
+                   (:duration_ms parent) (int start-ms)])
+                topic-id))]
+        (audit-doc-created! user-id clip-id)
+        {:success true :id clip-id}))
+    {:success false :error "Video not found"}))
+
+(defn save-youtube-position!
+  "Persist a YouTube topic's resume position, and its duration while none is
+   stored (plans/youtube-kind.md 3.8, 3.9). Ownership-scoped, so a forged
+   topic-id writes nothing. The duration is written once: a clip inherits its
+   parent's, and a later report cannot change a fixed video.
+
+   Post: the number of rows updated, 0 or 1. 0 means the topic is not a
+         YouTube topic of this user."
+  [user-id topic-id pos-ms duration-ms]
+  (-> (jdbc/execute-one! ds
+        ["UPDATE topic_youtube
+          SET last_pos_ms = GREATEST(0, ?),
+              duration_ms = COALESCE(duration_ms, ?)
+          WHERE topic_id = ? AND topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+         (int (max 0 (or pos-ms 0)))
+         (when (and duration-ms (pos? duration-ms)) (int duration-ms))
+         topic-id user-id])
+      ::jdbc/update-count))
 
 ;; ── Chunked upload sessions (§4.3) ─────────────────────────────────────────
 

@@ -16,6 +16,7 @@
    [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
    [freememo.video-pane :refer [VideoPane]]
    [freememo.video-transcript :refer [VideoTranscriptPane]]
+   [freememo.youtube-pane :refer [YoutubePane]]
    [freememo.code-pane :refer [CodePane]]
    [freememo.commit-card :refer [CommitCard]]
    [freememo.gdoc-home :refer [GdocHome]]
@@ -160,6 +161,25 @@
       (PaneDragHandle :x dctx/!left-pct dctx/left-pct
         "Resize video and editor panes"))))
 
+(e/defn YoutubeSplitPane
+  "The player half of a YouTube topic: player and clip controls in a column
+   sized by left-pct, then its handle, with the notes editor beside it
+   (plans/youtube-kind.md 6.2). No transcript and no waveform. Renders nothing
+   for any other topic, mirroring PdfSplitPane. Own e/defn for the 64KB method
+   cap.
+
+   Pre:  dctx/video-topic-id is bound by the caller."
+  []
+  (e/client
+    (when (some? dctx/youtube)
+      (dom/div
+        (dom/props {:style {:width (str dctx/left-pct "%")
+                            :display "flex" :flex-direction "column"
+                            :min-width "0" :min-height "0" :overflow "auto"}})
+        (YoutubePane))
+      (PaneDragHandle :x dctx/!left-pct dctx/left-pct
+        "Resize video and editor panes"))))
+
 (e/defn CodeSplitPane
   "The code half of a file imported from a git forge: CodePane in a column sized
    by left-pct, then its handle, with the editor beside it. Renders nothing for
@@ -238,7 +258,8 @@
               ;; All four surfaces of §4.8 8.1 remain visible and independently
               ;; usable; only their arrangement changed.
               (binding [dctx/video-topic-id page-topic-id]
-                (VideoSplitPane))
+                (VideoSplitPane)
+                (YoutubeSplitPane))
               ;; Files from a git forge: read-only source beside the notes editor.
               (CodeSplitPane))
             (binding [dctx/topic-id page-topic-id

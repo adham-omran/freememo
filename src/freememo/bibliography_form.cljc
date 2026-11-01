@@ -141,6 +141,7 @@
     (= kind "score")                 ["Score"     "var(--color-badge-pdf)"]
     (= kind "video")                 ["Video"     "var(--color-badge-video)"]
     (= kind "video-playlist")        ["Playlist"  "var(--color-badge-video)"]
+    (= kind "youtube")               ["YouTube"   "var(--color-badge-video)"]
     (= kind "code")                  ["Code"      "var(--color-badge-web)"]
     (= kind "repo")                  ["Repo"      "var(--color-badge-occlusion)"]
     (= kind "commit")                ["Commit"    "var(--color-badge-occlusion)"]

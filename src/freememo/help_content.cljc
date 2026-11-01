@@ -142,7 +142,7 @@
     :title "Import video"
     :intro "Bring in one video or a playlist, with a transcript you can read and extract from."
     :steps [{:label "Add the files"
-             :detail "Import → Video, then drop files or click the box. MP4, MKV, WebM, OGV and MOV are accepted, up to 8 GB each. ＋ Add more adds files. FreeMemo takes files only. It cannot import a YouTube or other video link."
+             :detail "Import → Video, then drop files or click the box. MP4, MKV, WebM, OGV and MOV are accepted, up to 8 GB each. ＋ Add more adds files. This dialog takes files only. To add a YouTube video, paste its link, as Import YouTube describes."
              :commands #{:import-video}}
             {:label "Choose Upload as"
              :detail "Separate documents makes one topic for each video. New playlist makes a playlist topic with the videos under it. Add to existing playlist adds them to a playlist you have."
@@ -159,6 +159,30 @@
             {:label "Extract a range"
              :detail "Drag on the waveform to mark a range. ▶ range plays it and ⟲ loop repeats it. Extract range makes a child topic for that range, with its part of the transcript."
              :commands #{:extract-video}}]}
+   {:slug "import-youtube"
+    :title "Import YouTube"
+    :intro "Watch a YouTube video in FreeMemo, take notes beside it, and cut it into clips you review."
+    :steps [{:label "Paste the link"
+             :detail "Import → Link, then paste a YouTube link and import it. Watch, youtu.be, Shorts and embed links all work. A link with a start time, such as t=90, opens there. A playlist link imports its one video, never the playlist. The same video pasted again opens the topic you already have."
+             :commands #{}}
+            {:label "Watch and resume"
+             :detail "The player sits beside the notes editor. It never starts by itself. FreeMemo saves the position when you pause and when you leave, and the video opens there next time."
+             :commands #{}}
+            {:label "Mark a clip"
+             :detail "Mark in sets the start to the current time, and Mark out sets the end. You can also type a time, such as 1:05 or 1:05.5, in each field."
+             :commands #{}}
+            {:label "Extract clip"
+             :detail "Extract clip makes a child topic for the marked range, with an empty notes editor. A clip is at least 1 second long. You can cut a clip from a clip, inside its range."
+             :commands #{:extract-clip}}
+            {:label "Review a clip"
+             :detail "A clip opens paused at its start. When playback reaches its end, it pauses. If you seek past the end, it plays on. Replay clip plays it again from its start."
+             :commands #{}}
+            {:label "When a video does not play"
+             :detail "Some owners do not allow their videos to play outside YouTube. If the import suspects this, it warns you, and the topic is still made. If the player refuses the video, the pane says so and links to it on YouTube."
+             :commands #{}}
+            {:label "In the desktop app"
+             :detail "The desktop app cannot play YouTube videos. It shows Open in browser in place of the player."
+             :commands #{}}]}
    {:slug "new-topic"
     :title "Write a new topic"
     :intro "Start a topic with no imported content, and write in it."
@@ -790,6 +814,7 @@
    "supermemo"      "import-supermemo"
    "video"          "import-video"
    "video-playlist" "import-video"
+   "youtube"        "import-youtube"
    "audio"          "import-audio"
    "score"          "score-cards"
    "poem"           "import-poem"

@@ -166,6 +166,12 @@
 (e/declare video-last-pos-ms)   ; resume position, read once at mount
 (e/declare video-has-audio?)    ; extracted MP3 exists ⇒ a waveform can render
 
+;; ── YouTube state (kind='youtube' topics only) ─────────────────────────────
+;; plans/youtube-kind.md 6.1. nil for any other kind, else
+;; {:video-id :start-ms :end-ms :duration-ms :last-pos-ms :desktop?}. A NULL
+;; range is the root video; a range is a clip.
+(e/declare youtube)
+
 ;; ── Code state (files imported from a git forge) ───────────────────────────
 ;; plans/git-forge-integration.md §4.4. A `code` topic from an older `kg-code`
 ;; import is NOT is-code?: it has no repo_path and no pane.

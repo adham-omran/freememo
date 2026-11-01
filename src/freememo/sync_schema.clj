@@ -72,6 +72,7 @@
    :topic_videos [["topic_id" :topics]]
    :topic_epubs [["topic_id" :topics]]
    :topic_code [["topic_id" :topics]]
+   :topic_youtube [["topic_id" :topics]]
    :repo_selections [["topic_id" :topics]]
    :video_transcripts [["topic_id" :topics]]
    :video_segments [["topic_id" :topics]]

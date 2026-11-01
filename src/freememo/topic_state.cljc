@@ -23,6 +23,7 @@
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.page-ocr :as page])
+   #?(:clj [freememo.peer :as peer])
    #?(:clj [freememo.db :as db])))
 
 ;; ---------------------------------------------------------------------------
@@ -50,7 +51,8 @@
                                     (= kind "score") topic
                                     (and (= kind "page") (= root-kind "pdf")) (or root topic)
                                     :else nil)
-               video-row (when (= kind "video") (db/get-topic-video topic-id))]
+               video-row (when (= kind "video") (db/get-topic-video topic-id))
+               youtube-row (when (= kind "youtube") (db/get-topic-youtube topic-id))]
            ;; Scalars only — TopicPage destructures this map client-side, so
            ;; every key crosses the wire on each :refresh tick. Content bodies
            ;; are fetched separately: get-topic-content* (gated off for PDFs)
@@ -73,6 +75,18 @@
             :video-last-pos-ms (:last_pos_ms video-row)
             :video-has-audio? (and (some? video-row)
                                 (db/topic-file-exists? topic-id "audio"))
+            ;; YouTube (plans/youtube-kind.md 6.1): nil for every other kind.
+            ;; One small map of scalars, read once per topic load. The player
+            ;; reads it at mount; the range and video id never change for a
+            ;; topic. :desktop? is decided by the peer that serves the page,
+            ;; because the desktop app cannot play an embed (decision D1).
+            :youtube (when youtube-row
+                       {:video-id (:video_id youtube-row)
+                        :start-ms (:start_ms youtube-row)
+                        :end-ms (:end_ms youtube-row)
+                        :duration-ms (:duration_ms youtube-row)
+                        :last-pos-ms (:last_pos_ms youtube-row)
+                        :desktop? (peer/desktop?)})
             ;; A file imported from a git forge (§4.4 4.1). `repo_path` is what
             ;; separates it from the older kind='code' topics `kg-code` writes,
             ;; which keep their source in `content` and have no pane to show.
@@ -204,9 +218,10 @@
         root-topic-id (:root-topic-id overview)
         is-pdf? (some? pdf-root-id)
         focus-available? (focus-reader/available? kind is-pdf?)
-        ;; A source pane sits beside the editor only on these three (§2.2).
+        ;; A source pane sits beside the editor only on these four (§2.2).
         ;; `kind` cannot say it: a kg-code topic is kind "code" with no pane.
-        has-source-pane? (boolean (or is-pdf? (:is-video? overview) (:is-code? overview)))]
+        has-source-pane? (boolean (or is-pdf? (:is-video? overview) (:is-code? overview)
+                                      (some? (:youtube overview))))]
     {:kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
      :is-score? (boolean (:is-score? overview))
      :focus-available? focus-available?
@@ -441,6 +456,7 @@
        :video-duration-ms (:video-duration-ms overview)
        :video-last-pos-ms (:video-last-pos-ms overview)
        :video-has-audio? (boolean (:video-has-audio? overview))
+       :youtube (:youtube overview)
        :is-code? (boolean (:is-code? overview))
        :code-has-source? (boolean (:code-has-source? overview))
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)

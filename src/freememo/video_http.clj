@@ -121,7 +121,13 @@
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn position-handler
-  "POST /api/video/position — form-encoded {topic_id, pos_ms}. §4.8 8.7.
+  "POST /api/video/position — form-encoded {topic_id, pos_ms, duration_ms?}.
+   §4.8 8.7, and plans/youtube-kind.md 3.8 for a YouTube topic.
+
+   One route serves both kinds. Each UPDATE matches only its own table, so a
+   YouTube topic writes `topic_youtube` and any other topic falls through to
+   `topic_videos`. `duration_ms` is read for a YouTube topic only: its length
+   comes from the player, where an uploaded video's comes from ffprobe.
 
    An HTTP route rather than an Electric server call because the write must
    survive teardown: the client fires it with `navigator.sendBeacon` on pause
@@ -135,9 +141,11 @@
   (if-let [user-id (require-auth request)]
     (try
       (let [topic-id (some-> (get-in request [:params "topic_id"]) str parse-long)
-            pos-ms (some-> (get-in request [:params "pos_ms"]) str parse-long)]
+            pos-ms (some-> (get-in request [:params "pos_ms"]) str parse-long)
+            duration-ms (some-> (get-in request [:params "duration_ms"]) str parse-long)]
         (when (and topic-id pos-ms)
-          (db/save-video-position! user-id topic-id pos-ms))
+          (when (zero? (db/save-youtube-position! user-id topic-id pos-ms duration-ms))
+            (db/save-video-position! user-id topic-id pos-ms)))
         (json-response 200 {:success true}))
       (catch Exception e
         (tel/error! {:id ::video-position} e)

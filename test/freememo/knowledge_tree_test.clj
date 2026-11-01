@@ -39,6 +39,6 @@
 
 (deftest document-kind-filter-covers-root-kinds
   (is (= ["all" "basic" "pdf" "epub" "web" "wikipedia" "markdown"
-          "audio" "score" "video" "video-playlist" "code" "supermemo"
+          "audio" "score" "video" "video-playlist" "youtube" "code" "supermemo"
           "poem"]
          (mapv first tree/document-kind-options))))
