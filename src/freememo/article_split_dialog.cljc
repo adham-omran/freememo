@@ -9,6 +9,7 @@
    [freememo.forms-ext :as fields]
    [freememo.modal-shell :as modal]
    [freememo.rich-text-editor :as editor]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.article-split :as article-split])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.undo :as undo])))
@@ -102,8 +103,9 @@
             (dom/summary (dom/text "Inspect section"))
             (dom/iframe
               ;; Media requires session cookies. Keep scripts disabled.
-              (dom/props {:class "article-split__content" :title (str "Preview: " title)
+              (dom/props {:class "article-split__content"
                           :sandbox "allow-same-origin" :srcdoc (preview-document content)})
+              (tooltip/Tooltip! (str "Preview: " title) :aria? true)
               (modal/IframeEscape close!)))
           (e/amb))))))
 

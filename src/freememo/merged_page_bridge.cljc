@@ -11,7 +11,7 @@
 
    ARRIVE — the page the reader is returned to after the editor installs a
    body. Every install puts the editor at scrollTop 0, which in this mode is
-   page 1 whatever page was asked for. Four entrances reach that: a deep link
+   the range's first page. Four entrances reach that: a deep link
    at `/viewer/topic/<root>/<page>`, turning the mode on while reading,
    reopening the document in-app, and an OCR scan finishing mid-read. They share
    one cause, so the trigger is `rich-text-editor/!content-generation` — the
@@ -32,6 +32,7 @@
    [hyperfiddle.electric3 :as e]
    [freememo.doc-context :as dctx]
    [freememo.editor-actions :as editor-actions]
+   [freememo.merged-window :as merged-window]
    [freememo.rich-text-editor :as editor]))
 
 (e/defn MergedPageBridge
@@ -111,5 +112,7 @@
       (let [scrolled (e/watch editor-actions/!scrolled-page)
             page (:page scrolled)]
         (when (and merged? (some? page) (= (:doc-id scrolled) doc-id)
+                (= (:body-key scrolled) (merged-window/body-key doc-id true merged-page-numbers))
+                (some #{current} merged-page-numbers)
                 (not= page current) on-page-change!)
           (on-page-change! page))))))

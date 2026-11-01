@@ -25,6 +25,8 @@
   (:require [freememo.schedule-fsrs :as sf]
             [freememo.logging :as log]
             [freememo.task-owner :as owner]
+   [freememo.task-request :as request]
+   [freememo.schedule-history :as history]
             ;; `anki-call!` is cljs-only, so a plain `:refer` fails to resolve
             ;; on the JVM peer and this whole namespace stops loading. The pure
             ;; half — `preset?`, `config-deck-candidates`, `ignore-before-ms`,
@@ -192,64 +194,42 @@
                  (if (js/isNaN t) 0 (long t))))
       (catch #?(:clj Exception :cljs :default) _ 0))))
 
+(defn card-row
+  "Project one replayed state into a Schedule cache row."
+  [info state fingerprint high-water]
+  (let [cid (:cardId info)
+        anki-ivl (anki-interval->days (:interval info))
+        last-ms (:last-review-ms state)
+        hw high-water]
+    {:anki_card_id cid
+     :anki_note_id (:note info)
+     :deck (:deckName info)
+     ;; Normalized so the stored row already satisfies
+     ;; `fsrs/review-card`'s `step nil ⟺ state = 2`. A card pushed to Anki
+     ;; but never reviewed has no replayed state at all, and writing it as
+     ;; Learning with a null step makes every later projection of it throw
+     ;; from inside FSRS.
+     :state (:state (sf/->fsrs-card state))
+     :step (:step (sf/->fsrs-card state))
+     :stability (:stability state)
+     :difficulty (:difficulty state)
+     ;; A card Anki reports at interval 0 is new or in learning. It has no
+     ;; interval in force, so the replayed one is the only figure there is.
+     :interval_days (if (pos? anki-ivl) anki-ivl (or (:interval-days state) 0.0))
+     :last_review_ms last-ms
+     :due_ms (when (and last-ms (pos? anki-ivl))
+               (+ (long last-ms) (long (* anki-ivl sf/ms-per-day))))
+     :reps (or (:reps state) 0)
+     :config_fingerprint fingerprint
+     :high_water_revlog_id hw}))
+
 (defn card-rows
-  "Merge `cardsInfo` and the replayed revlog into the rows the cache stores.
-
-   Pre : `infos` is the `cardsInfo` result and `revlog-by-card` is keyed by
-         Anki card id, holding each card's WHOLE history. `scheduler` is
-         configured from the deck config.
-   Post: one row per card in `infos`, carrying derived FSRS state plus the
-         anchors the projection needs. A card whose whole revlog is manual
-         entries has nil stability and reads as never-reviewed (§5.8.5), never
-         as an error.
-   Inv : every replay starts fresh. There used to be a second mode that
-         continued from a cached state, for the incremental pull the namespace
-         docstring describes; getting the flag backwards was silent, and each
-         card would have reported the stability of its last few reviews alone.
-         The mode is gone with the pull that needed it.
-
-   The interval comes from ANKI, not from the replay. Anki's `ivl` is the
-   interval actually in force — fuzzed, load-balanced, possibly hand-set — and
-   it is what decides when the user next sees the card. The replayed stability
-   decides every review AFTER that one. Using the replayed interval for the
-   first step would forecast a schedule the user is not on.
-
-   The last-review anchor comes from the REVLOG, not from `due`. `cardsInfo`
-   reports `due` for a review card in days since the collection was created,
-   and no action in the allowed set of §1.5 exposes that origin. `max(revlog.id)`
-   is an absolute epoch timestamp and needs no anchor, which is what §2.5's
-   cross-check asserts."
-  [scheduler infos revlog-by-card
-   {:keys [cutoff-ms fingerprint] :or {cutoff-ms 0}}]
-  (mapv
-    (fn [info]
-      (let [cid (:cardId info)
-            log (sf/filtered-revlog (get revlog-by-card cid []) cutoff-ms)
-            state (sf/replay scheduler log)
-            anki-ivl (anki-interval->days (:interval info))
-            last-ms (:last-review-ms state)
-            hw (if (seq log) (long (:id (peek log))) 0)]
-        {:anki_card_id cid
-         :anki_note_id (:note info)
-         :deck (:deckName info)
-         ;; Normalized so the stored row already satisfies
-         ;; `fsrs/review-card`'s `step nil ⟺ state = 2`. A card pushed to Anki
-         ;; but never reviewed has no replayed state at all, and writing it as
-         ;; Learning with a null step makes every later projection of it throw
-         ;; from inside FSRS.
-         :state (:state (sf/->fsrs-card state))
-         :step (:step (sf/->fsrs-card state))
-         :stability (:stability state)
-         :difficulty (:difficulty state)
-         ;; A card Anki reports at interval 0 is new or in learning. It has no
-         ;; interval in force, so the replayed one is the only figure there is.
-         :interval_days (if (pos? anki-ivl) anki-ivl (or (:interval-days state) 0.0))
-         :last_review_ms last-ms
-         :due_ms (when (and last-ms (pos? anki-ivl))
-                   (+ (long last-ms) (long (* anki-ivl sf/ms-per-day))))
-         :reps (or (:reps state) 0)
-         :config_fingerprint fingerprint
-         :high_water_revlog_id hw}))
+  "Replay each complete card history and project its cache row."
+  [scheduler infos revlog-by-card {:keys [cutoff-ms fingerprint] :or {cutoff-ms 0}}]
+  (mapv (fn [info]
+          (let [rows (sf/filtered-revlog (get revlog-by-card (:cardId info) []) cutoff-ms)
+                state (sf/replay scheduler rows)]
+            (card-row info state fingerprint (if (seq rows) (long (:id (peek rows))) 0))))
     infos))
 
 ;; ---------------------------------------------------------------------------
@@ -357,67 +337,14 @@
                           :fsrsParams5 (count (:fsrsParams5 cfg))
                           :fsrsParams6 (count (:fsrsParams6 cfg))})))))))))
 
-#?(:cljs
-   (defn revlog!
-     "§2.4 — the WHOLE revlog for `card-ids`, grouped by card id.
-
-      One path, and it names its cards. The namespace docstring records what
-      the deck-scoped incremental path lost.
-
-      Batched at `notes-info-batch` for the reason `cards-info!` batches: the
-      response carries one object per review, and a whole account's history in
-      a single response is megabytes (measured: 1624 cards, 6575 rows, 798 KB).
-
-      Post: a task of {card-id [{:id :ease :ivl :type} …]}, complete for every
-            card named. A card Anki holds with no reviews is absent from the
-            map, which `card-rows` reads as never-reviewed."
-     [card-ids]
-     (m/sp
-       (loop [batches (partition-all notes-info-batch (vec card-ids))
-              acc {}]
-         (if-let [b (first batches)]
-           (let [res (m/? (anki-call! "getReviewsOfCards" {:cards (vec b)}))]
-             (recur (rest batches)
-               ;; getReviewsOfCards keys its result by card id, which JSON
-               ;; renders as an object KEY — a string, which `anki-call!`'s
-               ;; keywordizing turns into a keyword. The rest of this feature
-               ;; keys on the numeric id, so the key is read back out of the
-               ;; keyword's name.
-               (reduce-kv (fn [m k v] (assoc m (js/parseInt (name k) 10) (vec v)))
-                 acc res)))
-           acc)))))
 
 #?(:cljs
    (defn acquire!
-     "The whole client-side acquisition, in one task (§2).
-
-      This stops at RAW rows. §9.4.1 puts the AnkiConnect I/O in the browser
-      because only the browser can reach localhost:8765, and §9.4.2 puts the
-      replay on the server because the branch tree of §4.6 would occupy the
-      browser's only thread. So this returns `:infos` and `:revlog` verbatim
-      and calls `card-rows` nowhere.
-
-      Pre : `note-ids` are `flashcards.anki_note_id` values for the document's
-            pushed cards. `push-deck` is the deck FreeMemo pushes this user's
-            cards to, or nil.
-      Post: a task of one of
-              {:status :ok :deck :deck-config :fingerprint :infos :revlog
-               :card-count :note-card-ids}
-              {:status :unsupported :missing [action …]}      ; §8.1, cause 1
-              {:status :no-deck}                              ; cards in no deck
-              {:status :filtered-deck :deck}                  ; no preset reachable
-              {:status :no-fsrs :deck :param-counts {…}}      ; §8.1, causes 2 and 3
-              {:status :no-cards}                             ; §8.3
-      Post: `:revlog` is always the WHOLE history of every card named, so the
-            server replays from fresh and no flag can be read backwards.
-
-      The deck is inferred, ranked by how many of the document's cards each
-      holds. `push-deck` is a LAST resort, tried only when no deck the cards
-      are actually in yields a preset — which happens when the user gathers the
-      whole document into a filtered deck to study it. Trying it first would
-      let a stale setting name a deck governing none of these cards, which is
-      why §2 rejected asking the user in the first place."
-     [note-ids push-deck]
+     "Read card metadata and send complete histories through acknowledged replay chunks.
+      Each history starts from fresh state. Filtered decks preserve every named card.
+      The server receives at most 1,000 reviews per replay request.
+      Return compact acquisition metadata after every card finishes."
+     [note-ids push-deck consume!]
      (m/sp
        (let [probe (m/? (probe!))]
          (if-not (:ok? probe)
@@ -450,21 +377,15 @@
                           :param-counts (:param-counts found)})
                        (let [deck (:deck found)
                              cfg (:config found)
-                             log (m/? (revlog! card-ids))]
+                             base {:deck deck :deck-config cfg :fingerprint (sf/config-fingerprint cfg)}
+                             result (m/? (history/read-history! anki-call! consume! base infos))]
                          (log/log-debug
                            (str "[schedule-anki] deck=" deck
                              " notes=" (count note-ids)
                              " cards=" (count card-ids)
                              " decks-seen=" (count candidates)
-                             " revlog-cards=" (count log)))
-                         {:status :ok
-                          :deck deck
-                          :deck-config cfg
-                          :fingerprint (sf/config-fingerprint cfg)
-                          :infos (vec infos)
-                          :revlog log
-                          :card-count (count card-ids)
-                          :note-card-ids n->c}))))))))))))
+                             " streamed-reviews=" (:review-count result)))
+                         (merge base result {:status :ok :card-count (count card-ids)})))))))))))))
 
 #?(:cljs
    (defn run-acquire!
@@ -482,13 +403,13 @@
       An unreachable Anki is not an error state here. §8.2 requires the tab to
       serve cached state with a staleness marker, so the failure callback
       writes `{:status :unreachable}` and the caller decides what to render."
-     [note-ids push-deck !result]
+     [note-ids push-deck !result !request run-id]
      (reset! !result nil)
-     (owner/start! (acquire! note-ids push-deck)
-      (fn [res] (reset! !result res))
+     (owner/start! (acquire! note-ids push-deck #(request/request! !request (assoc % :run-id run-id)))
+      (fn [res] (reset! !result (assoc res :run-id run-id)))
       (fn [err]
         (log/log-debug (str "[schedule-anki] unreachable: " (.-message err)))
-        (reset! !result {:status :unreachable :message (.-message err)})))))
+        (reset! !result {:status :unreachable :message (.-message err) :run-id run-id})))))
 
 (defn start-acquire!
   "Reactive-body-safe entry to `run-acquire!`.
@@ -500,6 +421,6 @@
 
    Start once inside a keyed frame with `e/snapshot`.
    Register the returned canceller with that frame's `e/on-unmount`."
-  [note-ids push-deck !result]
-  #?(:cljs (run-acquire! note-ids push-deck !result)
+  [note-ids push-deck !result !request run-id]
+  #?(:cljs (run-acquire! note-ids push-deck !result !request run-id)
      :clj nil))

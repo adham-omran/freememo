@@ -38,6 +38,12 @@
           edges {:source 20 :pred-set nil :min-degree 1
                  :view-mode :neighborhood :selected "a" :depth 1}))))
 
+(deftest a-known-isolated-node-remains-visible
+  (is (= {:node-ids #{"isolated"} :edge-ids #{}}
+        (graph-state/visible-subgraph []
+          {:source :all :min-degree 1 :view-mode :overview
+           :standalone-node-ids #{"isolated"}}))))
+
 (deftest parallel-relations-do-not-inflate-connectedness
   (let [parallel-edges [{:id "0" :source "a" :target "b" :pred 0 :topic 10}
                         {:id "1" :source "a" :target "b" :pred 1 :topic 10}

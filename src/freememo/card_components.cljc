@@ -10,6 +10,7 @@
    [freememo.logging :as log]
    #?(:clj [freememo.toasts :as toasts])
    [freememo.anki-review :as review]
+   [freememo.anki-note-deletion-client :as note-deletion]
    [freememo.occlusion-ordinals :as ord]
    [freememo.audio-clip :as clip]
    [freememo.math :as math]
@@ -91,9 +92,7 @@
   [note-ids]
   #?(:cljs
      (when (seq note-ids)
-       ((anki-call! "deleteNotes" {:notes (vec note-ids)})
-        (fn [_] nil)
-        (fn [_] nil)))
+       (note-deletion/start! anki-call! note-ids))
      :clj nil))
 
 #?(:clj

@@ -130,9 +130,7 @@
              (.updateContents ed delta "api")
              ;; Stored form via editor-html, never .root.innerHTML — a raw read
              ;; would persist Quill's rendered KaTeX subtree instead of the TeX.
-             (reset! editor/!dirty-html
-               {:html (quill-field/editor-html ed)
-                :topic-id (:topic-id @editor/!editor-state)}))
+             (editor/publish-dirty! (quill-field/editor-html ed)))
            blocks)))))
 
 (defn after-paint!

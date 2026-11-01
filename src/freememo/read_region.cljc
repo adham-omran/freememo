@@ -16,6 +16,26 @@
          250)))
 
 #?(:clj
+   (def ^:dynamic *read-context*
+     "Optional aggregate context for a controlled measurement run."
+     {}))
+
+#?(:clj
+   (defn read-event
+     "Build safe metric fields without query text, account IDs, or content."
+     [region context outcome duration-ms]
+     (merge {:metric "server-read"
+             :region (name region)
+             :outcome outcome
+             :duration-ms duration-ms
+             :thread (.getName (Thread/currentThread))
+             :build (or (System/getenv "READ_BUILD_REVISION") (config/git-commit))
+             :run (or (System/getenv "READ_TRACE_RUN") "unassigned")
+             :route "unspecified"
+             :phase "query"}
+       (select-keys context [:build :run :route :phase :fixture-size :result-count]))))
+
+#?(:clj
    (defn timed-read
      "Run read! and log its duration and the name of the thread that ran it.
 
@@ -26,26 +46,33 @@
       Post: returns the value of read!, or rethrows what read! threw.
             Writes one log line per call: :info at or above slow-read-ms,
             :debug below it, and :warn when read! throws."
-     [region read!]
+     ([region read!] (timed-read region *read-context* read!))
+     ([region context read!]
      (let [started-at (System/nanoTime)
-           elapsed-ms #(long (/ (- (System/nanoTime) started-at) 1000000))
-           line (fn [outcome duration-ms]
+           elapsed-ms #(/ (double (- (System/nanoTime) started-at)) 1000000.0)
+           line (fn [{:keys [outcome duration-ms thread build run route phase]}]
                   (str "Timed read region=" (name region)
                     " outcome=" outcome
                     " duration-ms=" duration-ms
-                    " thread=" (.getName (Thread/currentThread))))]
+                    " thread=" thread
+                    " build=" build " run=" run " route=" route " phase=" phase))]
        (try
          (let [value (read!)
-               duration-ms (elapsed-ms)]
+               duration-ms (elapsed-ms)
+               event (read-event region
+                       (cond-> context (vector? value) (assoc :result-count (count value)))
+                       "ok" duration-ms)]
            (if (>= duration-ms slow-read-ms)
-             (log/log-info (line "ok" duration-ms))
-             (log/log-debug (line "ok" duration-ms)))
+             (log/log-info (line event) event)
+             (log/log-debug (line event) event))
            value)
          (catch Throwable error
-           (log/log-warn
-             (str (line "error" (elapsed-ms))
-               " error=" (or (.getMessage error) (.getName (class error)))))
-           (throw error))))))
+           (let [event (assoc (read-event region context "error" (elapsed-ms))
+                         :error-class (.getName (class error)))]
+             (log/log-warn
+               (str (line event)
+                 " error=" (or (.getMessage error) (.getName (class error)))) event))
+           (throw error)))))))
 
 (defn measured-result
   "Measure one server read and convert its outcome to a region result.

@@ -271,6 +271,43 @@
 ;; Ingest — raw acquisition in, derived state out (§9.4.2, §9.4.3)
 ;; ---------------------------------------------------------------------------
 
+(defn start-acquisition! [!owner]
+  #?(:clj (locking !owner (let [id (str (random-uuid))] (reset! !owner id) id)) :cljs nil))
+
+(defn cancel-acquisition! [!owner run-id]
+  #?(:clj (locking !owner (when (= run-id @!owner) (reset! !owner nil))) :cljs nil))
+
+(defn commit-acquisition! [!owner run-id write!]
+  #?(:clj
+     (locking !owner
+       (if (= run-id @!owner)
+         (write!)
+         (throw (ex-info "A newer Schedule acquisition owns this result." {:cancelled? true}))))
+     :cljs nil))
+
+(defn ingest-history-chunk!
+  "Continue a complete-history replay from its acknowledged preceding chunk."
+  [user-id {:keys [deck-config fingerprint info reviews initial final?]} !owner run-id]
+  #?(:clj
+     (try
+       (when (> (count reviews) 1000)
+         (throw (ex-info "A Schedule history chunk exceeds 1,000 reviews." {})))
+       (let [scheduler (sf/scheduler-from-deck-config deck-config)
+             rows (sf/filtered-revlog reviews (sa/ignore-before-ms (:ignoreRevlogsBeforeDate deck-config)))
+             state (sf/replay scheduler rows initial)]
+         (when final?
+           (let [row (sa/card-row info state fingerprint (or (:last-review-ms state) 0))
+                 row (-> row
+                       (dissoc :last_review_ms :due_ms)
+                       (assoc :last_review_at (some-> (:last_review_ms row) long java.sql.Timestamp.)
+                              :due_at (some-> (:due_ms row) long java.sql.Timestamp.)))]
+             (commit-acquisition! !owner run-id #(db/upsert-anki-card-states! user-id [row]))))
+         {:ok true :state state})
+       (catch Throwable error
+         (log/log-error (str "[schedule] history chunk failed: " (.getMessage error)))
+         {:ok false :error (.getMessage error)}))
+     :cljs nil))
+
 (defn ingest-acquisition!
   "Replay one `schedule-anki/acquire!` result and store the derived state.
 
@@ -318,8 +355,8 @@
            (db/upsert-anki-card-states! user-id db-rows)
            (cmd/bump-channels! user-id #{:schedule-mutations})
            (log/log-info (str "[schedule] ingested deck=" deck
-                           " cards=" (count db-rows)))
-           {:ok true :stored (count db-rows) :deck deck :fingerprint fingerprint
+                           " cards=" (if (:streamed? acquisition) (:card-count acquisition) (count db-rows))))
+           {:ok true :stored (if (:streamed? acquisition) (:card-count acquisition) (count db-rows)) :deck deck :fingerprint fingerprint
             :theta (:desired-retention sched)})
          (catch Throwable e
            ;; A replay that throws MUST still return. The caller sequences its

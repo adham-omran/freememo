@@ -16,6 +16,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.assistant-modes :as modes]
+   [freememo.assistant-reference-choice :as choice]
    [freememo.tooltip :as tooltip]
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
@@ -110,6 +111,7 @@
                     :style {:--count reference-document-count
                             :--grid-cols "1fr"
                             :--row-height (str row-height "px")}})
+        (e/drain (when open? (choice/keep-selected-visible! dom/node selected-index row-height)))
         (let [[offset limit]
               (Scroll-window row-height reference-document-count dom/node
                 {:overquery-factor 2 :reset-key mention-query})]
@@ -128,13 +130,14 @@
                                       (when selected?
                                         " assistant-panel__mention-option--selected"))
                              :type "button" :role "option"
+                             :data-mention-query (:mention-query document)
                              :aria-selected (str selected?)})
                           (tooltip/Tooltip! (:title document))
                           (dom/text (:title document))
                           (dom/On "mousedown"
                             (fn [event]
                               (.preventDefault event)
-                              (reset! !picked i))
+                              (reset! !picked (choice/capture document)))
                             nil))))))))))
         ;; Keep the virtual list mounted at zero rows. A query can only change
         ;; its row count, never tear down its Scroll-window frame.

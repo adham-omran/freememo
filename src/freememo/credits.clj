@@ -14,18 +14,26 @@
    [taoensso.telemere :as tel]))
 
 (defn request-base-url
-  "Public origin for an incoming Ring request — `https://freememo.net` in prod,
-   `http://localhost:8080` in dev. Used for Wayl webhook + redirection URLs so
-   neither path needs a config knob. Honors X-Forwarded-Proto + Host when a
-   reverse proxy is in front; falls back to :scheme + :server-* otherwise."
+  "Public origin for Wayl webhook + redirection URLs — `https://freememo.net`
+   in prod, `http://localhost:8080` in dev.
+   APP_BASE_URL (or :deployment :app-base-url) wins when set, with any trailing
+   slash removed. Production sets it because the request cannot tell the
+   scheme: the Cloudflare tunnel ends TLS, and Caddy then sends
+   X-Forwarded-Proto `http`. From 2026-08-26 to 2026-10-30 every Wayl link
+   carried http:// URLs for that reason.
+   With no configured value, the origin comes from X-Forwarded-Proto + Host,
+   else from :scheme + :server-*."
   [request]
-  (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
-                   (name (or (:scheme request) :http)))
-        host (or (get-in request [:headers "host"])
-                 (str (:server-name request)
-                   (when-let [port (:server-port request)]
-                     (str ":" port))))]
-    (str scheme "://" host)))
+  (if-let [configured (some-> (config/env-or-config "APP_BASE_URL" [:deployment :app-base-url])
+                              str str/trim not-empty (str/replace #"/+$" ""))]
+    configured
+    (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
+                     (name (or (:scheme request) :http)))
+          host (or (get-in request [:headers "host"])
+                   (str (:server-name request)
+                     (when-let [port (:server-port request)]
+                       (str ":" port))))]
+      (str scheme "://" host))))
 
 ;; ── Pure cost computation (§5.2) ──
 
@@ -143,24 +151,31 @@
 
 ;; ── Purchase (§5.5) ──
 
+(declare top-up-packs iqd-display?)
+
 (defn start-checkout!
   "Create a pending order + Wayl top-up link for a preset amount.
-   Pre:  credits enabled; amount-iqd is a configured preset; base-url is the
-         app's public HTTPS origin; country-code is ISO-3166 alpha-2 or nil.
-   Post: a pending credit_orders row exists; returns {:ok true :url u} or
-         {:ok false :error msg} (order marked failed on provider error).
-         Non-IQ (incl. nil) country → URL has `currency=usd` appended."
-  [user-id amount-iqd base-url country-code]
-  (cond
-    (not (config/credits-enabled?))
-    {:ok false :error "Credits are not enabled"}
+   Pre:  credits enabled; amount is the :amount of one of
+         (top-up-packs country-code), so IQD for Iraq and whole USD for
+         every other country; base-url is the app's public HTTPS origin;
+         country-code is ISO-3166 alpha-2 or nil.
+   Post: a pending credit_orders row exists for the pack's IQD; returns
+         {:ok true :url u} or {:ok false :error msg} (order marked failed on
+         provider error). Non-IQ (incl. nil) country → URL has
+         `currency=usd` appended."
+  [user-id amount base-url country-code]
+  (let [pack (some #(when (= amount (:amount %)) %) (top-up-packs country-code))]
+    (cond
+      (not (config/credits-enabled?))
+      {:ok false :error "Credits are not enabled"}
 
-    (not (contains? (set (config/presets)) amount-iqd))
-    {:ok false :error "Invalid top-up amount"}
+      (nil? pack)
+      {:ok false :error "Invalid top-up amount"}
 
-    :else
-    (let [reference-id (str "fm-" (random-uuid))
-          usd? (not= "IQ" country-code)]
+      :else
+      (let [amount-iqd (:iqd pack)
+            reference-id (str "fm-" (random-uuid))
+            usd? (not (iqd-display? country-code))]
       (db/insert-credit-order! user-id reference-id amount-iqd)
       (let [r (wayl/create-link! {:reference-id reference-id
                                   :amount-iqd amount-iqd
@@ -171,7 +186,7 @@
           (do (db/set-order-wayl-fields! reference-id (:code r) (:link-id r))
               {:ok true :url (:url r)})
           (do (db/fail-credit-order! reference-id)
-              {:ok false :error (:error r)}))))))
+              {:ok false :error (:error r)})))))))
 
 ;; ── Reconciliation (§5.10.2) — webhook miss / dev fallback ──
 
@@ -197,22 +212,135 @@
           :else
           {:ok true :credited false :wayl-status s})))))
 
-;; ── USD display formatting ──
+;; ── Abandoned checkouts ──
 
-(defn iqd->usd-str
-  "Format an IQD amount as a USD approximation string for in-app display only.
-   Pre: iqd is a non-negative number or nil.
-   Post: nil when iqd is nil or fx-iqd-per-usd is nil/0;
-         '~$0.00' when iqd is 0;
-         '<$0.01' when 0 < usd < 0.01;
-         '~$X.YY' otherwise.
-   The on-page disclaimer covers the 'approximate' framing."
-  [iqd]
-  (when iqd
-    (when-let [fx (config/fx-iqd-per-usd)]
-      (when (pos? fx)
-        (let [usd (/ iqd (double fx))]
-          (cond
-            (zero? iqd) "~$0.00"
-            (< usd 0.01) "<$0.01"
-            :else (format "~$%.2f" usd)))))))
+(def abandon-after-minutes
+  "Age at which a pending order counts as abandoned. Every completed payment
+   so far finished within 5 minutes of its link being created."
+  30)
+
+(def abandon-lookback-hours
+  "The sweep ignores pending orders older than this, so a deploy does not mail
+   about every order that was abandoned before the sweep existed."
+  24)
+
+(defn- sweep-order!
+  "Check one pending order at Wayl. Credit it when Wayl reports it paid; else
+   mail about it once. Returns the outcome keyword."
+  [{:keys [reference-id user-id kind amount-iqd created-at email display-name tries paid]}]
+  (let [r (reconcile-order! reference-id)]
+    (cond
+      (not (:ok r))
+      ;; wayl/get-link-status already mailed the lookup failure. The order
+      ;; stays unmarked, so the next sweep tries it again.
+      :lookup-failed
+
+      (or (:credited r) (:licensed r))
+      (do (commands/bump! user-id :credits-granted)
+          (tel/log! {:level :info :id ::sweep-credited
+                     :data {:reference-id reference-id :user-id user-id :email email
+                            :kind kind :amount-iqd amount-iqd}}
+            "Paid checkout credited by the sweep: the buyer never reached the return page")
+          :credited)
+
+      (= :already (:reason r))
+      :already-complete
+
+      :else
+      (do (tel/log! {:level :info :id ::checkout-abandoned
+                     :data {:reference-id reference-id :user-id user-id
+                            :email email :name display-name
+                            :kind kind :amount-iqd amount-iqd :created-at (str created-at)
+                            :wayl-status (:wayl-status r)
+                            :orders-by-user tries :paid-orders-by-user paid}}
+            "Checkout abandoned: the user went to Wayl and did not pay")
+          (db/mark-order-abandon-alerted! reference-id)
+          :abandoned))))
+
+(defn sweep-abandoned-checkouts!
+  "Hourly sweep job. Each pending order between `abandon-after-minutes` and
+   `abandon-lookback-hours` old is checked at Wayl once more: a paid one is
+   credited (the buyer closed the tab before the return page), and an unpaid
+   one logs ::checkout-abandoned, which freememo.logging mails, once per order.
+   Returns the outcome per reference-id. No-op when credits are off."
+  []
+  (when (config/credits-enabled?)
+    (into {}
+      (for [o (db/unalerted-pending-orders abandon-after-minutes abandon-lookback-hours)]
+        [(:reference_id o)
+         (sweep-order! {:reference-id (:reference_id o) :user-id (:user_id o)
+                        :kind (:kind o) :amount-iqd (:amount_iqd o)
+                        :created-at (:created_at o) :email (:email o)
+                        :display-name (:display_name o)
+                        :tries (:tries o) :paid (:paid o)})]))))
+
+(db/register-sweep-job! ::abandoned-checkouts #'sweep-abandoned-checkouts!)
+
+;; ── Display currency ──
+;;
+;; Iraq sees prices in IQD. Every other country, and an unknown one, sees them
+;; in USD. The Wayl checkout follows the same rule, so a label and the checkout
+;; page always name one currency. :fx-iqd-per-usd is set to the rate Wayl shows
+;; USD at, so a USD label is the amount the checkout page shows, not an
+;; approximation of it.
+
+(defn iqd-display?
+  "True when this country sees prices in IQD. Only Iraq does."
+  [country-code]
+  (= "IQ" country-code))
+
+(defn group-digits
+  "A whole number with comma thousands separators: 50000 → \"50,000\".
+   Locale-fixed, so a server locale cannot turn the comma into a dot."
+  [n]
+  (String/format java.util.Locale/US "%,d" (object-array [(long n)])))
+
+(defn usd-str
+  "A USD amount as a price: \"$40\" when whole, \"$3.29\" otherwise,
+   \"<$0.01\" for a positive amount below one cent. Rounds to the cent."
+  [usd]
+  (let [cents (Math/round (* 100.0 (double usd)))]
+    (cond
+      (and (pos? usd) (zero? cents)) "<$0.01"
+      (zero? (mod cents 100)) (str "$" (group-digits (quot cents 100)))
+      :else (str "$" (group-digits (quot cents 100))
+              (String/format java.util.Locale/US ".%02d" (object-array [(mod cents 100)]))))))
+
+(defn usd->iqd
+  "IQD that Wayl charges for a USD amount, at the configured rate. nil when the
+   rate is unconfigured."
+  [usd]
+  (when-let [fx (config/fx-iqd-per-usd)]
+    (when (pos? fx)
+      (long (Math/ceil (* (double usd) fx))))))
+
+(defn top-up-packs
+  "The top-up buttons this country sees, each {:amount a :iqd n :label s}.
+   :amount is in the pack's own currency (IQD for Iraq, whole USD otherwise)
+   and is what start-checkout! takes. :iqd is what Wayl charges and how many
+   credits the pack adds. A USD pack is absent while the rate is unconfigured."
+  [country-code]
+  (if (iqd-display? country-code)
+    (mapv (fn [iqd] {:amount iqd :iqd iqd :label (str (group-digits iqd) " IQD")})
+      (config/presets))
+    (into []
+      (keep (fn [usd]
+              (when-let [iqd (usd->iqd usd)]
+                {:amount usd :iqd iqd
+                 :label (str (usd-str usd) " (" (group-digits iqd) " credits)")})))
+      (config/presets-usd))))
+
+(defn credits-label
+  "A credit amount for display: 12340 → \"12,340 credits\". The same in every
+   country: a balance is in credits, and only a price names a currency."
+  [credits]
+  (str (group-digits (or credits 0)) " credits"))
+
+(defn top-up-note
+  "The sentence under the top-up buttons: how many credits a unit of this
+   country's currency buys."
+  [country-code]
+  (let [fx (config/fx-iqd-per-usd)]
+    (if (or (iqd-display? country-code) (nil? fx))
+      "You get 1 credit for each 1 IQD you pay."
+      (str "You get " (group-digits fx) " credits for each $1."))))

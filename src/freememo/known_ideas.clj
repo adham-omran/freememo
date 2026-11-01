@@ -190,7 +190,7 @@
    Post: {:ok true} once queued, or {:error} when the idea has no material."
   [user-id entity-id]
   (if-let [material (db/idea-material user-id entity-id)]
-    (do (card-gen/enqueue-card-gen!
+    (let [outcome (card-gen/enqueue-card-gen!
           {:id (str (random-uuid))
            :content (material-html material)
            :context (material-context material)
@@ -203,8 +203,8 @@
            :entity-id entity-id
            :pre-prompt nil
            :pre-prompt-mode nil
-           :success-toast? true})
-        {:ok true})
+           :success-toast? true})]
+      (if (= :enqueued outcome) {:ok true} outcome))
     {:error "There is no passage to make cards from."}))
 
 (defn check-card-ids

@@ -20,7 +20,8 @@
 (defn- clear! []
   (reset! (us/get-atom uid :anki-run) {})
   (reset! (us/get-atom uid :anki-run-cancellers) {})
-  (reset! (us/get-atom uid :anki-run-errors) {}))
+  (reset! (us/get-atom uid :anki-run-errors) {})
+  (reset! (us/get-atom uid :anki-run-results) {}))
 
 (use-fixtures :each (fn [f] (clear!) (try (f) (finally (clear!)))))
 
@@ -88,6 +89,27 @@
     (lease/release! uid run-id "boom")
     (lease/claim! uid)
     (is (nil? (registry/work-error "anki-reconcile" uid collection)))))
+
+(deftest release-records-the-summary-for-the-reporter
+  (let [{run-id :run-id} (lease/claim! uid nil 17)]
+    (is (= {:work-key collection :activity-floor 17} (lease/owned-run uid run-id)))
+    (is (= :released (lease/release! uid run-id nil "12 sent to Anki")))
+    (is (= "12 sent to Anki" (registry/work-summary "anki-reconcile" uid collection)))
+    (is (nil? (registry/work-error "anki-reconcile" uid collection)))
+    (is (nil? (lease/owned-run uid run-id)) "a released run owns nothing")))
+
+(deftest a-claim-clears-the-previous-summary
+  (let [{run-id :run-id} (lease/claim! uid)]
+    (lease/release! uid run-id nil "12 sent to Anki")
+    (lease/claim! uid)
+    (is (nil? (registry/work-summary "anki-reconcile" uid collection)))))
+
+(deftest a-late-release-records-no-summary
+  (let [{old :run-id} (lease/claim! uid)]
+    (age-heartbeat! (inc lease/ttl-ms))
+    (lease/claim! uid)
+    (is (= :not-owner (lease/release! uid old nil "stale words")))
+    (is (nil? (registry/work-summary "anki-reconcile" uid collection)))))
 
 (deftest the-activity-reading-follows-the-lease
   (let [{run-id :run-id} (lease/claim! uid)]

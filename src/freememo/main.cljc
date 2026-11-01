@@ -47,6 +47,7 @@
             [freememo.nav-rail :as nav-rail :refer [NavRail]]
             [freememo.spotlight :as spotlight :refer [Spotlight]]
             [freememo.quick-sync :refer [QuickSyncButton]]
+            [freememo.anki-note-deletion-client :as manual-deletion]
             [freememo.video-import-modal :refer [VideoUploadActivity]]
             [freememo.import-modal :refer [StagingUploadActivity]]
             [freememo.command-bus :as bus]
@@ -471,6 +472,7 @@
                 ;; collection, so a driver mounted under one document died on
                 ;; navigation and took the in-flight run with it.
                 (QuickSyncButton user-id)
+                (manual-deletion/Owner user-id)
 
                 ;; Activity mirrors for the pushed tier (headless). At the root
                 ;; because the transfers they watch outlive the modals that

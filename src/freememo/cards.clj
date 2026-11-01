@@ -567,12 +567,17 @@
    With `entity-id`, the cards are made from that known idea, and the insert
    and the links to the idea commit in one transaction
    (db/insert-flashcards-for-entity!, plans/known-ideas.md §2.4). A card the
-   uniqueness indexes skip is linked too."
+   uniqueness indexes skip is linked too.
+
+   The optional `commit!` wrapper receives the insert thunk after image preparation.
+   A canceled generation can reject that thunk before any card insert."
   ([user-id topic-id root-topic-id kind cards]
    (save-cards user-id topic-id root-topic-id kind cards true))
   ([user-id topic-id root-topic-id kind cards bake?]
    (save-cards user-id topic-id root-topic-id kind cards bake? nil))
   ([user-id topic-id root-topic-id kind cards bake? entity-id]
+   (save-cards user-id topic-id root-topic-id kind cards bake? entity-id (fn [write!] (write!))))
+  ([user-id topic-id root-topic-id kind cards bake? entity-id commit!]
    (try
      (let [rows (map (fn [card]
                        (if (= kind "overlapping")
@@ -617,19 +622,21 @@
                              :unstored unstored :reason reason}}
              "save-cards rejected — pasted image could not be stored")
            {:success false :error (str "Image could not be stored: " reason)})
-         (let [rows (mapv :row rehosted)
-               ids (vec (if entity-id
-                          (db/insert-flashcards-for-entity! user-id entity-id rows)
-                          (db/insert-flashcards! rows)))
-               skipped (- (count rehosted) (count ids))]
-           (log/audit! {:id ::save-cards :user-id user-id :action :create
-                        :entity :card :n (count ids)})
-           (tel/log! {:level :info :id ::save-cards-detail
-                      :data {:user-id user-id :topic-id topic-id :kind kind
-                             :ids ids :n (count ids) :skipped skipped
-                             :card-hash (hash cards)}}
-             "save-cards detail")
-           {:success true :ids ids :skipped skipped})))
+         (commit!
+           (fn []
+             (let [rows (mapv :row rehosted)
+                   ids (vec (if entity-id
+                              (db/insert-flashcards-for-entity! user-id entity-id rows)
+                              (db/insert-flashcards! rows)))
+                   skipped (- (count rehosted) (count ids))]
+               (log/audit! {:id ::save-cards :user-id user-id :action :create
+                            :entity :card :n (count ids)})
+               (tel/log! {:level :info :id ::save-cards-detail
+                          :data {:user-id user-id :topic-id topic-id :kind kind
+                                 :ids ids :n (count ids) :skipped skipped
+                                 :card-hash (hash cards)}}
+                 "save-cards detail")
+               {:success true :ids ids :skipped skipped})))))
      (catch Exception e
        (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))

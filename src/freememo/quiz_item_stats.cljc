@@ -367,7 +367,7 @@
           (dom/props {:class "modal-backdrop" :style {:pointer-events "auto"}})
           (dom/div
             (dom/props {:class "modal-content item-stats-modal"})
-            (modal/ModalEscape "Item statistics" close!)
+            (modal/ModalEscape close! "Item statistics")
             (dom/div
               (dom/props {:class "item-stats-head"})
               (dom/h3 (dom/props {:style {:margin "0" :font-size "16px"}})

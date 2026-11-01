@@ -13,9 +13,15 @@
 ;; BOTH peers — so CLJS log calls obey Telemere's min-levels instead of
 ;; printing unconditionally to the browser console.
 
-(defn log-info  [msg] (tel/log! :info  msg))
-(defn log-debug [msg] (tel/log! :debug msg))
-(defn log-warn  [msg] (tel/log! :warn  msg))
+(defn log-info
+  ([msg] (tel/log! :info msg))
+  ([msg data] (tel/log! {:level :info :data data} msg)))
+(defn log-debug
+  ([msg] (tel/log! :debug msg))
+  ([msg data] (tel/log! {:level :debug :data data} msg)))
+(defn log-warn
+  ([msg] (tel/log! :warn msg))
+  ([msg data] (tel/log! {:level :warn :data data} msg)))
 (defn log-error [msg] (tel/log! :error msg))
 (defn log-trace [msg] (tel/log! :trace msg))
 
@@ -186,7 +192,9 @@
            error (:error signal)
            coords (:coords cleaned)]
        (json-compatible-value
-         (cond-> (dissoc cleaned :inst :ns :msg_ :coords)
+         (cond-> (assoc (dissoc cleaned :inst :ns :msg_ :coords)
+                  :server-build (or (System/getenv "READ_BUILD_REVISION") (config/git-commit))
+                  :process-id (.pid (java.lang.ProcessHandle/current)))
            (:inst cleaned) (assoc :timestamp (str (:inst cleaned)))
            (:ns cleaned) (assoc :logger (:ns cleaned))
            (:msg_ cleaned) (assoc :message (:msg_ cleaned))
@@ -244,6 +252,8 @@
               :freememo.wayl/create-link
               :freememo.wayl/create-link-failed
               :freememo.wayl/get-link-status
+              ;; A buyer paid and got no receipt. Someone sends it by hand.
+              :freememo.receipt/receipt-gave-up
               ;; Deployment-hook failures, in the money pool because a configured
               ;; hook that stops measuring leaves downstream spending decisions
               ;; running on bad data. Neither raises anything user-visible.
@@ -256,6 +266,10 @@
        :subject-tag "event"
        :min-level :info
        :ids #{:freememo.api/wayl-credited
+              ;; The abandoned-checkout sweep (freememo.credits): one mail per
+              ;; abandoned order, and one per paid order it had to credit.
+              :freememo.credits/checkout-abandoned
+              :freememo.credits/sweep-credited
               :freememo.google-oauth/user-signup
               :freememo.db/signup-grant
               :freememo.db/grandfather-grant}}
@@ -308,7 +322,7 @@
       {:keys [handler-id subject-tag min-level ids limit]}]
      (tel/add-handler! handler-id
        (tel-postal/handler:postal
-         {:conn-opts {:host host :port port :user user :pass pass :ssl true}
+         {:conn-opts (config/smtp-connection {:host host :port port :user user :pass pass})
           :msg-opts  {:from from :to to}
           :subject-fn (alert-subject-fn subject-tag)
           :body-fn alert-email-body})

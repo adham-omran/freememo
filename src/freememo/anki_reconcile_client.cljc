@@ -14,7 +14,7 @@
      4. `read-back!`   notesInfo again, over ONLY the notes step 3 touched
      5. (server records the batch — note ids and baselines)
      then once:
-     6. `delete!`      deleteNotes for tombstones the plan cleared
+     6. `finish-io/finish!` commits bounded pull and deletion chunks
      7. (server applies pulls, backfill, conflicts and tombstones)
 
    Step 4 is the one that looks redundant and is not. Anki normalises HTML on
@@ -26,6 +26,8 @@
   (:require
    [missionary.core :as m]
    [freememo.anki-reads :as reads]
+   [freememo.task-request :as request]
+   [freememo.anki-finish-io :as finish-io]
    [freememo.anki-digest :as digest]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.logging :as log]))
@@ -40,38 +42,27 @@
      :digest  (digest/anki-digest (:fields note) (get kind-by-note note-id))
      :mod     (:mod note)}))
 
+(defn scan-notes!
+  "Compute compact scan state and release each validated note batch."
+  [call! note-ids kind-by-note]
+  (reads/reduce-notes! call!
+    (fn [result ids notes]
+      (reduce (fn [acc [nid note]]
+                (if (:noteId note)
+                  (let [entry (note-digest-entry note kind-by-note)]
+                    (-> acc
+                      (assoc-in [:digests nid] (:digest entry))
+                      (assoc-in [:mods nid] (:mod entry))))
+                  (update acc :absent conj nid)))
+        result (map vector ids notes)))
+    {:digests {} :mods {} :absent []} note-ids))
+
 #?(:cljs
-   (defn scan!
-     "Read known notes through sequential, bounded notesInfo requests.
-
-      pre : `note-ids` is the union of the pushed-card manifest and the
-            outstanding tombstones. `kind-by-note` maps note id to the local
-            card's kind — a tombstone's note has no card, so it maps to nil and
-            digests over every field, which is the conservative reading.
-      post: task of {:digests {note-id hex} :mods {note-id n} :absent [note-id]
-                     :notes-by-id {note-id note}}.
-
-      A note id AnkiConnect does not report comes back as an empty entry rather
-      than a gap, so `absent` is derived by position against the request.
-
-      `:notes-by-id` keeps the batch so `pull-entries` can build its updates from
-      it. Holding it costs what the Library overlay already holds — 0.94 MB at
-      1477 notes, measured — and the alternative is a second full notesInfo."
-     [note-ids kind-by-note]
-     (if (empty? note-ids)
-       (m/sp {:digests {} :mods {} :absent [] :notes-by-id {}})
-       (m/sp
-         (let [notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                       :keywordize-keys true)
-               pairs (map vector note-ids notes)
-               present (into [] (keep (fn [[_ n]] (when (:noteId n) n))) pairs)]
-           (log/log-debug (str "[reconcile] scanned " (count note-ids) " notes"))
-           {:digests (into {} (map (fn [n] (let [e (note-digest-entry n kind-by-note)]
-                                             [(:note-id e) (:digest e)])))
-                       present)
-            :mods    (into {} (map (juxt :noteId :mod)) present)
-            :notes-by-id (into {} (map (juxt :noteId identity)) present)
-            :absent  (into [] (keep (fn [[nid n]] (when-not (:noteId n) nid)) pairs))})))))
+   (defn scan! [note-ids kind-by-note]
+     (m/sp
+       (let [result (m/? (scan-notes! helpers/anki-call! note-ids kind-by-note))]
+         (log/log-debug (str "[reconcile] scanned " (count note-ids) " notes"))
+         result))))
 
 #?(:cljs
    (defn write!
@@ -116,8 +107,7 @@
                                             #(get kind-by-card (:card-id %))))
                               pairs)
                card-by-note (into {} (map (juxt :anki-note-id :card-id)) pairs)
-               notes (js->clj (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                       :keywordize-keys true)]
+               notes (m/? (reads/read-notes! helpers/anki-call! note-ids))]
            (into []
              (keep (fn [n]
                      (when-let [nid (:noteId n)]
@@ -128,20 +118,6 @@
                           :anki-mod mod}))))
              notes))))))
 
-#?(:cljs
-   (defn delete!
-     "Remove notes from Anki.
-      pre : `note-ids` are tombstoned notes the plan classified `:delete-anki`.
-      post: task of the ids that were sent. AnkiConnect's deleteNotes ignores an
-            id it does not hold, so a note already gone is not an error — the
-            caller drops those tombstones either way."
-     [note-ids]
-     (if (empty? note-ids)
-       (m/sp [])
-       (m/sp
-         (m/? (helpers/anki-call! "deleteNotes" {:notes (vec note-ids)}))
-         (log/log-debug (str "[reconcile] deleted " (count note-ids) " notes"))
-         (vec note-ids)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Drivers — plain fns that run a task and land its result in atoms.
@@ -229,37 +205,22 @@
        nil)
      :clj nil))
 
-(defn run-deletes!
-  "Remove the tombstoned notes, after every batch.
 
-   The deletes run AFTER the writes deliberately. Both touch the same collection,
-   and a delete that raced a create could remove a note the same run had just
-   made if Anki reused the id.
-
-   post (async): `:!finished-note-ids` ← every tombstone this run settled, or
-         `:!error` and phase `:error`."
-  [note-ids-to-delete note-ids-to-drop recon]
+(defn run-finish-io!
+  "Read and commit pulls and deletes through bounded acknowledged requests."
+  [plan scan recon]
   #?(:cljs
      (let [g (swap! !run-gen inc)]
        (run-task! recon
-         (delete! note-ids-to-delete)
+         (finish-io/finish! helpers/anki-call!
+           #(request/request! (:!io-request recon) %) plan scan)
          g
-         (fn [deleted]
-           (reset! (:!finished-note-ids recon)
-             (vec (concat deleted note-ids-to-drop))))
-         (fn [err] (fail! recon (str "Anki delete failed: " (.-message err)))))
-       nil)
+         (fn [result]
+           (if-let [verdict (:verdict result)]
+             (if (= :cancel verdict)
+               (reset! (:!phase recon) :cancelled)
+               (fail! recon "Another tab took over this sync."))
+             (do (reset! (:!finish-io recon) result)
+                 (reset! (:!finished-note-ids recon) (:finished-note-ids result)))))
+         (fn [err] (fail! recon (str "Anki finish failed: " (.-message err))))))
      :clj nil))
-
-(defn notes-for
-  "The subset of a scan's notes the server needs to apply pulls.
-
-   pre : `notes-by-id` is `scan!`'s whole batch; `note-ids` are the notes of the
-         plan's `:pull` cards.
-   post: {note-id note} for those ids only.
-
-   Sending the whole batch back would double the run's wire cost for no gain —
-   the server builds every update itself, and only needs the handful of notes
-   whose cards it decided to pull."
-  [notes-by-id note-ids]
-  (select-keys notes-by-id (vec note-ids)))

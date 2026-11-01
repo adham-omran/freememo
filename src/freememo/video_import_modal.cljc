@@ -23,6 +23,8 @@
    [freememo.navigation :as nav]
    [freememo.commands :as commands]
    [freememo.desktop-section :as desktop-section]
+   [freememo.document-picker :as picker]
+   #?(:clj [freememo.option-queries :as options])
    [freememo.video-format :refer [format-bytes format-ms]]
    #?(:cljs [freememo.video-upload :as vu])
    #?(:cljs [freememo.video-probe :as probe])
@@ -126,17 +128,8 @@
            :hourly (video/transcription-cost-estimate user-id 3600)}
      :cljs nil))
 
-(defn playlist-options*
-  "The user's playlists as `[{:id :title}]`, for the target picker.
-
-   `_refresh` is the watched :tree-mutations counter, passed in rather than
-   closed over: it both re-reads the list after this modal creates a playlist
-   and keeps the call from being a zero-arity server call in a client `let`,
-   which diverges between the two compilers and kills the websocket (see
-   `upload-limits*`)."
-  [_refresh user-id]
-  #?(:clj (db/list-video-playlists user-id)
-     :cljs []))
+(defn have-playlists?* [_refresh user-id]
+  #?(:clj (options/any-playlist? user-id) :cljs false))
 
 ;; ^js hints only exist on the CLJS reader branch — a whole-form reader
 ;; conditional, not a body-level one, or the CLJ compiler tries to resolve `js`
@@ -534,11 +527,10 @@
    None of these atoms feeds an `e/Token`, so passing them down is safe — the
    rule that bans it applies to token inputs, whose re-derivation on any map
    change would re-fire the token."
-  [target playlist-id playlist-options title-default busy?
+  [target playlist-id have-playlists? title-default busy? user-id refresh
    !target !target-chosen? !playlist-id !title]
   (e/client
-    (let [have-playlists? (pos? (count playlist-options))
-          options (if have-playlists?
+    (let [options (if have-playlists?
                     target-labels
                     ;; §14.3 2.2 — an option that cannot be satisfied is worse
                     ;; than an absent one.
@@ -580,17 +572,10 @@
             (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                 :font-size "13px"}})
             (dom/text "Playlist")
-            (dom/select
-              (dom/props {:class "input" :disabled busy? :style {:flex "1"}})
-              (dom/option (dom/props {:value ""}) (dom/text "Choose a playlist…"))
-              (e/for [p (e/diff-by :id playlist-options)]
-                (dom/option
-                  (dom/props {:value (str (:id p)) :selected (= (:id p) playlist-id)})
-                  (dom/text (:title p))))
-              (dom/On "change"
-                (fn [e] (let [v (-> e .-target .-value)]
-                          (reset! !playlist-id (when-not (str/blank? v) (parse-long v)))))
-                nil))))
+            (dom/fieldset
+              (dom/props {:disabled busy? :class "picker-fieldset"})
+              (picker/DocumentPicker !playlist-id refresh user-id :playlist nil
+                "Choose a playlist…"))))
 
         (when (= target "new")
           (dom/label
@@ -828,7 +813,7 @@
          has started.
    Invariant: `transcribe?` is captured at commit and handed to `start!`, so a
          checkbox toggled mid-transfer cannot change what already finalized."
-  [files busy? playlist-options user-id refresh t
+  [files busy? have-playlists? user-id refresh t
    on-cancel on-upload start! !durations !uploaded-parent]
   (e/client
     (let [!target (atom nil)               ;; nil ⇒ still following the count
@@ -861,7 +846,7 @@
           estimate-message (transcription-estimate-message estimate seconds unknown)]
 
       (when (seq files)
-        (UploadTargetControls target playlist-id playlist-options title-default busy?
+        (UploadTargetControls target playlist-id have-playlists? title-default busy? user-id refresh
           !target !target-chosen? !playlist-id !title))
 
       ;; §15.3 4.1 — below the target controls, and inside the same staged-files
@@ -922,7 +907,7 @@
           ;; :tree-mutations, not :refresh — a playlist created here is a
           ;; tree-shape change, and it is the channel `:import-document` bumps.
           tree-rev (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          playlist-options (e/server (vec (playlist-options* tree-rev user-id)))
+          have-playlists? (e/server (e/Offload #(have-playlists?* tree-rev user-id)))
           !files (atom [])
           files (e/watch !files)
           ;; Probed durations, keyed by `file-identity`. Written here (the picker
@@ -1010,7 +995,7 @@
 
           ;; While busy, Cancel stops the transfer but KEEPS the modal open so the
           ;; "Upload cancelled" message lands somewhere the user can see it.
-          (UploadOptionsAndCommit files busy? playlist-options user-id refresh t
+          (UploadOptionsAndCommit files busy? have-playlists? user-id refresh t
             (fn [] (if busy? (reset! !cancel true) (close!)))
             (fn [] (reset! !error nil) (reset! !cancel false)
               (reset! !start (js/Date.now)))

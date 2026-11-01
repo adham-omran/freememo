@@ -15,6 +15,7 @@
    [freememo.row-menu :as menu]
    [freememo.tape-table :as tape]
    [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
    [freememo.util :as util]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.db :as db])
@@ -195,8 +196,7 @@
           !menu (atom nil) menu (e/watch !menu)
           !action (atom nil) action (e/watch !action)
           !merge-pick (atom nil) merge-pick (e/watch !merge-pick)
-          docs (e/server (e/Offload #(scope/list-source-docs* kg-bump user-id)))
-          doc-options (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
+          selected-source (e/server (e/Offload #(picker/selected* kg-bump user-id :source source-id)))
           ;; Actions: Rename (~66px) and ⋯ (~38px), the cell's gap and padding.
           grid-cols "34px minmax(200px,1fr) minmax(160px,1fr) 60px 140px"]
       (loading/WithLatestServerLoading
@@ -216,7 +216,7 @@
                 (dom/props {:class "knowledge-filters"})
                 (scope/SearchInput "Search entities…" query !query search-epoch)
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
-                  (typeahead/Typeahead !source-id doc-options "Filter by source…" nil nil))
+                  (picker/DocumentPicker !source-id kg-bump user-id :source nil "Filter by source…"))
                 (dom/span (dom/props {:class "knowledge-count"})
                   (dom/text (cond
                               (>= item-count entity-limit) (str entity-limit "+ entities")
@@ -229,7 +229,7 @@
                     (tape/FilterLabel (str "Search: " query) clear-search!))
                   (when (some? source-id)
                     (tape/FilterLabel
-                      (str "Source: " (or (some #(when (= source-id (:id %)) (:label %)) doc-options) source-id))
+                      (str "Source: " (or (:label selected-source) source-id))
                       (fn [] (reset! !source-id nil))))
                   (tape/ClearFilters (fn [] (clear-search!) (reset! !source-id nil)))))
               (tape/HeadedTapeTable

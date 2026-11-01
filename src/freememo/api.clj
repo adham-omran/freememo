@@ -36,6 +36,7 @@
    [freememo.config :as config]
    [freememo.client-failure-http :as client-failure-http]
    [freememo.account-export :as account-export]
+   [freememo.card-export-http :as card-export-http]
    [freememo.ai-proxy :as ai-proxy]
    [freememo.desktop-auth :as desktop-auth]
    [freememo.sync-server :as sync-server]
@@ -1253,8 +1254,10 @@
 ;; ── Credits: checkout + Wayl webhook (§5.5 / §5.6) ──────────────────
 
 (defn credits-checkout-handler
-  "POST /api/credits/checkout — {amount_iqd}. Creates a Wayl top-up link.
-   Pre:  authenticated; credits enabled; amount is a configured preset.
+  "POST /api/credits/checkout — {amount}. Creates a Wayl top-up link.
+   Pre:  authenticated; credits enabled; amount is a top-up pack for the
+         client's country (`credits/top-up-packs`): IQD for Iraq, whole USD
+         elsewhere. `amount_iqd` is still read when `amount` is absent.
    Post: {:success true :url u} or {:success false :error msg}. Wayl URL has
          `currency=usd` appended when the client IP resolves to a non-IQ country
          (or to unknown — fallback is USD).
@@ -1262,7 +1265,9 @@
   [request]
   (if-let [user-id (require-auth request)]
     (try
-      (let [amount (some-> (get-in request [:params "amount_iqd"]) parse-long)
+      (let [amount (some-> (or (get-in request [:params "amount"])
+                               (get-in request [:params "amount_iqd"]))
+                     parse-long)
             ip (geo/client-ip request)
             country (geo/country-of ip)]
         (tel/log! {:level :debug :id ::credits-checkout-geo
@@ -1391,6 +1396,10 @@
    ;; No :body key — that cap governs REQUEST bodies, and this route's body is
    ;; the response (plans/user-data-export-import.md §5.3.4).
    {:method :get  :path    "/api/account/export" :handler #'account-export/download-handler}
+   ;; Card export (plans/card-export-csv-tsv.md). GET for a topic or every
+   ;; card; POST for the Library filter, whose opts are too large for a URL.
+   {:method :get  :path    "/api/cards/export"  :handler #'card-export-http/export-handler}
+   {:method :post :path    "/api/cards/export"  :handler #'card-export-http/export-handler :body :small}
    {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
    {:method :get  :path    "/api/video/status"  :handler #'upload-http/status-handler}

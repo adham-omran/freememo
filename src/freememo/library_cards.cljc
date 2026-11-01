@@ -5,7 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.context-menu-surface :as menu-surface]
+   #?(:cljs [freememo.library-card-row :as row-view])
    [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
@@ -15,11 +15,13 @@
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-review :as review]
    [freememo.anki-review-overlay :as review-overlay]
+   [freememo.anki-sync-observation :as sync-observation]
    [freememo.anki-reconcile-client :as rc]
    [freememo.card-components :as cc
-    :refer [card-row-html set-inner-html! DeleteCardButton
+    :refer [card-row-html set-inner-html!
             overlapping-row-html occlusion-row-html
             score-row-html try-delete-anki-notes!]]
+   [freememo.card-export-modal :as card-export]
    [freememo.card-rows :as rows]
    [freememo.optimistic :as opt]
    [freememo.client-state :as cs]
@@ -297,9 +299,10 @@
        (let [q (str/lower-case (str/trim text))]
          (filterv
            (fn [c]
-             (let [hay (str/lower-case
-                         (str (str/join (map member-text (:members c)))
-                           (or (:root_title c) "")))]
+             (let [hay (or (:search-text c)
+                           (str/lower-case
+                             (str (str/join (map member-text (:members c)))
+                               (or (:root_title c) ""))))]
                (str/includes? hay q)))
            cards)))))
 
@@ -398,51 +401,63 @@
          :member-states states
          :sync-state (if (= 1 (count (set states))) (first states) :mixed)))))
 
-(defn query-user-cards* [_rev user-id opts]
+(defn load-user-cards* [revision user-id]
   #?(:clj
      (try
        (let [card-revision @(us/get-atom user-id :card-mutations)
-             {:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
-             ;; Collapse BEFORE filtering. Filtering first would leave
-             ;; :member-ids holding only the members that matched, and the row
-             ;; would then delete a subset of its own group.
-             ;; Timed alone, not with the whole thunk: gate 6.0 of
-             ;; plans/server-query-performance.md asks for this call's time.
-             all (mapv with-sync-states
-                   (rows/collapse-groups
-                     (read-region/timed-read :library-cards-rows
-                       #(db/get-user-flashcards user-id))))
-             ;; Read only when the facet is on, so the ordinary view costs no
-             ;; extra query — same rule `OverlayIds` follows on the client.
-             conflict-ids (when (contains? origins "conflict")
-                            (set (db/list-anki-conflicts user-id)))
-             filtered (-> all
-                        (filter-cards-kinds kinds)
-                        (filter-cards-origins origins overlay-ids conflict-ids)
-                        (filter-cards-flags flags overlay-ids)
-                        (filter-cards-text text))
-             sorted (sort-user-cards filtered sort-col sort-dir)
-             states (into [] (mapcat :member-states) sorted)]
-         {:success true :card-revision card-revision
-          ;; The filters and sort this result was read with, for the
-          ;; row-motion/arrivals! scope.
-          :view-key [text kinds origins flags sort-col sort-dir]
-          ;; Only the trimmed summary crosses the wire; counts/ids/manifest
-          ;; below still derive from the full `sorted`/`all` rows.
-          :cards (mapv card-list-summary sorted)
-          :count (count sorted)
-          :card-count (rows/card-count sorted)
-          ;; The filtered+sorted set as [row-key member-ids] pairs. Select-all
-          ;; needs the keys and the bulk actions need the ids, so ONE value
-          ;; serves both and the two cannot drift. Ints and keywords only;
-          ;; content stays server-side.
-          :filtered-rows (mapv (juxt :row-key :member-ids) sorted)
-          ;; Card counts, not row counts — they describe what Push acts on.
-          :unpushed (count (filterv #(= :unpushed %) states))
-          :modified (count (filterv #(= :modified %) states))})
+             all (->> (read-region/timed-read :library-cards-rows
+                        {:route "library/cards" :phase "snapshot"}
+                        #(db/get-user-flashcards user-id))
+                   rows/collapse-groups
+                   (mapv (fn [row]
+                           (assoc (with-sync-states row)
+                             :search-text (str/lower-case
+                                            (str (str/join (map member-text (:members row)))
+                                              (or (:root_title row) "")))))))]
+         {:success true :revision revision :card-revision card-revision
+          :rows (sort-user-cards all :added :desc)})
        (catch Exception e
-         (tel/error! {:id ::query-user-cards :data {:user-id user-id}} e)
+         (tel/error! {:id ::load-user-cards :data {:user-id user-id}} e)
          {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+(defn query-loaded-cards* [snapshot user-id opts]
+  #?(:clj
+     (if-not (:success snapshot)
+       snapshot
+       (try
+         (let [{:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
+               conflict-ids (when (contains? origins "conflict")
+                              (set (db/list-anki-conflicts user-id)))
+               filtered (-> (:rows snapshot)
+                          (filter-cards-kinds kinds)
+                          (filter-cards-origins origins overlay-ids conflict-ids)
+                          (filter-cards-flags flags overlay-ids)
+                          (filter-cards-text text))
+               sorted (if (and (= sort-col :added) (= sort-dir :desc))
+                        filtered
+                        (sort-user-cards filtered sort-col sort-dir))
+               states (into [] (mapcat :member-states) sorted)]
+           {:success true :card-revision (:card-revision snapshot)
+            :view-key [text kinds origins flags sort-col sort-dir]
+            :cards sorted
+            :count (count sorted)
+            :card-count (rows/card-count sorted)
+            :filtered-rows (mapv (juxt :row-key :member-ids) sorted)
+            :unpushed (count (filterv #(= :unpushed %) states))
+            :modified (count (filterv #(= :modified %) states))})
+         (catch Exception e
+           (tel/error! {:id ::query-user-cards :data {:user-id user-id}} e)
+           {:success false :error (.getMessage e)})))
+     :cljs nil))
+
+(defn query-user-cards* [revision user-id opts]
+  (query-loaded-cards* (load-user-cards* revision user-id) user-id opts))
+
+(defn window-card-summaries* [window]
+  #?(:clj
+     (mapv (fn [row]
+             (assoc (card-list-summary row) :pos (:pos row) :fresh? (:fresh? row))) window)
      :cljs nil))
 
 ;; Filter-independent overlay manifest. Separate from query-user-cards* so it
@@ -545,250 +560,104 @@
 
 (defn selected-card-ids
   "The selection's flashcard ids — every member of every selected row.
-   Pre:  `selected` is the row-key → member-ids map RowSelectCell maintains.
+   Pre: `selected` holds the row keys and captured member IDs from local selection.
    Post: the delete / push / pull unit. A group contributes ALL of its cards,
    which is what makes a row act as a whole."
   [selected]
   (into [] (mapcat identity) (vals selected)))
 
-;; Selection checkbox cell. `selected` is a MAP of row-key → member-ids: the
-;; ids are captured here, while the row is windowed, so the action bar can
-;; count and the bulk actions can expand without ever reading :filtered-rows in
-;; client scope — that read materializes all N ids on every filter change
-;; (measured: 531 ms of main-thread block at 2.9k cards).
-(e/defn RowSelectCell [row-key member-ids !selected selected]
+;; Row selection changes client state. The command dispatcher owns server writes.
+(defn set-row-selected! [!selected row-key member-ids selected?]
+  (swap! !selected #(if selected? (assoc % row-key member-ids) (dissoc % row-key))))
+
+(defn selection-subjects
+  "Build the shared multi-selection context target once per view."
+  [selected]
+  (when (> (count selected) 1)
+    (mapv (fn [[_ ids]] {:member-ids (vec ids)}) selected)))
+
+(defn row-view-model
+  "Compute one bounded row's display data and current action targets."
+  [card navigate! !editing-card !diff-card !selected selected selected-subjects i visible? anki-overlay !stats]
+  (let [id (:flashcards/id card)
+        row-key (:row-key card)
+        member-ids (vec (:member-ids card))
+        kind (:flashcards/kind card)
+        group-row? (not= :card (first row-key))
+        topic-id (:flashcards/topic_id card)
+        root-topic-id (:flashcards/root_topic_id card)
+        note-id (:flashcards/anki_note_id card)
+        flags (review/row-flags member-ids anki-overlay)
+        dirs (member-directions member-ids (:member-states card) anki-overlay)
+        direction (fold-directions dirs)
+        doc-label (if (= topic-id root-topic-id)
+                    (:root_title card)
+                    (str (:root_title card) " / " (:topic_title card)))
+        edit-card! (fn [_]
+                     (cond
+                       (contains? #{"occlusion" "score"} kind)
+                       (navigate! :viewer (nav/nav-topic topic-id :library))
+
+                       (= "overlapping" kind)
+                       (reset! !editing-card
+                         {:id id :kind kind :overlapping (:flashcards/overlapping card)
+                          :anki-flags flags :anki-note-id note-id
+                          :topic-id topic-id :root-topic-id root-topic-id})
+
+                       :else
+                       (reset! !editing-card
+                         {:id id :kind kind :question (:flashcards/question card)
+                          :answer (:flashcards/answer card) :cloze (:flashcards/cloze card)
+                          :anki-flags flags :anki-note-id note-id
+                          :topic-id topic-id :root-topic-id root-topic-id})))
+        diff-payload (when-not group-row?
+                       {:id id :kind kind :question (:flashcards/question card)
+                        :answer (:flashcards/answer card) :cloze (:flashcards/cloze card)
+                        :note-id note-id})]
+    {:row-key row-key :member-ids member-ids :visible? visible? :pos i
+     :fresh? (:fresh? card)
+     :class (str (when (even? i) "row-alt") (review/row-class flags))
+     :selected? (and visible? (contains? selected row-key))
+     :flags flags :direction-tooltip (row-direction-tooltip direction dirs)
+     :direction-glyph (direction-glyph direction) :direction-color (direction-color direction)
+     :diff? (some? diff-payload)
+     :badge-class (str "type-badge type-badge-" (if (badge-kinds kind) kind "basic"))
+     :badge-label (case kind "overlapping" "Overlap" "cloze" "Cloze"
+                    "occlusion" "Occlusion" "score" "Score" "Basic")
+     :span2? (:span2? card) :front-html (:front-html card) :back-html (:back-html card)
+     :doc-label doc-label :added (:formatted_date card) :stats? (contains? #{"basic" "cloze"} kind)
+     :target {:kind :card
+              :subjects (if (and (contains? selected row-key) (> (count selected) 1))
+                          selected-subjects
+                          [{:member-ids member-ids :topic-id topic-id
+                            :history-scope (when-not group-row? [:card id])}])
+              :surface {:origin :library :edit-card! edit-card!}}
+     :actions {:edit #(edit-card! nil)
+               :select #(set-row-selected! !selected row-key member-ids %)
+               :document #(navigate! :viewer (nav/nav-topic topic-id :library))
+               :diff #(when diff-payload (reset! !diff-card diff-payload))
+               :stats #(when (contains? #{"basic" "cloze"} kind) (reset! !stats {:card id}))
+               :delete #(do (swap! !selected dissoc row-key)
+                            (opt/enqueue-delete-card! member-ids))}}))
+
+(defn make-row-owner! [node]
+  #?(:cljs (row-view/create! node) :clj nil))
+
+(defn sync-native-row! [owner model]
+  #?(:cljs (row-view/sync-row! owner model) :clj nil))
+
+(defn release-row-owner! [owner]
+  #?(:cljs ((:dispose! owner)) :clj nil))
+
+(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected selected-subjects user-id i visible? anki-overlay !stats]
   (e/client
-    (dom/td
-      (dom/props {:class "card-cell-center"})
-      (dom/input
-        (dom/props {:type "checkbox" :aria-label "Select card"})
-        (set! (.-checked dom/node) (contains? selected row-key))
-        (dom/On "click"
-          (fn [e]
-            (.stopPropagation e)
-            (swap! !selected #(if (contains? % row-key)
-                                (dissoc % row-key)
-                                (assoc % row-key member-ids))))
-          nil)))))
-
-;; Diff cell — direction glyph + secondary Anki state icons; click → diff modal.
-;; diff-payload is nil for a group row: the modal diffs two text fields against
-;; one Anki note, which says nothing about a row standing for k notes with no
-;; question/answer of their own.
-(e/defn RowDiffCell [dirs flags diff-payload !diff-card]
-  (e/client
-    (let [direction (fold-directions dirs)
-          susp (:suspended flags)]
-      (dom/td
-        (dom/props {:class "card-cell-diff"})
-        (tooltip/Tooltip! (row-direction-tooltip direction dirs))
-        (when diff-payload
-          (let [show-diff! (fn [e]
-                             (.stopPropagation e)
-                             (reset! !diff-card diff-payload))]
-            (a11y/KeyActivate {:label "Show Anki difference"} show-diff!)
-            (dom/On "click" show-diff! nil)))
-        (dom/span
-          (dom/props {:style {:color (direction-color direction)}})
-          (dom/text (direction-glyph direction)))
-        (when (:marked flags)
-          (dom/span
-            (dom/props {:class "card-cell-glyph" :style {:color "var(--color-primary-text)"}})
-            (tooltip/Tooltip! "Marked in Anki")
-            (dom/text "★")))
-        (when (:remarked flags)
-          (dom/span
-            (dom/props {:class "card-cell-glyph card-cell-glyph-remarked"})
-            (tooltip/Tooltip! "Has remarks in Anki")
-            (dom/text "✎")))
-        (when (and susp (pos? (:suspended susp)))
-          (dom/span
-            (dom/props {:class "card-cell-glyph"
-                        ;; I3 tri-state: solid = all suspended, dimmed = partial
-                        :style {:color "var(--color-text-secondary)"
-                                :opacity (if (= (:suspended susp) (:total susp)) "1" "0.45")}})
-            (tooltip/Tooltip! (str (:suspended susp) " of " (:total susp)
-                                " card" (when (not= (:total susp) 1) "s")
-                                " suspended"))
-            (dom/text "⏸")))))))
-
-;; Front + Back cells — span2? kinds (cloze/occlusion/score/overlapping) span
-;; both content columns with the back cell hidden. front-html/back-html are
-;; built server-side (card-front-html) so every kind renders one way.
-(e/defn RowContentCells [span2? id front-html back-html edit-card!]
-  (e/client
-    (dom/td
-      (dom/props {:dir "auto"
-                  :class (str "card-row-cell" (when span2? " card-cell-span2"))})
-      (a11y/KeyActivate {:label "Edit card"} edit-card!)
-      (e/for-by identity [_k [(str "f-" id)]]
-        (dom/div
-          (dom/props {:class "card-row-html"})
-          (set-inner-html! dom/node front-html))))
-    (dom/td
-      (dom/props {:dir "auto"
-                  :class (str "card-row-cell" (when span2? " card-cell-hidden"))})
-      (e/for-by identity [_k [(str "b-" id)]]
-        (dom/div
-          (dom/props {:class "card-row-html"})
-          (set-inner-html! dom/node back-html))))))
-
-;; Document cell — "Root / Document", or "Root" alone when the card sits on the
-;; root topic. Click navigates to the card's topic.
-(e/defn RowDocCell [doc-label topic-id navigate!]
-  (e/client
-    (dom/td
-      (dom/props {:class "card-cell-doc"})
-      (let [open-document! (fn [e]
-                             (.stopPropagation e)
-                             (navigate! :viewer (nav/nav-topic topic-id :library)))]
-        (a11y/KeyActivate {:label (str "Open " doc-label)} open-document!)
-        (dom/On "click" open-document! nil))
-      (dom/span
-        (dom/props {:class "card-cell-doc-label"})
-        (tooltip/Tooltip! doc-label)
-        (dom/text (or doc-label ""))))))
-
-(e/defn RowKindCell "
-Kind badge. Its own e/defn so LibraryCardRow's body is not a flat list of eight
-cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
-:prod build. Clicking anywhere on the row still opens the editor via the tr.
-"
-  [kind]
-  (e/client
-    (dom/td
-      (dom/props {:class "card-cell-badge"})
-      (dom/span
-        ;; Plain set membership, NOT `case` with grouped test constants —
-        ;; Electric compiles `case` specially and a ("a" "b") test list blanked
-        ;; the page (WS closed on boot).
-        (dom/props {:class (str "type-badge type-badge-"
-                             (if (badge-kinds kind) kind "basic"))})
-        (dom/text (case kind
-                    "overlapping" "Overlap" "cloze" "Cloze"
-                    "occlusion" "Occlusion" "score" "Score" "Basic"))))))
-
-(e/defn RowAddedCell [added]
-  (e/client
-    (dom/td
-      (dom/props {:class "card-cell-added"})
-      (dom/text (or added "")))))
-
-(e/defn RowDeleteCell [member-ids user-id]
-  (e/client
-    (dom/td
-      (dom/props {:class "card-cell-center"})
-      (DeleteCardButton member-ids user-id))))
-
-(e/defn RowStatsCell
-  "Lifetime stats for the card this row stands for.
-
-   Only basic and cloze cards are quiz items — occlusion, score and overlapping
-   carry no typed answer, so the quiz never asks them and they have no schedule to
-   show (db/card-quiz-ords, and card-quiz-where beneath it). Those rows render an
-   empty cell rather than a button that opens onto nothing. They are also the only
-   kinds that make a row stand for several flashcards, so a row that HAS this button
-   is always exactly one card — the ord, when there are several, is resolved inside
-   the modal.
-   Its own cell with stopPropagation: the rest of the row opens the edit modal."
-  [id kind !stats]
-  (e/client
-    (dom/td
-      (dom/props {:class "card-cell-center"})
-      (when (#{"basic" "cloze"} kind)
-        (stats/StatsOpenerButton !stats {:card id})))))
-
-(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay !stats]
-  (e/client
-    ;; Plain client-sited keyword lookups, NOT 16 × (e/server (:k card)).
-    ;; Each e/server read is its own cross-peer reactive node; at 22 windowed
-    ;; rows that was 350+ nodes mounting and unmounting on every filter change.
-    ;; Profiling a filter change put ~all the time in incseq/missionary
-    ;; transfer machinery with no app frame on the list — the cost was node
-    ;; COUNT, not payload (measured: 31 KB moved, 2.3 s of main thread burned).
-    ;; A client-sited lookup forces `card` across exactly once and makes the
-    ;; rest local. Every field below is consumed on the client anyway, and the
-    ;; row map is already trimmed by card-list-summary, so no extra bytes.
-    (let [id (:flashcards/id card)
-          row-key (:row-key card)
-          member-ids (:member-ids card)
-          member-states (:member-states card)
-          group-row? (not= :card (first row-key))
-          kind (:flashcards/kind card)
-          question (:flashcards/question card)
-          answer (:flashcards/answer card)
-          cloze (:flashcards/cloze card)
-          ol (:flashcards/overlapping card)
-          topic-id (:flashcards/topic_id card)
-          root-topic-id (:flashcards/root_topic_id card)
-          note-id (:flashcards/anki_note_id card)
-          root-title (:root_title card)
-          topic-title (:topic_title card)
-          front-html (:front-html card)
-          back-html (:back-html card)
-          span2? (:span2? card)
-          added (:formatted_date card)
-          anki-flags (review/row-flags member-ids anki-overlay)
-          ;; "Root / Document", or just "Root" when the card is on the root topic.
-          doc-label (if (= topic-id root-topic-id)
-                      root-title
-                      (str root-title " / " topic-title))
-          ;; Occlusion/score have no in-place editor here — their editors live
-          ;; in the topic view (occlusion modal / score toolbar), which need
-          ;; doc-context /cards lacks. Route the click to the card's document
-          ;; instead. basic/cloze/overlapping seed the edit modal.
-          edit-card! (fn [_]
-                       (cond
-                         (contains? #{"occlusion" "score"} kind)
-                         (navigate! :viewer (nav/nav-topic topic-id :library))
-
-                         (= "overlapping" kind)
-                         (reset! !editing-card
-                           {:id id :kind kind :overlapping ol
-                            :anki-flags anki-flags
-                            :anki-note-id note-id
-                            :topic-id topic-id :root-topic-id root-topic-id})
-
-                         :else
-                         (reset! !editing-card {:id id :kind kind :question question
-                                                :answer answer :cloze cloze
-                                                :anki-flags anki-flags
-                                                :anki-note-id note-id
-                                                :topic-id topic-id :root-topic-id root-topic-id})))
-          ;; Context menu (plans/custom-context-menu.md 4.3.1). With this row in
-          ;; a selection of several, the target is every selected row, and only
-          ;; the rows that take many cards (Delete) apply.
-          target {:kind :card
-                  :subjects (if (and (contains? selected row-key) (> (count selected) 1))
-                              (mapv (fn [[_ mids]] {:member-ids (vec mids)}) selected)
-                              [{:member-ids (vec member-ids)
-                                :topic-id topic-id
-                                :history-scope (when-not group-row? [:card id])}])
-                  :surface {:origin :library :edit-card! edit-card!}}]
+    (let [model (row-view-model card navigate! !editing-card !diff-card !selected selected selected-subjects
+                  i visible? anki-overlay !stats)]
       (dom/tr
-        (dom/props {:class (str (when (even? i) "row-alt")
-                             (review/row-class anki-flags))
-                    ;; The key freememo.row-motion follows when rows move. A
-                    ;; card that comes back, from an undo, slides in.
-                    :data-row-key (pr-str row-key)
-                    :data-enter (when (:fresh? card) "1")
-                    ;; 0-based absolute index → per-row translateY (C1c)
-                    :style {:--order i}})
-        (menu-surface/RowMenu target)
-        (dom/On "click" edit-card! nil)
-        (RowSelectCell row-key member-ids !selected selected)
-        (RowDiffCell (member-directions member-ids member-states anki-overlay)
-          anki-flags
-          (when-not group-row?
-            {:id id :kind kind :question question :answer answer
-             :cloze cloze :note-id note-id})
-          !diff-card)
-        (RowKindCell kind)
-        (RowContentCells span2? id front-html back-html edit-card!)
-        (RowDocCell doc-label topic-id navigate!)
-        (RowAddedCell added)
-        (RowStatsCell id kind !stats)
-        (RowDeleteCell member-ids user-id)))))
+        (let [owner (e/snapshot (make-row-owner! dom/node))]
+          (e/on-unmount #(release-row-owner! owner))
+          (case (sync-native-row! owner model) nil))))))
+
 
 ;; ---------------------------------------------------------------------------
 ;; Main view
@@ -796,7 +665,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
 
 ;; Nine tracks. The trailing pair is stats then delete, each 44px — one .btn-sm
 ;; icon inside .cards-table-body td's padding. Front/Back are the two 1fr tracks
-;; and RowContentCells spans Front across both when a card has no Back, so a track
+;; and Front spans both content tracks when a card has no Back, so a track
 ;; added at the END cannot disturb that.
 (def ^:private grid-cols "32px 44px 64px 1fr 1fr 200px 80px 44px 44px")
 
@@ -1248,13 +1117,27 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
 ;; removed by the runtime when the result's children arrive (Electric v3
 ;; mount bug, observed on the documents→cards branch switch); nothing in
 ;; this view may mount before the query result exists.
+(e/defn CardsExportButton "
+Opens the Export cards dialog with the filter on screen. `opts` is the query
+opts the rows come from, so the dialog's filter scope is exactly these rows
+(plans/card-export-csv-tsv.md §1.3).
+"
+  [opts]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm btn-secondary cards-action" :type "button"})
+      (tooltip/Tooltip! "Export cards as CSV or TSV for Noji, Mnemosyne or a spreadsheet")
+      (icons/Icon :download :size 14)
+      (dom/text "Export…")
+      (dom/On "click" (fn [_] (card-export/open! {:scope :library :opts opts})) nil))))
+
 (e/defn CardsSearchRow "
 Toolbar row 1: view switcher, search box, Check Anki.
 Split out of CardsFilterBar for the 64 KB per-e/defn bytecode cap — each
 e/defn compiles to one JVM method, and the three rows as flat siblings under
 one body overflowed it in the :prod build (dev never emits that bytecode).
 "
-  [navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick]
+  [navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick opts]
   (e/client
     (dom/div
       (dom/props {:class "cards-toolbar-row"})
@@ -1289,7 +1172,8 @@ one body overflowed it in the :prod build (dev never emits that bytecode).
         (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
         (icons/Icon :refresh-cw :size 14)
         (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
-        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
+        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil))
+      (CardsExportButton opts))))
 
 (e/defn CardsKindFilterRow [kinds !kinds]
   (e/client
@@ -1328,7 +1212,7 @@ filter groups with separate atoms and separate query semantics.
             (fn [] (toggle-in! !flags v))))))))
 
 (e/defn CardsFilterBar [navigate! ov-status initial-text !text !text-debounced !text-timer
-                        !kinds !origins !flags !check-tick]
+                        !kinds !origins !flags !check-tick opts]
   (e/client
     (let [kinds (e/watch !kinds)
           origins (e/watch !origins)
@@ -1336,7 +1220,7 @@ filter groups with separate atoms and separate query semantics.
           anki-ready? (= ov-status :ready)]
       (dom/div
         (dom/props {:class "cards-toolbar"})
-        (CardsSearchRow navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick)
+        (CardsSearchRow navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick opts)
         (CardsKindFilterRow kinds !kinds)
         (CardsSyncFilterRow origins flags anki-ready? !origins !flags)))))
 
@@ -1443,6 +1327,28 @@ bytecode cap in the :prod build, which dev compilation never emits.
   [cards visible]
   (into #{} (map #(:row-key (nth cards %))) visible))
 
+(defn window-slots
+  "Keep bounded slot identities when a result window shrinks or becomes empty."
+  [window limit]
+  (mapv (fn [slot] {:slot slot :card (nth window slot nil)}) (range limit)))
+
+(defn card-slot-state
+  "Retain one hidden card per slot within the same account."
+  [previous scope incoming]
+  {:scope scope
+   :visible? (some? incoming)
+   :card (or incoming (when (= scope (:scope previous)) (:card previous)))})
+
+(e/defn LibraryCardSlot
+  [incoming navigate! !editing-card !diff-card !selected selected selected-subjects user-id anki-overlay !stats]
+  (e/client
+    (let [{:keys [card visible?]}
+          (e/with-cycle [previous nil]
+            (card-slot-state previous user-id incoming))]
+      (when card
+        (LibraryCardRow card navigate! !editing-card !diff-card !selected selected selected-subjects
+          user-id (:pos card) visible? anki-overlay !stats)))))
+
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
 ;; positioned sibling overlay rather than a branch that swaps the table out.
@@ -1454,7 +1360,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; position:relative is inline, not on the shared .tape-scroll class — this is
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
 (e/defn CardsTableBody [cards-vec query-revision rows-view-key row-height font-sz filters-active? scroll-reset-key
-                        navigate! !editing-card !diff-card !selected selected
+                        navigate! !editing-card !diff-card !selected selected selected-subjects
                         user-id anki-overlay !stats]
   (e/client
     (dom/div
@@ -1498,18 +1404,19 @@ bytecode cap in the :prod build, which dev compilation never emits.
                       :style {:width "100%" :font-size (str font-sz "px")}})
           ;; Rows slide by key, whichever node paints them.
           (e/on-unmount (row-motion/install! dom/node))
-          ;; The window is diffed by row key on the server, so a row's card
-          ;; and its position cross together. A slot loop read each card by a
-          ;; client index, and a delete moved every slot below it to another
-          ;; card, so each of those rows went empty for the round trip.
+          ;; One bounded server window transfers card content and position together.
+          ;; Stable slots retain their row frames through empty results.
+          ;; Hidden slots keep at most one card and reject input.
           (let [arrived (e/server (row-motion/arrivals! !seen [rows-view-key offset]
                                     (visible-row-keys cards-vec visible-indexes)))
-                window (e/server
-                         (e/diff-by :row-key
-                           (window-cards cards-vec visible-indexes offset limit arrived)))]
-            (e/for [card window]
-              (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                selected user-id (:pos card) anki-overlay !stats))))
+                slots (e/server
+                        (e/diff-by :slot
+                          (window-slots
+                            (window-card-summaries*
+                              (window-cards cards-vec visible-indexes offset limit arrived)) limit)))]
+            (e/for [slot slots]
+              (LibraryCardSlot (:card slot) navigate! !editing-card !diff-card !selected
+                selected selected-subjects user-id anki-overlay !stats))))
         ;; Sibling overlay — never a branch that unmounts the table above.
         (when (zero? row-count)
           (dom/div
@@ -1551,6 +1458,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; KEYS, not the selection map: the member-id vectors would multiply
           ;; the payload for a value used only as a membership test.
           selected-keys (set (keys selected))
+          selected-subjects (selection-subjects selected)
           filtered-count (e/server (count (:filtered-rows result)))
           selected-in-filter (e/server
                                (count (filterv #(contains? selected-keys (first %))
@@ -1561,7 +1469,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTableBody cards-vec (e/server (:card-revision result)) (e/server (:view-key result))
         row-height font-sz filters-active? scroll-reset-key
-        navigate! !editing-card !diff-card !selected selected
+        navigate! !editing-card !diff-card !selected selected selected-subjects
         user-id anki-overlay !stats))))
 
 ;; Phase 3: selection + diff modal + bulk action state, plus the tables.
@@ -1689,6 +1597,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
           !check-tick (atom 0)
+          sync-revision (e/server (second (sync-observation/SyncObservation user-id)))
           ;; Overlay computed UPSTREAM of the filtered query: its per-card flag
           ;; map feeds the rows (icons) AND, split into id-sets, the query opts.
           ;; The manifest is filter-independent (own query), so this is an
@@ -1696,7 +1605,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           manifest (e/server
                      (let [rev (+ refresh
                                  (e/watch (us/get-atom user-id :card-mutations))
-                                 (e/watch (us/get-atom user-id :sync-mutations)))]
+                                 sync-revision)]
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (review-overlay/AnkiOverlay
                          user-id manifest !ov-status !ov-payload !check-tick)
@@ -1734,13 +1643,15 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; view entry (~1 MB at 3k cards). A bare (e/server ...) form is
           ;; sited-by-use: only the fields the client actually reads cross
           ;; the wire (counts, filtered-ids, manifest, window rows).
+          snapshot (e/server
+                     (let [revision [refresh
+                                     (e/watch (us/get-atom user-id :card-mutations))
+                                     sync-revision
+                                     (e/watch (us/get-atom user-id :tree-mutations))]]
+                       (e/Offload #(load-user-cards* revision user-id))))
           result (e/server
-                   (let [rev (+ refresh
-                               (e/watch (us/get-atom user-id :card-mutations))
-                               (e/watch (us/get-atom user-id :sync-mutations))
-                               (e/watch (us/get-atom user-id :tree-mutations)))]
-                     (e/Offload #(assoc (query-user-cards* rev user-id opts)
-                                   :opts-hash opts-hash))))
+                   (e/Offload #(assoc (query-loaded-cards* snapshot user-id opts)
+                                 :opts-hash opts-hash)))
           success? (e/server (:success result))
           ;; True while the rows on screen belong to a PREVIOUS filter set.
           ;; Deliberately blind to :refresh / :card-mutations / :sync-mutations
@@ -1763,7 +1674,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
       ;; re-mounted the view too — see OverlayIds.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status (:text initial) !text !text-debounced !text-timer
-          !kinds !origins !flags !check-tick)
+          !kinds !origins !flags !check-tick opts)
         (CardsResultRegion user-id navigate! result anki-overlay ov-status
           filters-active? filter-pending? scroll-reset-key
           !sort-col !sort-dir !editing-card)))))

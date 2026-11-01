@@ -16,7 +16,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
    [freememo.motion :as motion]
-   #?(:clj [freememo.config :as config])
+   [freememo.storage-copy :as storage-copy]
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.storage-meter :as meter])
@@ -47,6 +47,18 @@
   #?(:clj (meter/storage-rate-label)
      :cljs nil))
 
+(defn top-up-view*
+  "The top-up buttons and the note under them, for the session's country.
+   `_refresh` re-reads them on a :credits-refresh bump."
+  [_refresh country]
+  #?(:clj {:packs (credits/top-up-packs country)
+           :note (credits/top-up-note country)}
+     :cljs nil))
+
+(defn balance-label* [balance]
+  #?(:clj (credits/credits-label balance)
+     :cljs nil))
+
 (e/defn CreditsSection
   "Balance, what spends it, and the top-up presets.
 
@@ -59,8 +71,8 @@
     (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           balance (e/server (credit-balance* credits-refresh user-id))
           rate-label (e/server (storage-rate-label* credits-refresh))
-          presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
-                              (config/presets)))
+          balance-label (e/server (balance-label* balance))
+          {:keys [packs note]} (e/server (top-up-view* credits-refresh client-country))
           !checkout-error (atom nil)
           checkout-error (e/watch !checkout-error)]
       (dom/section
@@ -80,7 +92,7 @@
               (dom/props {:style {:font-size "16px" :font-weight "600"
                                   :color (if (and balance (> balance 0))
                                            "var(--color-text-primary)" "var(--color-danger)")}})
-              (dom/text (str (or balance 0) " credits"))
+              (dom/text (or balance-label ""))
               (motion/flash-own-change! dom/node user-id balance)))
 
           ;; What spends credits. Storage is named with its rate because it is the
@@ -88,23 +100,20 @@
           ;; button press, rent does not.
           (dom/div
             (dom/props {:class "hint" :style {:margin-bottom "10px"}})
-            (dom/text (if rate-label
-                        (str "Spent by OCR and flashcard generation, and by stored videos at "
-                          rate-label ".")
-                        "Spent by OCR and flashcard generation.")))
+            (dom/text (storage-copy/credit-spend rate-label)))
 
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
           (dom/div
             (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
-            (e/for [{:keys [iqd usd-str]} (e/diff-by :iqd presets)]
+            (e/for [{:keys [amount label]} (e/diff-by :amount packs)]
               (dom/button
                 (dom/props {:type "button" :class "btn btn-secondary"
                             :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
-                (dom/text (str iqd " credits" (when usd-str (str " (" usd-str ")"))))
+                (dom/text label)
                 (let [ev (dom/On "click" identity nil)
                       [t _] (e/Token ev)]
                   (when t
-                    (let [r (e/server (e/Offload #(credits/start-checkout! user-id iqd base-url client-country)))]
+                    (let [r (e/server (e/Offload #(credits/start-checkout! user-id amount base-url client-country)))]
                       (case r
                         (if (:ok r)
                           (do (navigate-external! (:url r)) (t))
@@ -113,7 +122,7 @@
           (dom/div
             (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
                                               :color "var(--color-text-secondary)"}})
-            (dom/text "USD prices shown here are approximate and may be adjusted if we change AI models. The amount you pay is the credits amount shown."))
+            (dom/text (or note "")))
 
           (when checkout-error
             (dom/div

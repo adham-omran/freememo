@@ -1,22 +1,58 @@
 (ns freememo.youtube-url
-  "Recognize a YouTube video URL and read its video id and start time
+  "Which addresses are YouTube, and which video one names
    (plans/youtube-kind.md 2.2).
 
-   No requires, so a unit test reaches it without a browser or a database, and
-   both peers can read it.
+   Two questions with two answers. `youtube-url?` says the host is YouTube, for
+   any path. `parse` says the URL names one video, and reads its id and start
+   time. A link that names a video imports as a `youtube` topic. Any other
+   YouTube page is refused, because a fetch of it reads only the site footer, in
+   the language YouTube picks for the server's IP
+   (plans/feedback-activity-biblio-youtube.md).
+
+   Requires only `clojure.string`, so both peers and a unit test load it with
+   nothing else.
 
    A video id is 11 characters from `[A-Za-z0-9_-]`. That format is a
    convention Google does not document, so the parser and the `topic_youtube`
    CHECK hold the same pattern and nothing else assumes it.
 
-   Accepted forms:
+   Accepted video forms:
      youtube.com/watch?v=ID       (also www., m., music.)
      youtu.be/ID
      youtube.com/shorts/ID
      youtube.com/embed/ID
      youtube-nocookie.com/embed/ID
    A playlist is out of scope: a URL with both `list=` and `v=` is the video
-   alone, and a URL with only `list=` is not a video.")
+   alone, and a URL with only `list=` is not a video."
+  (:require [clojure.string :as str]))
+
+(def rejection-message
+  "This YouTube page cannot be read as text. Paste a link to one video to import it.")
+
+(def ^:private host-re
+  ;; Optional "scheme://" or a bare "//", optional userinfo, then the host up
+  ;; to a port, path, query or fragment. A scheme only counts with its "//":
+  ;; "youtube.com:443/x" is a host and a port, not the scheme "youtube.com".
+  #"^(?:(?:[A-Za-z][A-Za-z0-9+.\-]*:)?//)?(?:[^/?#@]*@)?([^/?#:]+)")
+
+(def ^:private youtube-domains
+  ["youtube.com" "youtu.be" "youtube-nocookie.com"])
+
+(defn- host-of [url]
+  (some-> (re-find host-re (str/trim url))
+    second
+    str/lower-case
+    (str/replace #"\.$" "")))
+
+(defn youtube-url?
+  "True when `url`'s host is a YouTube domain or one of its subdomains, for any
+   path. Pre: `url` is a string or nil. Post: a boolean; nil and blank are false."
+  [url]
+  (boolean
+    (when-some [host (when (string? url) (host-of url))]
+      (some (fn [domain]
+              (or (= host domain) (str/ends-with? host (str "." domain))))
+        youtube-domains))))
 
 (def ^:private url-re
   #"(?i)^(?:https?://)?(?:(?:www|m|music)\.)?(youtube\.com|youtube-nocookie\.com|youtu\.be)(/[^?#]*)?(\?[^#]*)?(#.*)?$")
@@ -81,3 +117,12 @@
    (str "https://www.youtube.com/watch?v=" video-id
         (when (and start-ms (pos? start-ms))
           (str "&t=" (quot (long start-ms) 1000) "s")))))
+
+
+(defn non-video-youtube-url?
+  "True when `url` is a YouTube address that names no single video: a channel,
+   a playlist, the home page. Web import refuses exactly these.
+
+   Invariant: for any `url`, at most one of `parse` and this is truthy."
+  [url]
+  (and (youtube-url? url) (nil? (parse url))))

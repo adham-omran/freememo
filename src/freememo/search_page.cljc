@@ -4,17 +4,16 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.context-menu-surface :as menu-surface]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.search-result-row :as result-row]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
-   [freememo.a11y :as a11y]
    [freememo.logging :as log]
-   [freememo.math :as math]
    [freememo.navigation :as nav]
-   [freememo.tooltip :as tooltip]
    [freememo.util :as util]
-   #?(:clj [freememo.search :as search])))
+   #?(:clj [freememo.search :as search])
+   #?(:clj [freememo.read-region :as read-region])))
 
 ;; Server wrapper — plain defn with reader conditional, so :refer works from cljs
 ;;
@@ -28,7 +27,9 @@
 ;; read by operators and rendered into alert mail. Length, mode, kind filter and
 ;; result count answer what the trail is for without carrying any of it.
 (defn run-search* [user-id query mode kind-filter]
-  #?(:clj (let [rows (search/search-content user-id query mode kind-filter)]
+  #?(:clj (let [rows (read-region/timed-read :search-results
+                       {:route "search" :phase (name mode)}
+                       #(search/search-content user-id query mode kind-filter))]
             ;; :kind-filter, not :kind — :kind is one of interaction!'s reserved
             ;; base keys and names the interaction type, not a topic kind.
             (log/interaction! user-id nil :search
@@ -54,24 +55,24 @@
 
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "var(--color-badge-pdf)"]
-    "page" ["Page" "var(--color-badge-pdf)"]
-    "epub" ["EPUB" "var(--color-badge-epub)"]
-    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
-    "markdown" ["MD" "var(--color-badge-web)"]
-    "audio" ["Audio" "var(--color-badge-web)"]
-    "video" ["Video" "var(--color-badge-video)"]
-    "video-playlist" ["Playlist" "var(--color-badge-video)"]
-    "youtube" ["YouTube" "var(--color-badge-video)"]
-    "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
-    "poem" ["Poem" "var(--color-badge-epub)"]
-    "repo" ["Repo" "var(--color-badge-occlusion)"]
-    "commit" ["Commit" "var(--color-badge-occlusion)"]
-    "dir" ["Folder" "var(--color-badge-occlusion)"]
-    "code" ["Code" "var(--color-badge-web)"]
-    "gdoc" ["Google Doc" "var(--color-badge-occlusion)"]
-    "gdoc-snapshot" ["Snapshot" "var(--color-badge-web)"]
-    ["Topic" "var(--color-badge-epub)"]))
+    "pdf" ["PDF" "search-result-badge-pdf"]
+    "page" ["Page" "search-result-badge-pdf"]
+    "epub" ["EPUB" "search-result-badge-epub"]
+    ("web" "wikipedia") ["Web" "search-result-badge-web"]
+    "markdown" ["MD" "search-result-badge-web"]
+    "audio" ["Audio" "search-result-badge-web"]
+    "video" ["Video" "search-result-badge-video"]
+    "video-playlist" ["Playlist" "search-result-badge-video"]
+    "youtube" ["YouTube" "search-result-badge-video"]
+    "supermemo" ["SuperMemo" "search-result-badge-supermemo"]
+    "poem" ["Poem" "search-result-badge-epub"]
+    "repo" ["Repo" "search-result-badge-occlusion"]
+    "commit" ["Commit" "search-result-badge-occlusion"]
+    "dir" ["Folder" "search-result-badge-occlusion"]
+    "code" ["Code" "search-result-badge-web"]
+    "gdoc" ["Google Doc" "search-result-badge-occlusion"]
+    "gdoc-snapshot" ["Snapshot" "search-result-badge-web"]
+    ["Topic" "search-result-badge-epub"]))
 
 (defn encode-query [q]
   #?(:cljs (js/encodeURIComponent (or q ""))
@@ -115,72 +116,31 @@
   ;; id when kind="page", so no special branching is needed.
   (navigate! :viewer (nav/nav-topic (:id row) :search)))
 
-(e/defn ResultRow [row i row-height navigate!]
-  (e/client
-    (let [{:keys [title kind snippet source-title]} row
-          [badge-text badge-color] (kind-badge kind)
-          open-result! (fn [_] (click-nav! navigate! row))
-          ;; Context menu (plans/custom-context-menu.md 4.2.1). A result knows
-          ;; its parent but not its status or children, so the rows that test
-          ;; those stay hidden.
-          target (menu-surface/topic-row-target
-                   {:topic-id (:id row) :title (or title "") :topic-kind kind
-                    :root? (nil? (:parent-id row))
-                    :deletable? (not= "page" kind)}
-                   :search)]
-      (dom/tr
-        (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
-                            :height (str row-height "px")
-                            :cursor "pointer"
-                            :--order i}})
-        (menu-surface/RowMenu target)
-        (dom/On "click" open-result! nil)
-        ;; Column 1: kind badge + title
-        (dom/td
-          (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                              :padding "4px 10px" :overflow "hidden"}})
-          (a11y/KeyActivate {:label (str "Open " (or title "untitled result"))}
-            open-result!)
-          (dom/span
-            (dom/props {:class "type-badge" :style {:background badge-color}})
-            (dom/text badge-text))
-          (dom/span
-            (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                :font-size "13px" :font-weight "500"
-                                :color "var(--color-text-primary)"}})
-            (tooltip/Tooltip! (or title "(untitled)"))
-            (dom/text (or title "(untitled)"))))
-        ;; Column 2: source (root topic's title)
-        (dom/td
-          (dom/props {:style {:padding "4px 10px" :overflow "hidden"
-                              :display "flex" :align-items "center"
-                              :font-size "12px" :color "var(--color-text-secondary)"
-                              :white-space "nowrap" :text-overflow "ellipsis"}})
-          (dom/span
-            (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                :width "100%"}})
-            (tooltip/Tooltip! (or source-title ""))
-            (dom/text (or source-title ""))))
-        ;; Column 3: snippet (HTML with <mark>; scroll-centered on mark)
-        (dom/td
-          (dom/props {:style {:padding "4px 10px" :overflow "hidden"
-                              :display "flex" :align-items "center"
-                              :font-size "12px" :color "var(--color-text-secondary)"
-                              :white-space "nowrap"}})
-          (dom/div
-            (dom/props {:dir "auto"
-                        :style {:overflow "hidden" :white-space "nowrap"
-                                :width "100%"}})
-            ;; Snippets are built from `content_text` (plain text + <mark>), so a
-            ;; stored `\(TeX\)` arrives here as literal text and needs typesetting
-            ;; like any other display site. Centering runs in the after-render
-            ;; callback: KaTeX renders async and changes the line's width, so
-            ;; centering before it lands leaves the <mark> off-centre.
-            (math/set-html! dom/node snippet #(snippet-center! dom/node))))))))
+(defn result-slot-state
+  "Keep one hidden result in a slot for the same account."
+  [previous user-id incoming]
+  {:user-id user-id
+   :visible? (some? incoming)
+   :row (or incoming (when (= user-id (:user-id previous)) (:row previous)))})
 
-;; Always-mounted: SearchPage renders this unconditionally, never gated by a
-;; cond branch. row-count drives the Tape window; 0 → an empty (but mounted)
-;; differential. Two regressions drove this shape:
+(e/defn ResultRow [row i navigate! visible?]
+  (e/client
+    (dom/tr
+      (let [owner (e/snapshot (result-row/mount! dom/node snippet-center!))]
+        (e/on-unmount #(result-row/dispose! owner))
+        (case (result-row/update! owner row i visible? (kind-badge (:kind row)) navigate!) nil)))))
+
+(e/defn ResultSlot [incoming i navigate! user-id]
+  (e/client
+    (let [{:keys [row visible?]}
+          (e/with-cycle [previous nil]
+            (result-slot-state previous user-id incoming))]
+      (when row
+        (ResultRow row i navigate! visible?)))))
+
+;; SearchPage keeps this table mounted across query changes. Empty results
+;; hide cached row frames. Each Tape slot retains at most one result.
+;; Two regressions drove the permanently mounted table:
 ;;  - Unmounting the whole table (Scroll-window + Tape + per-row server flows)
 ;;    when the validity gate flipped <2 chars raced the cancelled query's
 ;;    e/Offload teardown and crashed the WS (:diff-corruption). Keeping the
@@ -192,40 +152,35 @@
 ;;    offset-independent `results`, so work-skipping holds rows steady.
 ;; The empty-state message is a sibling overlay in SearchPage, never a branch
 ;; that swaps this table out.
-(e/defn SearchResultsTable [results row-count navigate!]
+(e/defn SearchResultsTable [results row-count navigate! reset-key user-id]
   (e/client
     (let [rc (or row-count 0)
           row-height 36
           grid-cols "minmax(160px, 1fr) minmax(120px, 0.7fr) 2.5fr"]
       (dom/div
-        (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
+        (dom/props {:class "search-results-table" :style {:--grid-cols grid-cols}})
 
         ;; Header
         (dom/table
-          (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
+          (dom/props {:class "search-results-header"})
           (dom/thead
-            (dom/props {:style {:display "contents"}})
+            (dom/props {:class "search-results-header-contents"})
             (dom/tr
-              (dom/props {:style {:display "contents"}})
-              (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)"
-                              :font-weight "600" :font-size "13px"
-                              :color "var(--color-text-primary)" :text-align "left"}]
-                (dom/th (dom/props {:style th-style}) (dom/text "Document"))
-                (dom/th (dom/props {:style th-style}) (dom/text "Source"))
-                (dom/th (dom/props {:style th-style}) (dom/text "Snippet"))))))
+              (dom/props {:class "search-results-header-contents"})
+              (dom/th (dom/text "Document"))
+              (dom/th (dom/text "Source"))
+              (dom/th (dom/text "Snippet")))))
 
         ;; Scrollable body — permanently mounted; empties to 0 rows, never unmounts
         (dom/div
-          (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 2})]
-            (dom/props {:class "tape-scroll"
-                        :style {:--count rc :--grid-cols grid-cols :--row-height (str row-height "px")}})
+          (dom/props {:class "search-results-scroll tape-scroll"})
+          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 1.5 :reset-key reset-key})]
+            (dom/props {:style {:--count rc :--row-height (str row-height "px")}})
             (dom/table
-              (dom/props {:style {:width "100%" :font-size "13px"}})
+              (dom/props {:class "search-results-body"})
               (e/for [i (Tape offset limit)]
                 (let [row (e/server (nth results i nil))]
-                  (when row
-                    (ResultRow row i row-height navigate!)))))))))))
+                  (ResultSlot row i navigate! user-id))))))))))
 
 (e/defn SearchPage [user-id navigate!]
   (e/client
@@ -324,7 +279,7 @@
         (dom/div
           (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                               :min-height "0" :position "relative"}})
-          (SearchResultsTable results (or result-count 0) navigate!)
+          (SearchResultsTable results (or result-count 0) navigate! [mode kind query-debounced] user-id)
           (when (or (not valid?)
                   (and valid? (not loading?) (= 0 result-count)))
             (dom/div

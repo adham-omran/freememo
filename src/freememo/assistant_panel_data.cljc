@@ -6,6 +6,7 @@
    [freememo.assistant-modes :as modes]
    [freememo.card-models :as card-models]
    #?(:clj [freememo.assistant :as assistant])
+   #?(:clj [freememo.assistant-history :as history])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])))
 
@@ -88,42 +89,25 @@
           (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           stream-rev
           (e/server (e/watch (us/get-atom user-id :assistant-stream)))
+          active-chat
+          (e/server (e/Offload #(do assistant-rev
+                                 (history/active-chat user-id root-topic-id active))))
           chat-options
-          (e/server
-            (mapv
-              (fn [chat]
-                {:id (:id chat)
-                 :label (or (:title chat) "Untitled")
-                 :mode (:mode chat)
-                 :web-search? (:web_search chat)
-                 :activity-ms (:activity_ms chat)
-                 :pinned-ms (:pinned_ms chat)
-                 :parent-id (:parent_chat_id chat)
-                 :fork-message-id (:fork_message_id chat)
-                 :excluded? (boolean (:excluded chat))})
-              (assistant/chats* assistant-rev user-id root-topic-id)))
+          (e/server (e/Offload #(do assistant-rev
+                                 (history/branch-options user-id root-topic-id active))))
           active-run
           (e/server
-            (assistant/active-run* [assistant-rev stream-rev] user-id active))
+            (e/Offload #(assistant/active-run* [assistant-rev stream-rev] user-id active)))
           details
           (e/server
-            (assistant/run-details* assistant-rev user-id details-run))
+            (e/Offload #(assistant/run-details* assistant-rev user-id details-run)))
           ;; A finished answer bumps :assistant-mutations, and a model saved in
           ;; Settings bumps :settings-refresh, which moves the total.
           context-usage
           (e/server
-            (assistant/context-usage*
-              [assistant-rev (e/watch (us/get-atom user-id :settings-refresh))]
-              user-id active))
-          mode-entry
-          (modes/resolve-mode
-            (or (some
-                  (fn [chat]
-                    (when (= active (:id chat)) (:mode chat)))
-                  chat-options)
-              pending-mode))
-          active-chat
-          (some #(when (= active (:id %)) %) chat-options)
+            (let [settings-rev (e/watch (us/get-atom user-id :settings-refresh))]
+              (e/Offload #(assistant/context-usage* [assistant-rev settings-rev] user-id active))))
+          mode-entry (modes/resolve-mode (or (:mode active-chat) pending-mode))
           web-search?
           (if active-chat
             (:web-search? active-chat)

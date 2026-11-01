@@ -17,7 +17,9 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
-   [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
+   [freememo.measured-list :as measured]
+   [freememo.window-ranges :as ranges]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-link :as link])
@@ -65,19 +67,28 @@
 (defn choose-full-sync!* [direction]
   #?(:clj (sync-client/choose-full-sync! (keyword direction)) :cljs nil))
 
-(defn conflicts* [_refresh]
-  #?(:clj (sync-client/open-conflicts) :cljs []))
+(defn conflict-count* [_refresh]
+  #?(:clj (sync-client/open-conflict-count) :cljs 0))
+
+(defn conflict-rows* [_refresh indices]
+  #?(:clj (into [] (mapcat (fn [[offset limit]]
+                            (mapv vector (range offset (+ offset limit))
+                              (sync-client/open-conflict-window offset limit))))
+            (ranges/index-ranges indices))
+     :cljs []))
 
 (defn restore-conflict!* [user-id conflict-id parent-id]
-  #?(:clj (let [r (sync-client/restore-conflict! conflict-id parent-id)]
-            (commands/bump-channels! user-id #{:desktop-mutations :refresh :tree-mutations :card-mutations})
-            r)
+  #?(:clj (sync-client/restore-conflict! conflict-id parent-id)
      :cljs nil))
 
 (defn discard-conflict!* [user-id conflict-id]
-  #?(:clj (let [r (sync-client/discard-conflict! conflict-id)]
-            (commands/bump-channels! user-id #{:desktop-mutations})
-            r)
+  #?(:clj (sync-client/discard-conflict! conflict-id)
+     :cljs nil))
+
+(defn refresh-conflicts!* [user-id restored?]
+  #?(:clj (commands/bump-channels! user-id
+            (if restored? #{:desktop-mutations :refresh :tree-mutations :card-mutations}
+              #{:desktop-mutations}))
      :cljs nil))
 
 (defn root-topics* [_refresh user-id]
@@ -91,11 +102,11 @@
   #?(:clj (license/access db/ds user-id desktop-version/desktop-major) :cljs nil))
 
 (defn price-label*
-  "The license price in credits, or nil while no license is for sale: the
-   trial is open, or the price is unconfigured."
-  [_refresh]
+  "The license price for the session's country, or nil while no license is for
+   sale: the trial is open, or the price is unconfigured."
+  [_refresh country]
   #?(:clj (when-not license/trial-open?
-            (some-> (license/price-iqd) (str " credits")))
+            (license/price-label country))
      :cljs nil))
 
 (defn devices* [_refresh user-id]
@@ -177,65 +188,89 @@
 
 (e/defn ConflictRow [user-id conflict parent-id]
   (e/client
-    (dom/tr
-      (dom/td (dom/text (:label conflict)))
-      (dom/td (dom/text (:reason conflict)))
-      (dom/td
+    (dom/div
+      (dom/props {:class "sync-conflict-row" :role "row"})
+      (dom/div (dom/props {:role "cell"}) (dom/text (:label conflict)))
+      (dom/div (dom/props {:role "cell"}) (dom/text (:reason conflict)))
+      (dom/div
+        (dom/props {:role "cell"})
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary"})
           (dom/text "Restore")
           (let [[t ?error] (e/Token (dom/On "click" identity nil))]
+            (dom/props {:disabled (some? t) :aria-busy (some? t) :aria-invalid (some? ?error)})
             (when t
               (let [r (e/server (e/Offload #(restore-conflict!* user-id (:id conflict) parent-id)))]
-                (case r (if (:ok r) (t) (t (:error r))))))))
+                (case r
+                  (if (:ok r)
+                    (case (e/server (e/on-unmount #(refresh-conflicts!* user-id true))) (t))
+                    (t (:error r))))))
+            (when ?error
+              (dom/span (dom/props {:role "alert" :class "curriculum-inline-error"})
+                (dom/text ?error)))))
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary" :style {:margin-left "6px"}})
           (dom/text "Discard")
           (let [[t _] (e/Token (dom/On "click" identity nil))]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
             (when t
-              (case (e/server (e/Offload #(discard-conflict!* user-id (:id conflict)))) (t)))))))))
+              (case (e/server (e/Offload #(discard-conflict!* user-id (:id conflict))))
+                (case (e/server (e/on-unmount #(refresh-conflicts!* user-id false))) (t))))))))))
 
 (e/defn DesktopSyncBody [user-id]
   (e/client
-    (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
-          status (e/server (sync-status* refresh))
-          conflicts (e/server (conflicts* refresh))
-          roots (e/server (root-topics* refresh user-id))
-          !parent (atom nil)
-          parent (e/watch !parent)]
-      (dom/section
-        (dom/props {:class "settings-group"})
-        (group/GroupHeading "Sync")
-        (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
-        (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
-        (dom/div
-          (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
-          (when (= :full-sync-choice (:state status))
-            (dom/div
-              (dom/props {:style {:display "contents"}})
-              (SyncNowButton "Keep freememo.net's copy"
-                (e/fn [] (e/server (e/Offload #(choose-full-sync!* "download")))))
-              (SyncNowButton "Keep this device's copy"
-                (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload")))))))))
-      (dom/section
-        (dom/props {:class "settings-group"})
-        (group/GroupHeading "Sync conflicts")
-        (dom/p (dom/props {:class "hint"})
-          (dom/text (if (zero? (count conflicts))
-                      "Nothing was left out of a sync."
-                      "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
-        (dom/div
-          (dom/props {:class "field"})
-          (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
+   (let [refresh (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
+         status (e/server (e/Offload #(sync-status* refresh)))
+         conflict-count (e/server (e/Offload #(conflict-count* refresh)))
+         !parent (atom nil)
+         parent (e/watch !parent)]
+     (dom/section
+      (dom/props {:class "settings-group"})
+      (group/GroupHeading "Sync")
+      (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
+      (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
+      (dom/div
+       (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
+       (when (= :full-sync-choice (:state status))
+         (dom/div
+          (dom/props {:style {:display "contents"}})
+          (SyncNowButton "Keep freememo.net's copy"
+                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "download")))))
+          (SyncNowButton "Keep this device's copy"
+                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload")))))))))
+     (dom/section
+      (dom/props {:class "settings-group"})
+      (group/GroupHeading "Sync conflicts")
+      (dom/p (dom/props {:class "hint"})
+             (dom/text (if (zero? conflict-count)
+                         "Nothing was left out of a sync."
+                         "These items could not sync, usually because their document was deleted on another device. Restore puts an item back under the document you choose.")))
+      (dom/div
+       (dom/props {:class "field"})
+       (dom/label (dom/props {:class "label"}) (dom/text "Restore into"))
           ;; An empty field is no selection, which restores at the top level.
-          (typeahead/Typeahead !parent
-            (mapv (fn [{:keys [id title]}] {:id id :label title}) roots)
-            "Top level. Type to choose a document." nil false))
-        (dom/table
-          (dom/props {:style {:width "100%" :font-size "13px"}})
-          (dom/tbody
-            (e/for [c (e/diff-by :id conflicts)]
-              (ConflictRow user-id c parent))))))))
+       (picker/DocumentPicker !parent refresh user-id :source nil
+                              "Top level. Type to choose a document."))
+      (dom/div
+        (dom/props {:class "measured-list-scroll sync-conflict-scroll" :role "table"
+                    :aria-label "Sync conflicts" :aria-rowcount conflict-count :tabindex "0"})
+        (let [scroller dom/node
+              window (measured/Window scroller conflict-count
+                       {:estimate-height 80 :reset-key [:sync-conflicts user-id]})
+              indices (mapv :index (:rows window))
+              rows (e/server (e/Offload #(conflict-rows* refresh indices)))
+              tops (into {} (map (juxt :index :top)) (:rows window))]
+          (dom/div
+            (dom/props {:class "measured-list-space" :role "rowgroup"
+                        :style {:height (str (:height window) "px")}})
+            (e/for [[index conflict]
+                    (e/server (e/diff-by (comp :id second) (filterv some? rows)))]
+              (when (contains? tops index)
+                (dom/div
+                (dom/props {:class "measured-list-row" :role "presentation" :data-row-key (str (:id conflict))
+                            :style {:position "absolute" :top 0 :transform (str "translateY(" (get tops index 0) "px)") :left 0 :right 0}})
+                (measured/Observe scroller index dom/node)
+                (ConflictRow user-id conflict parent)))))))))))
 
 ;; ── Server body ────────────────────────────────────────────────────
 
@@ -243,9 +278,9 @@
   (e/client
     (let [refresh (+ (e/server (e/watch (us/get-atom user-id :desktop-mutations)))
                     (e/server (e/watch (us/get-atom user-id :credits-refresh))))
-          summary (e/server (license-summary* refresh user-id))
-          price (e/server (price-label* refresh))
-          devices (e/server (devices* refresh user-id))
+          summary (e/server (e/Offload #(license-summary* refresh user-id)))
+          price (e/server (price-label* refresh client-country))
+          devices (e/server (e/Offload #(devices* refresh user-id)))
           !error (atom nil)
           error (e/watch !error)]
       (dom/section

@@ -41,7 +41,7 @@
   (let [source (slurp "src/freememo/assistant_transcript.cljc")]
     (is (re-find #"\(e/server\s+\(e/diff-by :assistant_messages/id" source))
     (is (str/includes? source
-          "(mapv assistant/transcript-message-view messages)")
+          "(assistant/transcript-rows page live-row)")
       "the view is diffed, so a row's shape and content cross in one frame")
     (is (not (str/includes? source
                "(e/server (assistant/transcript-message-view message))"))
@@ -52,7 +52,9 @@
         composer-source (slurp "src/freememo/assistant_composer.cljc")
         row-source (slurp "src/freememo/assistant_panel_rows.cljc")
         data-source (slurp "src/freememo/assistant_panel_data.cljc")]
-    (is (re-find #"\(e/server \(e/Offload #\(assistant/referenceable-docs\s+user-id root-topic-id mention-query\)\)\)" panel-source))
+    (is (str/includes? panel-source "(and at-open? (some? mention-query))"))
+    (is (str/includes? panel-source "(m/sleep 200 mention-query)"))
+    (is (str/includes? panel-source "(= mention-query (:query result))"))
     (is (str/includes? panel-source "(e/server (count reference-documents))"))
     (is (str/includes? composer-source
           "(rows/ReferenceMenu at-open? reference-documents reference-document-count"))

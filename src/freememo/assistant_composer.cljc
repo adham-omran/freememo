@@ -9,6 +9,7 @@
    [freememo.assistant-answer-selection :as answer-selection]
    [freememo.assistant-context-usage :as context-usage]
    [freememo.assistant-panel-data :as panel-data]
+   [freememo.assistant-reference-choice :as choice]
    [freememo.assistant-panel-rows :as rows]
    [freememo.assistant-slash-menu :as slash-menu]
    [freememo.tooltip :as tooltip]
@@ -75,39 +76,35 @@
        0)
      :clj nil))
 
+(defn apply-reference-choice!
+  "Apply a rendered choice only while its query still matches the actual draft."
+  [picked !refs !draft !mention-index !at-open?]
+  (let [draft #?(:cljs (if-let [input (.querySelector js/document ".assistant-panel__input")]
+                         (.-value input) @!draft)
+                 :clj @!draft)]
+    (when-let [document (choice/for-draft picked draft)]
+      (swap! !refs
+        (fn [references]
+          (if (some #(= (:id document) (:id %)) references)
+            references
+            (conj references document))))
+      (replace-composer-draft! !draft (panel-data/draft-with-reference draft (:title document)))
+      (reset! !mention-index 0)
+      (reset! !at-open? false)
+      true)))
+
 (e/defn ReferencePickEffect
-  "Add the picked document as a reference chip and complete its `@` mention.
-   The server list stays server-sited: `reference-documents` arrives as a
-   positional argument, which does not transfer it, and the indexed lookup
-   transfers only the selected document.
-   Pre:  `picked` is an index into the mention menu, or nil."
-  [picked reference-documents reference-document-count draft
-   !refs !draft !mention-index !at-open? !picked]
+  "Apply the captured document identity without another server lookup."
+  [picked !refs !draft !mention-index !at-open? !picked]
   (e/client
-    (let [[pt _] (e/Token picked)]
+    (let [[pt ?error] (e/Token picked)]
       (when pt
-        (let [document (e/server
-                         (when (pos? reference-document-count)
-                           (nth reference-documents
-                             (mod picked reference-document-count) nil)))]
-          (case document
-            (if document
-              (let [next-draft (panel-data/draft-with-reference
-                                 draft (:title document))]
-                (case (swap! !refs
-                        (fn [references]
-                          (if (some #(= (:id document) (:id %)) references)
-                            references
-                            (conj references {:id (:id document)
-                                              :title (:title document)}))))
-                  (case (e/client (sync-composer-draft-value! next-draft))
-                    (case (reset! !draft next-draft)
-                      (case (reset! !mention-index 0)
-                        (case (reset! !at-open? false)
-                          (case (reset! !picked nil)
-                            (pt))))))))
-              (case (reset! !picked nil)
-                (pt)))))))))
+        (let [selection (e/snapshot picked)]
+          (e/on-unmount
+            #(when (= (:request-id selection) (:request-id @!picked))
+               (reset! !picked nil)))
+          (case (apply-reference-choice! selection !refs !draft !mention-index !at-open?)
+            (pt)))))))
 
 (e/defn AssistantComposer
   [{:keys [at-open? mention-query active-reference-index reference-document-count refs
@@ -246,7 +243,7 @@
                     (pos? reference-document-count))
                   (do
                     (.preventDefault event)
-                    (reset! !picked active-reference-index))
+                    (choice/pick-selected! (.-target event) value))
 
                   (and at-open? (= (.-key event) "Escape"))
                   (do (.preventDefault event) (reset! !at-open? false))

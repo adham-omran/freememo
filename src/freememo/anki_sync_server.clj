@@ -315,12 +315,12 @@
   "Flag live Anki note state against local cards, for the Library rows.
 
    pre:  present-notes [{:note-id long
-                         :stripped-fields [str ...]   ; strip-html'd, Anki field order
+                         :field-fingerprints [hex ...] ; normalized text hashes in field order
                          :tags [str ...]
-                         :remark string or nil
+                         :remark boolean
                          :suspended {:total n :suspended n}} ...]
          absent-note-ids [long ...] — accepted and IGNORED, see below.
-         Both derive from ONE notesInfo batch on the client.
+         Both derive from a complete sequence of validated client batches.
    post: {:success true
           :per-card {card-id {:anki-modified bool, :marked bool, :remarked bool,
                               :suspended {:total n :suspended n}}}  ; SPARSE — flagged cards only
@@ -351,21 +351,28 @@
                           (db/get-flashcards-by-anki-note-ids user-id note-ids))
           per-card
           (into {}
-            (keep (fn [{:keys [note-id stripped-fields tags remark suspended]}]
+            (keep (fn [{:keys [note-id stripped-fields field-fingerprints fingerprint tags remark suspended]}]
                     (when-let [card (get local-by-note note-id)]
                       (let [kind (:flashcards/kind card)
                             basic? (= "basic" kind)
+                            equal-field? (fn [i html]
+                                           (if field-fingerprints
+                                             (= (get field-fingerprints i (digest/text-fingerprint nil))
+                                               (digest/text-fingerprint
+                                                 (helpers/strip-html (math/stored->compare-html html kind))))
+                                             (stripped= (get stripped-fields i) html kind)))
                             anki-modified?
                             (cond
-                              ;; Occlusion content diff is owned by the pull
-                              ;; path (io_fields); score + overlapping fields are
-                              ;; FM-derived (media, or the expanded list) with no
-                              ;; single-field inverse. The overlay only surfaces
-                              ;; marked/suspended for these rows.
                               (contains? #{"occlusion" "score" "overlapping"} kind) false
-                              basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card) kind))
-                                       (not (stripped= (second stripped-fields) (:flashcards/answer card) kind)))
-                              :else (not (stripped= (first stripped-fields) (:flashcards/cloze card) kind)))
+                              fingerprint
+                              (not= fingerprint
+                                (digest/text-tuple-fingerprint
+                                  (map #(helpers/strip-html (math/stored->compare-html % kind))
+                                    (if basic? [(:flashcards/question card) (:flashcards/answer card)]
+                                      [(:flashcards/cloze card)]))))
+                              basic? (or (not (equal-field? 0 (:flashcards/question card)))
+                                       (not (equal-field? 1 (:flashcards/answer card))))
+                              :else (not (equal-field? 0 (:flashcards/cloze card))))
                             flags (review/overlay-flags
                                     anki-modified? tags remark suspended)]
                         (when (seq flags)

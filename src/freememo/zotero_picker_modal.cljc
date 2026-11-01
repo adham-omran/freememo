@@ -19,7 +19,8 @@
    [freememo.modal-shell :as modal]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.navigation :as nav]
    [freememo.client-errors :as ce]
    [freememo.zotero-client :as zc]))
@@ -180,56 +181,45 @@
   (e/client
     (let [pick! (fn [_] (on-pick item))]
       (dom/td
-        (dom/props {:style {:padding "6px 12px"
-                            :cursor "pointer"
-                            :display "flex" :flex-direction "column"
-                            :justify-content "center"
-                            :overflow "hidden"}})
+        (dom/props {:class "zotero-item-cell"})
         (a11y/KeyActivate {:label (str "Select " (or (:title item) "untitled item"))} pick!)
         (dom/On "click" pick! nil)
         (dom/div
-          (dom/props {:style {:font-size "14px" :font-weight "500"
-                              :color "var(--color-text-primary)"
-                              :white-space "nowrap" :overflow "hidden"
-                              :text-overflow "ellipsis"}})
+          (dom/props {:class "zotero-item-title"})
           (dom/text (or (:title item) "(Untitled)")))
         (dom/div
-          (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                              :white-space "nowrap" :overflow "hidden"
-                              :text-overflow "ellipsis"
-                              :margin-top "2px"}})
+          (dom/props {:class "zotero-item-meta"})
           (dom/text (format-meta item)))))))
 
-(e/defn VirtualItemList [filtered on-pick empty-message]
+(e/defn VirtualItemList [filtered on-pick empty-message reset-key]
   (e/client
-    (let [row-count (count filtered)]
-      (dom/div
-        (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"
-                            :border "1px solid var(--color-border)"
-                            :border-radius "var(--radius-sm)"}})
-        (let [[offset limit] (Scroll-window row-height row-count dom/node
-                               {:overquery-factor 2})]
-          (dom/props {:class "tape-scroll"
-                      :style {:--count row-count :--grid-cols "1fr"
-                              :--row-height (str row-height "px")}})
-          (dom/table
-            (dom/props {:style {:width "100%"}})
-            (if (pos? row-count)
-              (e/for [i (Tape offset limit)]
-                (let [item (nth filtered i nil)]
-                  (when item
-                    (dom/tr
-                      (dom/props {:style {:--order i
-                                          :height (str row-height "px")
-                                          :border-bottom "1px solid var(--color-bg-subtle)"}})
-                      (ItemCell item i on-pick)))))
-              (dom/tr
-                (dom/props {:style {:height "auto"}})
-                (dom/td
-                  (dom/props {:style {:padding "24px 12px" :text-align "center"
-                                      :color "var(--color-text-secondary)"
-                                      :font-size "13px"}})
-                  (dom/text empty-message))))))))))
+   (let [row-count (count filtered)]
+     (dom/div
+      (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"
+                          :border "1px solid var(--color-border)"
+                          :border-radius "var(--radius-sm)"}})
+      (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                          {:overquery-factor 1.5 :reset-key reset-key})]
+        (dom/props {:class "tape-scroll"
+                    :style {:--count row-count :--grid-cols "1fr"
+                            :--row-height (str row-height "px")}})
+        (dom/table
+         (dom/props {:style {:width "100%"}})
+         (do
+           (e/for [i (Tape offset limit)]
+             (let [item (nth filtered i nil)]
+               (when item
+                 (dom/tr
+                  (dom/props {:class "audit-tape-row" :style {:--order i}})
+                  (ItemCell item i on-pick)))))
+           (when (zero? row-count)
+             (dom/tr
+              (dom/props {:style {:height "auto"}})
+              (dom/td
+               (dom/props {:style {:padding "24px 12px" :text-align "center"
+                                   :color "var(--color-text-secondary)"
+                                   :font-size "13px"}})
+               (dom/text empty-message)))))))))))
 
 (e/defn AttachmentChooser [candidates on-pick on-cancel]
   (e/client
@@ -433,4 +423,4 @@
               (VirtualItemList filtered pick-item!
                 (if (zero? total)
                   "No bibliographic items in your Zotero library."
-                  "No items match your filter.")))))))))
+                  "No items match your filter.") query))))))))

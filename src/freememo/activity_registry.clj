@@ -194,9 +194,7 @@
     :tier :server :subject :topic :work-key id->key
     :state-key :card-gen-status
     :canceller-key :card-gen-cancellers :cancelled-key :card-gen-cancelled
-    ;; `forget-card-gen-item!` leaves the entry behind with `:pending` 0 and its
-    ;; `:error` intact, which is exactly what makes the outcome readable after
-    ;; the work is gone.
+    ;; The owner retains errors after its pending count reaches zero.
     :error-fn (fn [uid work-key]
                 (:error (get @(us/get-atom uid :card-gen-status) (key->id work-key))))
     ;; `:card-gen-status` is keyed by TOPIC and aggregates that topic's runs into
@@ -211,17 +209,16 @@
     ;; would do nothing. That reasoning was incomplete: the call cannot be
     ;; recalled, but the CARDS can be left uninserted, and not receiving cards
     ;; you asked to abandon is the part still available.
-    ;; `generate-and-save!` reads `:card-gen-cancelled` immediately before its
-    ;; insert — the same cooperative shape a page scan uses, for the same
-    ;; reason: neither request can be aborted.
+    ;; Each generation attempt checks its own guard at the card insert.
+    ;; The topic marker only hides canceled work from discovery.
     ;;
     ;; The phase carries the outstanding count, because this entry AGGREGATES.
     ;; Three generations on one page are one row, and without the count three
     ;; runs and one read identically — which is exactly what a user who ran
     ;; three and saw one activity reported.
-    :entry->state (fn [{:keys [active-id pending]}]
+    :entry->state (fn [{:keys [active-id active-count pending]}]
                     (let [pending (or pending 0)
-                          queued (- pending (if active-id 1 0))]
+                          queued (- pending (or active-count (if active-id 1 0)))]
                       (cond
                         (some? active-id)
                         {:phase (if (pos? queued)
@@ -366,7 +363,10 @@
     :canceller-key :anki-run-cancellers
     :entry->state (fn [entry] (lease/reading entry (System/currentTimeMillis)))
     :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :anki-run-errors) work-key))}
+                (get @(us/get-atom uid :anki-run-errors) work-key))
+    ;; The closing toast's text, so the row says what the sync did.
+    :summary-fn (fn [uid work-key]
+                  (get @(us/get-atom uid :anki-run-results) work-key))}
 
    ;; ── Account transfer. SERVER tier, not pushed. ─────────────────────────
    ;; An export streams on a Jetty request thread and an import runs in an
@@ -387,6 +387,15 @@
     ;; indeterminate, and a second declaration could disagree with the data.
     :work-key (constantly "account")
     :state-key :exporting-accounts :phase "exporting"
+    :key-fn identity :owner-key->args (constantly [])}
+
+   ;; A card export download (freememo.card-export-http). Same shape as the
+   ;; account export: it streams on a request thread, one at a time per user.
+   :card-export
+   {:label "Exporting cards"
+    :tier :server :subject :none
+    :work-key (constantly "cards")
+    :state-key :exporting-cards :phase "exporting"
     :key-fn identity :owner-key->args (constantly [])}
 
    :account-import
@@ -525,6 +534,16 @@
   [type uid work-key]
   (when-some [{:keys [error-fn]} (activity-type type)]
     (when error-fn (error-fn uid work-key))))
+
+(defn work-summary
+  "The owner's recorded summary of one finished piece of work, or nil.
+
+   What the run did, in words, for the Activity row of a success or a cancel.
+   Only the types with a `:summary-fn` publish one; the rest show their last
+   done/total, or nothing."
+  [type uid work-key]
+  (when-some [{:keys [summary-fn]} (activity-type type)]
+    (when summary-fn (summary-fn uid work-key))))
 
 (defn server-tier-types
   "The type strings the reporter is responsible for ticking. Pushed-tier rows are

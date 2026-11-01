@@ -3,61 +3,38 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
-   [freememo.anki-reads :as reads]
+   [freememo.anki-overlay-reads :as overlay-reads]
+   [freememo.anki-digest :as digest]
+   [freememo.anki-sync-observation :as sync-observation]
+   [freememo.task-request :as request]
    [freememo.task-owner :as owner]
-   [freememo.anki-review :as review]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.client-state :as cs]
    [freememo.logging :as log]
-   [freememo.math :as math]
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.user-state :as us])))
 
 (defn start-fetch!
   "Read mark, suspension, remark, and field state from AnkiConnect.
    Return a canceller that rejects callbacks after frame teardown."
-  [manifest _trigger !status !payload]
+  [note-count _trigger !requests !status !payload]
   #?(:cljs
-     (let [my-gen (random-uuid)
-           note-ids (mapv :note-id manifest)]
+     (let [my-gen (random-uuid)]
        (reset! !status :checking)
        (log/log-debug (str "[anki-overlay] fetch start gen=" my-gen
-                        " notes=" (count note-ids)))
-       (owner/start! (m/sp
-          (let [notes (m/? (reads/read-notes! helpers/anki-call! note-ids))
-                notes-clj (js->clj notes :keywordize-keys true)
-                pairs (map vector note-ids notes-clj)
-                absent (into []
-                         (keep (fn [[nid note]]
-                                 (when (or (nil? note) (empty? note) (nil? (:noteId note)))
-                                   nid)))
-                         pairs)
-                present (into []
-                          (keep (fn [[nid note]]
-                                  (when (and (map? note) (:noteId note))
-                                    {:note-id nid
-                                     :stripped-fields (mapv (comp helpers/strip-html
-                                                              math/anki->stored-html)
-                                                        (helpers/ordered-field-values (:fields note)))
-                                     :tags (vec (:tags note))
-                                     :remark (review/note-remark (:fields note))
-                                     :card-ids (vec (:cards note))})))
-                          pairs)
-                all-card-ids (into [] (mapcat :card-ids) present)
-                suspended-flags (if (seq all-card-ids)
-                                  (vec (js->clj (m/? (helpers/anki-call! "areSuspended"
-                                                       {:cards all-card-ids}))))
-                                  [])
-                card-id->suspended (zipmap all-card-ids suspended-flags)]
-            {:present (mapv (fn [{:keys [card-ids] :as note}]
-                              (-> note
-                                (dissoc :card-ids)
-                                (assoc :suspended
-                                  {:total (count card-ids)
-                                   :suspended (count (filter #(true? (get card-id->suspended %))
-                                                       card-ids))})))
-                        present)
-             :absent absent}))
+                        " notes=" note-count))
+       (owner/start!
+         (m/sp
+           (loop [offset 0 result {:present [] :absent []}]
+             (if (< offset note-count)
+               (let [targets (m/? (request/request! !requests {:offset offset}))
+                     ids (mapv :note-id targets)
+                     kinds (into {} (map (juxt :note-id :kind)) targets)
+                     chunk (m/? (overlay-reads/read-overlay! helpers/anki-call! ids kinds))]
+                 (recur (+ offset 500)
+                   (-> result (update :present into (:present chunk))
+                     (update :absent into (:absent chunk)))))
+               result)))
         (fn [result]
           (log/log-debug (str "[anki-overlay] fetch done gen=" my-gen
                           " present=" (count (:present result))
@@ -70,17 +47,33 @@
           (reset! !status :unavailable))))
      :clj nil))
 
+(e/defn OverlayRequests [manifest !requests]
+  (e/client
+    (let [pending (e/watch !requests)]
+      (e/for-by :id [item (if pending [pending] [])]
+        (let [offset (get-in item [:data :offset])
+              [t ?error] (e/Token (:id item))]
+          (when t
+            (let [ids (e/server (mapv #(select-keys % [:note-id :kind]) (take 500 (drop offset manifest))))]
+              (case ids
+                (do (e/on-unmount #(request/resolve! item ids))
+                    (t))))))))))
+
 (e/defn AnkiOverlay [user-id manifest !status !payload !check-tick]
   (e/client
-    (let [sync-rev (e/server (e/watch (us/get-atom user-id :sync-mutations)))
+    (let [[sync-busy? sync-rev] (sync-observation/SyncObservation user-id)
           card-rev (e/server (e/watch (us/get-atom user-id :card-mutations)))
           payload (e/watch !payload)
+          !requests (atom nil)
+          note-count (e/server (count manifest))
+          manifest-key (e/server (digest/text-fingerprint (pr-str manifest)))
           check-tick (e/watch !check-tick)
           action-refresh (e/watch (cs/get-atom :anki-overlay-refresh))]
-      (e/for-by identity [_key [[manifest sync-rev check-tick action-refresh]]]
-        (when (seq manifest)
+      (OverlayRequests manifest !requests)
+      (e/for-by identity [_key [[manifest-key sync-rev check-tick action-refresh]]]
+        (when (and (not sync-busy?) (pos? note-count))
           (let [cancel! (e/snapshot
-                          (start-fetch! manifest [sync-rev check-tick action-refresh] !status !payload))]
+                          (start-fetch! note-count [sync-rev check-tick action-refresh] !requests !status !payload))]
             (e/on-unmount cancel!))))
       ;; `e/as-vec` is load-bearing, and it must be on the CLIENT. When the
       ;; payload arrives, the `when` mounts a new server form, and the client

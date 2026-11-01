@@ -179,7 +179,9 @@ an activity reporter bug."}
                 ;; finished, not stale, and this process can assign its outcome.
                 (let [err (registry/work-error type user_id work_key)]
                   (activity/terminate! user_id id (if err "failure" "success")
-                    {:error err})
+                    {:error err
+                     :summary (when-not err
+                                (registry/work-summary type user_id work_key))})
                   (swap! locally-observed-activity-ids disj id)
                   (update acc :closed inc))
                 ;; Another process owns this row. Only its reporter can close it.

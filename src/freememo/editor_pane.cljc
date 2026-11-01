@@ -13,6 +13,8 @@
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.merged-page-bridge :refer [MergedPageBridge]]
+   [freememo.merged-window-navigation :refer [MergedWindowNavigation]]
+   [freememo.merged-window :as merged-window]
    [freememo.editor-pin-layer :refer [EditorPinLayer]]
    [freememo.reading-anchor :as reading-anchor]
    [freememo.reading-position-view :refer [ReadingPosition]]
@@ -120,9 +122,9 @@
    Per-page mode writes the body to `topic-id`, as it always has.
 
    Merged mode splits it back across `pdf-root-id`'s page rows
-   (plans/merged-page-reading.md item 3.2). The editor holds the WHOLE document
+   (plans/merged-page-reading.md item 3.2). The editor holds one page range
    there, so writing it to `topic-id` would put every page's text — boundary
-   markers included — into one page row and empty the rest on the next merge.
+   markers included — into one page row.
 
    `page-numbers` is the list the merge reported. The editor cannot supply it:
    a page whose marker the reader deleted has no marker left to report.
@@ -138,6 +140,8 @@
   [{:keys [user-id topic-id html merged? pdf-root-id page-numbers]}]
   #?(:clj
      (try
+       (when-not (db/owns-topic? user-id (if merged? pdf-root-id topic-id))
+         (throw (ex-info "This document is not available." {})))
        (let [{rehosted :html} (image-rehost/rehost-data-uris! {:html html :user-id user-id})]
          (if merged?
            (let [r (db/save-merged-pages! pdf-root-id rehosted page-numbers)]
@@ -172,7 +176,7 @@
 
       ;; -----------------------------------------------------------------------
       ;; Auto-save + save-status: watch editor/!dirty-html and write on every
-      ;; edit whose topic-id matches. save-result is computed once and reused
+      ;; edit whose captured owner matches. save-result is computed once and reused
       ;; for last-saved tracking and the status indicator (PDF mode).
       ;;
       ;; The trigger MUST read dirty-data directly. needs-save? → save-result
@@ -180,28 +184,26 @@
       ;; write and the status DOM, so Electric runs it. A prior debounce parked
       ;; the write behind a value-discarded let-binding that Electric never
       ;; evaluated, so no edit ever saved. !last-saved dedups repeat values, so
-      ;; a matched edit writes once per distinct html.
+      ;; a matched edit writes once per edit identity.
       ;; -----------------------------------------------------------------------
       (let [dirty-data (e/watch editor/!dirty-html)
             !last-saved (atom nil)
             ;; The dirty tag is the DOCUMENT id, which merged reading makes
             ;; distinct from the page — see doc-context/editor-doc-id.
             doc-id (or dctx/editor-doc-id topic-id)
-            needs-save? (and (some? dirty-data)
-                          (= (:topic-id dirty-data) doc-id)
-                          (not= (:html dirty-data) (e/watch !last-saved)))
+            needs-save? (merged-window/save-needed? dirty-data user-id
+                          (e/watch editor/!saved-edit-id) (e/watch !last-saved))
             save-result (when needs-save?
                           (log/log-debug (str "EditorPane auto-save topic-id=" topic-id))
                           (e/server
                             (e/Offload
-                              #(save-editor-html!*
-                                 {:user-id user-id :topic-id topic-id
-                                  :html (:html dirty-data)
-                                  :merged? merged?
-                                  :pdf-root-id pdf-root-id
-                                  :page-numbers merged-page-numbers}))))]
+                              #(assoc (save-editor-html!*
+                                        (merge (:save-scope dirty-data)
+                                          {:user-id user-id :html (:html dirty-data)}))
+                                 :saved-edit-id (:edit-id dirty-data)))))]
         (when (:success save-result)
-          (reset! !last-saved (:html dirty-data)))
+          (reset! !last-saved (:saved-edit-id save-result))
+          (reset! editor/!saved-edit-id (:saved-edit-id save-result)))
         (when (and (some? save-result) (not (:success save-result)))
           (log/log-error (str "EditorPane auto-save error topic-id=" topic-id
                            " err=" (:error save-result))))
@@ -218,6 +220,7 @@
         ;; Merged reading's two-way link with the page state. Its own namespace
         ;; because inlining it here pushed this e/defn past the 64KB method cap.
         (MergedPageBridge)
+        (MergedWindowNavigation)
 
         ;; -----------------------------------------------------------------------
         ;; Link import

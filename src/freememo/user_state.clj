@@ -52,12 +52,10 @@
           :walkthrough-mutations (atom 0)
           :desktop-mutations (atom 0)
           :card-gen-status  (atom {})
-          ;; Card generation cancels QUEUED work only. The processor is an m/ap
-          ;; over a mailbox with `m/?> 3`, which hands out no per-item cancel fn,
-          ;; and an in-flight LLM call has already committed its credits — so
-          ;; there is nothing a canceller could usefully stop once a run starts.
-          :card-gen-cancelled (atom #{})    ; topic ids whose queued items to skip
-          :card-gen-cancellers (atom {})    ; topic id -> fn marking it cancelled
+          ;; Topic membership hides canceled work while its request drains.
+          ;; Each attempt retains its own commit guard through retries.
+          :card-gen-cancelled (atom #{})
+          :card-gen-cancellers (atom {})
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})
           ;; The editor uses active URLs to avoid another fetch for the same URL.
@@ -77,12 +75,9 @@
           :video-process-errors (atom {})
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
-          ;; Cancelling a page scan cannot abort its OCR request — clj-http's
-          ;; socket read ignores Thread.interrupt() — so the missionary cancel is
-          ;; only an attempt, and THIS is what makes cancelling mean something:
-          ;; `extract-page-text` reads it before writing and leaves the page
-          ;; alone. Also what keeps a cancelled scan from being re-discovered as
-          ;; a second activity while its request drains.
+          :scan-runs        (atom {})
+          ;; The attempt owns its commit guard. This marker hides canceled work
+          ;; from Activity discovery while its HTTP request drains.
           :scan-cancelled   (atom #{})      ; [doc page] pairs the user abandoned
           :distilling-docs  (atom #{})      ; root topic ids with a distill run in flight
           :distill-cancellers (atom {})     ; root topic id -> missionary cancel fn
@@ -103,6 +98,9 @@
           ;; user, so the set holds a constant rather than an id.
           :exporting-accounts (atom #{})
           :importing-accounts (atom #{})
+          ;; A card export download (freememo.card-export-http). Holds the
+          ;; constant "cards" for the same reason.
+          :exporting-cards (atom #{})
           ;; Git forge imports and updates (freememo.repo-import):
           ;; `host/owner/name` -> phase while the work runs. A map rather than a
           ;; set because the phase moves — cloning or fetching, resolving,
@@ -141,6 +139,10 @@
           ;; the lease drops so the reporter closes the row as failed; cleared
           ;; by the next claim.
           :anki-run-errors  (atom {})
+          ;; "collection" -> what the last finished or cancelled sync did, in
+          ;; the words of its closing toast. Written before the lease drops so
+          ;; the reporter closes the row with it; cleared by the next claim.
+          :anki-run-results (atom {})
           :toasts           (atom []))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;

@@ -16,6 +16,7 @@
    [freememo.assistant-chat-tree :as tree]
    [freememo.assistant-context-usage :as context-usage]
    [freememo.assistant-evidence :as evidence]
+   [freememo.assistant-history :as history]
    [freememo.assistant-evidence-excerpt :as evidence-excerpt]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-slash :as slash]
@@ -2181,7 +2182,7 @@
       (nil? page) {:error "Topic not found."}
       (str/blank? (text/strip-html (or content ""))) {:error "There is no text to make cards from."}
       :else
-      (do (card-gen/enqueue-card-gen!
+      (let [outcome (card-gen/enqueue-card-gen!
             {:id (str (random-uuid))
              :content content
              :context (when (settings/get-context-enabled user-id) context-text)
@@ -2197,8 +2198,8 @@
                               root-id)
              :pre-prompt nil
              :pre-prompt-mode nil
-             :success-toast? true})
-        {:ok true}))))
+             :success-toast? true})]
+        (if (= :enqueued outcome) {:ok true} outcome)))))
 
 (defn selection->cards!
   "Queue cards from text selected in one settled answer. The whole answer is the
@@ -2413,53 +2414,22 @@
           :content answer-context-text)
         card-count))))
 
-(def ^:private max-referenceable-files
-  "Most repo files the @ picker lists for one query. A repository can hold
-   thousands of files, so the learner narrows the list by typing."
-  50)
-
-(def ^:private unreferenceable-kinds
-  "Root kinds the @ picker never offers, because a reference to one sends the
-   model no text. A repository root holds none: `referenceable-docs` offers
-   its files instead. A score holds a sheet-music PDF and a recording. No
-   import makes text from either."
-  #{"repo" "score"})
-
 (defn referenceable-docs
-  "Return what a learner can reference from a chat: root documents, then repo
-   files.
+  "Return at most 50 owned documents and repository files matching query text.
 
-   A repository root holds no text of its own. Its files live in `topic_code`
-   under commit and directory nodes, so a reference to the root gave the model
-   nothing. The list offers the files instead, from the newest commit of each
-   repository, and only those with stored source. A blank query lists no files:
-   the panel computes this list while the menu is closed, and a bare `@` would
-   bury the documents under files the learner did not ask for.
-
-   Pre: `query` is the unfinished text after `@`, or an empty string.
-   Post: the documents exclude the open document and every root of an
-         `unreferenceable-kinds` kind, in newest-first order. At most
-         `max-referenceable-files` files follow them, each titled
-         `<repo title>/<path>`.
-   Invariant: every result has an `:id` and a displayable `:title`."
+   Repository roots and scores hold no referenceable text. Blank queries return
+   document suggestions only. The panel performs no query while the menu is closed."
   ([user-id current-root-topic-id]
    (referenceable-docs user-id current-root-topic-id ""))
   ([user-id current-root-topic-id query]
-   (let [needle (str/lower-case (or query ""))
-         documents (into []
-                     (comp
-                       (remove #(= current-root-topic-id (:topics/id %)))
-                       (remove #(unreferenceable-kinds (:topics/kind %)))
-                       (map (fn [topic]
-                              {:id (:topics/id topic)
-                               :title (or (:topics/title topic) "Untitled")}))
-                       (filter #(str/includes? (str/lower-case (:title %)) needle)))
-                     (db/get-root-topic-titles user-id))]
+   (let [needle (str/lower-case (str/trim (or query "")))
+         documents (history/document-options user-id current-root-topic-id needle)]
      (if (str/blank? needle)
        documents
        (into documents
          (map (fn [{:keys [id label]}] {:id id :title label}))
-         (db/get-referenceable-repo-files user-id needle max-referenceable-files))))))
+         (db/get-referenceable-repo-files user-id needle
+           (max 0 (- history/page-size (count documents)))))))))
 
 ;; ── Reactive read wrappers (first arg = the relevant watched revision) ──────
 
@@ -2686,6 +2656,125 @@
         (sort-by ::order)
         (mapv #(dissoc % ::order))))))
 
+(defn- history-message-views
+  "Project one bounded set of owned messages and their cited evidence."
+  [user-id ids]
+  (let [evidence (group-by :run_uuid (history/cited-evidence user-id ids))]
+    (into {}
+      (map (fn [row]
+             (let [message (cond-> {:assistant_messages/id (:id row)
+                                   :assistant_messages/role (:role row)
+                                   :assistant_messages/content (:content row)
+                                   :assistant_messages/client_id (:client_id row)}
+                             (:run_uuid row)
+                             (assoc :assistant_messages/content (:response_text row)
+                               :assistant_run/uuid (:run_uuid row)
+                               :assistant_run/status (:status row)
+                               :assistant_run/error (:error_text row)
+                               :assistant_run/retry_of (:retry_of_run_uuid row)
+                               :assistant_run/evidence (get evidence (:run_uuid row) [])))]
+               [(:id row) (transcript-message-view message)])))
+      (history/message-rows user-id ids))))
+
+(defn transcript-page*
+  "Read and project a fixed transcript page away from the session reactor."
+  [_rev user-id chat-id before]
+  (let [{:keys [events] :as page} (history/transcript-page user-id chat-id before)
+        messages (history-message-views user-id (keep :message_id events))
+        checkpoints (into {} (map (juxt :id identity))
+                      (history/checkpoints user-id (keep :checkpoint_id events)))]
+    (-> page
+      (dissoc :events)
+      (assoc :scope [chat-id before] :rows
+        (mapv (fn [{:keys [kind message_id checkpoint_id inherited chat_title]}]
+                (case (long kind)
+                  0 (cond-> (get messages message_id)
+                      inherited (assoc :assistant_messages/inherited? true))
+                  1 (transcript-message-view
+                      (checkpoint-event (assoc (get checkpoints checkpoint_id) :chat_title chat_title)))
+                  2 {:assistant_messages/id "fork" :assistant_messages/role "event"
+                     :assistant_event/type "fork" :assistant_messages/content chat_title}))
+          events)))))
+
+(defn transcript-index*
+  "Read ordered event identities away from the session reactor."
+  [revision user-id chat-id]
+  {:chat chat-id :revision revision :events (history/transcript-index user-id chat-id)})
+
+(defn transcript-window*
+  "Project requested window bodies, including interaction pins, from the server-owned index."
+  [user-id index indices]
+  (let [indices (vec (distinct indices))
+        events (mapv #(nth (:events index) % nil) indices)
+        messages (history-message-views user-id (keep :message_id events))
+        checkpoints (into {} (map (juxt :id identity))
+                      (history/checkpoints user-id (keep :checkpoint_id events)))]
+    {:scope [(:chat index) indices]
+     :rows (into {}
+             (map (fn [i {:keys [kind message_id checkpoint_id inherited chat_title] :as event}]
+                    [i (when event
+                         (assoc
+                           (case (long kind)
+                             0 (cond-> (get messages message_id)
+                                 inherited (assoc :assistant_messages/inherited? true))
+                             1 (transcript-message-view
+                                 (checkpoint-event (assoc (get checkpoints checkpoint_id) :chat_title chat_title)))
+                             2 {:assistant_messages/id "fork" :assistant_messages/role "event"
+                                :assistant_event/type "fork" :assistant_messages/content chat_title})
+                           :transcript/key ((juxt :section :position :kind :event_id) event)))])
+               indices events))}))
+
+(defn transcript-window-row
+  "Retain overlapping identities during a fetch. Never accept another chat or a moved event."
+  ([result chat-id indices index live-row]
+   (when (= [chat-id indices] (:scope result))
+     (transcript-window-row result chat-id indices index live-row
+       (get-in result [:rows index :transcript/key]))))
+  ([result chat-id _indices index live-row expected-key]
+   (let [row (get (:rows result) index)]
+     (when (and row (= chat-id (first (:scope result)))
+                (= expected-key (:transcript/key row)))
+       (if (and (:assistant_messages/id live-row)
+                (= (:assistant_messages/id row) (:assistant_messages/id live-row))
+                (#{"queued" "streaming" "stop-requested"} (:assistant_run/status row)))
+         (assoc live-row :transcript/key (:transcript/key row))
+         row)))))
+
+(defn transcript-window-rows
+  "Transfer indexed content. The client owns measured row positions."
+  [result projection chat-id indices live-row]
+  (into []
+    (keep (fn [index]
+            (let [key (some-> (nth (:events projection) index nil)
+                        ((juxt :section :position :kind :event_id)))]
+              (when-let [row (transcript-window-row result chat-id nil index live-row key)]
+                (assoc row :window/index index)))))
+    indices))
+
+(defn current-transcript-page
+  "Keep same-chat rows during paging and hide rows from another chat."
+  [page chat-id before]
+  (cond
+    (= [chat-id before] (:scope page)) page
+    (= chat-id (first (:scope page))) (assoc page :more? false :cursor nil :pending? true)
+    :else {:rows [] :more? false :cursor nil :pending? true}))
+
+(defn live-transcript-row*
+  "Project the newest answer through settlement while the durable window refreshes."
+  [_stream-rev user-id chat-id]
+  (when-let [id (and chat-id (history/latest-answer-message-id user-id chat-id))]
+    (get (history-message-views user-id [id]) id)))
+
+(defn transcript-rows
+  "Replace a live answer on its own page without replacing a terminal result."
+  [page live-row]
+  (let [id (:assistant_messages/id live-row)
+        active-statuses #{"queued" "streaming" "stop-requested"}]
+    (mapv #(if (and id (= id (:assistant_messages/id %))
+                   (active-statuses (:assistant_run/status %)))
+             live-row %)
+      (:rows page))))
+
 (defn message-client-id-present?
   "Return true when `rows` already carry the optimistic user message.
 
@@ -2711,8 +2800,7 @@
    context… and offers Stop (plans/assistant-chat-forks.md §4.5.4)."
   [_rev user-id chat-id]
   (when chat-id
-    (or (some-> (db/get-active-assistant-run user-id chat-id)
-          (select-keys [:run_uuid :kind :status]))
+    (or (history/active-run-summary user-id chat-id)
       (when (and (preparing? chat-id) (db/get-assistant-chat user-id chat-id))
         {:run_uuid nil :kind "compact" :status "preparing"}))))
 

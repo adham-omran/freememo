@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.assistant :as assistant]
+            [freememo.assistant-history :as history]
             [freememo.assistant-evidence :as evidence]
             [freememo.assistant-panel :as panel]
             [freememo.assistant-panel-data :as panel-data]
@@ -245,18 +246,20 @@
           (panel-data/draft-without-reference "nothing to remove" "Zig")))
     (is (= "" (panel-data/draft-without-reference "@Zig" "Zig")))))
 
-(deftest document-mentions-filter-on-the-server
-  (with-redefs [db/get-root-topic-titles
-                (fn [_]
-                  [{:topics/id 9 :topics/title "Open document"}
-                   {:topics/id 2 :topics/title "Frontend Design"}
-                   {:topics/id 1 :topics/title "Backend Notes"}])
-                db/get-referenceable-repo-files (fn [_ _ _] [])]
-    (is (= [{:id 2 :title "Frontend Design"}]
-          (assistant/referenceable-docs "learner" 9 "FRONT")))
-    (is (= [{:id 2 :title "Frontend Design"}
-            {:id 1 :title "Backend Notes"}]
-          (assistant/referenceable-docs "learner" 9 "")))))
+(deftest document-mentions-delegate-filtering-to-the-bounded-query
+  (let [calls (atom [])]
+    (with-redefs [history/document-options
+                  (fn [user-id root-id query]
+                    (swap! calls conj [user-id root-id query])
+                    (if (= query "front")
+                      [{:id 2 :title "Frontend Design"}]
+                      [{:id 2 :title "Frontend Design"} {:id 1 :title "Backend Notes"}]))
+                  db/get-referenceable-repo-files (fn [_ _ _] [])]
+      (is (= [{:id 2 :title "Frontend Design"}]
+            (assistant/referenceable-docs "learner" 9 "FRONT")))
+      (is (= [{:id 2 :title "Frontend Design"} {:id 1 :title "Backend Notes"}]
+            (assistant/referenceable-docs "learner" 9 "")))
+      (is (= [["learner" 9 "front"] ["learner" 9 ""]] @calls)))))
 
 (deftest citation-target-resolves-retained-evidence
   (let [source {:citation_key "E1" :document_topic_id 7 :page_number 3

@@ -92,6 +92,10 @@
 ;; page whose marker the reader deleted.
 (e/declare merged?)
 (e/declare merged-page-numbers)
+(e/declare merged-range)
+(e/declare merged-read-request)
+(e/declare merged-expected-read-request)
+(e/declare merged-root-id)
 ;; The identity of the DOCUMENT the editor holds, which is not always the topic
 ;; whose id sits in `topic-id`.
 ;;

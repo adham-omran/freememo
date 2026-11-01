@@ -39,6 +39,12 @@
 (deftest empty-manifest-makes-no-request
   (is (= [] (await-task (reads/read-notes! (fn [& _] (throw (Exception. "Unexpected request"))) [])))))
 
+(deftest wrong-note-order-cannot-classify-a-scan
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"wrong position"
+        (await-task (reads/reduce-notes!
+                      (fn [_ _] (m/sp [{:noteId 2} {:noteId 1}]))
+                      (fn [result _ notes] (into result notes)) [] [1 2])))))
+
 (deftest cancellation-does-not-start-the-next-chunk
   (let [calls (atom 0)
         started (promise)

@@ -174,7 +174,7 @@
 
 (defn visible-subgraph
   "Return the visible node and edge IDs after scope, k-core, and view filters."
-  [edges {:keys [source pred-set min-degree view-mode selected depth]}]
+  [edges {:keys [source pred-set min-degree view-mode selected depth standalone-node-ids]}]
   (let [scoped-edges (filterv #(edge-in-scope? % source pred-set) edges)
         core-node-ids (k-core-node-ids scoped-edges min-degree)
         core-edges (induced-edges scoped-edges core-node-ids)
@@ -184,6 +184,10 @@
             (neighborhood-node-ids core-edges selected depth)
             #{})
           core-node-ids)
+        visible-node-ids (into visible-node-ids
+                           (if (= view-mode :neighborhood)
+                             (filter #{selected} standalone-node-ids)
+                             standalone-node-ids))
         visible-edges (induced-edges core-edges visible-node-ids)]
     {:node-ids visible-node-ids
      :edge-ids (into #{} (map :id) visible-edges)}))

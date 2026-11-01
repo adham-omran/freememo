@@ -19,6 +19,7 @@
    [freememo.client-errors :as ce]
    [freememo.import-types :as itypes]
    [freememo.util :as util]
+   [freememo.youtube-url :as yt]
    #?(:cljs [freememo.archive-upload :as archive-upload])
    #?(:cljs [freememo.chunked-upload :as cu])
    #?(:clj [freememo.web-import :as web-import])
@@ -353,6 +354,15 @@
      (reset! !quota-error? false)
      (reset! !stage :error)))
 
+(defn refused-url-result
+  "The `import-url!*` result for an address this client can refuse without the
+   server, or nil. The server refuses the same addresses (`wikipedia/fetch-url`);
+   answering here skips the round trip and the url-import Activity row. A link
+   to one video is not refused: the server imports it as a `youtube` topic."
+  [url]
+  (when (yt/non-video-youtube-url? url)
+    {:ok false :error yt/rejection-message}))
+
 #?(:cljs
    (defn- apply-url-result!
      "Apply one `web-import/import-url!*` result: navigate, stage, or fail.
@@ -476,7 +486,9 @@
           (e/on-unmount #(reset! !busy-msg nil))
           (case (reset! !busy-msg "Fetching…")
             (case (reset-error! !error !quota-error?)
-              (let [r (e/server (e/Offload #(web-import/import-url!* user-id url)))]
+              (let [r (if-some [refused (refused-url-result url)]
+                        refused
+                        (e/server (e/Offload #(web-import/import-url!* user-id url))))]
                 (case r
                   ;; `case` on the shared handler: it resolves before the branch
                   ;; picks, so the token spends after the transition ran.
@@ -496,7 +508,9 @@
                        !stage !staged !flow !error !quota-error?]
   (e/client
     (let [frozen (e/snapshot url)
-          r (e/server (e/Offload #(web-import/import-url!* user-id frozen)))]
+          r (if-some [refused (refused-url-result frozen)]
+              refused
+              (e/server (e/Offload #(web-import/import-url!* user-id frozen))))]
       (case r
         (case (apply-url-result! r
                 {:!stage !stage :!staged !staged :!flow !flow

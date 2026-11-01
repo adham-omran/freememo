@@ -41,6 +41,7 @@
    "exam-grade"           {:member 42 :entry [1 3]}
    "account-export"       {:member "account"}
    "account-import"       {:member "account"}
+   "card-export"          {:member "cards"}
    "url-import"           {:member "url-run" :entry {:phase "Fetching"}}
    "html-import"          {:member "html-run" :entry {:phase "Uploading"}}
    "repo-import"          {:member "github.com/owner/name" :entry "downloading"}

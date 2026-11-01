@@ -6,12 +6,14 @@
    [freememo.logging :as log]
    [freememo.quill-table-ui :as table-ui]
    [freememo.quill-field :as quill-field]
+   [freememo.merged-window :as merged-window]
    [freememo.quill-markdown :as quill-markdown]
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
    [freememo.motion :as motion]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.command-bus :as bus])
+   #?(:cljs [freememo.focus-window :as focus-window])
    #?(:cljs [freememo.editor-links :as editor-links])
    #?(:cljs [freememo.reading-position :as rp])
    #?(:cljs [freememo.format-menu :as format-menu])
@@ -69,16 +71,18 @@
 ;; Shape: "section-id" or nil.
 (defonce !pending-anchor (atom nil))
 
-;; Set to the current HTML on every user edit (immediate, no debounce — other
-;; consumers need the live value: bottom_panel.cljc's ToolbarBar derives
-;; card-gen context from it, rich_text_editor_component.cljc gates its
-;; in-place content refresh on it). editor_pane.cljc's auto-save watches this
-;; but debounces the actual DB write to an idle pause; it does not save on
-;; every change here.
-;; nil means "no pending user edits" — the auto-save guard checks for non-nil.
-;; Reset to nil on init/page-switch so navigating doesn't trigger a save.
-;; Shape: {:html "..." :topic-id N}
+;; Each user edit publishes stored HTML and its immutable save scope.
+;; Toolbar consumers read the live value. EditorPane saves each edit off the reactor.
+;; A saved snapshot remains until another body installs. Its acknowledgement
+;; prevents repeated saves after navigation or a component remount.
+;; Shape: {:html string :topic-id id :save-scope map :edit-id string}.
 (defonce !dirty-html (atom nil))
+(defonce !saved-edit-id (atom nil))
+
+(defn publish-dirty! [html]
+  (reset! !dirty-html
+    (merged-window/edit-entry @!editor-state html (str (random-uuid)))))
+
 
 ;; Most recent non-empty in-editor selection range. Used as fallback when
 ;; (.getSelection ed) returns null/empty — happens in Chrome when clicking
@@ -195,8 +199,9 @@
      :cljs
      (do
        (reset! !editor-ready? false)
+       (reset! merged-window/!blocked-range nil)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown focus-anchor-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -220,6 +225,7 @@
            ;; Remove the scroll listener that reports the merged document's
            ;; current page.
            (when page-marker-teardown (page-marker-teardown))
+           (when focus-anchor-teardown (focus-anchor-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -316,6 +322,33 @@
        (.observe obs root #js {:childList true :subtree true})
        obs)))
 
+(defn report-viewport-edge! [ed page reader-direction]
+  #?(:clj nil
+     :cljs
+     (let [^js ed ed
+           state @!editor-state
+           scope (:save-scope state)
+           ^js root (.-root ed)
+           pages (:page-numbers scope)
+           distance (- (.-scrollHeight root) (.-clientHeight root) (.-scrollTop root))
+           capacity (if (< (count (or (:html @!dirty-html) (:installed-body-html state))) 262144)
+                      (min merged-window/max-page-limit
+                        (+ 4 (long (js/Math.ceil
+                                     (/ (* (.-clientHeight root) (max 1 (count pages)))
+                                        (max 1 (.-scrollHeight root)))))))
+                      merged-window/page-limit)
+           direction (cond
+                       (and (:merged? scope) (<= distance 200)
+                            (or (= reader-direction :forward)
+                                (and (nil? reader-direction)
+                                     (<= (.-scrollHeight root) (+ (.-clientHeight root) 200))))) :forward
+                       (and (:merged? scope) (= reader-direction :backward)
+                            (<= (.-scrollTop root) 200)) :backward)]
+       (reset! merged-window/!viewport-edge
+         (when direction
+           {:root-id (:pdf-root-id scope) :range [(first pages) (last pages)]
+            :page page :direction direction :capacity capacity})))))
+
 (defn- build-editor!
   "Construct the singleton Quill editor. Called by init-editor! once the KaTeX
    wait has settled; `math?` is that outcome.
@@ -323,7 +356,7 @@
    Pre  : `container` is mounted, `window.Quill` exists, no editor is live
           (init-editor! destroyed any predecessor).
    Post : !editor-state holds the new instance and its teardowns; returns it."
-  [container initial-html topic-id math?]
+  [container initial-html topic-id math? save-scope]
   #?(:clj nil
      :cljs
      (let [Quill (.-Quill js/window)
@@ -354,7 +387,8 @@
                       ;; ancestor — otherwise it is positioned past the
                       ;; pane edge and clipped by the PDF pane. QuillField
                       ;; has no such ancestor and omits :bounds.
-                      (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
+                      (clj->js (assoc-in (quill-field/quill-config "Enter text..." {:bounds container})
+                                 [:modules :history] {:userOnly true})))
                         ;; Cmd/Ctrl+\\ clears selected formatting in this editor.
                         (editor-actions/install-clear-format-binding!))
            _redo (quill-field/install-cmd-y-redo! editor)
@@ -401,8 +435,7 @@
          (fn [_delta _oldDelta source]
            (when (= source "user")
              (let [current-topic-id (:topic-id @!editor-state)]
-               (reset! !dirty-html {:html (quill-field/editor-html editor)
-                                    :topic-id current-topic-id})
+               (publish-dirty! (quill-field/editor-html editor))
                ;; User edits invalidate cached range — indices may now be stale
                (reset! !last-selection nil)))))
        ;; Cache last non-empty selection so toolbar buttons (Extract, etc.)
@@ -410,14 +443,17 @@
        ;; mousedown for buttons; Safari/Firefox on macOS do not).
        (.on editor "selection-change"
          (fn [^js range _old _source]
-           (when (and range (> (.-length range) 0))
-             (reset! !last-selection {:index (.-index range)
-                                      :length (.-length range)}))))
+           (swap! editor-actions/!pending-editor-work-revision inc)
+           (when range
+             (reset! !last-selection
+               (when (pos? (.-length range))
+                 {:index (.-index range) :length (.-length range)})))))
        ;; Bubble theme has no fixed `.ql-toolbar` to relocate — its formatting
        ;; controls live in the floating tooltip shown on selection. So no
        ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
        (reset! !editor-state {:editor editor :container container
-                              :topic-id topic-id :toolbar nil
+                              :topic-id topic-id :save-scope save-scope :toolbar nil
+                              :installed-body-html initial-html
                               ;; The KaTeX-wait outcome, recorded rather than
                               ;; re-derived: set-content! needs it to decide
                               ;; whether to promote stored math to blots, and
@@ -428,6 +464,9 @@
                               ;; line correct.
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
+                              :focus-anchor-teardown
+                              (focus-window/install-resize-anchor! editor
+                                #(get-in @!editor-state [:save-scope :merged?]))
                               :link-actions-teardown (editor-links/install! editor
                                                        {:!import !import-url
                                                         :!navigate !navigate-topic
@@ -470,7 +509,10 @@
                               (editor-actions/install-page-marker-tracking! editor
                                 (fn [page]
                                   (reset! editor-actions/!scrolled-page
-                                    {:doc-id (:topic-id @!editor-state) :page page})))})
+                                    {:doc-id (:topic-id @!editor-state)
+                                     :body-key (get-in @!editor-state [:save-scope :body-key])
+                                     :page page}))
+                                report-viewport-edge!)})
        (reset! !editor-ready? true)
        ;; Content is in the DOM (setContents above) and !editor-state is set, so
        ;; a reader woken by this bump can find the editor and its markers.
@@ -488,7 +530,7 @@
        (a11y/install-editor-escape! editor)
        editor)))
 
-(defn init-editor!
+(defn init-editor-with-scope!
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
    Wires an immediate text-change listener that sets !dirty-html on user edits.
@@ -507,7 +549,7 @@
           this claims the generation AFTER that call — claiming it before would
           have this call invalidate itself and never build. Any later init or
           teardown bumps again and drops this pending wait."
-  [container initial-html topic-id]
+  [container initial-html topic-id save-scope]
   #?(:clj nil
      :cljs
      (when (and container (.-Quill js/window))
@@ -521,8 +563,13 @@
          (math/on-katex-ready!
            (fn [math?]
              (when (= my-gen @!init-gen)
-               (build-editor! container initial-html topic-id math?)))))
+               (build-editor! container initial-html topic-id math? save-scope)))))
        nil)))
+
+(defn init-editor!
+  "Create an editor without an application save scope."
+  [container initial-html topic-id]
+  (init-editor-with-scope! container initial-html topic-id nil))
 
 (defn set-content!
   "Update Quill content without destroying the editor.
@@ -538,7 +585,8 @@
    `content-topic-id` is the topic `html` was fetched for. A real replacement
    reports it to the reading position, which restores only against its own
    topic's content (plans/reading-position-memory.md §4 3.6.1, 3.7)."
-  [html content-topic-id]
+  ([html content-topic-id] (set-content! html content-topic-id false))
+  ([html content-topic-id force?]
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor math?]} @!editor-state]
@@ -551,7 +599,7 @@
                        str/trim)
              current-stored (quill-field/editor-html ed)]
          ;; Skip if content hasn't changed (preserves scroll + highlights)
-         (when (not= (count cleaned) (count current-stored))
+         (when (or force? (not= (count cleaned) (count current-stored)))
            (let [for-editor (if math? (math/stored->editor-html cleaned) cleaned)
                  delta (.convert clipboard #js {:html for-editor})]
              (.setText ed "" "api")
@@ -563,7 +611,48 @@
              ;; happened. See !content-generation.
              (swap! !content-generation inc)
              (rp/installed! "editor" content-topic-id (.-root ed))))
-         true))))
+         true)))))
+
+(defn patch-overlapping-body! [state html scope]
+  #?(:clj nil
+     :cljs
+     (when (focus-window/overlapping? (:save-scope state) scope)
+       (focus-window/patch! (:editor state) (:math? state) html
+         (:save-scope state) scope !last-selection))))
+
+(defn install-body!
+  "Replace a loaded page range only after its latest edit has saved."
+  [html content-topic-id scope saved-edit-id]
+  #?(:clj nil
+     :cljs
+     (when-let [state @!editor-state]
+       (let [dirty @!dirty-html
+             old-key (get-in state [:save-scope :body-key])
+             new-key (:body-key scope)
+             changed? (not= old-key new-key)]
+         (when (and (or (not (:merged? scope))
+                        (merged-window/snapshot-current? (:read-request scope) (:expected-read-request scope)))
+                    (not (and (= old-key new-key)
+                              (= html (:installed-body-html state))))
+                    (merged-window/install-allowed? dirty saved-edit-id))
+           (when (or changed? (nil? dirty))
+             (let [overlap? (and changed? (get-in state [:save-scope :merged?])
+                                (:merged? scope)
+                                (= (get-in state [:save-scope :pdf-root-id]) (:pdf-root-id scope))
+                                (or (nil? (:requested-page scope))
+                                    (some #{(:requested-page scope)} (get-in state [:save-scope :page-numbers])))
+                                (some (set (get-in state [:save-scope :page-numbers])) (:page-numbers scope)))
+                   patched? (when overlap? (patch-overlapping-body! state html scope))]
+               (when (or (not overlap?) patched?)
+                 (swap! !editor-state assoc :save-scope scope :installed-body-html html)
+                 (reset! merged-window/!blocked-range nil)
+                 (when-not patched? (set-content! html content-topic-id true))
+                 (when changed?
+                   (reset! !dirty-html nil)
+                   (when-not patched? (reset! !last-selection nil)))))))))))
+
+(defn install-body-after-work! [html content-topic-id scope saved-edit-id _work-revision]
+  (install-body! html content-topic-id scope saved-edit-id))
 
 (defn install-saved-content!
   "Pre: before-html and after-html describe one committed change to topic-id.
@@ -705,5 +794,4 @@
        ;; Push updated HTML so the auto-save pipeline persists the highlight.
        ;; Stored form, like every other !dirty-html writer — a raw read here
        ;; would persist Quill's rendered KaTeX subtree instead of the TeX.
-       (reset! !dirty-html {:html (quill-field/editor-html editor)
-                            :topic-id topic-id}))))
+       (publish-dirty! (quill-field/editor-html editor)))))

@@ -111,6 +111,12 @@
   [{:keys [phase] :as activity}]
   (or (progress-text activity) phase))
 
+(defn finished-line
+  "The one line under a finished row's label: why it failed, else what it did,
+   else how far it got, else nothing. Never the phase — a finished run has none."
+  [{:keys [error summary] :as activity}]
+  (or (not-empty error) (not-empty summary) (progress-text activity) ""))
+
 ;; ---------------------------------------------------------------------------
 ;; Components
 ;; ---------------------------------------------------------------------------
@@ -148,7 +154,7 @@
    caller so the list derefs once rather than once per row."
   [activity user-id drivers navigate! !open?]
   (e/client
-    (let [{:keys [id label outcome error subject-id cancellable]} activity
+    (let [{:keys [id label outcome subject-id cancellable]} activity
           tab-owned? (ac/tab-owns? drivers id)
           live? (nil? outcome)
           pct (progress-pct activity)]
@@ -166,7 +172,7 @@
 
           (dom/div
             (dom/props {:class "activity-status"})
-            (dom/text (if live? (status-line activity) (or error ""))))
+            (dom/text (if live? (status-line activity) (finished-line activity))))
 
           ;; Determinate work only. An indeterminate bar that never moves reads
           ;; as stuck, which is worse than no bar.

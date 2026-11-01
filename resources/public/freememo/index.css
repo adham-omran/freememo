@@ -871,6 +871,85 @@ html:has(> body > .app-shell) > body {
     display: none !important;
 }
 
+/* Bibliography peek (freememo.bibliography-peek). The trigger keeps its book
+   icon at every tier the meta group shows; only the citation text beside it
+   collapses, by the rule above. */
+.bib-peek-anchor {
+    display: inline-flex;
+    min-width: 0;
+}
+.bib-peek-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 280px;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-hint);
+    font: inherit;
+    cursor: pointer;
+}
+.bib-peek-trigger:hover,
+.bib-peek-trigger[aria-expanded="true"] {
+    border-color: var(--color-border);
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+}
+.bib-peek-trigger svg { flex: none; }
+.bib-peek-trigger .toolbar-collapse-citation {
+    font-size: 12px;
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The UA [popover] rule centres the element with `inset: 0; margin: auto`, so
+   this rule resets it. Hidden until placed, so it never flashes at 0,0. */
+.bib-peek {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    z-index: 1100;
+    width: max-content;
+    max-width: min(380px, calc(100vw - 16px));
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card);
+    color: var(--color-text-primary);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.bib-peek:not([data-placed]) { visibility: hidden; }
+/* A long author list must not push Edit off-screen: the body scrolls and the
+   actions stay. On :popover-open only, since an author `display` would beat
+   the UA rule that hides a closed popover. */
+.bib-peek:popover-open {
+    display: flex;
+    flex-direction: column;
+    max-height: min(70vh, 480px);
+}
+.bib-peek-body { overflow-y: auto; min-height: 0; }
+.bib-peek-actions { flex-shrink: 0; }
+.bib-peek-title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+a.bib-peek-title { color: var(--color-primary-text); }
+.bib-peek-line { color: var(--color-text-secondary); }
+.bib-peek-muted { color: var(--color-text-hint); font-style: italic; }
+.bib-peek-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
 /* Document-meta group (Edit-Bib + progress + Mark-PDF-Done) hides at tier ≥2 */
 .toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-docmeta {
     display: none !important;
@@ -1667,6 +1746,19 @@ input[type="checkbox"].switch[aria-busy="true"] { cursor: progress; opacity: 0.7
     align-items: center;
     gap: 6px;
 }
+
+/* freememo.card-export-modal */
+.card-export { display: flex; flex-direction: column; gap: 14px; }
+.card-export h3 { margin: 0; font-size: 16px; font-weight: 500; overflow-wrap: anywhere; }
+.card-export__set { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.card-export__set legend { padding: 0; margin-bottom: 4px; font-weight: 600; font-size: 13px; }
+.card-export__set label,
+.card-export__check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.card-export__field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.card-export__field select { font-weight: 400; }
+.card-export__help { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.card-export__summary p { margin: 0 0 4px; font-size: 13px; }
+.card-export__actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Count cluster + selection cluster on ONE line, as two flex children, so the
    line wraps between them rather than mid-button-group. */
@@ -6194,6 +6286,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .cards-table-body .card-cell-glyph { font-size: 9px; }
 .cards-table-body .card-cell-glyph-remarked { color: var(--color-primary-text); }
 .cards-table-body tr { cursor: pointer; }
+.cards-table-body tr[hidden] { display: none; }
 .cards-table-body input[type="checkbox"] { cursor: pointer; }
 
 /* The tint shows the most urgent state: suspended, then marked, then
@@ -8333,13 +8426,41 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .graph-page {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: 52px minmax(0, 1fr);
+    position: relative;
     height: 100%;
     min-height: 0;
     overflow: hidden;
     background: var(--color-bg-page);
 }
+.graph-page-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-card);
+}
+.graph-page-search { flex: 1; min-width: 0; }
+.graph-scope-summary {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.graph-relations-toggle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.graph-relations-toggle[aria-expanded="true"] {
+    border-color: var(--color-primary);
+    color: var(--color-primary-text);
+    background: var(--color-bg-subtle);
+}
 
 .graph-filters {
+    grid-column: 1;
+    grid-row: 2;
     width: 276px;
     min-width: 0;
     height: 100%;
@@ -8469,6 +8590,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 .graph-scene {
+    grid-column: 2;
+    grid-row: 2;
     position: relative;
     min-width: 0;
     height: 100%;
@@ -8593,6 +8716,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 .graph-inspector {
+    grid-column: 3;
+    grid-row: 2;
     display: flex;
     flex-direction: column;
     width: 342px;
@@ -8670,10 +8795,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
 @media (max-width: 1100px) {
     .graph-page { position: relative; grid-template-columns: auto minmax(0, 1fr); }
+    .graph-scope-summary { display: none; }
     .graph-inspector {
         position: absolute;
+        grid-column: auto;
+        grid-row: auto;
         z-index: 12;
-        top: 8px;
+        top: 60px;
         right: 8px;
         bottom: 8px;
         height: auto;
@@ -8683,11 +8811,13 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 @media (max-width: 760px) {
-    .graph-page { display: block; }
+    .graph-page { grid-template-columns: 0 minmax(0, 1fr) 0; }
     .graph-filters {
         position: absolute;
+        grid-column: auto;
+        grid-row: auto;
         z-index: 14;
-        top: 8px;
+        top: 60px;
         bottom: 8px;
         left: 8px;
         width: min(310px, calc(100% - 16px));
@@ -8702,6 +8832,9 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 @media (max-width: 520px) {
+    .graph-page-header { gap: 8px; padding-inline: 8px; }
+    .graph-page-header .graph-action-label { display: none; }
+    .graph-page-header .btn { display: inline-flex; align-items: center; justify-content: center; }
     .graph-inspector {
         top: auto;
         left: 8px;
@@ -9742,4 +9875,122 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
   align-items: flex-start;
   justify-content: center;
   padding: 16px;
+}
+
+/* Bounded assistant history controls. */
+.assistant-transcript__paging,
+.assistant-history__paging {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  flex-shrink: 0;
+}
+/* Bounded audit widgets share one static property per cell. */
+.picker-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; flex: 1; }
+.typeahead-option-cell {
+  padding: 5px 8px; cursor: pointer; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.typeahead-option-cell.is-active { background: var(--color-highlight); }
+.audit-tape-row { border-bottom: 1px solid var(--color-bg-subtle); }
+.status-tape-row { cursor: pointer; }
+.status-document-cell {
+  padding: 4px 10px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; display: flex; align-items: center; gap: 8px;
+}
+.status-kind-badge { flex-shrink: 0; }
+.status-number-cell { padding: 4px 6px; text-align: center; }
+.status-number-cell.is-complete { color: var(--color-success-dark); }
+.status-number-cell.is-started { color: var(--color-text-primary); }
+.status-number-cell.is-muted { color: var(--color-text-secondary); }
+.zotero-item-cell {
+  padding: 6px 12px; cursor: pointer; display: flex; flex-direction: column;
+  justify-content: center; overflow: hidden;
+}
+.zotero-item-title {
+  font-size: 14px; font-weight: 500; color: var(--color-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zotero-item-meta {
+  font-size: 12px; color: var(--color-text-secondary); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audit-page-controls { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.focus-reader-pages { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; padding: 4px 8px; }
+
+/* Search keeps ten visible rows and one buffered window. */
+.search-results-table { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.search-results-header { width: 100%; display: grid; grid-template-columns: var(--grid-cols); flex-shrink: 0; padding-right: 10px; }
+.search-results-header-contents { display: contents; }
+.search-results-header th { padding: 8px 10px; border-bottom: 2px solid var(--color-border); font-weight: 600; font-size: 13px; color: var(--color-text-primary); text-align: left; }
+.search-results-scroll { flex: 1; overflow-y: auto; min-height: 0; max-height: 360px; scrollbar-gutter: stable; }
+.search-results-body { width: 100%; font-size: 13px; }
+.search-result-row { border-bottom: 1px solid var(--color-bg-subtle); cursor: pointer; }
+.search-result-row td { padding: 4px 10px; overflow: hidden; display: flex; align-items: center; }
+.search-result-document { gap: 8px; }
+.search-result-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+.search-result-source, .search-result-snippet { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
+.search-result-source, .search-result-source-label { text-overflow: ellipsis; }
+.search-result-source-label, .search-result-snippet-text { overflow: hidden; white-space: nowrap; width: 100%; }
+.search-result-badge-pdf { background: var(--color-badge-pdf); }
+.search-result-badge-epub { background: var(--color-badge-epub); }
+.search-result-badge-web { background: var(--color-badge-web); }
+.search-result-badge-video { background: var(--color-badge-video); }
+.search-result-badge-supermemo { background: var(--color-badge-supermemo); }
+.search-result-badge-occlusion { background: var(--color-badge-occlusion); }
+
+.search-results-body .search-result-row[hidden] { display: none; }
+
+/* Variable-height lists retain the viewport while rows enter and leave. */
+.measured-list-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  overflow-anchor: none;
+}
+.measured-list-space { position: relative; }
+.measured-list-row { display: flow-root; box-sizing: border-box; }
+.focus-reader-column .ql-editor { overflow-anchor: none; }
+.curriculum-block-scroll { max-height: 70vh; }
+.curriculum-material-scroll, .sync-conflict-scroll { max-height: 480px; }
+.sync-conflict-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) minmax(170px, auto);
+  gap: 12px;
+  padding: 10px 4px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border);
+}
+.sync-conflict-row > * { min-width: 0; overflow-wrap: anywhere; }
+.assistant-panel__rows--windowed { display: block; width: 100%; }
+.assistant-transcript__window-row { padding-bottom: 12px; box-sizing: border-box; }
+.graph-relation-explorer { gap: 12px; }
+.graph-relation-explorer .graph-inspector-header { align-items: center; }
+.graph-relation-explorer .graph-inspector-header h2 { margin: 0; font-size: 16px; }
+.graph-relation-explorer-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.graph-relations-count { color: var(--color-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.graph-relation-explorer-scroll { flex: 1; min-height: 0; overflow-y: auto; font-size: 13px; }
+.graph-relation-explorer-scroll tr { border-bottom: 1px solid var(--color-bg-subtle); }
+.graph-relation-explorer-cell { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.graph-relation-concept {
+  flex: 0 1 auto;
+  max-width: 45%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  text-align: start;
+  cursor: pointer;
+  font: inherit;
+}
+.graph-relation-concept:last-child { flex: 1; max-width: none; }
+.graph-relation-predicate { flex: 0 1 auto; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
+.graph-relation-explorer > p { font-size: 12px; margin: 0; color: var(--color-text-secondary); }
+@media (max-width: 700px) {
+  .sync-conflict-row { grid-template-columns: 1fr; }
+  .curriculum-material-actions { grid-column: 2; flex-wrap: wrap; }
 }

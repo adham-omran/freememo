@@ -17,6 +17,7 @@
    [hyperfiddle.router5 :as r]
    [freememo.schedule :as sched]
    [freememo.schedule-anki :as sa]
+   [freememo.task-request :as request]
    [freememo.schedule-forecast :as fc]
    [freememo.schedule-detail :refer [ScheduleForecast]]
    [freememo.a11y :as a11y]
@@ -24,7 +25,7 @@
    [freememo.navigation :as nav]
    [freememo.page-title :refer [PageTitle]]
    [freememo.tooltip :as tooltip]
-   [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
    [clojure.string :as str]
    #?(:clj [freememo.curriculum :as curriculum])
    #?(:clj [freememo.user-state :as us])))
@@ -56,6 +57,18 @@
 ;; Acquisition (§2, §9.4.1)
 ;; ---------------------------------------------------------------------------
 
+(e/defn HistoryRequests [user-id !request !owner run-id]
+  (e/client
+    (let [pending (e/watch !request)]
+      (e/for-by :id [item (if (= run-id (get-in pending [:data :run-id])) [pending] [])]
+        (let [data (:data item)
+              [t ?error] (e/Token (:id item))]
+          (when t
+            (let [result (e/server (e/Offload #(sched/ingest-history-chunk! user-id data !owner run-id)))]
+              (case result
+                (do (e/on-unmount #(request/resolve! item result))
+                    (t))))))))))
+
 (e/defn AnkiSync [user-id]
   (e/client
     ;; The whole acquire-then-ingest cycle. Mounted once per tab visit.
@@ -67,10 +80,12 @@
     ;; nothing, so the caller can bind it before anything that reads it.
     (let [refresh (e/server (e/watch (us/get-atom user-id :schedule-mutations)))
           sync-refresh (e/server (e/watch (us/get-atom user-id :sync-mutations)))
-          inputs (e/server (sched/refresh-inputs (+ refresh sync-refresh) user-id))
+          inputs (e/server (e/Offload #(sched/refresh-inputs (+ refresh sync-refresh) user-id)))
           note-ids (e/server (:note-ids inputs))
           push-deck (e/server (:push-deck inputs))
           !acq (atom nil)
+          !request (atom nil)
+          !owner (e/server (atom nil))
           acq (e/watch !acq)]
 
       ;; §8.4 — the fetch fires ONCE per mount, inside a keyed frame. A bare
@@ -79,7 +94,10 @@
       ;; user or of card set an honest unmount and mount instead.
       (e/for-by identity [_k [[user-id note-ids push-deck]]]
         (when (pos? (count note-ids))
-          (let [cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq))]
+          (let [run-id (e/snapshot (e/server (sched/start-acquisition! !owner)))
+                cancel! (e/snapshot (sa/start-acquire! note-ids push-deck !acq !request run-id))]
+            (HistoryRequests user-id !request !owner run-id)
+            (e/server (e/on-unmount #(sched/cancel-acquisition! !owner run-id)))
             (e/on-unmount cancel!))))
 
       ;; §7.3 — the ingest is sequenced, never a `(token)` sibling of the
@@ -92,7 +110,11 @@
       ;; it readable below.
       (let [[t ?error] (e/Token acq)]
         (when t
-          (let [res (e/server (e/Offload #(sched/ingest-acquisition! user-id acq)))]
+          (let [res (e/server (e/Offload #(try
+                                          (sched/commit-acquisition! !owner (:run-id acq)
+                                            (fn [] (sched/ingest-acquisition! user-id acq)))
+                                          (catch Throwable error
+                                            {:ok false :error (.getMessage error)}))))]
             (if (e/server (:ok res))
               (t)
               (t (e/server (:error res))))))
@@ -122,29 +144,8 @@
 ;; New-schedule form (§7.4)
 ;; ---------------------------------------------------------------------------
 
-(e/defn DocumentSelect [!doc-id docs]
-  (e/client
-    ;; `Typeahead`, not a `<select>`. This is the widget's canonical case
-    ;; (CLAUDE.md, 'Typeahead Is Id-Keyed; Suggest Is Free Text'): the option
-    ;; list IS the domain of legal values — a schedule over a document that
-    ;; does not exist is meaningless — and the domain is genuinely id-keyed,
-    ;; because a topic id is distinct from its title and two documents may
-    ;; share one. It is a better fit than the Anki deck field, which has to
-    ;; pass the label as the id because Anki exposes no deck id.
-    ;;
-    ;; A plain select also stops scaling: a library is unbounded, and picking
-    ;; one book out of hundreds by scrolling is the problem typeahead exists
-    ;; to remove.
-    ;;
-    ;; Options MUST be {:id :label}. A seq of strings fails SILENTLY here —
-    ;; `(:label "text")` is nil, so rows paint blank and selecting one writes
-    ;; nil, CLEARING the field instead of setting it.
-    (typeahead/Typeahead !doc-id
-      (mapv (fn [d] {:id (:id d)
-                     :label (str (:title d) " — " (:pages d) " pages")})
-        docs)
-      "Search your documents…" nil false)
-    (e/amb)))
+(e/defn DocumentSelect [!doc-id refresh user-id]
+  (picker/DocumentPicker !doc-id refresh user-id :schedule nil "Search your documents…"))
 
 (e/defn FieldLabel [text]
   (e/client
@@ -157,7 +158,6 @@
 (e/defn NewScheduleForm [user-id navigate! !open?]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          docs (e/server (sched/documents-for-picker refresh user-id))
           !doc-id (atom nil)
           commits (forms/Form!
                     {:target-date "" :first-page "1" :last-page ""
@@ -165,7 +165,7 @@
                     (e/fn Fields [{:keys [target-date first-page last-page capacity]}]
                       (e/amb
                         (FieldLabel "Document")
-                        (DocumentSelect !doc-id docs)
+                        (DocumentSelect !doc-id refresh user-id)
 
                         (FieldLabel "Target date")
                         (forms/Input! :target-date (or target-date "") :type "date"

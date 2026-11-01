@@ -460,6 +460,24 @@
            (.readAsDataURL reader blob))))
      :clj nil))
 
+(defonce !pending-editor-work-revision (atom 0))
+
+#?(:cljs (defonce ^:private pending-editor-uploads (js/WeakMap.)))
+
+(defn pending-editor-upload? [editor]
+  #?(:cljs (pos? (or (.get pending-editor-uploads editor) 0)) :clj false))
+
+(defn track-editor-upload! [editor promise]
+  #?(:cljs
+     (let [done! (fn [& _]
+                   (.set pending-editor-uploads editor
+                     (max 0 (dec (or (.get pending-editor-uploads editor) 0))))
+                   (swap! !pending-editor-work-revision inc))]
+       (.set pending-editor-uploads editor (inc (or (.get pending-editor-uploads editor) 0)))
+       (.then promise done! done!)
+       promise)
+     :clj nil))
+
 (defn- rehost-embed-at!
   "Upload `file` and replace the image embed at `index` with its /api/media URL.
 
@@ -482,7 +500,8 @@
   #?(:cljs
      (let [^js ed ed
            blot (aget (.getLeaf ed index) 0)]
-       (-> (upload-media-blob! file)
+       (track-editor-upload! ed
+         (-> (upload-media-blob! file)
          (.then (fn [url]
                   (let [Quill (.-Quill js/window)
                         Delta (.import Quill "delta")
@@ -496,7 +515,7 @@
          (.catch (fn [err]
                    (js/console.warn "[editor-actions] image re-host failed:" (str err))
                    (ce/report! :editor/image-rehost err
-                     (str "Image could not be stored: " (.-message err)))))))
+                     (str "Image could not be stored: " (.-message err))))))))
      :clj nil))
 
 (defn- insert-and-rehost-image!
@@ -516,7 +535,8 @@
   [ed index file]
   #?(:cljs
      (let [^js ed ed]
-       (-> (read-data-url! file)
+       (track-editor-upload! ed
+         (-> (read-data-url! file)
          (.then (fn [data-url]
                   (.insertEmbed ed index "image" data-url "user")
                   (.setSelection ed (inc index) 0 "user")
@@ -525,7 +545,7 @@
          (.catch (fn [err]
                    (ce/report! :editor/image-read err
                      (str "Image could not be read: " (.-message err)))
-                   index))))
+                   index)))))
      :clj nil))
 
 (defn- insert-audio-clip!
@@ -546,7 +566,8 @@
   [ed index file]
   #?(:cljs
      (let [^js ed ed]
-       (-> (upload-media-blob! file)
+       (track-editor-upload! ed
+         (-> (upload-media-blob! file)
          (.then (fn [url]
                   (.insertEmbed ed index "audio-clip" #js {:src url :loop false} "user")
                   (.setSelection ed (inc index) 0 "user")
@@ -554,7 +575,7 @@
          (.catch (fn [err]
                    (ce/report! :editor/audio-upload err
                      (str "Audio could not be stored: " (.-message err)))
-                   index))))
+                   index)))))
      :clj nil))
 
 (defn insert-audio!
@@ -1043,6 +1064,13 @@
 ;; behind: `install!` returns a fn that clears it.
 (defonce ^:private !marker-tracking (atom nil))
 
+(defn settle-scroll-origin! [ed]
+  #?(:cljs
+     (let [{:keys [scroller scroll-top]} @!marker-tracking]
+       (when (and scroll-top (identical? scroller (.-root ed)))
+         (reset! scroll-top (.-scrollTop scroller))))
+     :clj nil))
+
 ;; The page the reader has scrolled to, as `{:doc-id … :page …}`, or nil.
 ;;
 ;; The editor writes; Electric watches. Same direction as
@@ -1314,26 +1342,76 @@
 
    The last-reported page is remembered ONLY to suppress a repeat call. It is
    not read to compute the answer."
-  [ed on-page]
+  [ed on-page on-scroll]
   #?(:cljs
      (let [^js ed ed
            ;; The scroller is `.ql-editor` itself — see page-at-scroll-top.
            ^js scroller (.-root ed)
            !last (atom nil)
+           !direction (atom nil)
+           !dragging (atom false)
+           !scroll-top (atom (.-scrollTop scroller))
+           !touch-y (atom nil)
+           wheel (fn [event]
+                   (when (not (zero? (.-deltaY event)))
+                     (reset! !direction (if (pos? (.-deltaY event)) :forward :backward))))
+           pointer-down (fn [_] (reset! !dragging true) (reset! !scroll-top (.-scrollTop scroller)))
+           pointer-up (fn [_] (reset! !dragging false))
+           touch-start (fn [event] (reset! !touch-y (.-clientY (aget (.-touches event) 0))))
+           touch-move (fn [event]
+                        (let [y (.-clientY (aget (.-touches event) 0))]
+                          (when (and @!touch-y (not= y @!touch-y))
+                            (reset! !direction (if (< y @!touch-y) :forward :backward)))
+                          (reset! !touch-y y)))
+           key-intent (fn [event]
+                        (cond
+                          (#{"ArrowDown" "PageDown" "End"} (.-key event)) (reset! !direction :forward)
+                          (#{"ArrowUp" "PageUp" "Home"} (.-key event)) (reset! !direction :backward)
+                          (= " " (.-key event)) (reset! !direction (if (.-shiftKey event) :backward :forward))))
            handler (fn []
+                     (let [top (.-scrollTop scroller)]
+                       (when (and @!dragging (not= top @!scroll-top))
+                         (reset! !direction (if (> top @!scroll-top) :forward :backward)))
+                       (reset! !scroll-top top))
                      (when-let [page (page-at-scroll-top ed)]
                        (when (not= page @!last)
                          (reset! !last page)
-                         (on-page page))))
+                         (on-page page))
+                       (on-scroll ed page @!direction)))
            invalidate (fn [& _] (invalidate-marker-offsets!))
-           resize-obs (js/ResizeObserver. invalidate)]
+           resize-obs (js/ResizeObserver. (fn [& _] (invalidate) (handler)))
+           !composition-timer (atom nil)
+           composition-end (fn [_]
+                             (when-let [timer @!composition-timer] (js/clearTimeout timer))
+                             (reset! !composition-timer
+                               (js/setTimeout
+                                 (fn []
+                                   (when (.-isConnected scroller)
+                                     (swap! !pending-editor-work-revision inc))) 0)))]
        (.addEventListener scroller "scroll" handler #js {:passive true})
+       (.addEventListener scroller "wheel" wheel #js {:passive true})
+       (.addEventListener scroller "pointerdown" pointer-down #js {:passive true})
+       (.addEventListener js/window "pointerup" pointer-up #js {:passive true})
+       (.addEventListener js/window "pointercancel" pointer-up #js {:passive true})
+       (.addEventListener scroller "touchstart" touch-start #js {:passive true})
+       (.addEventListener scroller "touchmove" touch-move #js {:passive true})
+       (.addEventListener scroller "keydown" key-intent)
+       (.addEventListener scroller "compositionend" composition-end)
        (.on ed "text-change" invalidate)
        (.observe resize-obs scroller)
        (invalidate-marker-offsets!)
-       (reset! !marker-tracking {:scroller scroller :handler handler})
+       (reset! !marker-tracking {:scroller scroller :handler handler :scroll-top !scroll-top})
        (fn []
          (.removeEventListener scroller "scroll" handler)
+         (.removeEventListener scroller "wheel" wheel)
+         (.removeEventListener scroller "pointerdown" pointer-down)
+         (.removeEventListener js/window "pointerup" pointer-up)
+         (.removeEventListener js/window "pointercancel" pointer-up)
+         (.removeEventListener scroller "touchstart" touch-start)
+         (.removeEventListener scroller "touchmove" touch-move)
+         (.removeEventListener scroller "keydown" key-intent)
+         (.removeEventListener scroller "compositionend" composition-end)
+         (when-let [timer @!composition-timer] (js/clearTimeout timer))
          (.off ed "text-change" invalidate)
          (.disconnect resize-obs)
          (invalidate-marker-offsets!)

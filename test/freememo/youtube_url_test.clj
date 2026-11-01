@@ -1,6 +1,8 @@
 (ns freememo.youtube-url-test
-  "The YouTube URL parser (plans/youtube-kind.md 2.2). Pure, no database."
+  "Which addresses are YouTube, which video one names, and which ones web
+   import refuses (plans/youtube-kind.md 2.2). Pure, no database."
   (:require [clojure.test :refer [deftest is testing are]]
+            [freememo.import-modal :as import-modal]
             [freememo.youtube-url :as yt]))
 
 (def ^:private id "dQw4w9WgXcQ")
@@ -56,3 +58,52 @@
   (testing "a start rounds down to whole seconds, which is what t= takes"
     (is (= "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=12s" (yt/watch-url id 12999))))
   (is (= "https://www.youtube.com/watch?v=dQw4w9WgXcQ" (yt/watch-url id 0))))
+
+(deftest youtube-hosts-match-for-any-path
+  (doseq [url ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+               "https://youtube.com/shorts/abc"
+               "https://m.youtube.com/watch?v=abc"
+               "https://music.youtube.com/playlist?list=x"
+               "https://youtu.be/dQw4w9WgXcQ"
+               "https://www.youtube-nocookie.com/embed/abc"
+               "HTTPS://WWW.YouTube.COM/watch?v=abc"
+               "http://youtube.com:443/watch?v=abc"
+               "www.youtube.com/watch?v=abc"
+               "  https://youtu.be/abc  "
+               "https://user@youtube.com/watch?v=abc"
+               "https://www.youtube.com./watch?v=abc"
+               "youtube.com"
+               "//youtu.be/abc"]]
+    (testing url
+      (is (true? (yt/youtube-url? url))))))
+
+(deftest other-hosts-do-not-match
+  (doseq [url ["https://notyoutube.com/watch?v=abc"
+               "https://youtube.com.evil.net/watch?v=abc"
+               "https://en.wikipedia.org/wiki/YouTube"
+               "https://example.com/?next=https://youtube.com"
+               "https://evil.net/youtube.com"
+               ""
+               "   "
+               nil]]
+    (testing (pr-str url)
+      (is (false? (yt/youtube-url? url))))))
+
+(deftest only-a-youtube-page-that-names-no-video-is-refused
+  (are [url] (true? (yt/non-video-youtube-url? url))
+    "https://www.youtube.com/"
+    "https://www.youtube.com/@channel"
+    "https://www.youtube.com/playlist?list=PL123"
+    "https://youtu.be/abc")
+  (are [url] (false? (yt/non-video-youtube-url? url))
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    "https://youtu.be/dQw4w9WgXcQ?t=90"
+    "https://en.wikipedia.org/wiki/YouTube"
+    nil))
+
+(deftest the-import-modal-refuses-locally-in-the-server-shape
+  (is (= {:ok false :error yt/rejection-message}
+        (import-modal/refused-url-result "https://www.youtube.com/@channel")))
+  (testing "a video link goes to the server, which imports it"
+    (is (nil? (import-modal/refused-url-result "https://youtu.be/dQw4w9WgXcQ"))))
+  (is (nil? (import-modal/refused-url-result "https://en.wikipedia.org/wiki/YouTube"))))

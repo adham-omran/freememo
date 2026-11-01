@@ -8,10 +8,11 @@
    [hyperfiddle.router5 :as r]
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
-   [freememo.row-motion :as row-motion]
+   [freememo.window-ranges :as ranges]
    [freememo.modal-shell :as modal]
    [freememo.page-title :refer [PageTitle]]
-   [freememo.typeahead :as typeahead]
+   [freememo.document-picker :as picker]
+   [freememo.measured-list :as measured]
    ;; One way only. The exam page never requires this namespace back, because
    ;; the chip below and that page share `GenerateExamButton`.
    [freememo.curriculum-exam-page :as exam-page]
@@ -44,6 +45,23 @@
 
 (defn curriculum-detail* [refresh user-id curriculum-id]
   #?(:clj (curriculum/curriculum-detail refresh user-id curriculum-id) :cljs nil))
+
+(defn curriculum-overview* [refresh user-id curriculum-id]
+  #?(:clj (curriculum/curriculum-overview refresh user-id curriculum-id) :cljs nil))
+
+(defn block-rows* [refresh user-id curriculum-id indices]
+  #?(:clj {:scope [user-id curriculum-id]
+           :rows (into [] (mapcat (fn [[offset limit]]
+                            (curriculum/curriculum-block-window refresh user-id curriculum-id offset limit)))
+                   (ranges/index-ranges indices))}
+     :cljs nil))
+
+(defn material-rows* [refresh user-id block-id indices]
+  #?(:clj {:scope [user-id block-id]
+           :rows (into [] (mapcat (fn [[offset limit]]
+                            (curriculum/curriculum-material-window refresh user-id block-id offset limit)))
+                   (ranges/index-ranges indices))}
+     :cljs nil))
 
 (defn curriculum-schedule* [refresh user-id curriculum-id]
   #?(:clj
@@ -216,7 +234,7 @@
 (e/defn CurriculumDashboard [user-id navigate!]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          curricula (e/server (list-curricula* refresh user-id))]
+          curricula (e/server (e/Offload #(list-curricula* refresh user-id)))]
       (if (empty? curricula)
         (dom/div (dom/props {:class "curriculum-empty"})
           (icons/Icon :route :size 32)
@@ -263,43 +281,28 @@
             (do (e/on-unmount #(reset! !open? false)) (token))
             (token (e/server (:error response)))))))))
 
-(e/defn MaterialPicker [!topic-id docs]
-  (e/client
-    (typeahead/Typeahead !topic-id
-      (mapv (fn [doc] {:id (:id doc) :label (:title doc)}) docs)
-      "Search imported material…" nil false)
-    (e/amb)))
+(e/defn MaterialPicker [!topic-id refresh user-id kind]
+  (picker/DocumentPicker !topic-id refresh user-id :curriculum kind "Search your material…"))
 
 (def material-kind-filters
   "The Add-material kind row. `nil` is every kind, and it is the default —
-   the search reaches all imported material before the row is touched.
+   the search reaches all material before the row is touched.
 
-   No `poem` row (poem-reader-spec row 2.4.2). `curriculum/add-material!` does
-   not accept the kind, and this row must not offer a filter for material the
-   server would refuse."
+   One row per kind in `curriculum/material-condition`, and no other. No `poem`
+   row (poem-reader-spec row 2.4.2): the server does not accept the kind, and
+   this row must not offer a filter for material the server would refuse."
   [[nil "All"] ["pdf" "PDF"] ["markdown" "Markdown"]
-   ["web" "Web"] ["wikipedia" "Wikipedia"]])
+   ["web" "Web"] ["wikipedia" "Wikipedia"] ["basic" "My topics"]])
 
 (e/defn AddMaterialWizard [user-id block-id navigate! !open?]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          docs (e/server (e/Offload #(documents-for-picker* refresh user-id)))
           !kind (atom nil)
           kind (e/watch !kind)
           !topic-id (atom nil)
-          topic-id (e/watch !topic-id)
-          ;; The kind row narrows the list, and the chosen material stays in
-          ;; the list whatever the row says. `Typeahead` displays an id its
-          ;; options do not hold as BLANK, so a narrowing that drops the
-          ;; selection shows an empty field that still submits the earlier
-          ;; material. Keeping the row in `options` is what makes the field and
-          ;; the atom agree.
-          filtered (if kind
-                     (filterv #(or (= kind (:kind %)) (= topic-id (:id %))) docs)
-                     docs)
           commits
           (dom/div
-            (dom/props {:class "curriculum-form-card curriculum-material-wizard"})
+            (dom/props {:class "curriculum-form-card curriculum-material-wizard" :data-window-pin "true"})
             (dom/h3 (dom/text "Add material"))
             (forms/Form! {:minutes ""}
               (e/fn Fields [{:keys [minutes]}]
@@ -314,8 +317,8 @@
                 (dom/div
                   (dom/props {:class "curriculum-picker-step"})
                   (dom/label (dom/props {:class "curriculum-field-label"})
-                    (dom/text "Search all imported material"))
-                  (MaterialPicker !topic-id filtered)
+                    (dom/text "Search your documents and topics"))
+                  (MaterialPicker !topic-id refresh user-id kind)
                   (dom/p (dom/props {:class "curriculum-help"})
                     (dom/text "The material is missing? ")
                     (dom/button
@@ -350,7 +353,7 @@
               :Parse (e/fn [fields _]
                        (let [topic-id (e/watch !topic-id)]
                          (if-not topic-id
-                           (ex-info "Choose imported material." {})
+                           (ex-info "Choose material." {})
                            [`AddMaterial {:topic-id topic-id
                                           :minutes (parse-positive-int (:minutes fields))}])))
               :type :command :show-buttons false))]
@@ -378,6 +381,7 @@
       (tooltip/Tooltip! label :aria? true)
       (icons/Icon (if (= label "Move up") :chevron-up :chevron-down) :size 14)
       (let [[token error] (e/Token (dom/On "click" identity nil))]
+        (dom/props {:aria-busy (some? token) :aria-invalid (some? error)})
         (when token
           (let [response (Operation)]
             (if (e/server (:ok response)) (token)
@@ -448,7 +452,7 @@
           (dom/On "click" (fn [_] (reset! !editing? true)) nil))
         (let [commits
               (dom/div
-                (dom/props {:class "curriculum-estimate-form"})
+                (dom/props {:class "curriculum-estimate-form" :data-window-pin "true"})
                 (forms/Form! {:minutes (str (:estimated_minutes material))}
                   (e/fn Fields [{:keys [minutes]}]
                     (e/amb
@@ -480,7 +484,7 @@
   (e/client
     (let [material-id (:id material)]
     (dom/div
-      ;; The key row-motion/install-list! follows when the arrows reorder.
+      ;; Stable IDs keep row state with its material after a move.
       (dom/props {:class "curriculum-material-row" :data-row-key (str material-id)})
       (dom/div (dom/props {:class "curriculum-order-controls"})
         (MoveButton "Move up" (zero? index)
@@ -536,7 +540,7 @@
             (dom/On "click" (fn [_] (reset! !editing? true)) nil)))
         (let [commits
               (dom/div
-                (dom/props {:class "curriculum-rename-form"})
+                (dom/props {:class "curriculum-rename-form" :data-window-pin "true"})
                 (forms/Form! {:title (:title block)}
                   (e/fn Fields [{:keys [title]}]
                     (e/amb
@@ -560,17 +564,38 @@
                 (do (e/on-unmount #(reset! !editing? false)) (token))
                 (token (e/server (:error response)))))))))))
 
+(e/defn MaterialList [user-id block material-count navigate! refresh]
+  (e/client
+    (dom/div
+      (dom/props {:class "measured-list-scroll curriculum-material-scroll"
+                  :aria-label "Block materials" :tabindex "0"})
+      (let [scroller dom/node
+            window (measured/Window scroller material-count
+                     {:estimate-height 110 :reset-key [:materials (:id block)]})
+            indices (mapv :index (:rows window))
+            rows (e/server (e/Offload #(material-rows* refresh user-id (:id block) indices)))
+            tops (into {} (map (juxt :index :top)) (:rows window))]
+        (dom/div
+          (dom/props {:class "measured-list-space" :style {:height (str (:height window) "px")}})
+          (e/for [[index material]
+                  (e/server (e/diff-by by-id (when (= [user-id (:id block)] (:scope rows)) (:rows rows))))]
+            (when (contains? tops index)
+              (dom/div
+              (dom/props {:class "measured-list-row" :data-row-key (str (:id material))
+                          :style {:position "absolute" :top 0 :transform (str "translateY(" (get tops index 0) "px)") :left 0 :right 0}})
+              (measured/Observe scroller index dom/node)
+              (MaterialRow user-id block material-count index material navigate!)))))))))
+
 (e/defn BlockCard
   "One block and its materials.
 
    Pre: `index` is the block's place in the curriculum, `block-count` the
    curriculum's block count.
    Invariant: as `MaterialRow` — a block id and a direction, never an order."
-  [user-id curriculum-id block-count index block navigate!]
+  [user-id curriculum-id block-count index block navigate! refresh]
   (e/client
     (let [block-id (:id block)
-          materials (:materials block)
-          material-count (count materials)
+          material-count (:material_count block)
           !add-material? (atom false)
           add-material? (e/watch !add-material?)]
       (dom/section
@@ -607,15 +632,10 @@
             (dom/p (dom/props {:class "curriculum-help"})
               (dom/text "Pass the previous block exam or use its unlock override."))
             (dom/div
-              ;; The two rows an arrow swaps trade places.
-              (e/on-unmount (row-motion/install-list! dom/node))
-              (if (empty? materials)
+              (if (zero? material-count)
                 (dom/p (dom/props {:class "curriculum-help"})
-                  (dom/text "Add imported material to this block."))
-                (e/for [[material-index material]
-                        (e/diff-by by-id (map-indexed vector materials))]
-                  (MaterialRow user-id block material-count material-index material
-                    navigate!)))
+                  (dom/text "Add a document or one of your topics to this block."))
+                (MaterialList user-id block material-count navigate! refresh))
               (if add-material?
                 (AddMaterialWizard user-id (:id block) navigate! !add-material?)
                 (dom/button
@@ -625,7 +645,7 @@
                   (dom/On "click" (fn [_] (reset! !add-material? true)) nil)))
               (dom/div
                 (dom/props {:class "curriculum-block-footer"})
-                (when (seq materials)
+                (when (pos? material-count)
                   (ExamChip user-id navigate! curriculum-id {:block-id (:id block)}
                     (:exam block) (some? (:completed_at block)) nil))
                 ;; The override is a separate step, under a rule, and it says
@@ -738,9 +758,9 @@
 (e/defn CurriculumDetail [user-id curriculum-id navigate!]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :curriculum-mutations)))
-          detail (e/server (e/Offload #(curriculum-detail* refresh user-id curriculum-id)))
-          blocks (:blocks detail)
-          block-count (count blocks)
+          detail (e/server (e/Offload #(curriculum-overview* refresh user-id curriculum-id)))
+          header detail
+          block-count (:block-count header)
           !add-block? (atom false)
           add-block? (e/watch !add-block?)
           !edit? (atom false)
@@ -748,7 +768,7 @@
           !confirm-delete (atom nil)
           !delete-error (atom nil)
           delete-error (e/watch !delete-error)]
-      (if-not detail
+      (if-not (e/server (some? detail))
         (dom/div (dom/props {:class "curriculum-empty"}) (dom/text "Curriculum not found."))
         (dom/div
           (dom/props {:class "curriculum-detail"})
@@ -760,8 +780,8 @@
               (dom/On "click" (fn [_] (navigate! :curriculum)) nil))
             (dom/div
               (dom/div (dom/props {:class "curriculum-card-kicker"}) (dom/text "PERSONAL CURRICULUM"))
-              (dom/h1 (dom/text (:title detail)))
-              (when (:complete? detail)
+              (dom/h1 (dom/text (:title header)))
+              (when (:complete? header)
                 (dom/span (dom/props {:class "curriculum-done-badge"})
                   (dom/text "Curriculum complete")))
               (dom/div
@@ -776,17 +796,32 @@
                   (dom/text "Delete curriculum")
                   (dom/On "click" (fn [_] (reset! !delete-error nil)
                                     (reset! !confirm-delete {:id curriculum-id
-                                                             :title (:title detail)})) nil)))
+                                                             :title (:title header)})) nil)))
               (when delete-error
                 (dom/p (dom/props {:class "curriculum-inline-error"})
                   (dom/text delete-error))))
             (ScheduleSummary user-id curriculum-id))
-          (when edit? (EditCurriculumForm user-id detail !edit?))
+          (when edit? (EditCurriculumForm user-id header !edit?))
           (dom/main (dom/props {:class "curriculum-study-rail"})
-            (e/on-unmount (row-motion/install-list! dom/node))
-            (e/for [[index block]
-                    (e/diff-by by-id (map-indexed vector blocks))]
-              (BlockCard user-id curriculum-id block-count index block navigate!))
+            (dom/div
+              (dom/props {:class "measured-list-scroll curriculum-block-scroll"
+                          :aria-label "Curriculum blocks" :tabindex "0"})
+              (let [scroller dom/node
+                    window (measured/Window scroller block-count
+                             {:estimate-height 450 :reset-key [:blocks curriculum-id]})
+                    indices (mapv :index (:rows window))
+                    rows (e/server (e/Offload #(block-rows* refresh user-id curriculum-id indices)))
+                    tops (into {} (map (juxt :index :top)) (:rows window))]
+                (dom/div
+                  (dom/props {:class "measured-list-space" :style {:height (str (:height window) "px")}})
+                  (e/for [[index block]
+                          (e/server (e/diff-by by-id (when (= [user-id curriculum-id] (:scope rows)) (:rows rows))))]
+                    (when (contains? tops index)
+                      (dom/div
+                      (dom/props {:class "measured-list-row" :data-row-key (str (:id block))
+                                  :style {:position "absolute" :top 0 :transform (str "translateY(" (get tops index 0) "px)") :left 0 :right 0}})
+                      (measured/Observe scroller index dom/node)
+                      (BlockCard user-id curriculum-id block-count index block navigate! refresh)))))))
             (if add-block?
               (AddBlockForm user-id curriculum-id !add-block?)
               (dom/button
@@ -844,7 +879,7 @@
             (dom/header (dom/props {:class "curriculum-page-header"})
               (dom/div
                 (dom/h1 (dom/text "Curriculum"))
-                (dom/p (dom/text "Turn imported material into an ordered, scheduled course of study.")))
+                (dom/p (dom/text "Turn your documents and topics into an ordered, scheduled course of study.")))
               (when-not new-open?
                 (dom/button
                   (dom/props {:type "button" :class "btn btn-primary"})

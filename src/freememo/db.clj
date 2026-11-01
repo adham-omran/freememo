@@ -48,8 +48,9 @@
 (declare move-everyone-to-best-level!)
 (declare normalize-inline-card-images!)
 (declare owns-topic?)
-(declare record-anki-tombstones!)
+(declare record-anki-tombstones! param-bounded-batches)
 (declare start-purge-scheduler!)
+(declare setup-schema-receipts!)
 (declare unsynced-sql)
 (declare ->jsonb)
 (declare pgobject->clj)
@@ -1177,6 +1178,16 @@
                       REFERENCES undo_log(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_staged_delete
                       ON assistant_chats(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_live_history
+                      ON assistant_chats(user_id, root_topic_id, pinned_at DESC NULLS LAST,
+                        (coalesce(updated_at,created_at)) DESC, id DESC)
+                      WHERE staged_delete_id IS NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_live_title_search
+                      ON topics USING GIN (lower(coalesce(title,'Untitled')) gin_trgm_ops)
+                      WHERE parent_id IS NULL AND staged_delete_id IS NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_live_title_search
+                      ON assistant_chats USING GIN (lower(coalesce(title,'Untitled')) gin_trgm_ops)
+                      WHERE staged_delete_id IS NULL"])
 )
 
 (defn- setup-schema-kg!
@@ -2219,6 +2230,10 @@
   ;; Widen an activities table created before bytes were a progress unit.
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN done TYPE BIGINT"])
   (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN total TYPE BIGINT"])
+  ;; What a finished run did, in words: "12 sent to Anki, 3 pulled from Anki".
+  ;; `error` says why a run failed; nothing said what a success did, so a Done
+  ;; row read blank (plans/feedback-activity-biblio-youtube.md 3.1.1).
+  (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS summary TEXT"])
   ;; The idempotency contract of `activity/start!`: at most one in-flight run per
   ;; (user, type, work_key). Partial, so a completed run does not block a retry.
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_inflight
@@ -3444,6 +3459,10 @@
   (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
                       kind TEXT NOT NULL DEFAULT 'credits'
                       CHECK (kind IN ('credits', 'desktop_license'))"])
+  ;; Set once the abandoned-checkout sweep has mailed about a pending order,
+  ;; so each abandoned checkout mails once (credits/sweep-abandoned-checkouts!).
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      abandon_alerted_at TIMESTAMP"])
 
   (sync-schema/install! ds))
 
@@ -3480,6 +3499,8 @@
   (setup-schema-flashcard-uniqueness!)
   ;; After every table exists: it converts ids and triggers all of them.
   (setup-schema-sync!)
+  ;; After setup-schema-sync!, which adds credit_orders.kind; the index reads it.
+  (setup-schema-receipts!)
 
   ((requiring-resolve 'freememo.comprehension/ensure-schema!))
 
@@ -4879,6 +4900,133 @@
           (promote-to-paid-storage-tier! tx user-id quota/paid-quota-bytes)
           {:credited true :amount amount :user-id user-id})))))
 
+(defn unalerted-pending-orders
+  "Pending orders that are older than `min-age-minutes` and younger than
+   `max-age-hours`, and that the abandoned-checkout sweep has not mailed about.
+   Each row carries the buyer's email and name, and their order counts.
+   `created_at` is a TIMESTAMP written in the session time zone, so the bounds
+   use LOCALTIMESTAMP, which is in that zone too."
+  [min-age-minutes max-age-hours]
+  (jdbc/execute! ds
+    ["SELECT o.reference_id, o.user_id, o.kind, o.amount_iqd, o.created_at,
+             u.email, u.display_name,
+             (SELECT count(*) FROM credit_orders p WHERE p.user_id = o.user_id) AS tries,
+             (SELECT count(*) FROM credit_orders p
+               WHERE p.user_id = o.user_id AND p.status = 'complete') AS paid
+      FROM credit_orders o JOIN users u ON u.id = o.user_id
+      WHERE o.status = 'pending' AND o.abandon_alerted_at IS NULL
+        AND o.created_at < LOCALTIMESTAMP - CAST(? AS integer) * INTERVAL '1 minute'
+        AND o.created_at > LOCALTIMESTAMP - CAST(? AS integer) * INTERVAL '1 hour'
+      ORDER BY o.created_at"
+     min-age-minutes max-age-hours]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn mark-order-abandon-alerted!
+  "Record that the abandoned-checkout sweep mailed about this order."
+  [reference-id]
+  (jdbc/execute! ds
+    ["UPDATE credit_orders SET abandon_alerted_at = LOCALTIMESTAMP
+      WHERE reference_id = ?" reference-id]))
+
+;; ── Payment receipts (freememo.receipt) ──
+
+(defn- setup-schema-receipts!
+  "Receipt state on credit_orders. receipt_sent_at is set once an order needs no
+   further receipt work; receipt_skip_reason says why no mail went out, and is
+   NULL when one did. receipt_attempted_at is the last attempt that failed, and
+   spaces the retries."
+  []
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_sent_at TIMESTAMP"])
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_skip_reason TEXT
+                      CHECK (receipt_skip_reason IN ('no-email', 'gave-up'))"])
+  (jdbc/execute! ds ["ALTER TABLE credit_orders ADD COLUMN IF NOT EXISTS
+                      receipt_attempted_at TIMESTAMPTZ"])
+  ;; The sweep reads only these rows, once a minute, on every app color.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_orders_receipt_due
+                      ON credit_orders(id)
+                      WHERE status = 'complete' AND kind = 'credits'
+                        AND receipt_sent_at IS NULL"]))
+
+(def ^:private completed-at-instant-sql
+  ;; completed_at is a zone-less TIMESTAMP written by CURRENT_TIMESTAMP, so it
+  ;; holds wall time in the session's TimeZone. Reading it through that zone
+  ;; gives a timestamptz, the instant, whatever the server's zone is.
+  "(o.completed_at AT TIME ZONE current_setting('TimeZone'))")
+
+(def receipt-retry-interval
+  "How long a failed receipt waits before the next attempt. Over the 24 hours a
+   receipt is retried, that is at most 96 attempts, where the one-minute sweep
+   alone would make 1440 against an address the server keeps refusing."
+  "15 minutes")
+
+(defn settle-next-receipt!
+  "Lock one credit order that owes a receipt, let `settle` decide its outcome,
+   and record that outcome, in one transaction.
+
+   An order owes a receipt when it is a complete 'credits' order with no
+   receipt_sent_at, completed at or after `cutoff`, and with no failed attempt
+   in the last `receipt-retry-interval`. Orders are taken oldest id first, FOR
+   UPDATE SKIP LOCKED, so a second JVM sweeping at the same time takes a
+   different order or none. While `settle` runs, `complete-credit-order!` for
+   the same order (a redelivered webhook) waits on the row lock.
+
+   Pre:  cutoff is a java.time.Instant. (settle order) returns :sent, :no-email,
+         :gave-up or nil, and does not throw, where `order` is {:id :user-id
+         :reference-id :amount-iqd :completed-at :email :expired?}.
+         :completed-at is a java.time.Instant. :expired? is true when the order
+         completed 24 hours or more ago. `settle` bounds its own run time.
+   Post: nil when no order owes a receipt. Otherwise {:order-id :outcome}. A
+         non-nil outcome sets receipt_sent_at, with receipt_skip_reason
+         'no-email' or 'gave-up' for those outcomes and NULL for :sent. A nil
+         outcome sets receipt_attempted_at, which hides the order from this
+         function for `receipt-retry-interval`; a sweep loop therefore ends.
+   Invariant: the lock is held while `settle` runs, so the mail it sends and the
+         stamp commit together or not at all. A throwing `settle` breaks the
+         Pre: nothing is recorded, and a caller that loops takes the order again."
+  [cutoff settle]
+  (jdbc/with-transaction [tx ds]
+    ;; The session is idle while `settle` renders and mails. A server-wide idle
+    ;; timeout shorter than that would end it, roll back the stamp, and turn
+    ;; every slow send into a duplicate. `settle` bounds the wait instead.
+    (jdbc/execute! tx ["SET LOCAL idle_in_transaction_session_timeout = 0"])
+    (when-let [row (jdbc/execute-one! tx
+                     [(str "SELECT o.id, o.user_id, o.reference_id, o.amount_iqd, u.email, "
+                           completed-at-instant-sql " AS completed_at, "
+                           completed-at-instant-sql " <= now() - interval '24 hours' AS expired
+                      FROM credit_orders o JOIN users u ON u.id = o.user_id
+                      WHERE o.status = 'complete' AND o.kind = 'credits'
+                        AND o.receipt_sent_at IS NULL
+                        AND " completed-at-instant-sql " >= ?::timestamptz
+                        AND (o.receipt_attempted_at IS NULL
+                             OR o.receipt_attempted_at <= now() - ?::interval)
+                      ORDER BY o.id
+                      LIMIT 1
+                      FOR UPDATE OF o SKIP LOCKED")
+                      (str cutoff)
+                      receipt-retry-interval]
+                     {:builder-fn rs/as-unqualified-maps})]
+      (let [order {:id (:id row)
+                   :user-id (:user_id row)
+                   :reference-id (:reference_id row)
+                   :amount-iqd (:amount_iqd row)
+                   :completed-at (.toInstant ^java.sql.Timestamp (:completed_at row))
+                   :email (:email row)
+                   :expired? (boolean (:expired row))}
+            outcome (settle order)]
+        (if outcome
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET receipt_sent_at = CURRENT_TIMESTAMP,
+                                       receipt_skip_reason = ?
+              WHERE id = ?"
+             (case outcome :sent nil :no-email "no-email" :gave-up "gave-up")
+             (:id order)])
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET receipt_attempted_at = now() WHERE id = ?"
+             (:id order)]))
+        {:order-id (:id order) :outcome outcome}))))
+
 (defn fail-credit-order!
   "Mark a pending order failed (provider error / Cancelled / Rejected / Returned).
    No-op once the order is complete."
@@ -5128,7 +5276,7 @@
     (jdbc/execute! ds
       (sql/format {:select [:id :email :display_name :created_at]
                    :from [:users]
-                   :where [:in :id (vec user-ids)]
+                   :where [:= :id [:any [:lift (long-array user-ids)]]]
                    :order-by [[:id :asc]]}))))
 
 (defn user-ids-with-event
@@ -5313,7 +5461,7 @@
     (into {}
       (map (juxt :id :title))
       (jdbc/execute! ds
-        (sql/format {:select [:id :title] :from [:topics] :where [:in :id (vec ids)]})
+        (sql/format {:select [:id :title] :from [:topics] :where [:= :id [:any [:lift (long-array ids)]]]})
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn get-topic-for-user
@@ -5521,13 +5669,10 @@
   [root-id merged page-numbers]
   (jdbc/with-transaction [tx ds]
     (let [rows (jdbc/execute! tx
-                 (sql/format {:select [:id :page_number :content]
-                              :from [:topics]
-                              :where [:and
-                                      [:= :parent_id root-id]
-                                      [:= :kind "page"]
-                                      [:is :staged_delete_id nil]
-                                      [:is-not :page_number nil]]}))
+                 ["SELECT id,page_number,content FROM topics
+                   WHERE parent_id=? AND kind='page' AND staged_delete_id IS NULL
+                     AND page_number=ANY(?)"
+                  root-id (long-array (remove nil? page-numbers))])
           by-page (into {} (map (juxt :topics/page_number identity)) rows)
           ;; The caller's list is authoritative for WHICH pages to split into.
           ;; Intersecting it with the live rows keeps a page deleted in another
@@ -5682,11 +5827,12 @@
                  (distinct))
                deleted-rows)]
     (when (seq rows)
-      (jdbc/execute! conn
-        (sql/format {:insert-into :anki_note_tombstones
-                     :values rows
-                     :on-conflict [:user_id :anki_note_id]
-                     :do-nothing true})))
+      (doseq [batch (param-bounded-batches rows)]
+        (jdbc/execute! conn
+          (sql/format {:insert-into :anki_note_tombstones
+                       :values (vec batch)
+                       :on-conflict [:user_id :anki_note_id]
+                       :do-nothing true}))))
     (count rows)))
 
 (defn subtree-synced-cards
@@ -7006,7 +7152,7 @@
                     (jdbc/execute! connectable
                       (sql/format {:select digest-columns
                                    :from [[:flashcards :f]]
-                                   :where [:in :f.id ids]})))]
+                                   :where [:= :f.id [:any [:lift (long-array ids)]]]})))]
         (doseq [batch (partition-all (quot max-statement-params 2) pairs)]
           (jdbc/execute-one! connectable
             (into [(str "UPDATE flashcards AS f SET local_current_digest = v.digest "
@@ -7121,8 +7267,8 @@
   (let [owned [:in :root_topic_id (owned-topic-ids-subquery user-id)]]
     (case (first scope)
       :root   [:and [:= :root_topic_id (second scope)] owned]
-      :topics [:and [:in [:coalesce :topic_id :root_topic_id] (vec (second scope))] owned]
-      :cards  [:and [:in :id (vec (second scope))] owned])))
+      :topics [:and [:= [:coalesce :topic_id :root_topic_id] [:any [:lift (long-array (second scope))]]] owned]
+      :cards  [:and [:= :id [:any [:lift (long-array (second scope))]]] owned])))
 
 (defn- snapshot-scope-card-ids
   "The card ids one snapshot scope names, read through `tx`.
@@ -7573,7 +7719,7 @@
     :select [:id] :from [:subtree]}])
 
 (defn get-pushed-card-manifest
-  "Card-id/note-id pairs for every pushed card the user owns (anki_note_id NOT
+  "Card IDs, note IDs, and kinds for every pushed card the user owns (anki_note_id NOT
    NULL). Filter-independent — this is the Anki overlay's fetch set, so it must
    not narrow with the /library/cards filters. Empty → [].
 
@@ -7582,9 +7728,10 @@
    1-arity."
   ([user-id] (get-pushed-card-manifest user-id nil))
   ([user-id root-id]
-   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
+   (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)
+                  :kind (:flashcards/kind r)})
      (jdbc/execute! ds
-       (sql/format {:select [:f.id :f.anki_note_id]
+       (sql/format {:select [:f.id :f.anki_note_id :f.kind]
                     :from [[:flashcards :f]]
                     :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                     :where (cond-> [:and
@@ -7615,7 +7762,7 @@
                                  [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                      :where [:and
                              [:= :root.user_id user-id]
-                             [:in :f.id (vec card-ids)]]})))))
+                             [:= :f.id [:any [:lift (long-array card-ids)]]]]})))))
 
 (defn- fully-deleted-groups-of
   "Rows of `group-table` that deleting `card-ids` would leave with no member.
@@ -7636,13 +7783,13 @@
                                      :where [:and
                                              [:= :root.user_id user-id]
                                              [:= f-fk :g.id]
-                                             [:in :f.id ids]]}]
+                                             [:= :f.id [:any [:lift (long-array ids)]]]]}]
                            ;; and none survives
                            [:not [:exists {:select [1]
                                            :from [[:flashcards :f2]]
                                            :where [:and
                                                    [:= f2-fk :g.id]
-                                                   [:not-in :f2.id ids]]}]]]}))))
+                                                   [:not [:= :f2.id [:any [:lift (long-array ids)]]]]]}]]]}))))
 
 (defn fully-deleted-group-rows
   "Occlusion and score group rows that deleting `card-ids` would destroy — the
@@ -7696,9 +7843,10 @@
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
-                               (seq card-ids) (conj [:in :f.id (vec card-ids)])
+                               (seq card-ids) (conj [:= :f.id [:any [:lift (long-array card-ids)]]])
                                (some? root-id)
                                (conj (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)))}))))))
+
 
 (defn card-ids-in-subtree
   "The subset of `card-ids` that `user-id` owns and that sit under topic
@@ -7717,7 +7865,7 @@
                      :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                      :where [:and
                              [:= :root.user_id user-id]
-                             [:in :f.id (vec card-ids)]
+                             [:= :f.id [:any [:lift (long-array card-ids)]]]
                              (card-in-subtree-pred :f.topic_id :f.root_topic_id root-id)]})))))
 
 (defn set-anki-conflicts!
@@ -7731,7 +7879,7 @@
 
          With `root-id` the clearing stops at the subtree. A branch run never
          looked at the other cards, so it knows nothing about their conflicts
-         and must not forget them."
+         and must not forget them. Marking also stays within that subtree."
   ([user-id card-ids] (set-anki-conflicts! user-id card-ids nil))
   ([user-id card-ids root-id]
    (jdbc/with-transaction [tx ds]
@@ -7742,17 +7890,19 @@
                       :where (cond-> [:and
                                       [:in :root_topic_id owned]
                                       [:not= :anki_conflict_at nil]]
-                               (seq card-ids) (conj [:not-in :id (vec card-ids)])
+                               (seq card-ids) (conj [:not [:= :id [:any [:lift (long-array card-ids)]]]])
                                (some? root-id)
                                (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))}))
        (when (seq card-ids)
          (jdbc/execute! tx
            (sql/format {:update :flashcards
                         :set {:anki_conflict_at [:now]}
-                        :where [:and
-                                [:in :root_topic_id owned]
-                                [:in :id (vec card-ids)]
-                                [:= :anki_conflict_at nil]]})))))))
+                        :where (cond-> [:and
+                                         [:in :root_topic_id owned]
+                                         [:= :id [:any [:lift (long-array card-ids)]]]
+                                         [:= :anki_conflict_at nil]]
+                                 (some? root-id)
+                                 (conj (card-in-subtree-pred :topic_id :root_topic_id root-id)))})))))))
 
 (defn clear-anki-conflicts!
   "Drop the conflict flag from `card-ids` only, leaving every other card's alone.
@@ -7766,7 +7916,7 @@
                    :where [:and
                            [:in :root_topic_id
                             {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
-                           [:in :id (vec card-ids)]]}))))
+                           [:= :id [:any [:lift (long-array card-ids)]]]]}))))
 
 (defn list-anki-conflicts
   "Card ids `user-id` currently has flagged as reconcile conflicts, oldest
@@ -7885,7 +8035,7 @@
          (jdbc/execute-one! ds
            (sql/format {:delete-from :anki_note_tombstones
                         :where [:and [:= :user_id user-id]
-                                [:in :anki_note_id (vec note-ids)]]})))
+                                [:= :anki_note_id [:any [:lift (long-array note-ids)]]]]})))
       0)))
 
 (defn delete-user-flashcards!
@@ -7903,7 +8053,7 @@
                                    :where [:and
                                            [:= :flashcards.root_topic_id :root.id]
                                            [:= :root.user_id user-id]
-                                           [:in :flashcards.id (vec card-ids)]]
+                                           [:= :flashcards.id [:any [:lift (long-array card-ids)]]]]
                                    :returning [:flashcards.*]}))]
         (record-anki-tombstones! tx user-id deleted)
         deleted))))
@@ -7961,6 +8111,57 @@
       (when (pos? (or (:next.jdbc/update-count result) 0))
         (restamp-card-digests! tx [card-id]))
       result)))
+
+(defn apply-reconcile-pulls!
+  "Apply one bounded pull batch under owned row locks and planned versions.
+   Content and digest baselines share one set-based statement and transaction."
+  [user-id entries]
+  (when (> (count entries) 500)
+    (throw (ex-info "A pull batch exceeds 500 cards." {:count (count entries)})))
+  (if (empty? entries)
+    {:count 0 :conflict-card-ids []}
+    (jdbc/with-transaction [tx ds]
+      (let [rows (into {}
+                   (map (fn [row] [(:flashcards/id row) (parse-digest-jsonb row)]))
+                   (jdbc/execute! tx
+                     ["SELECT f.* FROM flashcards f JOIN topics root ON root.id=f.root_topic_id
+                       WHERE f.id=ANY(?) AND root.user_id=? ORDER BY f.id FOR UPDATE OF f"
+                      (long-array (map :card-id entries)) user-id]))
+            classified
+            (reduce (fn [acc {:keys [card-id expected update-map anki-digest]}]
+                      (if-let [card (get rows card-id)]
+                        (if (or (nil? (:local-digest expected))
+                                (not= (:note-id expected) (:flashcards/anki_note_id card))
+                                (not= (:local-digest expected) (digest/local-digest card)))
+                          (update acc :conflict-card-ids conj card-id)
+                          (if update-map
+                            (let [changed (reduce-kv
+                                            (fn [row k v]
+                                              (assoc row (keyword "flashcards" (name k)) v))
+                                            card (select-keys update-map [:question :answer :cloze]))
+                                  changed (if (seq (:io-fields update-map))
+                                            (update changed :flashcards/io_fields merge (:io-fields update-map))
+                                            changed)]
+                              (update acc :updates conj
+                                [card-id (:flashcards/question changed) (:flashcards/answer changed)
+                                 (:flashcards/cloze changed) (->jsonb (:flashcards/io_fields changed))
+                                 (digest/local-digest changed) anki-digest]))
+                            acc))
+                        acc))
+              {:updates [] :conflict-card-ids []} (dedupe-last-by :card-id entries))
+            updates (:updates classified)]
+        (when (seq updates)
+          (jdbc/execute-one! tx
+            (into [(str "UPDATE flashcards AS f SET question=v.question, answer=v.answer, cloze=v.cloze, "
+                     "io_fields=v.io_fields, local_current_digest=v.local_digest, "
+                     "local_baseline_digest=v.local_digest, anki_baseline_digest=v.anki_digest, "
+                     "baseline_digest_version=" digest/digest-version ", updated_at=NOW(), anki_synced_at=NOW() "
+                     "FROM (VALUES "
+                     (str/join "," (repeat (count updates)
+                                      "(?::bigint,?::text,?::text,?::text,?::jsonb,?::char(64),?::char(64))"))
+                     ") AS v(id,question,answer,cloze,io_fields,local_digest,anki_digest) WHERE f.id=v.id")]
+              (mapcat identity updates))))
+        {:count (count updates) :conflict-card-ids (:conflict-card-ids classified)}))))
 
 (defn apply-reconcile-pull!
   "Apply sanitized pull fields only if the locked row still matches the plan.
@@ -8271,7 +8472,7 @@
       (jdbc/execute! ds
         (sql/format {:select [:*]
                      :from [:occlusion_groups]
-                     :where [:in :id (vec group-ids)]})))))
+                     :where [:= :id [:any [:lift (long-array group-ids)]]]})))))
 
 (defn get-occlusion-cards
   "Flashcard rows of a group ordered by mask_ordinal, io_fields parsed."
@@ -8497,7 +8698,7 @@
       (jdbc/execute! ds
         (sql/format {:select [:*]
                      :from [:score_groups]
-                     :where [:in :id (vec group-ids)]})))))
+                     :where [:= :id [:any [:lift (long-array group-ids)]]]})))))
 
 (defn get-score-cards
   "Flashcard rows of a score group, audio-front first."
@@ -9421,6 +9622,21 @@
                  :from [:media]
                  :where [:= :id id]})))
 
+(defn media-mime-types-for-user
+  "Map {media-id mime-type} for those of `ids` that `user-id` owns.
+   Post: an id the user does not own, or that does not exist, is absent."
+  [user-id ids]
+  (if (empty? ids)
+    {}
+    (into {}
+      (map (juxt :id :mime_type))
+      (jdbc/execute! ds
+        (sql/format {:select [:id :mime_type]
+                     :from [:media]
+                     :where [:and [:= :user_id user-id]
+                             [:= :id [:any [:lift (long-array ids)]]]]})
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn upsert-media-row!
   "Insert media, or return the existing row's id if the same bytes are already
    stored for this user. Charges quota only on actual insert.
@@ -9923,23 +10139,24 @@
    than falsely rendering as pushed/synced."
   [conn snapshot-rows]
   (when (seq snapshot-rows)
-    (jdbc/execute! conn
-      (sql/format {:insert-into :flashcards
-                   :values (mapv #(as-> % row
-                                    (assoc row :anki_note_id nil :anki_synced_at nil)
-                                    (cast-timestamps row flashcard-ts-cols)
-                                    ;; JSONB round-trip left a plain map — re-wrap.
-                                    (cond-> row
-                                      (some? (:io_fields row))
-                                      (update :io_fields ->jsonb)))
-                                  snapshot-rows)
-                   :on-conflict []
-                   :do-nothing true}))))
+    (let [rows (mapv #(as-> % row
+                        (assoc row :anki_note_id nil :anki_synced_at nil)
+                        (cast-timestamps row flashcard-ts-cols)
+                        (cond-> row
+                          (some? (:io_fields row)) (update :io_fields ->jsonb)))
+                 snapshot-rows)]
+      (into []
+        (mapcat #(jdbc/execute! conn
+                   (sql/format {:insert-into :flashcards :values (vec %)
+                                :on-conflict [] :do-nothing true})))
+        (param-bounded-batches rows)))))
 
 (defn restore-flashcards!
-  "Re-insert deleted flashcards from a snapshot (non-transactional)."
+  "Re-insert deleted flashcards from a snapshot in one transaction."
   [snapshot-rows]
-  (restore-flashcards-tx! ds snapshot-rows))
+  (when (seq snapshot-rows)
+    (jdbc/with-transaction [tx ds]
+      (restore-flashcards-tx! tx snapshot-rows))))
 
 (def ^:private group-ts-cols
   "Timestamp columns shared by occlusion_groups and score_groups."
@@ -9954,14 +10171,13 @@
    regenerated mask filenames stay consistent with surviving card_versions."
   [conn table snapshot-rows]
   (when (seq snapshot-rows)
-    (jdbc/execute! conn
-      (sql/format {:insert-into table
-                   :values (mapv #(-> %
-                                    (cast-timestamps group-ts-cols)
-                                    (update :geometry ->jsonb))
-                               snapshot-rows)
-                   :on-conflict [:id]
-                   :do-nothing true}))))
+    (let [rows (mapv #(-> % (cast-timestamps group-ts-cols) (update :geometry ->jsonb))
+                 snapshot-rows)]
+      (into []
+        (mapcat #(jdbc/execute! conn
+                   (sql/format {:insert-into table :values (vec %)
+                                :on-conflict [:id] :do-nothing true})))
+        (param-bounded-batches rows)))))
 
 (defn restore-card-rows!
   "Reverse a card delete from its map-shaped snapshot.
@@ -10130,7 +10346,7 @@
         (jdbc/execute! tx
           (sql/format {:update :topics
                        :set {:dismissed value}
-                       :where [:in :id ids]}))
+                       :where [:= :id [:any [:lift (long-array ids)]]]}))
         {:count (count ids)}))))
 
 (defn dismiss-topic!
@@ -10179,7 +10395,7 @@
                          {:builder-fn rs/as-unqualified-maps}))
             deleted (jdbc/execute! tx
                       (sql/format {:delete-from :flashcards
-                                   :where [:in :topic_id ids]
+                                   :where [:= :topic_id [:any [:lift (long-array ids)]]]
                                    :returning [:*]}))
             note-ids (into [] (keep :flashcards/anki_note_id) deleted)
             entry-id (insert-undo-entry-raw! tx user-id "delete-document" "document"
@@ -10195,7 +10411,7 @@
         (jdbc/execute! tx
           (sql/format {:update :topics
                        :set {:staged_delete_id entry-id}
-                       :where [:in :id ids]}))
+                       :where [:= :id [:any [:lift (long-array ids)]]]}))
         (when (pos? freed) (bump-user-usage! tx user-id (- freed)))
         (prune-undo-log! tx user-id)
         {:entry-id entry-id :card-count (count deleted)
@@ -12860,9 +13076,8 @@
   (if (and (some? new-ids) (empty? new-ids))
     []
     (let [restrict (when (seq new-ids)
-                     (let [ph (str/join ", " (repeat (count new-ids) "?"))]
-                       (str " AND b.id IN (" ph ") AND a.id NOT IN (" ph ")")))
-          ids (vec new-ids)
+                     " AND b.id = ANY(?) AND NOT (a.id = ANY(?))")
+          ids (when (seq new-ids) [(long-array new-ids) (long-array new-ids)])
           statuses (vec statuses)
           sph (str/join ", " (repeat (count statuses) "?"))]
       (jdbc/execute! ds
@@ -12890,7 +13105,7 @@
                   FROM ok a JOIN ok b ON a.pk = b.pk AND a.id < b.id"
                  restrict)
                user-id graph-topic-id]
-          (concat statuses [max-facts-per-page] ids ids))
+          (concat statuses [max-facts-per-page] ids))
         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn get-kg-facts-context
@@ -12953,7 +13168,7 @@
            :join [[:kg_questions :q] [:= :q.id :qf.question_id]]
            :where [:and [:= :q.user_id user-id]
                    [:= :q.status "approved"]
-                   [:in :qf.fact_id (vec fact-ids)]]
+                   [:= :qf.fact_id [:any [:lift (long-array fact-ids)]]]]
            :group-by [:qf.fact_id]})
         {:builder-fn rs/as-unqualified-maps}))))
 
@@ -13162,7 +13377,7 @@
                      (when (seq qids)
                        (jdbc/execute! tx
                          (sql/format {:update :kg_questions :set {:status "retired"}
-                                      :where [:in :id qids]})))
+                                      :where [:= :id [:any [:lift (long-array qids)]]]})))
                      {:fact-id fact-id :prev-status (:status row)
                       :retired-question-ids (vec qids)}))))]
     (when snap
@@ -13202,7 +13417,7 @@
             (let [rows (jdbc/execute! tx
                          (sql/format {:select [:id :status] :from :kg_facts
                                       :where [:and [:= :user_id user-id]
-                                              [:in :id (vec fact-ids)]
+                                              [:= :id [:any [:lift (long-array fact-ids)]]]
                                               [:not= :status target-status]]
                                       :for :update})
                          {:builder-fn rs/as-unqualified-maps})
@@ -13216,7 +13431,7 @@
                               (sql/format {:select [:qf.fact_id :q.id]
                                            :from [[:kg_question_facts :qf]]
                                            :join [[:kg_questions :q] [:= :q.id :qf.question_id]]
-                                           :where [:and [:in :qf.fact_id ids]
+                                           :where [:and [:= :qf.fact_id [:any [:lift (long-array ids)]]]
                                                    [:= :q.status "approved"]]})
                               {:builder-fn rs/as-unqualified-maps})
                       by-fact (reduce (fn [m {:keys [fact_id id]}]
@@ -13230,11 +13445,11 @@
                   (jdbc/execute! tx
                     (sql/format {:update :kg_facts
                                  :set {:status target-status :reviewed_at [:now]}
-                                 :where [:and [:= :user_id user-id] [:in :id ids]]}))
+                                 :where [:and [:= :user_id user-id] [:= :id [:any [:lift (long-array ids)]]]]}))
                   (when (seq qids)
                     (jdbc/execute! tx
                       (sql/format {:update :kg_questions :set {:status "retired"}
-                                   :where [:in :id qids]})))
+                                   :where [:= :id [:any [:lift (long-array qids)]]]})))
                   {:snaps snaps
                    :undo-id (insert-undo-entry-raw! tx user-id action-type "fact"
                               ids snaps)}))))]
@@ -13318,7 +13533,7 @@
       (when (seq qids)
         (jdbc/execute! tx
           (sql/format {:update :kg_questions :set {:status "approved"}
-                       :where [:in :id qids]}))))))
+                       :where [:= :id [:any [:lift (long-array qids)]]]}))))))
 
 (defn restore-rejected-fact!
   "Undo a reject-fact: restore the fact's pre-reject status and set exactly the
@@ -13331,7 +13546,7 @@
       (when (seq retired-question-ids)
         (jdbc/execute! tx
           (sql/format {:update :kg_questions :set {:status "approved"}
-                       :where [:in :id retired-question-ids]}))))))
+                       :where [:= :id [:any [:lift (long-array retired-question-ids)]]]}))))))
 
 (defn update-kg-fact-literal!
   "Edit-then-approve for literal-object facts (entity edits go through
@@ -13660,8 +13875,8 @@
                            [:kg_predicates :p] [:= :p.id :f.predicate_id]]
                     :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
                     :where [:and [:= :f.user_id user-id] [:= :f.status "approved"]
-                            [:or [:in :f.subject_entity_id ids]
-                             [:in :f.object_entity_id ids]]]
+                            [:or [:= :f.subject_entity_id [:any [:lift (long-array ids)]]]
+                             [:= :f.object_entity_id [:any [:lift (long-array ids)]]]]]
                     :order-by [[:f.id :asc]]})
                  {:builder-fn rs/as-unqualified-maps})
           row->prompt #(select-keys % [:fact_id :s :p :o])]
@@ -13856,7 +14071,7 @@
   "HoneySQL value for a BIGINT[] column holding row ids.
    Post: an expression valid for both empty and non-empty `ids`."
   [ids]
-  (if (seq ids) [:array (vec ids)] [:raw "'{}'::bigint[]"]))
+  (if (seq ids) [:lift (long-array ids)] [:raw "'{}'::bigint[]"]))
 
 (defn- text-array-value
   "HoneySQL value for a TEXT[] column; elements are UTF-8 sanitised.
@@ -13906,11 +14121,11 @@
                            [:exists {:select [1] :from [[:kg_question_facts :qf]]
                                      :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
                                      :where [:and [:= :qf.question_id :q.id]
-                                             [:in :f.graph_topic_id scope-topic-ids]]}]
+                                             [:= :f.graph_topic_id [:any [:lift (long-array scope-topic-ids)]]]]}]
                            [:not [:exists {:select [1] :from [[:kg_question_facts :qf]]
                                            :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
                                            :where [:and [:= :qf.question_id :q.id]
-                                                   [:not-in :f.graph_topic_id scope-topic-ids]]}]]]
+                                                   [:not [:= :f.graph_topic_id [:any [:lift (long-array scope-topic-ids)]]]]]}]]]
                    :order-by [[[:raw "random()"]]]
                    :limit n})
       {:builder-fn rs/as-unqualified-maps})))
@@ -13922,8 +14137,8 @@
   (:id (jdbc/execute-one! ds
          (sql/format {:insert-into :kg_sessions
                       :values [{:user_id user-id :kind kind
-                                :scope_topic_ids [:array (vec scope-topic-ids)]
-                                :question_ids [:array (vec question-ids)]
+                                :scope_topic_ids (id-array-value scope-topic-ids)
+                                :question_ids (id-array-value question-ids)
                                 :time_limit_seconds time-limit-seconds}]
                       :returning [:id]})
          {:builder-fn rs/as-unqualified-maps})))
@@ -13986,7 +14201,7 @@
                        (jdbc/execute! ds
                          (sql/format {:select [:id :label :aliases]
                                       :from [:kg_entities]
-                                      :where [:in :id (vec entity-ids)]})
+                                      :where [:= :id [:any [:lift (long-array entity-ids)]]]})
                          {:builder-fn rs/as-unqualified-maps})))
           keywords (into []
                      (comp (mapcat (fn [{:keys [label aliases]}] (cons label aliases)))
@@ -14023,7 +14238,7 @@
                 [:kg_predicates :p] [:= :p.id :f.predicate_id]
                 [:topics :t] [:= :t.id :f.graph_topic_id]]
          :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
-         :where [:and [:= :f.user_id user-id] [:in :f.id (vec fact-ids)]]
+         :where [:and [:= :f.user_id user-id] [:= :f.id [:any [:lift (long-array fact-ids)]]]]
          :order-by [[:f.id :asc]]})
       {:builder-fn rs/as-unqualified-maps})))
 
@@ -14841,9 +15056,9 @@
                 [:kg_predicates :p] [:= :p.id :f.predicate_id]]
          :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
          :where [:and [:= :f.user_id user-id] [:= :f.status "approved"]
-                 [:not-in :f.id (vec fact-ids)]
+                 [:not [:= :f.id [:any [:lift (long-array fact-ids)]]]]
                  [:exists {:select [1] :from [[:kg_facts :lf]]
-                           :where [:and [:in :lf.id (vec fact-ids)]
+                           :where [:and [:= :lf.id [:any [:lift (long-array fact-ids)]]]
                                    [:= :lf.predicate_id :f.predicate_id]
                                    [:or
                                     [:and [:!= :lf.object_entity_id nil]
@@ -15389,7 +15604,7 @@
       (jdbc/execute! ds
         (sql/format {:select [:*] :from [:anki_card_states]
                      :where [:and [:= :user_id user-id]
-                             [:in :anki_note_id (vec note-ids)]
+                             [:= :anki_note_id [:any [:lift (long-array note-ids)]]]
                              [:= :config_fingerprint fingerprint]]})))))
 
 (defn upsert-anki-card-states!

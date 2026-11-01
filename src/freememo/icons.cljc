@@ -5,9 +5,8 @@
    stroke-linejoin: round` — Lucide's standard stroke contract. Color follows
    the surrounding `color:` via `currentColor`.
 
-   SVG-namespaced children (path/line/circle/rect/polyline) MUST be created via
-   `hyperfiddle.electric-svg3` macros — using `dom/element` from electric-dom3
-   creates HTML-namespace elements which render invisibly inside an `<svg>`.
+   The Electric SVG root owns its plain DOM children. The installer creates
+   each child in the SVG namespace so the browser can render it.
 
    Pre:  caller passes a known glyph keyword.
    Post: a sized SVG element is mounted; if `:title` is provided it sets
@@ -17,14 +16,20 @@
               than throwing, so a typo at one call site doesn't crash the
               page."
   (:require
-   [freememo.icon-paths :as icon-paths]
+   [freememo.icon-dom :as icon-dom]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-svg3 :as svg]
    [freememo.tooltip :as tooltip]))
 
-(defn- icon-known? [name]
-  (contains? icon-paths/paths name))
+(defn install-icon!
+  "Update icon geometry and its tooltip on the same SVG root."
+  [node glyph size class title]
+  #?(:cljs
+     (do
+       (icon-dom/install! node glyph size class title)
+       (tooltip/set-tooltip! node (when title title) :aria? true))
+     :clj nil))
 
 ;; Pre:  `name` is a keyword present in `icon-paths/paths`. `size` defaults to 16.
 ;;       `title` is optional but recommended for icon-only buttons (sets
@@ -36,25 +41,4 @@
                       :or {size 16}}]
   (e/client
     (svg/svg
-      (dom/props
-        (cond-> {:width (str size)
-                 :height (str size)
-                 :viewBox "0 0 24 24"
-                 :fill "none"
-                 :stroke "currentColor"
-                 :stroke-width "2"
-                 :stroke-linecap "round"
-                 :stroke-linejoin "round"
-                 :aria-hidden (if title "false" "true")}
-          class (assoc :class class)))
-      ;; Icon-only trigger: the tooltip text also names the element for a11y.
-      (when title (tooltip/Tooltip! title :aria? true))
-      (when (icon-known? name)
-        (e/for [[tag attrs] (e/diff-by hash (get icon-paths/paths name))]
-          (case tag
-            :path (svg/path (dom/props attrs))
-            :line (svg/line (dom/props attrs))
-            :circle (svg/circle (dom/props attrs))
-            :rect (svg/rect (dom/props attrs))
-            :polyline (svg/polyline (dom/props attrs))
-            nil))))))
+      (case (install-icon! dom/node name size class title) nil))))

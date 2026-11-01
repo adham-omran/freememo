@@ -11,6 +11,9 @@
    [freememo.segmented :as seg]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
+   [freememo.graph-lifecycle :as lifecycle]
+   [freememo.graph-filter :as filter]
+   #?(:clj [freememo.entity-options :as entity-options])
    [freememo.viewport :as viewport]
    [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.electric3 :as e]
@@ -18,6 +21,7 @@
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-graph :as kgg])
+   #?(:clj [freememo.graph-queries :as queries])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [taoensso.telemere :as tel])
    #?(:cljs [freememo.graph-render :as render])
@@ -74,24 +78,21 @@
         counts (predicate-counts scoped-edges)
         q (str/lower-case (str/trim (or query "")))]
     (->> predicates
-      (map-indexed (fn [idx [_id label]]
-                     {:idx idx :label (str label) :count (get counts idx 0)}))
+      (map-indexed (fn [idx [id label]]
+                     {:idx idx :id id :label (str label) :count (get counts idx 0)}))
       (filter #(or (str/blank? q)
                  (str/includes? (str/lower-case (:label %)) q)))
       (sort-by (juxt (comp - :count) (comp str/lower-case :label)))
       vec)))
 
-(defn- pred-checked? [pred-set idx]
-  (or (nil? pred-set) (contains? pred-set idx)))
+(defn- pred-checked? [selection id]
+  (filter/checked? selection id))
 
-(defn- set-pred-checked [pred-set idx n-preds checked?]
-  (let [full (set (range n-preds))
-        current (or pred-set full)
-        next (if checked? (conj current idx) (disj current idx))]
-    (when-not (= next full) next)))
+(defn- set-pred-checked [selection id checked?]
+  (filter/set-checked selection id checked?))
 
-(defn- selected-predicate-count [pred-set n-preds]
-  (if (nil? pred-set) n-preds (count pred-set)))
+(defn- selected-predicate-count [selection payload]
+  (filter/selected-count payload selection))
 
 (defn- source-title [payload source]
   (if (= source :all)
@@ -108,7 +109,7 @@
 
 (defn graph-payload*
   "Return the cached positioned graph for one user and mutation version."
-  [version user-id]
+  [version user-id selection]
   #?(:clj
      (do
        (tel/log! {:level :info :id ::payload.enter
@@ -116,7 +117,7 @@
          "graph-page: graph payload requested")
        (let [started-at (System/currentTimeMillis)]
          (try
-           (let [payload (kgg/get-or-compute user-id "all" version)]
+           (let [payload (kgg/get-bounded user-id version selection)]
              (tel/log! {:level :info :id ::payload.exit
                         :data {:user-id user-id
                                :nodes (count (:nodes payload))
@@ -138,17 +139,49 @@
   #?(:clj (db/kg-entity-card user-id entity-id)
      :cljs nil))
 
+(defn entity-options* [_version user-id request]
+  #?(:clj {:request request :options (entity-options/search-options user-id nil (:query request))}
+     :cljs nil))
+
+(defn selected-entity* [_version user-id id]
+  #?(:clj (entity-options/selected-option user-id id) :cljs nil))
+
+(defn relation-count* [_version user-id selection]
+  #?(:clj (queries/relation-count user-id selection) :cljs nil))
+
+(defn relation-window* [_version user-id selection offset limit]
+  #?(:clj {:scope selection :offset offset
+           :rows (mapv (fn [i row] (assoc row :index (+ offset i)))
+                   (range) (queries/relation-window user-id selection offset limit))}
+     :cljs nil))
+
+(defn predicate-count* [_version user-id source query]
+  #?(:clj (queries/predicate-count user-id source query) :cljs nil))
+
+(defn predicate-window* [_version user-id source query offset limit]
+  #?(:clj {:request [source query] :offset offset
+           :rows (queries/predicate-window user-id source query offset limit)} :cljs nil))
+
+(e/defn GraphSearch [user-id version !selected]
+  (typeahead/SearchTypeahead !selected
+    (e/fn Search [request]
+      (e/server (e/Offload #(entity-options* version user-id request))))
+    (e/fn Selected [id]
+      (e/server (e/Offload #(selected-entity* version user-id id))))
+    [user-id version] "Search all concepts…" nil false))
+
 ;; ---------------------------------------------------------------------------
 ;; Sigma bridge
 ;; ---------------------------------------------------------------------------
 
 (defn schedule-graph-init! [!ctx container payload on-select opts]
   #?(:cljs
-     (js/setTimeout
-       (fn []
-         (vendor/with! :graph
-           (fn [] (reset! !ctx (render/init! container payload on-select opts)))))
-       0)
+     (lifecycle/start! !ctx
+       (fn [ready!]
+         (let [timer (js/setTimeout #(vendor/with! :graph ready!) 0)]
+           #(js/clearTimeout timer)))
+       #(render/init! container payload on-select opts)
+       render/destroy!)
      :clj nil))
 
 (defn apply-filters! [ctx source pred-set connectedness]
@@ -230,7 +263,7 @@
       (dom/props {:class "graph-filter-section"})
       (dom/div
         (dom/props {:class "graph-filter-heading"})
-        (dom/label (dom/text "Connectedness"))
+        (dom/label (dom/text "Loaded connectedness"))
         (dom/strong (dom/text (str connectedness "+"))))
       (let [value (forms/Input (str connectedness)
                     :type "range" :min "1" :max (str max-connectedness)
@@ -242,9 +275,9 @@
         (dom/span (dom/text "Include small pairs"))
         (dom/span (dom/text "Core concepts"))))))
 
-(e/defn RelationFilter [payload source !preds preds]
+(e/defn RelationFilter [version user-id source !preds preds]
   (e/client
-    (let [n-preds (count (:predicates payload))]
+    (let [n-preds (e/server (e/Offload #(predicate-count* version user-id source "")))]
       (dom/section
         (dom/props {:class "graph-filter-section graph-relations-section"})
         (dom/div
@@ -252,11 +285,10 @@
           (dom/label (dom/text "Relations"))
           (dom/span
             (dom/props {:class "graph-filter-meta"})
-            (dom/text (str (selected-predicate-count preds n-preds) " of " n-preds))))
+            (dom/text (str n-preds " available"))))
         (let [query (forms/Input* "" :type "search" :class "input"
                       :placeholder "Filter relations…" :aria-label "Filter relations")
-              rows (relation-rows payload source query)
-              row-count (count rows)]
+              row-count (e/server (e/Offload #(predicate-count* version user-id source query)))]
           (dom/div
             (dom/props {:class "graph-relation-actions"})
             (dom/button
@@ -266,21 +298,23 @@
             (dom/button
               (dom/props {:type "button" :class "graph-text-action"})
               (dom/text "Select none")
-              (dom/On "click" (fn [_] (reset! !preds #{})) nil)))
+              (dom/On "click" (fn [_] (reset! !preds {:mode :include :ids #{}})) nil)))
           (dom/div
             (dom/props {:class "graph-relation-list tape-scroll"
                         :style {:--row-height (str relation-row-height "px")
                                 :--grid-cols "1fr"}})
             (let [[offset limit] (Scroll-window relation-row-height row-count dom/node
                                    {:overquery-factor 1.5
-                                    :reset-key [source query]})]
+                                    :reset-key [source query]})
+                  result (e/server (e/Offload #(predicate-window* version user-id source query offset limit)))
+                  current? (= [source query] (:request result))]
               (dom/props {:style {:--count row-count}})
               (dom/table
                 (dom/props {:style {:width "100%"}})
                 (e/for [i (Tape offset limit)]
-                  (let [{:keys [idx label count] :as row} (nth rows i nil)]
+                  (let [{:keys [id idx label count] :as row} (when current? (nth (:rows result) (- i (:offset result)) nil))]
                     (when row
-                      (let [checked? (pred-checked? preds idx)]
+                      (let [checked? (pred-checked? preds id)]
                         (dom/tr
                           (dom/props {:style {:--order i}})
                           (dom/td
@@ -290,8 +324,7 @@
                                                     :aria-label (str "Show " label))]
                                 (when (not= checked? next-checked?)
                                   (reset! !preds
-                                    (set-pred-checked @!preds idx n-preds
-                                      next-checked?))))
+                                    (set-pred-checked @!preds id next-checked?))))
                               (dom/span
                                 (dom/props {:class "graph-relation-label" :dir "auto"})
                                 (dom/text label))
@@ -302,17 +335,16 @@
                   (dom/text "No matching relations"))))))))))
 
 (e/defn FiltersPanel
-  [payload !selected-id selected-id !source !preds preds
+  [version user-id payload !selected-id selected-id !source !preds preds
    !connectedness connectedness max-connectedness !view-mode view-mode open?]
   (e/client
     (dom/aside
       (dom/props {:class (str "graph-filters" (when-not open? " is-closed"))
                   :aria-label "Graph filters" :aria-hidden (str (not open?))})
-      (ConceptPicker payload !selected-id !view-mode)
       (ViewPicker !view-mode view-mode selected-id)
       (DocumentPicker payload !source)
       (ConnectednessControl !connectedness connectedness max-connectedness)
-      (RelationFilter payload (e/watch !source) !preds preds))))
+      (RelationFilter version user-id (e/watch !source) !preds preds))))
 
 ;; ---------------------------------------------------------------------------
 ;; Graph scene and inspector
@@ -350,7 +382,7 @@
                         :aria-label (str "Remove document filter " source-title)})
             (dom/text (str source-title " ×"))
             (dom/On "click" (fn [_] (reset! !source :all)) nil)))
-        (when (not= selected-pred-count n-preds)
+        (when (some? (e/watch !preds))
           (dom/button
             (dom/props {:type "button"
                         :class "filter-chip filter-chip-active graph-active-filter"
@@ -365,7 +397,7 @@
             (dom/text (str "Connectedness " connectedness "+ ×"))
             (dom/On "click" (fn [_] (reset! !connectedness 1)) nil)))
         (when (or (not= source-title "All documents")
-                  (not= selected-pred-count n-preds)
+                  (some? (e/watch !preds))
                   (> connectedness 1))
           (dom/button
             (dom/props {:type "button" :class "graph-clear-filters"})
@@ -417,25 +449,22 @@
             nil))
         (dom/div
           (dom/props {:class "graph-render-surface"})
-          (e/for-by identity [_key [[kg-bump node-count]]]
+          (e/for-by identity [_key [[kg-bump (:selection payload)]]]
             (dom/div
               (dom/props {:class "graph-render-canvas"})
-              (schedule-graph-init! !ctx dom/node payload
+              (let [cancel! (e/snapshot (schedule-graph-init! !ctx dom/node payload
                 (fn [id]
                   (reset! !selected-id id)
                   (reset! !view-mode (if id :neighborhood :overview)))
                 {:on-counts (fn [counts]
                               (when (not= counts @!stats)
                                 (reset! !stats counts)))
-                 :minimap-container @!minimap-node})
-              (e/on-unmount
-                (fn []
-                  (destroy-graph! @!ctx)
-                  (reset! !ctx nil))))))
-        (case (apply-filters! ctx source preds connectedness) nil)
+                 :minimap-container @!minimap-node}))]
+                (e/on-unmount cancel!)))))
+        (case (apply-filters! ctx source (filter/renderer-indexes payload preds) connectedness) nil)
         (case (set-view! ctx view-mode selected-id depth) nil)
         (GraphToolbar ctx stats view-mode depth (source-title payload source)
-          (selected-predicate-count preds n-preds) n-preds
+          (selected-predicate-count preds payload) n-preds
           connectedness filters-open? !filters-open?
           !source !preds !connectedness)
         (when (= view-mode :neighborhood)
@@ -446,7 +475,7 @@
 
 (e/defn ConnectedFacts [facts selected-id !linked-entity navigate!]
   (e/client
-    (let [row-count (count facts)]
+    (let [row-count (e/server (count facts))]
       (dom/div
         (dom/props {:class "graph-inspector-facts tape-scroll"
                     :style {:--row-height (str fact-row-height "px")
@@ -458,7 +487,7 @@
           (dom/table
             (dom/props {:aria-label "Connected facts" :style {:width "100%"}})
             (e/for [i (Tape offset limit)]
-              (let [fact (nth facts i nil)]
+              (let [fact (e/server (nth facts i nil))]
                 (when fact
                   (dom/tr
                     (dom/props {:class "graph-inspector-fact-row"
@@ -480,8 +509,11 @@
     (when selected-id
       (let [card (e/server
                    (e/Offload #(graph-entity-card* kg-bump user-id selected-id)))
-            facts (:facts card)
-            document-count (count (into #{} (keep :graph_topic_id) facts))
+            facts (e/server (:facts card))
+            label (e/server (:label card))
+            aliases (e/server (:aliases card))
+            fact-count (e/server (count facts))
+            document-count (e/server (count (into #{} (keep :graph_topic_id) facts)))
             !linked-entity (atom nil)
             linked-entity (e/watch !linked-entity)]
         (when linked-entity
@@ -494,7 +526,7 @@
             (dom/div
               (dom/div (dom/props {:class "graph-inspector-kicker"})
                 (dom/text "Selected concept"))
-              (dom/h2 (dom/props {:dir "auto"}) (dom/text (:label card))))
+              (dom/h2 (dom/props {:dir "auto"}) (dom/text label)))
             (dom/button
               (dom/props {:type "button" :class "icon-btn"
                           :aria-label "Close concept details"})
@@ -507,12 +539,12 @@
                 nil)))
           (dom/p
             (dom/props {:class "graph-inspector-summary"})
-            (dom/text (str (item-count-label (count facts) "fact") " across "
+            (dom/text (str (item-count-label fact-count "fact") " across "
                         (item-count-label document-count "document"))))
-          (when (seq (:aliases card))
+          (when (seq aliases)
             (dom/p
               (dom/props {:class "graph-inspector-aliases" :dir "auto"})
-              (dom/text (str "Also: " (str/join ", " (:aliases card))))))
+              (dom/text (str "Also: " (str/join ", " aliases)))))
           (dom/button
             (dom/props {:type "button" :class "btn btn-primary graph-open-facts"})
             (dom/text "Open Facts")
@@ -520,8 +552,81 @@
           (dom/div
             (dom/props {:class "graph-inspector-section-heading"})
             (dom/strong (dom/text "Connected facts"))
-            (dom/span (dom/text (count facts))))
+            (dom/span (dom/text fact-count)))
           (ConnectedFacts facts selected-id !linked-entity navigate!))))))
+
+(defn close-relations! [!open? !button]
+  (reset! !open? false)
+  #?(:cljs (when-let [^js button @!button]
+             (.focus button #js {:preventScroll true}))
+     :clj nil)
+  nil)
+
+(defn close-relations-on-selection! [_selected-id !open?]
+  (reset! !open? false)
+  nil)
+
+(e/defn RelationExplorer [version user-id source preds !selected-id !view-mode close!]
+  (e/client
+    (let [scope {:source source :predicates preds}
+          total (e/server (e/Offload #(relation-count* version user-id scope)))]
+      (dom/aside
+        (dom/props {:id "graph-relations-panel"
+                    :class "graph-inspector graph-relation-explorer"
+                    :aria-label "Browse all graph relations"})
+        (dom/On "keydown"
+          (fn [event]
+            (when (= "Escape" (.-key event))
+              (.preventDefault event)
+              (.stopPropagation event)
+              (close!))) nil)
+        (dom/div
+          (dom/props {:class "graph-inspector-header graph-inspector-section-heading"})
+          (dom/div
+            (dom/props {:class "graph-relation-explorer-heading"})
+            (dom/h2 (dom/text "Relations"))
+            (dom/span (dom/props {:class "graph-relations-count"}) (dom/text total)))
+          (dom/button
+            (dom/props {:type "button" :class "icon-btn" :aria-label "Close relations"})
+            (icons/Icon :x :size 17)
+            (dom/On "click" (fn [_] (close!)) nil)))
+        (dom/p (dom/text "Select a concept to inspect its connections."))
+        (dom/div
+          (dom/props {:class "tape-scroll graph-relation-explorer-scroll" :tabindex "0" :style {:position "relative" :--row-height "36px" :--grid-cols "1fr"}})
+          (let [[offset limit] (Scroll-window 36 total dom/node {:overquery-factor 1.5 :reset-key scope})
+                result (e/server (e/Offload #(relation-window* version user-id scope offset limit)))
+                current? (and (= scope (:scope result)) (= offset (:offset result)))]
+            (dom/props {:style {:--count total}})
+            (dom/table
+              (dom/props {:aria-label "All matching graph relations"})
+              (e/for-by :id [row (if current? (:rows result) [])]
+                (dom/tr
+                  (dom/props {:style {:--order (:index row)}})
+                  (dom/td
+                    (dom/props {:class "graph-relation-explorer-cell"})
+                    (dom/button
+                      (dom/props {:class "graph-relation-concept" :dir "auto" :title (:subject_label row) :aria-label (str "Inspect " (:subject_label row))})
+                      (dom/text (:subject_label row))
+                      (dom/On "click"
+                        (fn [_]
+                          (reset! !selected-id (:subject_id row))
+                          (reset! !view-mode :neighborhood)
+                          (close!)) nil))
+                    (dom/span
+                      (dom/props {:class "graph-relation-predicate" :title (:predicate_label row)})
+                      (dom/text (:predicate_label row)))
+                    (dom/button
+                      (dom/props {:class "graph-relation-concept" :dir "auto" :title (:object_label row) :aria-label (str "Inspect " (:object_label row))})
+                      (dom/text (:object_label row))
+                      (dom/On "click"
+                        (fn [_]
+                          (reset! !selected-id (:object_id row))
+                          (reset! !view-mode :neighborhood)
+                          (close!)) nil)))))))
+          (when (zero? total)
+            (dom/p
+              (dom/props {:class "graph-filter-empty graph-virtual-empty"})
+              (dom/text "No matching relations"))))))))
 
 (e/defn GraphEmptyState [navigate!]
   (e/client
@@ -543,30 +648,82 @@
 (e/defn GraphPage [user-id navigate!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          payload (e/server (e/Offload #(graph-payload* kg-bump user-id)))
+          !selected-id (atom nil) selected-id (e/watch !selected-id)
+          !source (atom :all) source (e/watch !source)
+          !preds (atom nil) preds (e/watch !preds)
+          selection {:entity-id selected-id :page 0 :source source :predicates preds}
+          payload (e/server (e/Offload #(graph-payload* kg-bump user-id selection)))
           node-count (count (:nodes payload))
           max-degree (reduce (fn [m node] (max m (nth node 2 0))) 1 (:nodes payload))
           max-connectedness (max 1 (min 10 max-degree))
           compact? (e/watch viewport/!compact?)
           !ctx (atom nil) ctx (e/watch !ctx)
-          !selected-id (atom nil) selected-id (e/watch !selected-id)
-          !source (atom :all) source (e/watch !source)
-          !preds (atom nil) preds (e/watch !preds)
           !connectedness (atom 1) connectedness (e/watch !connectedness)
           !view-mode (atom :overview) view-mode (e/watch !view-mode)
           !depth (atom 2) depth (e/watch !depth)
           !stats (atom {:nodes node-count :edges (count (:edges payload))})
           stats (e/watch !stats)
-          !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)]
+          !filters-open? (atom (not compact?)) filters-open? (e/watch !filters-open?)
+          !relations-open? (atom false) relations-open? (e/watch !relations-open?)
+          !relations-button (atom nil)
+          close-relations (fn [] (close-relations! !relations-open? !relations-button))]
+      (case (when (not= connectedness (filter/connectedness connectedness max-connectedness))
+              (reset! !connectedness (filter/connectedness connectedness max-connectedness))) nil)
+      (case (close-relations-on-selection! selected-id !relations-open?) nil)
       (if (zero? node-count)
-        (GraphEmptyState navigate!)
+        (dom/div
+          (GraphSearch user-id kg-bump !selected-id)
+          (when selected-id
+            (dom/button
+              (dom/props {:type "button" :class "btn"})
+              (dom/text "Show all concepts")
+              (dom/On "click" (fn [_] (reset! !selected-id nil)) nil)))
+          (dom/button
+            (dom/props {:type "button" :class "btn btn-secondary"})
+            (dom/text "Clear graph filters")
+            (dom/On "click" (fn [_] (reset! !source :all) (reset! !preds nil)) nil))
+          (GraphEmptyState navigate!))
         (dom/div
           (dom/props {:class "graph-page"})
-          (FiltersPanel payload !selected-id selected-id !source !preds preds
+          (dom/On "keydown"
+            (fn [event]
+              (when (and @!relations-open? (= "Escape" (.-key event)))
+                (.preventDefault event)
+                (.stopPropagation event)
+                (close-relations))) nil)
+          (dom/div
+            (dom/props {:class "graph-page-header"})
+            (dom/div
+              (dom/props {:class "graph-page-search"})
+              (dom/On "focusin" (fn [_] (reset! !relations-open? false)) nil)
+              (GraphSearch user-id kg-bump !selected-id))
+            (dom/span
+              (dom/props {:class "graph-scope-summary"})
+              (dom/text (str (count (:edges payload)) " of "
+                          (get-in payload [:budget :total-edges]) " shown")))
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-secondary graph-relations-toggle"
+                          :aria-label "Browse relations"
+                          :aria-controls "graph-relations-panel"
+                          :aria-expanded (str relations-open?)})
+              (reset! !relations-button dom/node)
+              (icons/Icon :list :size 16)
+              (dom/span (dom/props {:class "graph-action-label"}) (dom/text "Browse relations"))
+              (dom/On "click" (fn [_] (swap! !relations-open? not)) nil))
+            (when selected-id
+              (dom/button
+                (dom/props {:type "button" :class "btn btn-secondary graph-show-all"
+                            :aria-label "Show all concepts"})
+                (icons/Icon :arrow-left :size 16)
+                (dom/span (dom/props {:class "graph-action-label"}) (dom/text "All concepts"))
+                (dom/On "click" (fn [_] (reset! !selected-id nil)) nil))))
+          (FiltersPanel kg-bump user-id payload !selected-id selected-id !source !preds preds
             !connectedness connectedness max-connectedness
             !view-mode view-mode filters-open?)
           (GraphScene payload kg-bump !ctx ctx !selected-id selected-id
             !view-mode view-mode !depth depth !source source !preds preds
             !connectedness connectedness stats !stats filters-open? !filters-open?)
-          (GraphInspector kg-bump user-id navigate! !selected-id selected-id
-            !view-mode))))))
+          (if relations-open?
+            (RelationExplorer kg-bump user-id source preds !selected-id !view-mode close-relations)
+            (GraphInspector kg-bump user-id navigate! !selected-id selected-id
+              !view-mode)))))))

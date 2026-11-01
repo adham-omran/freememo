@@ -3,7 +3,7 @@
    Graphviz sfdp, cache the positioned render payload per (user, scope), and
    serve it to freememo.graph-page.
 
-   Node = a kg_entity in ≥1 approved entity→entity fact. Edge = such a fact,
+   Overview nodes have an approved entity→entity fact. A selected concept can stand alone. Edge = such a fact,
    labeled by predicate. Literal-object facts are attributes, surfaced only in
    the side panel (db/kg-entity-card) — never graph edges.
 
@@ -12,11 +12,12 @@
    packs components and distributes leaf fans. Positions are raw Graphviz points.
    The client camera fits them, so the server does no normalization."
   (:require [freememo.db :as db]
+            [freememo.graph-queries :as queries]
             [clojure.string :as str]
             [taoensso.telemere :as tel]))
 
 (def ^:private sfdp-bin "sfdp")
-(def ^:private layout-revision 2)
+(def ^:private layout-revision 3)
 
 ;; prism0 runs only Prism's scaling phase. It does not run the costly iterative
 ;; overlap pass that took about 90 seconds on a 5,000-node graph. The pack margin
@@ -129,7 +130,7 @@
             "kg-graph sfdp: failed. See :stderr for the cause")
           (throw t))))))
 
-(defn compute-payload
+(defn elements->payload
   "Assemble + lay out the edges-only graph for `user-id`.
    Post: wire-ready
      {:nodes      [[id label degree x y] …]
@@ -137,10 +138,10 @@
       :predicates [[pred-id label] …]     ; index = pred-idx above
       :docs       [[topic-id title] …]
       :layout-revision <integer>}
-   Isolated nodes cannot occur (edges-only). Empty graph → empty vectors."
-  [user-id]
+   A selected concept can have no edges. Empty graph → empty vectors."
+  [user-id elements]
   (let [t0 (System/currentTimeMillis)
-        {:keys [nodes edges predicates docs]} (db/kg-graph-elements user-id)
+        {:keys [nodes edges predicates docs]} elements
         _ (tel/log! {:level :info :id ::compute.elements
                      :data {:user-id user-id :nodes (count nodes) :edges (count edges)
                             :predicates (count predicates) :docs (count docs)
@@ -156,7 +157,7 @@
                                 (let [[x y] (get pos id [0.0 0.0])]
                                   [id label (get degree id 0) x y]))
                           nodes)
-                 :edges (mapv (fn [{:keys [s t p topic]}] [s t (get pred-idx p) topic]) edges)
+                 :edges (mapv (fn [{:keys [s t p topic id]}] [s t (get pred-idx p) topic id]) edges)
                  :predicates (mapv (fn [{:keys [id label]}] [id label]) predicates)
                  :docs (mapv (fn [{:keys [id title]}] [id title]) docs)
                  :layout-revision layout-revision}]
@@ -166,6 +167,22 @@
                       :total-ms (- (System/currentTimeMillis) t0)}}
       "kg-graph compute: payload assembled")
     payload))
+
+(defn compute-payload [user-id]
+  (elements->payload user-id (db/kg-graph-elements user-id)))
+
+(defn get-bounded
+  "Cache one bounded page per user. Concept search reaches connections outside the current page."
+  [user-id version selection]
+  (let [cached (db/read-graph-layout user-id "bounded")]
+    (if (and (current-cache? cached version)
+          (= selection (get-in cached [:payload :selection])))
+      (:payload cached)
+      (let [elements (queries/elements user-id selection)
+            payload (assoc (elements->payload user-id elements)
+                      :budget (:budget elements) :selection selection)]
+        (db/write-graph-layout! user-id "bounded" version payload)
+        payload))))
 
 (defn get-or-compute
   "Serve the cached payload when its data version and layout revision match.

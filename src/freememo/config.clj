@@ -143,6 +143,41 @@
 (defn wayl-webhook-secret []
   (env-or-config "WAYL_WEBHOOK_SECRET" [:secrets :wayl-webhook-secret]))
 
+(defn- smtp-server
+  "The SMTP connection every sender shares, or nil when host, user or password
+   is unset. Post: {:host :port :user :pass}; :port defaults to 465."
+  []
+  (let [host (env-or-config "SMTP_HOST" [:secrets :smtp-host])
+        user (env-or-config "SMTP_USER" [:secrets :smtp-user])
+        pass (env-or-config "SMTP_PASS" [:secrets :smtp-pass])]
+    (when (and host user pass)
+      {:host host
+       :port (or (let [p (env-or-config "SMTP_PORT" [:secrets :smtp-port])]
+                   (if (string? p) (parse-long p) p))
+                 465)
+       :user user
+       :pass pass})))
+
+(def ^:private smtp-timeout-ms
+  "Connect, read and write timeouts. JavaMail's default for each is infinite, so
+   a server that accepts the connection and then says nothing would hang the
+   sender for the life of the process."
+  20000)
+
+(defn smtp-connection
+  "The postal connection map for an SMTP config from this namespace.
+   Pre:  smtp has :host :port :user :pass.
+   Post: implicit TLS on port 465, STARTTLS on any other port, and every socket
+         operation bounded by `smtp-timeout-ms`. Postal copies each key to
+         mail.smtp.<key> and mail.smtps.<key>."
+  [{:keys [host port user pass]}]
+  {:host host :port port :user user :pass pass
+   :ssl (= 465 port)
+   :tls (not= 465 port)
+   :connectiontimeout smtp-timeout-ms
+   :timeout smtp-timeout-ms
+   :writetimeout smtp-timeout-ms})
+
 (defn smtp-config
   "SMTP settings for the billing-failure alert email, or nil when not configured.
    Pre:  config.edn :secrets and/or SMTP_* / ALERT_* env vars (env wins per key).
@@ -151,19 +186,38 @@
    Requires host, user, pass and alert-to; :port defaults to 465 (implicit TLS),
    :from defaults to :user."
   []
-  (let [host (env-or-config "SMTP_HOST" [:secrets :smtp-host])
-        user (env-or-config "SMTP_USER" [:secrets :smtp-user])
-        pass (env-or-config "SMTP_PASS" [:secrets :smtp-pass])
-        to   (env-or-config "ALERT_TO"  [:secrets :alert-to])]
-    (when (and host user pass to)
-      {:host host
-       :port (or (let [p (env-or-config "SMTP_PORT" [:secrets :smtp-port])]
-                   (if (string? p) (parse-long p) p))
-                 465)
-       :user user
-       :pass pass
-       :from (or (env-or-config "ALERT_FROM" [:secrets :alert-from]) user)
-       :to   to})))
+  (let [server (smtp-server)
+        to     (env-or-config "ALERT_TO" [:secrets :alert-to])]
+    (when (and server to)
+      (assoc server
+        :from (or (env-or-config "ALERT_FROM" [:secrets :alert-from]) (:user server))
+        :to   to))))
+
+(defn- receipts-enabled?
+  "True only where RECEIPTS_ENABLED is \"true\". Nothing in config.edn turns it
+   on: dev and a local prod run read the same config.edn, SMTP credentials
+   included, and a database restored from production would have them mail real
+   buyers. docker-compose.prod.yml sets it for the two app colors alone."
+  []
+  (= "true" (some-> (System/getenv "RECEIPTS_ENABLED") str/trim str/lower-case)))
+
+(defn receipt-mail-config
+  "SMTP settings for payment receipts, or nil when receipts are off.
+   Pre:  RECEIPTS_ENABLED=true; the same SMTP_* keys as `smtp-config`; optional
+         RECEIPT_FROM, RECEIPT_COPY_TO and RECEIPT_SITE (env wins per key).
+   Post: nil (receipts off, the default everywhere but production), or
+         {:host :port :user :pass :from :copy-to :site}. :from defaults to
+         \"FreeMemo <user>\", which is a valid address only when the SMTP user
+         is one; a deployment whose login is not an address sets RECEIPT_FROM.
+         :copy-to and :site are nil when unset. ALERT_TO is not required: a
+         deployment can mail receipts with alerting off."
+  []
+  (when-let [server (when (receipts-enabled?) (smtp-server))]
+    (assoc server
+      :from    (or (env-or-config "RECEIPT_FROM" [:secrets :receipt-from])
+                   (str "FreeMemo <" (:user server) ">"))
+      :copy-to (env-or-config "RECEIPT_COPY_TO" [:secrets :receipt-copy-to])
+      :site    (env-or-config "RECEIPT_SITE" [:deployment :site]))))
 
 ;; ── Prod default model (set at boot by src-prod/prod.cljc) ──
 ;;
@@ -251,6 +305,12 @@
   "Top-up amounts in IQD shown as buttons. Empty vector when unconfigured."
   []
   (:presets (credits-config) []))
+
+(defn presets-usd
+  "Top-up amounts in whole USD, shown to every country but Iraq. Empty vector
+   when unconfigured."
+  []
+  (:presets-usd (credits-config) []))
 
 (defn signup-grant
   "One-time IQD grant for new users. 0 when unconfigured."

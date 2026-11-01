@@ -16,7 +16,8 @@
    (extern-less) methods.
 
    ctx = {:renderer <Sigma> :graph <graphology.Graph> :ui <atom>
-          :stop-theme-colours! <0-arg fn> and optional minimap functions}.
+          :stop-theme-colours! <0-arg fn> :stop-container-size! <0-arg fn>
+          and optional minimap functions}.
    :stop-theme-colours! detaches the theme listeners that keep canvas-drawn
    labels and hover chrome readable — destroy! owns calling it; nothing else may."
   (:require [clojure.string :as str]
@@ -41,16 +42,15 @@
 
 (defn- payload-model
   [payload]
-  (mapv (fn [[i [s t pidx topic]]]
-          {:id (str i) :source (str s) :target (str t)
+  (mapv (fn [[i [s t pidx topic fact-id]]]
+          {:id (str (or fact-id i)) :source (str s) :target (str t)
            :pred pidx :topic topic})
     (map-indexed vector (:edges payload))))
 
 (defn- build-graphology
   "payload {:nodes [[id label degree x y]…] :edges [[s t pred-idx topic]…]} →
    a directed multigraph with fixed positions and degree-scaled sizes.
-   Edge key = the edge's index in payload, so predicate/source filters address
-   edges by key. Endpoint-guarded so a malformed edge cannot throw."
+   Edge keys use durable fact IDs. Older cached payloads use their row index. Endpoint-guarded so a malformed edge cannot throw."
   [Graph payload]
   (let [^js g (new Graph #js {:type "directed" :multi true})
         predicate-labels (mapv second (:predicates payload))]
@@ -60,10 +60,10 @@
              :x x :y y
              :overviewX x :overviewY y
              :size (+ 3 (* 1.4 (js/Math.sqrt (max 1 (or degree 1)))))}))
-    (doseq [[i [s t pidx topic]] (map-indexed vector (:edges payload))]
+    (doseq [[i [s t pidx topic fact-id]] (map-indexed vector (:edges payload))]
       (let [sk (str s) tk (str t)]
         (when (and (.hasNode g sk) (.hasNode g tk))
-          (.addDirectedEdgeWithKey g (str i) sk tk
+          (.addDirectedEdgeWithKey g (str (or fact-id i)) sk tk
             #js {:pred pidx :topic topic
                  :type "arrow"
                  :label (str (get predicate-labels pidx ""))}))))
@@ -73,12 +73,13 @@
   "Apply scope filters, then the k-core and selected view. Store JS sets for
    constant-time reducer lookups. Return the new visible counts."
   [!ui]
-  (let [{:keys [model source pred-set min-degree view-mode selected depth]} @!ui
+  (let [{:keys [model source pred-set min-degree view-mode selected depth standalone-node-ids]} @!ui
         {:keys [node-ids edge-ids]} (graph-state/visible-subgraph
                                      model {:source source :pred-set pred-set
                                             :min-degree min-degree
                                             :view-mode view-mode
-                                            :selected selected :depth depth})
+                                            :selected selected :depth depth
+                                            :standalone-node-ids standalone-node-ids})
         vnodes (js/Set.)
         vedges (js/Set.)
         counts {:nodes (count node-ids) :edges (count edge-ids)}]
@@ -519,6 +520,21 @@
                 (when (= (.-parentNode canvas) container)
                   (.removeChild container canvas)))})))
 
+(defn- track-container-size! [^js renderer ^js container]
+  (let [!alive? (atom true)
+        !size (atom [(.-clientWidth container) (.-clientHeight container)])
+        ^js observer (when (exists? js/ResizeObserver)
+                       (js/ResizeObserver.
+                         (fn [_]
+                           (let [size [(.-clientWidth container) (.-clientHeight container)]]
+                             (when (and @!alive? (every? pos? size) (not= size @!size))
+                               (reset! !size size)
+                               (.scheduleRefresh renderer))))))]
+    (when observer (.observe observer container))
+    (fn []
+      (reset! !alive? false)
+      (when observer (.disconnect observer)))))
+
 (defn init!
   "Create a sigma renderer over `container` for `payload`. Wires clickNode →
    (on-select entity-id-int), clickStage → (on-select nil), and hover
@@ -539,6 +555,7 @@
                        :view-mode :overview :depth 1
                        :vnodes nil :vedges nil
                        :model (payload-model payload)
+                       :standalone-node-ids (into #{} (keep (fn [[id _ degree]] (when (zero? degree) (str id)))) (:nodes payload))
                        :counts {:nodes 0 :edges 0}
                        :on-select on-select
                        :on-counts (:on-counts opts)
@@ -559,8 +576,10 @@
                                 :nodeReducer (node-reducer g !ui)
                                 :edgeReducer (edge-reducer g !ui)})
             stop-theme-colours! (track-theme-colours! renderer container !ui)
+            stop-container-size! (track-container-size! renderer container)
             base-ctx {:renderer renderer :graph g :ui !ui
-                      :stop-theme-colours! stop-theme-colours!}
+                      :stop-theme-colours! stop-theme-colours!
+                      :stop-container-size! stop-container-size!}
             hop-rings (start-hop-rings! renderer g !ui)
             minimap (when-let [minimap-container (:minimap-container opts)]
                       (start-minimap! base-ctx minimap-container))
@@ -673,8 +692,9 @@
         (:nodes payload)))))
 
 (defn destroy!
-  "Stop custom drawing and theme listeners, then kill the renderer."
+  "Stop resize, drawing, and theme listeners, then kill the renderer."
   [ctx]
+  (when-let [stop! (:stop-container-size! ctx)] (stop!))
   (when-let [stop! (:stop-minimap! ctx)] (stop!))
   (when-let [stop! (:stop-hop-rings! ctx)] (stop!))
   (when-let [stop! (:stop-theme-colours! ctx)] (stop!))

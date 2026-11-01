@@ -552,12 +552,23 @@
                        :when #{:viewer} :views #{}}
      :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
                               :when #{:viewer} :views #{}}
+     ;; Opens the Export cards dialog for the topic on screen and its
+     ;; descendants (plans/card-export-csv-tsv.md §6.3). Writes nothing. The
+     ;; preparer reads the topic DocumentMainColumn publishes.
+     :export-topic-cards {:label "Export cards…" :class :query :exec :client
+                          :when #{:viewer} :views #{}}
      ;; One settings row per document, read once at open and never re-queried,
      ;; so :views stays empty — the same reasoning as :toggle-focus-reader.
      ;; :when is the tab; command-bus's preparer narrows it to documents with a
      ;; source pane (plans/editor-pane-toggle.md §4).
      :toggle-editor-pane {:label "Toggle Editor pane" :class :query :exec :client
                           :when #{:viewer} :views #{}}
+     ;; Opens the bibliography card the toolbar's book icon shows on hover
+     ;; (freememo.bibliography-peek). The trigger publishes the fn only while
+     ;; the document has a citation, so the preparer hides the command on a
+     ;; document with none.
+     :peek-bibliography {:label "Show bibliography" :class :query :exec :client
+                         :when #{:viewer} :views #{} :bind "meta+shift+b"}
      ;; Three components publish this invoker, and exactly one is ever mounted:
      ;; card-modals/EditCardModal, occlusion-modal (edit mode) and the score
      ;; toolbar. :when is tab-scoped and cannot say "a card editor is open", so
@@ -660,6 +671,9 @@
                                  :table #{:topics :settings} :views #{}}
      :open-document-options {:label "Document options…" :class :nav
                              :target :topic :target-if #{:root} :menu [5 1]}
+     ;; The same dialog as :export-topic-cards, for a right-clicked topic.
+     :export-cards-for-topic {:label "Export topic cards…" :menu-label "Export cards…"
+                              :class :query :target :topic :menu [5 2]}
      :delete-topic      {:label "Delete topic…" :menu-label "Delete…" :class :mutation
                          :target :topic :arity :many :target-if #{:deletable}
                          :menu [9 1] :danger? true

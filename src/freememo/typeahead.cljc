@@ -12,7 +12,8 @@
    [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [missionary.core :as m]))
 
 (def ^:private row-height 30)
@@ -74,7 +75,7 @@
    Pre:  options is non-empty; every option has a display label.
    Post: only the visible window of rows mounts. Transfer and filtering costs
          depend on the supplied option count."
-  [options active-idx on-pick!]
+  [options active-idx on-pick! reset-key]
   (e/client
     (let [n (count options)
           rh (if (some option-description options) described-row-height row-height)]
@@ -86,7 +87,7 @@
                             :max-height "240px" :overflow-y "auto"
                             :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
                             :--row-height (str rh "px")}})
-        (let [[offset limit] (Scroll-window rh n dom/node {:overquery-factor 2})]
+        (let [[offset limit] (Scroll-window rh n dom/node {:overquery-factor 1.5 :reset-key reset-key})]
           (dom/props {:style {:--count n :--grid-cols "1fr"}})
           ;; Keep the keyboard-active row on screen (case forces the call —
           ;; a bare unused-value statement would be work-skipped).
@@ -101,9 +102,8 @@
                   (dom/tr
                     (dom/props {:style {:--order i}})
                     (dom/td
-                      (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
-                                          :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
-                                          :background (when (= i active-idx) "var(--color-highlight)")}})
+                      (dom/props {:class (str "typeahead-option-cell"
+                                       (when (= i active-idx) " is-active"))})
                       (tooltip/Tooltip! label)
                       (dom/div (dom/props {:class "typeahead-option-label"}) (dom/text label))
                       (when description
@@ -194,6 +194,13 @@
                             (reset! !active-idx -1)
                             (when !request
                               (reset! !request {:query "" :id (random-uuid)}))) nil)
+          (dom/On "click"
+            (fn [_]
+              (when-not @!open?
+                (reset! !open? true)
+                (reset! !active-idx -1)
+                (when !request
+                  (reset! !request {:query (or @!search "") :id (random-uuid)})))) nil)
           ;; Emptying the field and leaving is how the selection is cleared. Other
           ;; uncommitted text is dropped: the atom holds ids, so half-typed labels
           ;; have nothing to write, and guessing a match is what the id-keying
@@ -205,10 +212,11 @@
           ;; Typing filters only — the selection changes on definitive commit, so
           ;; consumers reacting to !atom (URL sync, server queries) see one change
           ;; per selection instead of one per keystroke.
-          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v)
-              (edit! v)
-              (reset! !active-idx -1)))
+          (dom/On "input"
+            (fn [event]
+              (edit! (-> event .-target .-value))
+              (reset! !open? true)
+              (reset! !active-idx -1)) nil)
           (dom/On "keydown"
             (fn [e]
               ;; Arrow keys guard on (pos? n): the dropdown can be closed while
@@ -249,7 +257,7 @@
                 (when ?!committed (reset! ?!committed id)))
               (edit! nil)
               (reset! !open? false)
-              (reset! !active-idx -1))))))))
+              (reset! !active-idx -1)) search))))))
 
 (e/defn Typeahead
   "Select an ID from a local option collection. Keep small static domains here."
@@ -327,11 +335,11 @@
           ;; so there is nothing uncommitted to discard.
           (dom/On "blur" (fn [_] (reset! !open? false)
                            (reset! !active-idx -1)) nil)
-          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v)
-              (reset! !atom v)
+          (dom/On "input"
+            (fn [event]
+              (reset! !atom (-> event .-target .-value))
               (reset! !open? true)
-              (reset! !active-idx -1)))
+              (reset! !active-idx -1)) nil)
           (dom/On "keydown"
             (fn [e]
               (let [key (.-key e)
@@ -357,4 +365,4 @@
             (fn [i]
               (reset! !atom (nth filtered i))
               (reset! !open? false)
-              (reset! !active-idx -1))))))))
+              (reset! !active-idx -1)) value))))))
