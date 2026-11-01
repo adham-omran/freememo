@@ -18,6 +18,7 @@
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
+   [freememo.bibliography-peek :refer [BibliographyPeekOverflowItem]]
    [freememo.document-options :refer [DocumentOptionsTrigger]]
    [freememo.document-options-targets :as doc-options-targets]
    [freememo.transcribe-button :refer [TranscribeButton]]
@@ -91,7 +92,10 @@
         (binding [dctx/bib-topic-id biblio-target-id
                   dctx/citation nil dctx/page-info nil
                   dctx/variant :overflow]
-          (DocumentMetaGroup)))
+          (DocumentMetaGroup))
+        ;; The inline trigger is hidden at this tier; ⌘⇧B and this item open
+        ;; its card below the toolbar.
+        (BibliographyPeekOverflowItem #(reset! !overflow-open false)))
 
       ;; Separator between settings/context group and action buttons
       (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))

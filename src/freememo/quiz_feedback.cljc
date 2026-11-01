@@ -224,11 +224,14 @@
 (e/defn QuizFeedback
   "Graded result: verdict, explanation, reference + user answer with entity
    mentions linked (matched keywords highlighted), missed facts with
-   provenance — every entity click opens the concept popover."
+   provenance — every entity click opens the concept popover. A self-rated
+   review (no verdict) passes its :rating and shows that as its badge."
   [result user-answer entities !entity-card navigate-source!]
   (e/client
-    (let [{:keys [verdict explanation reference-answer matched-keywords missed-facts]} result
-          [label color] (get verdict-badge verdict ["?" "inherit"])]
+    (let [{:keys [verdict rating explanation reference-answer matched-keywords
+                  missed-facts]} result
+          ;; A self-rated review has no verdict, so it shows its rating instead.
+          [label color] (grade-badge verdict rating)]
       (dom/div
         (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "8px"
                             :padding "12px 16px" :margin-top "12px"}})

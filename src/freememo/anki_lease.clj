@@ -130,14 +130,16 @@
    `root-id`, over that topic and its descendants.
 
    Pre : none. A dead driver's expired lease is replaced, not waited for.
+         `activity-floor` is opaque here: the lease keeps it for `owned-run`.
    Post: `{:run-id s}` with the lease published, the canceller installed and the
-         previous run's error cleared — in that order, so the reporter's nudge
-         sees every atom it needs; or `:busy` when a live lease exists, with
+         previous run's error and summary cleared — in that order, so the
+         reporter's nudge sees every atom it needs; or `:busy` when a live lease exists, with
          nothing changed.
    Invariant: at most one live lease per user. The compare-and-set, not a
          prior read, is what arbitrates two tabs clicking at once."
-  ([user-id] (claim! user-id nil))
-  ([user-id root-id]
+  ([user-id] (claim! user-id nil nil))
+  ([user-id root-id] (claim! user-id root-id nil))
+  ([user-id root-id activity-floor]
    (let [a (lease-atom user-id)
          run-id (str (random-uuid))
          k (subtree/work-key root-id)]
@@ -147,7 +149,8 @@
          (if (live? (some-> (entry old) val) now)
            :busy
            (let [lease {:run-id run-id :root-id root-id :phase "scanning"
-                        :done nil :total nil :heartbeat-at now :cancel? false}]
+                        :done nil :total nil :heartbeat-at now :cancel? false
+                        :activity-floor activity-floor}]
              ;; `{k lease}`, not `assoc`: an expired lease under the OTHER key
              ;; (a dead branch run, say) must not survive as a second entry.
              (if (compare-and-set! a old {k lease})
@@ -155,6 +158,7 @@
                  (reset! (us/get-atom user-id :anki-run-cancellers)
                    {k (fn [] (request-cancel! user-id run-id))})
                  (swap! (us/get-atom user-id :anki-run-errors) dissoc k)
+                 (swap! (us/get-atom user-id :anki-run-results) dissoc k)
                  (us/work-started! user-id)
                  {:run-id run-id})
                (recur)))))))))
@@ -184,28 +188,40 @@
     (if (:cancel? lease) :cancel :continue)
     :not-owner))
 
+(defn owned-run
+  "`{:work-key k :activity-floor f}` for `run-id`'s lease — `k` is \"collection\"
+   or \"branch-<id>\", `f` what `claim!` was handed — or nil when `run-id` does
+   not own the lease."
+  [user-id run-id]
+  (when-some [[k lease] (entry @(lease-atom user-id))]
+    (when (= run-id (:run-id lease))
+      {:work-key k :activity-floor (:activity-floor lease)})))
+
 (defn release!
   "End `run-id`'s lease.
 
    Post: when `run-id` owns the lease, `error` (when non-nil) is recorded for
-         the reporter's `:error-fn`, then the canceller and the lease are
-         removed — error first, so the reporter never sees the work gone with
-         its outcome unwritten. Returns :released, or :not-owner with nothing
-         changed."
-  [user-id run-id error]
-  (if-some [[k lease] (entry @(lease-atom user-id))]
-    (if (= run-id (:run-id lease))
-      (do
-        (when error
-          (swap! (us/get-atom user-id :anki-run-errors) assoc k error))
-        (swap! (us/get-atom user-id :anki-run-cancellers) dissoc k)
-        (let [a (lease-atom user-id)]
-          (loop []
-            (let [old @a]
-              (if (= run-id (:run-id (get old k)))
-                (if (compare-and-set! a old (dissoc old k))
-                  :released
-                  (recur))
-                :not-owner)))))
-      :not-owner)
-    :not-owner))
+         the reporter's `:error-fn` and `summary` (when non-nil) for its
+         `:summary-fn`, then the canceller and the lease are removed — outcome
+         first, so the reporter never sees the work gone with its outcome
+         unwritten. Returns :released, or :not-owner with nothing changed."
+  ([user-id run-id error] (release! user-id run-id error nil))
+  ([user-id run-id error summary]
+   (if-some [[k lease] (entry @(lease-atom user-id))]
+     (if (= run-id (:run-id lease))
+       (do
+         (when error
+           (swap! (us/get-atom user-id :anki-run-errors) assoc k error))
+         (when summary
+           (swap! (us/get-atom user-id :anki-run-results) assoc k summary))
+         (swap! (us/get-atom user-id :anki-run-cancellers) dissoc k)
+         (let [a (lease-atom user-id)]
+           (loop []
+             (let [old @a]
+               (if (= run-id (:run-id (get old k)))
+                 (if (compare-and-set! a old (dissoc old k))
+                   :released
+                   (recur))
+                 :not-owner)))))
+       :not-owner)
+     :not-owner)))

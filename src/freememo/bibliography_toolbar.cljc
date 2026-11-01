@@ -10,6 +10,7 @@
    [freememo.doc-context :as dctx]
    [freememo.command-bus :as bus]
    [freememo.done-toggle :refer [DoneToggleFace]]
+   [freememo.bibliography-peek :refer [BibliographyPeek]]
    [freememo.schedule :as sched]
    [freememo.schedule-forecast :as fc]
    [freememo.client-state :as cs]
@@ -168,16 +169,10 @@
       ;; Document done toggle — PDF root and score only.
       (DocumentDoneToggle)
 
-      ;; Citation — inline only; first element to collapse (variable width).
+      ;; Citation — inline only. Hover peeks at the whole source, a click edits
+      ;; it; the text beside the icon is the first thing to collapse.
       (when (and inline? citation)
-        (dom/span
-          (dom/props {:class "toolbar-collapse-citation"
-                      :style {:font-size "12px" :font-style "italic"
-                              :color "var(--color-text-hint)" :max-width "240px"
-                              :overflow "hidden" :text-overflow "ellipsis"
-                              :white-space "nowrap"}})
-          (tooltip/Tooltip! citation)
-          (dom/text citation)))
+        (BibliographyPeek))
 
       ;; Page-progress X/Y — inline only, PDF only. The capsule styling moved
       ;; to `.toolbar-badge` in index.css so the pace badge beside it cannot

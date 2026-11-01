@@ -205,6 +205,16 @@
       (bump! user-id))
     :done))
 
+(def summary-max-chars
+  "Longest `summary` stored. A summary is one sentence for one panel row; the
+   cap guards against a future type passing something unbounded."
+  500)
+
+(defn- bounded-summary [summary]
+  (when (some? summary)
+    (let [s (str summary)]
+      (if (> (count s) summary-max-chars) (subs s 0 summary-max-chars) s))))
+
 (defn terminate!
   "End an activity with `outcome`, unless it has already ended.
 
@@ -216,16 +226,17 @@
          a staleness promoter cannot overwrite a 'success' that landed
          concurrently with its sweep. This is what makes lazy promotion safe to
          run from a read path."
-  [user-id activity-id outcome {:keys [error done total]}]
+  [user-id activity-id outcome {:keys [error summary done total]}]
   {:pre [(contains? terminal-outcomes outcome) (progress-ok? done total)]}
   (let [row (jdbc/execute-one! db/ds
               ["UPDATE activities
-                   SET outcome = ?, error = ?, terminated_at = now(), updated_at = now(),
+                   SET outcome = ?, error = ?, summary = ?,
+                       terminated_at = now(), updated_at = now(),
                        done = COALESCE(?, done), total = COALESCE(?, total),
                        cancellable = FALSE, unrecoverable = FALSE
                  WHERE id = ? AND user_id = ? AND terminated_at IS NULL
                 RETURNING id, type"
-               outcome error done total activity-id user-id]
+               outcome error (bounded-summary summary) done total activity-id user-id]
               {:builder-fn rs/as-unqualified-maps})]
     (when row
       (tel/log! {:level :info :id ::activity-terminated
@@ -234,6 +245,61 @@
         "activity terminated")
       (bump! user-id))
     :done))
+
+(defn newest-ended-row-id
+  "The id of the newest ENDED row for one piece of work, or 0 when there is none.
+
+   An owner reads this before it publishes new work, and hands it back to
+   `record-summary!`. Every row with a greater id is then the new work's own: a
+   row still in flight at that moment has a greater id than every ended row,
+   because only one row per work key is in flight at a time, and the new work
+   adopts it.
+
+   `type` is the registry key or the string `activities.type` holds."
+  [user-id type work-key]
+  (:id (jdbc/execute-one! db/ds
+         ["SELECT COALESCE(max(id), 0) AS id FROM activities
+            WHERE user_id = ? AND type = ? AND work_key = ?
+              AND terminated_at IS NOT NULL"
+          user-id (name type) work-key]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn record-summary!
+  "Add `summary` to the row of one run, once that row has ended.
+
+   For an owner whose outcome is written before its result is known. A Cancel
+   terminates the row at once (`cancel!`), and the run reaches its own report
+   only after it drains its last batch, so `terminate!`, first writer wins,
+   cannot carry the text.
+
+   Pre : `type` and `work-key` name the work as `start!` received them;
+         `after-row-id` is `newest-ended-row-id`'s answer, read before the run
+         was published; `summary` is non-blank (violation = caller bug).
+   Post: the newest row for (user-id, type, work-key) with an id above
+         `after-row-id` holds `summary` iff that row has ended and had no
+         summary. Returns :recorded, else :unchanged. A row still in flight is
+         left to `terminate!`, which writes the same text from the owner's
+         `:summary-fn`. A run that ended before any row was opened for it has
+         no row, and nothing is written — never an earlier run's row.
+   Invariant: never writes `outcome` or `error`, so the outcome's first writer
+         still wins."
+  [user-id type work-key after-row-id summary]
+  {:pre [(some? type) (not (str/blank? (name type))) (not (str/blank? work-key))
+         (nat-int? after-row-id) (not (str/blank? summary))]}
+  (let [row (jdbc/execute-one! db/ds
+              ["UPDATE activities SET summary = ?
+                 WHERE id = (SELECT id FROM activities
+                              WHERE user_id = ? AND type = ? AND work_key = ?
+                                AND id > ?
+                              ORDER BY id DESC LIMIT 1)
+                   AND terminated_at IS NOT NULL
+                   AND summary IS NULL
+                RETURNING id"
+               (bounded-summary summary) user-id (name type) work-key after-row-id]
+              {:builder-fn rs/as-unqualified-maps})]
+    (if row
+      (do (bump! user-id) :recorded)
+      :unchanged)))
 
 ;; ---------------------------------------------------------------------------
 ;; Reads. All `activities` SQL lives in this namespace, so the table's shape is
@@ -361,6 +427,7 @@
            :unrecoverable (boolean (if live (:unrecoverable live) (:unrecoverable r)))
            :outcome (:outcome r)
            :error (:error r)
+           :summary (:summary r)
            :subject-id (:subject_id r)
            :started-at (some-> (:started_at r) .toInstant .toEpochMilli)
            :terminated-at (some-> (:terminated_at r) .toInstant .toEpochMilli)}))
@@ -368,7 +435,7 @@
         ;; `work_key` is selected for the live flag read above, never sent to the
         ;; client — it is an owner's internal identity, not something to render.
         ["SELECT id, type, work_key, phase, done, total, cancellable, unrecoverable,
-                 outcome, error, subject_id, started_at, terminated_at
+                 outcome, error, summary, subject_id, started_at, terminated_at
             FROM activities
            WHERE user_id = ?
              AND (terminated_at IS NULL

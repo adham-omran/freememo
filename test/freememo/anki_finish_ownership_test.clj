@@ -46,5 +46,5 @@
           (is (= :not-owner (:verdict (recon/finish-run! uid run-id {}))))
           (is (empty? @!calls))))
       (finally
-        (doseq [k [:anki-run :anki-run-cancellers :anki-run-errors]]
+        (doseq [k [:anki-run :anki-run-cancellers :anki-run-errors :anki-run-results]]
           (reset! (us/get-atom uid k) {}))))))

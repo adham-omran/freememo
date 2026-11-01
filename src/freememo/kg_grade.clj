@@ -68,22 +68,54 @@
   "Shared failure path for both graders: log it, tell the learner, return the failure
    value. The session flows persist the typed answer before grading, so Submit works
    again; the Review flow persists nothing, and this toast is its only recovery path.
+
+   A credit refusal is not a fault, and Submit cannot succeed again until the balance
+   is topped up, so its toast says that instead. `toast-refusal?` false leaves the
+   refusal to the caller: the Review flow answers it inline with the self-rating bar,
+   and a toast on every turn of a sitting would be noise.
    Post: {:success false :error msg :error-type kw?}."
-  [user-id log-id e]
-  (if (llm/insufficient-credits? e)
-    (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}
-      "Grading refused: out of credits")
-    (tel/error! {:id log-id} e))
-  (toasts/push! user-id
-    {:level :error
-     :message (str "Grading failed: " (ex-message (llm/root-cause e))
-                " — your answer was kept, try Submit again.")
-     :actions (if (llm/insufficient-credits? e)
-                [{:label "Top up credits" :nav :settings}]
-                [])})
-  {:success false
-   :error (ex-message (llm/root-cause e))
-   :error-type (when (llm/insufficient-credits? e) :insufficient-credits)})
+  [user-id log-id e toast-refusal?]
+  (let [refused? (llm/insufficient-credits? e)]
+    (if refused?
+      (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}
+        "Grading refused: out of credits")
+      (tel/error! {:id log-id} e))
+    (cond
+      (not refused?)
+      (toasts/push! user-id
+        {:level :error
+         :message (str "Grading failed: " (ex-message (llm/root-cause e))
+                    " — your answer was kept, try Submit again.")
+         :actions []})
+
+      toast-refusal?
+      (toasts/push! user-id
+        {:level :error
+         :message "AI grading needs credits, and your balance is empty. Your answer was kept."
+         :actions [{:label "Top up credits" :nav :settings}]}))
+    {:success false
+     :error (ex-message (llm/root-cause e))
+     :error-type (when refused? :insufficient-credits)}))
+
+(defn ai-grading-available?
+  "Whether a grading call would pass the credit gate right now. Read-only: the gate
+   only reads the balance and the pricing config. Self-host always passes.
+   Post: boolean."
+  [user-id]
+  (boolean (:ok (credits/check-cost-billed-balance! user-id))))
+
+(defn card-grading-arm
+  "The arm a card turn renders. LLM grading needs the user's setting AND credits; with
+   the setting on and no credits the turn self-rates, as Anki does, rather than asking
+   for an answer it cannot grade. Reads only, so the stored setting is untouched and a
+   top-up returns the turn to LLM grading.
+   Post: {:llm-grading? bool :credits-out? bool}; :credits-out? is true only when the
+         setting asked for LLM grading and the credits refused it."
+  [user-id]
+  (let [wanted? (settings/card-quiz-llm-grading? user-id)
+        funded? (and wanted? (ai-grading-available? user-id))]
+    {:llm-grading? funded?
+     :credits-out? (and wanted? (not funded?))}))
 
 (defn grade-question
   "Grade one answer against its question's facts WITHOUT persisting anything —
@@ -93,52 +125,55 @@
    Post: {:success true :verdict str :explanation str :missed-fact-ids [int]
           :missed-facts [fact-map] :matched-keywords [str]
           :reference-answer str :keywords [str]} or
-         {:success false :error msg :error-type kw?}."
-  [user-id question-id user-answer]
-  (try
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
-          {:keys [facts keywords question reference-answer]}
-          (or (db/get-kg-question-for-session user-id question-id)
-              (throw (ex-info "Question not found" {})))
-          fact->row (fn [{:keys [id subject_label predicate_label
-                                 object_label object_literal]}]
-                      {:id id :s subject_label :p predicate_label
-                       :o (or object_label object_literal)})
-          ;; Sibling facts sharing predicate+object or subject+predicate:
-          ;; an answer the graph confirms must never be marked wrong just
-          ;; because the question was generated from a different fact.
-          also-true (db/kg-fact-alternates user-id (mapv :id facts))
-          payload (llm-json/write-prompt-input
-                    (cond-> {:question question
-                             :reference-answer reference-answer
-                             :facts (mapv fact->row facts)
-                             :keywords keywords
-                             :answer user-answer}
-                      (seq also-true)
-                      (assoc :also-true (mapv fact->row also-true))))
-          prompt (cards/load-prompt-template "kg-grade.md")
-          gctx {:feature :kg-grade :user-id user-id}
-          ;; unusable output is retried inside llm/chat!; :cost covers both attempts
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt payload
-                                         :grade :map gctx)
-          grade (validate-grade! parsed)
-          verdict (:verdict grade)
-          linked-ids (into #{} (map :id) facts)
-          missed (filterv linked-ids (:missed-fact-ids grade))
-          lexicon (into {} (map (juxt str/lower-case identity)) keywords)
-          matched (into []
-                    (comp (map str) (keep #(lexicon (str/lower-case %))) (distinct))
-                    (:matched-keywords grade))]
-      (credits/record-cost-charge! user-id :kg.grade (:id entry) cost tokens)
-      {:success true
-       :verdict verdict
-       :explanation (:explanation grade)
-       :missed-fact-ids missed
-       :missed-facts (filterv #(contains? (set missed) (:id %)) facts)
-       :matched-keywords matched
-       :reference-answer reference-answer
-       :keywords keywords})
-    (catch Exception e (grade-failure! user-id ::grade-question e))))
+         {:success false :error msg :error-type kw?}.
+   `toast-refusal?` (default true) is grade-failure!'s, for a credit refusal only."
+  ([user-id question-id user-answer]
+   (grade-question user-id question-id user-answer true))
+  ([user-id question-id user-answer toast-refusal?]
+   (try
+     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
+           {:keys [facts keywords question reference-answer]}
+           (or (db/get-kg-question-for-session user-id question-id)
+               (throw (ex-info "Question not found" {})))
+           fact->row (fn [{:keys [id subject_label predicate_label
+                                  object_label object_literal]}]
+                       {:id id :s subject_label :p predicate_label
+                        :o (or object_label object_literal)})
+           ;; Sibling facts sharing predicate+object or subject+predicate:
+           ;; an answer the graph confirms must never be marked wrong just
+           ;; because the question was generated from a different fact.
+           also-true (db/kg-fact-alternates user-id (mapv :id facts))
+           payload (llm-json/write-prompt-input
+                     (cond-> {:question question
+                              :reference-answer reference-answer
+                              :facts (mapv fact->row facts)
+                              :keywords keywords
+                              :answer user-answer}
+                       (seq also-true)
+                       (assoc :also-true (mapv fact->row also-true))))
+           prompt (cards/load-prompt-template "kg-grade.md")
+           gctx {:feature :kg-grade :user-id user-id}
+           ;; unusable output is retried inside llm/chat!; :cost covers both attempts
+           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt payload
+                                          :grade :map gctx)
+           grade (validate-grade! parsed)
+           verdict (:verdict grade)
+           linked-ids (into #{} (map :id) facts)
+           missed (filterv linked-ids (:missed-fact-ids grade))
+           lexicon (into {} (map (juxt str/lower-case identity)) keywords)
+           matched (into []
+                     (comp (map str) (keep #(lexicon (str/lower-case %))) (distinct))
+                     (:matched-keywords grade))]
+       (credits/record-cost-charge! user-id :kg.grade (:id entry) cost tokens)
+       {:success true
+        :verdict verdict
+        :explanation (:explanation grade)
+        :missed-fact-ids missed
+        :missed-facts (filterv #(contains? (set missed) (:id %)) facts)
+        :matched-keywords matched
+        :reference-answer reference-answer
+        :keywords keywords})
+     (catch Exception e (grade-failure! user-id ::grade-question e toast-refusal?)))))
 
 (defn grade-card
   "Grade one answer to a card item against that card's own reference answer.
@@ -153,30 +188,33 @@
           :missed-fact-ids [] :missed-facts [] :matched-keywords []} or
          {:success false :error msg :error-type kw?}. The empty fact and keyword keys
          are present so one feedback shape serves both item types; :reference-answer
-         keeps its HTML so the caller can render formatting and math."
-  [user-id card-id ord user-answer]
-  (try
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
-          {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
-                                    (throw (ex-info "Card item not found" {})))
-          payload (llm-json/write-prompt-input
-                    {:prompt (text/strip-html prompt)
-                     :reference-answer (text/strip-html answer)
-                     :answer user-answer})
-          tmpl (or (cards/load-prompt-template "card-grade.md")
-                 (throw (ex-info "Failed to load card-grade prompt" {})))
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields tmpl payload
-                                         :grade :map
-                                         {:feature :card-grade :user-id user-id})
-          grade (validate-grade! parsed)
-          verdict (:verdict grade)]
-      (credits/record-cost-charge! user-id :cards.grade (:id entry) cost tokens)
-      {:success true
-       :verdict verdict
-       :explanation (:explanation grade)
-       :reference-answer answer
-       :missed-fact-ids [] :missed-facts [] :matched-keywords []})
-    (catch Exception e (grade-failure! user-id ::grade-card e))))
+         keeps its HTML so the caller can render formatting and math.
+   `toast-refusal?` (default true) is grade-failure!'s, for a credit refusal only."
+  ([user-id card-id ord user-answer]
+   (grade-card user-id card-id ord user-answer true))
+  ([user-id card-id ord user-answer toast-refusal?]
+   (try
+     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
+           {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
+                                     (throw (ex-info "Card item not found" {})))
+           payload (llm-json/write-prompt-input
+                     {:prompt (text/strip-html prompt)
+                      :reference-answer (text/strip-html answer)
+                      :answer user-answer})
+           tmpl (or (cards/load-prompt-template "card-grade.md")
+                  (throw (ex-info "Failed to load card-grade prompt" {})))
+           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields tmpl payload
+                                          :grade :map
+                                          {:feature :card-grade :user-id user-id})
+           grade (validate-grade! parsed)
+           verdict (:verdict grade)]
+       (credits/record-cost-charge! user-id :cards.grade (:id entry) cost tokens)
+       {:success true
+        :verdict verdict
+        :explanation (:explanation grade)
+        :reference-answer answer
+        :missed-fact-ids [] :missed-facts [] :matched-keywords []})
+     (catch Exception e (grade-failure! user-id ::grade-card e toast-refusal?)))))
 
 (defn grade-answer!
   "Record + grade one answer inside a session (quiz/exam). Persists the answer
@@ -218,6 +256,17 @@
            :message "Your answer was graded, but its schedule could not be saved — this review will come up again."})
         nil))))
 
+(defn- refusal-with-reference
+  "A failed grade, plus the item's reference answer when the failure was a credit
+   refusal. The learner has already committed an answer, so showing the reference now
+   gives nothing away — it is what they rate themselves against. Any other failure
+   passes through unchanged: Submit may work again, and the reference stays hidden.
+   `reference!` is called only on a refusal."
+  [res reference!]
+  (if (= :insufficient-credits (:error-type res))
+    (assoc res :reference-answer (reference!))
+    res))
+
 (defn review-question!
   "FSRS Review path (H2): grade session-lessly, then advance the question's FSRS
    schedule and append a kg_reviews row carrying the answer. Writes NO
@@ -230,11 +279,15 @@
          it is unavailable. It is untrusted — db/apply-fsrs-review! bounds it.
    Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>};
          :schedule is nil when grading failed (nothing written) OR when scheduling
-         failed (grade shown, no review row, schedule untouched)."
+         failed (grade shown, no review row, schedule untouched).
+   Post: a credit refusal toasts nothing and carries the question's
+         :reference-answer, so the turn can offer rate-question! in its place."
   [user-id question-id user-answer duration-ms]
-  (let [res (grade-question user-id question-id user-answer)]
+  (let [res (grade-question user-id question-id user-answer false)]
     (if-not (:success res)
-      {:result res :schedule nil}
+      {:result (refusal-with-reference res
+                 #(:reference-answer (db/get-kg-question-for-session user-id question-id)))
+       :schedule nil}
       {:result res
        :schedule (schedule-review! user-id [:question question-id]
                    (verdict->rating (:verdict res))
@@ -252,11 +305,15 @@
    Pre:  the card-quiz LLM setting is on (settings/card-quiz-llm-grading?) — the
          caller owns that check, since it also decides which UI arm to render.
    Pre:  `duration-ms` as in review-question!.
-   Post: {:result <grade-card map> :schedule <apply-fsrs-review! map|nil>}."
+   Post: {:result <grade-card map> :schedule <apply-fsrs-review! map|nil>}.
+   Post: a credit refusal toasts nothing and carries the card's :reference-answer
+         (HTML), so the turn can offer rate-card! in its place."
   [user-id card-id ord user-answer duration-ms]
-  (let [res (grade-card user-id card-id ord user-answer)]
+  (let [res (grade-card user-id card-id ord user-answer false)]
     (if-not (:success res)
-      {:result res :schedule nil}
+      {:result (refusal-with-reference res
+                 #(:answer (db/get-card-item user-id card-id ord)))
+       :schedule nil}
       {:result res
        :schedule (schedule-review! user-id [:card card-id ord]
                    (verdict->rating (:verdict res))
@@ -266,26 +323,47 @@
                     :duration-ms duration-ms
                     :grade-source "ai"})})))
 
-(defn rate-card!
-  "The self-rated card arm: no LLM call, no verdict — the learner's own rating IS the
-   grade. Records grade_source 'self', which is what tells this row apart from an
-   LLM-graded one and from a row written before the column existed.
+(defn- self-rate!
+  "Record the learner's own rating as the grade of one item: no LLM call, no verdict.
+   Records grade_source 'self', which is what tells this row apart from an LLM-graded
+   one and from a row written before the column existed.
    Pre:  rating ∈ #{1 2 3 4} (the caller renders exactly four buttons — any other
          value is a caller bug and is refused here rather than scheduled).
-   Pre:  `duration-ms` spans mount to RATING, so it includes the reveal — the same
-         interval Anki records for a card (question shown → answered), not the
-         post-reveal judging time alone.
+   Pre:  `user-answer` is what the learner typed before rating, or nil when the turn
+         asked for none.
    Post: {:result {:success true :rating n} :schedule <map|nil>}, or
          {:result {:success false …} :schedule nil} for a rating outside 1..4."
-  [user-id card-id ord rating duration-ms]
+  [user-id item-ref rating duration-ms user-answer]
   (if-not (#{1 2 3 4} rating)
-    (do (tel/error! {:id ::rate-card-bad-rating
-                     :data {:user-id user-id :card-id card-id :rating rating}}
+    (do (tel/error! {:id ::self-rate-bad-rating
+                     :data {:user-id user-id :item item-ref :rating rating}}
           (ex-info "Rating outside 1..4" {:rating rating}))
       {:result {:success false :error "Invalid rating"} :schedule nil})
     {:result {:success true :rating rating}
-     :schedule (schedule-review! user-id [:card card-id ord] rating
-                 {:grade-source "self" :duration-ms duration-ms})}))
+     :schedule (schedule-review! user-id item-ref rating
+                 (cond-> {:grade-source "self" :duration-ms duration-ms}
+                   (some? user-answer) (assoc :user-answer user-answer)))}))
+
+(defn rate-card!
+  "The self-rated card arm, and the fallback when a card's LLM grade is refused for
+   credits. See self-rate! for the contract.
+   Pre:  `duration-ms` spans mount to RATING, so it includes the reveal — the same
+         interval Anki records for a card (question shown → answered), not the
+         post-reveal judging time alone."
+  ([user-id card-id ord rating duration-ms]
+   (rate-card! user-id card-id ord rating duration-ms nil))
+  ([user-id card-id ord rating duration-ms user-answer]
+   (self-rate! user-id [:card card-id ord] rating duration-ms user-answer)))
+
+(defn rate-question!
+  "A question rated by the learner, offered when its LLM grade is refused for
+   credits. A question has no self-rating setting: AI grading is its normal arm, and
+   this exists so an empty balance does not stop the sitting.
+   Pre:  `duration-ms` spans mount to rating, as in rate-card!.
+   Post: see self-rate!. The row carries the typed answer, so the history shows what
+         the learner compared."
+  [user-id question-id rating duration-ms user-answer]
+  (self-rate! user-id [:question question-id] rating duration-ms user-answer))
 
 (defn grade-exam-session!
   "Grade every saved-but-ungraded answer of an exam sitting, then close the

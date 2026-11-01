@@ -563,6 +563,12 @@
      ;; source pane (plans/editor-pane-toggle.md §4).
      :toggle-editor-pane {:label "Toggle Editor pane" :class :query :exec :client
                           :when #{:viewer} :views #{}}
+     ;; Opens the bibliography card the toolbar's book icon shows on hover
+     ;; (freememo.bibliography-peek). The trigger publishes the fn only while
+     ;; the document has a citation, so the preparer hides the command on a
+     ;; document with none.
+     :peek-bibliography {:label "Show bibliography" :class :query :exec :client
+                         :when #{:viewer} :views #{} :bind "meta+shift+b"}
      ;; Three components publish this invoker, and exactly one is ever mounted:
      ;; card-modals/EditCardModal, occlusion-modal (edit mode) and the score
      ;; toolbar. :when is tab-scoped and cannot say "a card editor is open", so

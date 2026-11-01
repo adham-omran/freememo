@@ -10,7 +10,8 @@
             [freememo.math :as math]
             [freememo.page-pipeline :as pipeline]
             [freememo.table-lowering :as tl]
-            [freememo.url-validate :as url])
+            [freememo.url-validate :as url]
+            [freememo.youtube-url :as yt])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Element TextNode]))
 
@@ -333,6 +334,11 @@
       (cond
         (or (nil? url) (str/blank? url))
         {:success false :error "URL is required"}
+
+        ;; Before any request: every web-import path and the bibliography
+        ;; refetch reach the network only through this fn.
+        (yt/youtube-url? url)
+        {:success false :error yt/rejection-message}
 
         (not (url/safe-url? url))
         {:success false :error "URL not allowed (only public http/https addresses)"}
