@@ -9994,3 +9994,23 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
   .sync-conflict-row { grid-template-columns: 1fr; }
   .curriculum-material-actions { grid-column: 2; flex-wrap: wrap; }
 }
+
+/* KaTeX gate notice above the document editor (freememo.math-notice,
+   plans/katex-timeout-notice.md). The slot always mounts and adds no box,
+   so the notice is the editor host's flex item only while it shows. */
+.math-notice-slot { display: contents; }
+.math-notice {
+    flex: none;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 13px; line-height: 1.4;
+    color: var(--color-warning-dark);
+    background: var(--color-warning-bg);
+}
+.math-notice--ready {
+    color: var(--color-success-dark);
+    background: var(--color-success-tint);
+}

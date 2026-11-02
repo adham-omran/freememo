@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.loading :as loading]
+   [freememo.math-notice :refer [MathNotice]]
    [freememo.logging :as log]
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
@@ -372,6 +373,9 @@
                 (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
                                     :overflow "hidden"}
                             :data-role "editor-host"})
+                ;; Above the text, outside `.quill-editor-wrapper`: Quill owns
+                ;; that wrapper's children (plans/katex-timeout-notice.md 4.3.1).
+                (MathNotice static-content)
                 (binding [dctx/initial-html static-content]
                   (RichTextEditorComponent))
                 ;; Question pins on the text (plans/document-question-pins.md

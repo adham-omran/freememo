@@ -186,3 +186,61 @@
 (deftest t18-strip-html-decodes-entities-in-math
   (testing "strip-html decodes, so search matches the literal TeX the user typed"
     (is (= "\\(a < b\\)" (text/strip-html "<p>\\(a &lt; b\\)</p>")))))
+
+;; ---------------------------------------------------------------------------
+;; KaTeX gate outcome (plans/katex-timeout-notice.md 4.1)
+;; ---------------------------------------------------------------------------
+
+(deftest has-tex-screens-for-an-opening-delimiter
+  (is (true? (math/has-tex? "<p>\\(x\\)</p>")))
+  (is (false? (math/has-tex? "<p>x</p>")))
+  (is (false? (math/has-tex? nil))))
+
+(defn- run-events
+  "Fold gate events over a nil outcome, the way the gate does."
+  [& events]
+  (reduce (fn [o [event ms msg]] (math/advance-outcome o event ms msg)) nil events))
+
+(deftest advance-outcome-first-event-decides
+  (is (= {:status :ready :elapsed-ms 40 :message nil}
+         (run-events [:loaded 40 nil] [:timed-out 3000 nil])))
+  (is (= :failed (:status (run-events [:load-failed 90 "404"] [:timed-out 3000 nil]))))
+  (is (= :timeout (:status (run-events [:timed-out 3000 nil])))))
+
+(deftest advance-outcome-after-a-timeout
+  (is (= {:status :late :elapsed-ms 5100 :message nil}
+         (run-events [:timed-out 3000 nil] [:loaded 5100 nil])))
+  (is (= {:status :failed :elapsed-ms 8000 :message "network"}
+         (run-events [:timed-out 3000 nil] [:load-failed 8000 "network"]))))
+
+(deftest advance-outcome-terminal-states-do-not-move
+  (doseq [o [{:status :ready} {:status :failed} {:status :late}]
+          e [:loaded :load-failed :timed-out]]
+    (is (= o (math/advance-outcome o e 1 nil)) (str o " " e))))
+
+(deftest notice-for-each-outcome
+  (testing "no notice without math in the document, whatever the gate did"
+    (doseq [s [:timeout :failed :late]]
+      (is (nil? (math/notice-for {:status s} false)))))
+  (testing "no notice while pending or after a ready gate"
+    (is (nil? (math/notice-for nil true)))
+    (is (nil? (math/notice-for {:status :ready} true))))
+  (is (= {:tone :error
+          :text "Formulas are showing as code. The math library did not load in time."}
+         (math/notice-for {:status :timeout} true)))
+  (is (= {:tone :error
+          :text "Formulas are showing as code. The math library could not load."}
+         (math/notice-for {:status :failed} true)))
+  (is (= {:tone :ready
+          :text "The math library is ready. Reload to show the formulas."}
+         (math/notice-for {:status :late} true))))
+
+(deftest outcome-log-entry-each-outcome
+  (is (nil? (math/outcome-log-entry nil)))
+  (is (nil? (math/outcome-log-entry {:status :ready :elapsed-ms 40})))
+  (is (= [:math/katex-timeout "KaTeX not ready after 3000 ms"]
+         (math/outcome-log-entry {:status :timeout :elapsed-ms 3001})))
+  (is (= [:math/katex-failed "KaTeX load failed after 90 ms: 404"]
+         (math/outcome-log-entry {:status :failed :elapsed-ms 90 :message "404"})))
+  (is (= [:math/katex-late "KaTeX arrived after 5100 ms"]
+         (math/outcome-log-entry {:status :late :elapsed-ms 5100}))))
