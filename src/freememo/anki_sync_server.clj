@@ -521,7 +521,7 @@
           first-bundles (bundles-of (load-write-cards user-id card-ids))
           ;; A create needs a deck; an update does not. Reported once, before
           ;; anything is sent, because the alternative is one AnkiConnect refusal
-          ;; per card and a toast that names a count instead of a cause. The
+          ;; per card and a failure that names a count instead of a cause. The
           ;; modal gates its button on `helpers/pushable?` for the same reason —
           ;; a headless run has no button to gray out.
           deckless (filterv (fn [b]

@@ -40,7 +40,8 @@
    [freememo.db :as db]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
+   [freememo.activity :as activity]
+   [freememo.activity-registry :as registry]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
    [freememo.kg-dedup :as kg-dedup]
@@ -520,39 +521,47 @@
 ;; ---------------------------------------------------------------------------
 
 (defn distill-summary
-  "One sentence for the completion toast.
+  "One sentence for the run's Activity row: counts only.
 
    The skip makes \"0 facts added\" a normal and CONFUSING outcome: a re-run that
    read nothing because nothing changed is a success, and the old wording read as a
    failure with no reason given. So a run that extracted no pages leads with why.
 
-   Capped pages are named here as well as in the log and the Pages column, because
-   a toast is the one surface a user is certainly looking at when the run ends.
+   Pages that failed or were given up on are NOT here. The popover shows a summary
+   only to someone who opens it, so those go to `distill-failure-text` and the
+   banner strip.
 
    Pre : `result` is a successful `distill-document!` return.
    Post: a non-blank string."
-  [{:keys [facts pages skipped at-cap duplicates page-errors]}]
+  [{:keys [facts pages skipped duplicates]}]
   (let [n (or facts 0)
         parts (cond-> []
                 (pos? n) (conj (str n " fact" (when (not= 1 n) "s") " added"))
                 (and (zero? n) (zero? (or pages 0)) (pos? (or skipped 0)))
-                (conj (str "Nothing to do — all " skipped " page"
+                (conj (str "Nothing to do. All " skipped " page"
                         (when (not= 1 skipped) "s") " already extracted"))
                 (and (zero? n) (pos? (or pages 0)))
                 (conj (str "No new facts from " pages " page"
                         (when (not= 1 pages) "s")))
-                (pos? (or duplicates 0)) (conj (str duplicates " marked duplicate"))
-                (pos? (or page-errors 0)) (conj (str page-errors " page"
-                                                  (when (not= 1 page-errors) "s")
-                                                  " failed"))
-                (pos? (or at-cap 0)) (conj (str at-cap " page"
-                                             (when (not= 1 at-cap) "s")
-                                             " given up on after "
-                                             attempt-cap " tries")))]
+                (pos? (or duplicates 0)) (conj (str duplicates " marked duplicate")))]
     (if (seq parts)
       (str (str/join ", " parts)
-        (when (pos? n) " — browse Knowledge to curate"))
+        (when (pos? n) ". Browse Knowledge to curate"))
       "Nothing to extract")))
+
+(defn distill-failure-text
+  "The failed part of a successful run, or nil when every page was read.
+   Pre : `result` is a successful `distill-document!` return.
+   Post: a string naming the pages that failed and the pages given up on."
+  [{:keys [page-errors at-cap]}]
+  (let [parts (cond-> []
+                (pos? (or page-errors 0))
+                (conj (str page-errors " page" (when (not= 1 page-errors) "s") " failed"))
+                (pos? (or at-cap 0))
+                (conj (str at-cap " page" (when (not= 1 at-cap) "s")
+                        " given up on after " attempt-cap " tries")))]
+    (when (seq parts)
+      (str "Distilling facts: " (str/join ", " parts) "."))))
 
 (defonce distill-executor (Executors/newFixedThreadPool 2))
 
@@ -563,43 +572,56 @@
 (defn start-distill!
   "Submit a distill run for (uid, root-topic-id) on the bounded executor.
    No-op when one is already in flight for that document. Tracks progress in
-   the :distilling-docs set, a cancel fn in :distill-cancellers; completion
-   toasts + bumps :distill (:kg-mutations)."
+   the :distilling-docs set, a cancel fn in :distill-cancellers. The summary or
+   the error is kept for the Activity row before membership drops, and a
+   successful run bumps :distill (:kg-mutations). Pages that failed in a run
+   that otherwise succeeded go to the banner strip."
   [uid root-topic-id]
   (when-not (contains? @(us/get-atom uid :distilling-docs) root-topic-id)
+    (registry/clear-run! uid :distill-doc root-topic-id)
     (swap! (us/get-atom uid :distilling-docs) conj root-topic-id)
     (tel/log! {:level :info :id ::distill-started
                :data {:user-id uid :root root-topic-id}}
       "Distillation started")
-    (let [cancel-fn
+    (let [done! (fn []
+                  (swap! (us/get-atom uid :distill-cancellers) dissoc root-topic-id)
+                  (swap! (us/get-atom uid :distilling-docs) disj root-topic-id))
+          cancel-fn
           ((m/timeout
              (m/via distill-executor (distill-document! uid root-topic-id))
              distill-timeout-ms
              {:success false :error "Distillation timed out after 20 minutes"})
            (fn [result]
-             (swap! (us/get-atom uid :distill-cancellers) dissoc root-topic-id)
-             (swap! (us/get-atom uid :distilling-docs) disj root-topic-id)
+             ;; Kept BEFORE `done!`: the reporter closes the row with what it
+             ;; finds when it sees the work gone.
              (if (:success result)
-               (do (commands/bump! uid :distill)
-                 (toasts/push! uid
-                   {:level :success
-                    :message (distill-summary result)}))
-               (toasts/push! uid
-                 {:level :error
-                  :message (:error result)
-                  :actions (if (= :insufficient-credits (:error-type result))
-                             [{:label "Top up credits" :nav :settings}]
-                             [])})))
+               (registry/record-summary! uid :distill-doc root-topic-id
+                 (distill-summary result))
+               (registry/record-error! uid :distill-doc root-topic-id result))
+             (done!)
+             (when (:success result)
+               (commands/bump! uid :distill)
+               (when-some [text (distill-failure-text result)]
+                 (activity/record-failure! uid
+                   {:error text :what "Distill document" :subject-id root-topic-id
+                    :retry {:command :distill-doc
+                            :payload {:topic-id root-topic-id}}}))))
            (fn [e]
-             (swap! (us/get-atom uid :distill-cancellers) dissoc root-topic-id)
-             (swap! (us/get-atom uid :distilling-docs) disj root-topic-id)
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::distill-task} e)
-               (toasts/push! uid {:level :error :message (ex-message e)}))))]
+               (registry/record-error! uid :distill-doc root-topic-id
+                 (or (ex-message e) "Distillation failed")))
+             (done!)))]
       (swap! (us/get-atom uid :distill-cancellers) assoc root-topic-id cancel-fn)
       ;; After the canceller: discovery reads cancellability when it opens the row.
       (us/work-started! uid))
     nil))
+
+(activity/register-retry-handler! :distill-doc
+  (fn [user-id {:keys [topic-id]}]
+    (if (some? (db/get-topic-for-user user-id topic-id))
+      (do (start-distill! user-id topic-id) {:ok? true})
+      {:ok? false :error "That document is not available."})))
 
 (defn cancel-distill!
   "Cancel an in-flight distill run for (uid, root-topic-id), if any."

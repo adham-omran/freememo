@@ -27,20 +27,7 @@
    [freememo.assistant-pane-requests :as pane-requests]
    [freememo.command-bus :as bus]
    [freememo.viewport :as viewport]
-   #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.toasts :as toasts])))
-
-(defn push-toast!*
-  "Push one toast for `user-id`. The `:show-poem-panel` command needs this: its
-   handler is a plain client fn, and the toast queue is a per-user SERVER atom,
-   so a refusal has to cross the wire through a mounted component. This one is
-   mounted on every viewer topic, which is exactly the surface that command
-   declares."
-  [user-id level message]
-  #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
-     :cljs nil))
-
-(def ^:private not-a-poem-message "This document is not a poem")
+   #?(:clj [freememo.settings :as settings])))
 
 (def ^:private tab-ids
   "The tab ids this panel can select. A client mirror of
@@ -108,15 +95,6 @@
             !tab-save (atom nil)
             tab-save (e/watch !tab-save)
             [tt _] (e/Token tab-save)
-            ;; The refusal path of :show-poem-panel. The handler is a plain
-            ;; client fn with no Electric scope of its own, so it writes a
-            ;; request here and this frame makes the server call. The id makes
-            ;; every request a distinct value: two refusals in a row would
-            ;; otherwise leave the watched value unchanged and the second would
-            ;; open no token.
-            !toast-request (atom nil)
-            toast-request (e/watch !toast-request)
-            [t-toast _] (e/Token toast-request)
             ;; Assistant chat state (§3.0), owned here so it outlives a panel
             ;; collapse and a poem tab switch. history/AssistantChatEffects
             ;; below runs everything that writes it from outside the panel.
@@ -148,11 +126,12 @@
                   (reset! !tab-save tab-id))))
             request-poem-panel!
             (e/snapshot
+              ;; The command is offered only where a poem reader is mounted
+              ;; (its preparer reads :poem-topic-id), so a call with no topic
+              ;; is a stale invocation and does nothing.
               (fn [poem-topic-id]
-                (if (some? poem-topic-id)
-                  (show-right-pane! poem/panel-tab)
-                  (reset! !toast-request {:id (random-uuid)
-                                          :message not-a-poem-message}))))]
+                (when (some? poem-topic-id)
+                  (show-right-pane! poem/panel-tab))))]
 
         (bus/publish-ctx! {:toggle-assistant-pane! toggle-assistant-pane!
                            :show-right-pane! show-right-pane!
@@ -182,11 +161,6 @@
           (let [r (e/server (e/Offload #(settings/save-right-panel-tab user-id root-topic-id tab-save)))]
             (case r
               (if (:success r) (tt) (tt (:error r))))))
-
-        (when t-toast
-          (case (e/server (e/Offload #(push-toast!* user-id :info (:message toast-request))))
-            (do (e/on-unmount #(reset! !toast-request nil))
-                (t-toast))))
 
         (SidePanelShell
           {:side :left

@@ -7,7 +7,6 @@
    [freememo.curriculum :as curriculum]
    [freememo.db :as db]
    [freememo.kg-llm :as llm]
-   [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [missionary.core :as m]
    [next.jdbc :as jdbc]
@@ -163,7 +162,9 @@
     outcome))
 
 (defn- finish-form-generation!
-  "Clear the live owner state and publish the result.
+  "Clear the live owner state and publish the result. The new form appearing
+   confirms a success, and a failure closes the Activity row with its error,
+   which the banner strip shows.
 
    Pre: result is the terminal task result for work-key.
    Post: live membership and its canceller are absent.
@@ -172,7 +173,9 @@
   (when (and (not (:success result))
           (not (:cancelled? result)))
     (swap! (us/get-atom user-id :exam-form-generation-errors)
-      assoc work-key (:error result)))
+      assoc work-key {:error (or (not-empty (str (:error result)))
+                                  "Exam form generation failed.")
+                    :error-type (:error-type result)}))
   (swap! (us/get-atom user-id :exam-form-generation-cancellers) dissoc work-key)
   (swap! (us/get-atom user-id :exam-form-generations) disj work-key)
   (cond
@@ -181,9 +184,7 @@
       (tel/log! {:level :info :id ::form-generation-complete
                  :data {:user-id user-id :work-key work-key
                         :form-id (:form-id result)}}
-        "Exam form generation completed")
-      (toasts/push! user-id
-        {:level :success :message "The exam form is ready."}))
+        "Exam form generation completed"))
 
     (:cancelled? result)
     nil
@@ -193,13 +194,7 @@
       (tel/log! {:level :warn :id ::form-generation-failed
                  :data {:user-id user-id :work-key work-key
                         :error-type (:error-type result)}}
-        "Exam form generation failed")
-      (toasts/push! user-id
-        {:level :error
-         :message (or (:error result) "Exam form generation failed.")
-         :actions (if (= :insufficient-credits (:error-type result))
-                    [{:label "Top up credits" :nav :settings}]
-                    [])})))
+        "Exam form generation failed")))
   nil)
 
 (defn start-form-generation!

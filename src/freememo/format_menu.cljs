@@ -691,7 +691,7 @@
          ;; only in focus reader's merged mode, and disabled there when every
          ;; page between the neighbours already has a marker — which is the
          ;; refusal item 4.7 asks for, stated in the control rather than in a
-         ;; toast the reader would have to trigger to read. With no media
+         ;; message the reader would have to trigger to read. With no media
          ;; control and no page-break, the Insert section has nothing to show.
          (let [ctx @editor-actions/!page-break-context
                page (when ctx (editor-actions/restorable-page q (:index (get-rng))))]

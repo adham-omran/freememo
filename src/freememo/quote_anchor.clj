@@ -509,7 +509,7 @@
 (def unplaced-heading
   "Heading opening the list of highlights nothing could place.
 
-   This settles spec item 7.2. The toast reports HOW MANY went unplaced, and a
+   This settles spec item 7.2. A message would report HOW MANY went unplaced, and a
    count alone is not actionable — the reader cannot tell which passage to look
    for. The other candidates were a server log, which no reader sees, and a
    report view, which the decision record rules out. A section needs no new view

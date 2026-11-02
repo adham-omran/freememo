@@ -77,10 +77,17 @@
   "Every available command on `active-tab` that matches `query`, best first,
    then the matching Help sections, then the persistent search row. Rows
    carry :idx for selection."
-  [active-tab ctx query]
+  ([active-tab ctx query] (palette-rows active-tab ctx query @bus/!blocked))
+  ([active-tab ctx query blocked]
   (let [matches (->> (commands/palette-listed active-tab)
                   (remove #(= :search (:id %))) ; rendered as the search row below
-                  (filter #(bus/available? (:id %) ctx))
+                  (keep (fn [{:keys [id] :as c}]
+                          (cond
+                            (bus/available? id ctx) c
+                            ;; Refused for now, not unavailable: listed disabled
+                            ;; with its reason (plans/remove-toasts.md A-12).
+                            (and (bus/blocked-reason blocked id) (bus/applies-here? id ctx))
+                            (assoc c :disabled-reason (bus/blocked-reason blocked id)))))
                   (keep #(when-let [s (match-score (:label %) query)]
                            (assoc % :score s
                                     :command-help-slug (help/slug-for-command (:id %)))))
@@ -88,7 +95,7 @@
         search-row {:id :search :search-row true
                     :label (if (= query "") "Search…" (str "Search: " query))}]
     (vec (map-indexed (fn [i row] (assoc row :idx i))
-           (concat matches (help-rows query) [search-row])))))
+           (concat matches (help-rows query) [search-row]))))))
 
 (defn row-help-slug
   "The Help section a row opens on Shift+Enter: its own for a help row, the
@@ -106,6 +113,7 @@
 
 (defn- run-row! [row query !help-slug]
   (cond
+    (:disabled-reason row) nil
     (:help-slug row) (open-help! !help-slug (:help-slug row))
     (= :search (:id row)) (do (close!) (bus/dispatch! :search {:text query} :palette))
     :else (do (close!) (bus/dispatch! (:id row) nil :palette))))
@@ -183,13 +191,20 @@
                                "command-palette-cell command-palette-cell--selected"
                                "command-palette-cell")})
           (dom/button
-            (dom/props {:class "command-palette-row"
+            (dom/props {:class (if (:disabled-reason palette-item)
+                                 "command-palette-row command-palette-row--disabled"
+                                 "command-palette-row")
+                        :aria-disabled (if (:disabled-reason palette-item) "true" "false")
                         :type "button"
                         :aria-posinset (str (inc i))
                         :aria-setsize (str row-count)})
             (dom/span
               (dom/props {:class "command-palette-label"})
               (dom/text (:label palette-item)))
+            ;; Always mounted: Tape recycles this frame across rows.
+            (dom/span
+              (dom/props {:class "command-palette-reason"})
+              (dom/text (or (:disabled-reason palette-item) "")))
             (when-let [bind (format-bind (:id palette-item) (:bind palette-item))]
               (dom/span
                 (dom/props {:class "command-palette-shortcut"})
@@ -249,7 +264,7 @@
             query (e/watch !query)
             !idx (atom 0)
             idx (e/watch !idx)
-            rows (palette-rows active-tab (e/watch bus/!ctx) query)]
+            rows (palette-rows active-tab (e/watch bus/!ctx) query (e/watch bus/!blocked))]
         (dom/div
           ;; data-keeps-focus-target: opening the palette must not clear the
           ;; target of the row it was opened over (context-menu-surface).

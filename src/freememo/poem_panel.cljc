@@ -234,7 +234,7 @@
 (e/defn AddCardButton
   "One card button. A click dispatches `:add-card`, which is a :queue command —
    the invocation lands in this tab's client queue and the pump runs the save,
-   bumps :card-mutations and toasts. That is a local effect, so it needs no
+   and bumps :card-mutations. That is a local effect, so it needs no
    token here (CLAUDE.md, \"Selection that invokes a side effect\").
 
    `entry` is a `card-entry` map. The button is never rendered from a pending

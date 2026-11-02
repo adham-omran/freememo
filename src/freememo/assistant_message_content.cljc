@@ -163,6 +163,10 @@
           (dom/div
             (dom/props {:class "assistant-msg-status"})
             (dom/text "Stopped")))
+        (when-let [notice (:assistant_run/notice message)]
+          (dom/div
+            (dom/props {:class "assistant-msg-status assistant-msg-notice"})
+            (dom/text notice)))
         (when (= "failed" status)
           (dom/div
             (dom/props {:class "assistant-msg-status assistant-msg-status--failed"})

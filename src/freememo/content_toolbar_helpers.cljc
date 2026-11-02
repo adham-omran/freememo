@@ -13,7 +13,7 @@
    #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.page-merge :as page-merge])
    #?(:clj [freememo.repo-markdown :as repo-md])
-   #?(:clj [freememo.toasts :as toasts])
+   #?(:clj [freememo.activity-registry :as registry])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.work-run :as run])
    #?(:clj [freememo.generation-queue :as queue])
@@ -235,7 +235,7 @@
                         {:content content :from-facts? false}
                         (resolve-gen-content content user-id root-topic-id))]
          (if (false? (:success resolved))
-           resolved ;; fact-selection failure — carries :error-type for the toast
+           resolved ;; fact-selection failure — carries :error-type for the failure
            (let [gen-content (:content resolved)
                  ;; Facts are self-contained; page/parent context would dilute
                  ;; the facts-only source, so drop it on the fact path.
@@ -315,17 +315,30 @@
                        (log/log-info (str "Card gen enqueued topic=" tid " run=" (:id attempt)))
                        (swap! (us/get-atom uid :card-gen-cancelled) disj tid)
                        (swap! (us/get-atom uid :card-gen-status) update tid assoc :error nil)
+                       (registry/clear-run! uid :card-gen tid)
                        (swap! (us/get-atom uid :card-gen-cancellers) assoc tid
                          #(cancel-card-generation! card-gen-queue uid tid))
                        (sync-topic-status! card-gen-queue uid tid)))]
        (if (:ok outcome)
          (do (us/work-started! uid) :enqueued)
-         (do (toasts/push! uid {:level :error :message (:error outcome)}) outcome)))
+         ;; The caller owns the surface (plans/remove-toasts.md 2.5.1).
+         ;; Generate records a banner, Known ideas and the assistant return the
+         ;; error to the button that asked. `outcome` is {:ok false :error str}.
+         outcome))
      :cljs nil))
 
 #?(:clj
    (defn- card-generation-task [item]
      (m/via m/blk (generate-and-save! item))))
+
+#?(:clj
+   (defn- generation-summary
+     "Counts only: what a finished run added. Never a failure."
+     [result]
+     (let [n (count (:ids result))]
+       (if (zero? n)
+         "No new cards: they were all duplicates."
+         (str "Added " n " card" (when (not= 1 n) "s") ".")))))
 
 #?(:clj
    (defn- settle-generation! [scheduler item result]
@@ -334,28 +347,26 @@
                     {:success false :cancelled? true}
                     result)]
        (locking (:state scheduler)
+         ;; The error or the summary is kept BEFORE `finish!` and the status sync.
+         ;; The sync lets the reporter see the work as done, and it closes the
+         ;; row with whatever it finds at that moment.
+         (cond
+           (:success result)
+           (registry/record-summary! uid :card-gen tid (generation-summary result))
+           (:cancelled? result) nil
+           :else
+           (do (swap! (us/get-atom uid :card-gen-status) update tid assoc :error (:error result))
+               (registry/record-error! uid :card-gen tid result)))
          (queue/finish! scheduler (:id item))
          (sync-topic-status! scheduler uid tid)
          (cond
            (:success result)
            (do (commands/bump! uid :generate)
-               (when (:success-toast? item)
-                 (let [n (count (:ids result))]
-                   (toasts/push! uid
-                     {:level :success
-                      :message (if (zero? n)
-                                 "No new cards: they were all duplicates."
-                                 (str "Added " n " card" (when (not= 1 n) "s") "."))})))
                (log/log-info (str "Card gen complete topic=" tid)))
            (:cancelled? result)
            (log/log-info (str "Card gen cancelled topic=" tid))
            :else
-           (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
-               (swap! (us/get-atom uid :card-gen-status) update tid assoc :error (:error result))
-               (toasts/push! uid
-                 {:level :error :message (:error result)
-                  :actions (if (= :insufficient-credits (:error-type result))
-                             [{:label "Top up credits" :nav :settings}] [])})))))))
+           (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result))))))))
 
 #?(:clj
    (defn- generation-worker [scheduler]

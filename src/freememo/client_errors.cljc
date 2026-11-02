@@ -14,13 +14,12 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [freememo.client-state :as cs]
-   [freememo.logging :as log]
-   #?(:clj [freememo.toasts :as toasts])))
+   [freememo.logging :as log]))
 
 ;; Defined on both peers so the ClientErrorForwarder e/defn resolves under the
 ;; JVM Electric compiler; only ever written/read on the client (e/client scope).
 (defonce ^{:doc "Client-side queue of pending client-error entries:
-                 [{:id uuid :op kw-or-str :message str :notify str-or-nil} …]."}
+                 [{:id uuid :op kw-or-str :message str} …]."}
   !queue (atom []))
 
 (defn report!
@@ -28,30 +27,21 @@
    from any JS callback. `op` names the failed operation (keyword or string);
    `ex` is an error/string (str'd here). No-op on the server. Returns nil.
 
-   The 3-arity adds `notify`: a message the USER must see, not just the log —
-   for failures with no other surface, such as a pasted image the browser
-   rejected before any Electric frame could observe it. It rides the same queue
-   because the transition is identical (JS callback → server); the forwarder
-   pushes an error toast alongside the log entry."
-  ([op ex] (report! op ex nil))
-  ([op ex notify]
-   #?(:cljs (swap! !queue conj {:id (random-uuid) :op op :message (str ex)
-                                :notify notify}))
-   nil))
+   This only logs. A failure the user must see goes where the user acted: the
+   caller shows it on its own surface (an editor's status line, a menu row, an
+   error beside a control). The log entry is for the operator."
+  [op ex]
+  #?(:cljs (swap! !queue conj {:id (random-uuid) :op op :message (str ex)}))
+  nil)
 
 (defn log-client-error!
-  "Log one queued client failure and, when it carries :notify, surface that text
-   to the user as an error toast.
-   Pre  : user-id may be nil (pre-auth surfaces); notify is a str or nil.
-   Post : one :warn signal is recorded, plus one toast iff notify is non-nil and
-          user-id is non-nil. Returns :logged (truthy — the forwarder spends its
-          token on it).
-   Inv  : never throws; a toast failure must not strand the queue entry."
-  [user-id session-id op message notify]
+  "Log one queued client failure.
+   Pre  : user-id may be nil (pre-auth surfaces).
+   Post : one :warn signal is recorded. Returns :logged (truthy — the
+          forwarder spends its token on it).
+   Inv  : never throws."
+  [user-id session-id op message]
   #?(:clj (do (log/client-error! user-id session-id op message)
-              (when (and notify user-id)
-                (try (toasts/push! user-id {:level :error :message notify})
-                     (catch Exception _ nil)))
               :logged)
      :cljs nil))
 
@@ -71,6 +61,6 @@
         (let [[t _] (e/Token (:id err))]
           (when t
             (when-some [_ (e/server (log-client-error! user-id sid
-                                      (:op err) (:message err) (:notify err)))]
+                                      (:op err) (:message err)))]
               (t)
               (swap! !queue (fn [q] (filterv #(not= (:id err) (:id %)) q))))))))))

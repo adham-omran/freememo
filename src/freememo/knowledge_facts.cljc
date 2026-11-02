@@ -12,9 +12,11 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
+   [freememo.inline-error :as ie]
    [freememo.knowledge-scope :as scope]
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
+   [freememo.result-line :as rl]
    [freememo.row-menu :as menu]
    [freememo.tape-table :as tape]
    [freememo.tooltip :as tooltip]
@@ -25,7 +27,8 @@
    #?(:clj [freememo.kg-dedup :as kg-dedup])
    #?(:clj [freememo.knowledge-bulk :as bulk])
    #?(:clj [freememo.logging :as log])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.user-state :as us])))
 
 (def ^:private status-label
   "The statuses the Facts table can list, with their filter labels. 'duplicate'
@@ -63,22 +66,18 @@
 
 (defn reject-facts!*
   "Reject a selection of facts as one operation: one undo entry, one bump, one
-   audit line, one toast — the counts that a per-fact loop would multiply.
-   Post: {:success true :deleted n} with the Undo toast pushed when n > 0, or
-         {:success false :error msg}. n = 0 (everything already rejected or not
-         owned) is a success with no toast, matching the single-fact no-op."
+   audit line — the counts that a per-fact loop would multiply. The Undo history
+   lists the entry.
+   Post: {:success true :deleted n}, or {:success false :error msg}. n = 0
+         (everything already rejected or not owned) is a success with no bump,
+         matching the single-fact no-op."
   [user-id fact-ids]
   #?(:clj (try
-            (let [{:keys [rejected undo-id]} (db/reject-kg-facts! user-id fact-ids)]
+            (let [{:keys [rejected]} (db/reject-kg-facts! user-id fact-ids)]
               (when (pos? rejected)
                 (commands/bump! user-id :bulk-reject-facts)
                 (log/audit! {:id ::reject-facts :user-id user-id :action :delete
-                             :entity :kg-fact :entity-id nil :n rejected})
-                (toasts/push! user-id
-                  (cond-> {:level :success
-                           :message (str "Deleted " rejected " fact" (when (not= 1 rejected) "s"))
-                           :dedup? false}
-                    undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+                             :entity :kg-fact :entity-id nil :n rejected}))
               {:success true :deleted rejected})
             (catch Exception e
               (tel/error! {:id ::reject-facts :data {:user-id user-id}} e)
@@ -89,28 +88,29 @@
   "Run one fact action over `ids` — one row from its menu, or a selection from
    the batch bar.
    Pre:  kind ∈ #{:delete :unmark}.
-   Post: {:success true …} or {:success false :error msg}."
+   Post: {:success true …} or {:success false :error msg}. The view shows the
+         error beside its bar (`bulk/failure-text`)."
   [user-id {:keys [kind ids]}]
-  #?(:clj (bulk/report-failure! user-id
-            (case kind
-              :delete (reject-facts!* user-id ids)
-              :unmark (bulk/unmark-duplicate-facts! user-id ids)
-              {:success false :error "That action is not available."}))
+  #?(:clj (case kind
+            :delete (reject-facts!* user-id ids)
+            :unmark (bulk/unmark-duplicate-facts! user-id ids)
+            {:success false :error "That action is not available."})
      :cljs nil))
+
+(defn action-error*
+  "The words a failed `result` of `run-fact-action!*` shows, or nil."
+  [result]
+  #?(:clj (bulk/failure-text result) :cljs nil))
 
 (defn edit-fact-value!*
   "Edit a fact's object: set a literal (`literal?` true) or relink to an entity
-   by label. Audits + bumps; toasts on duplicate. The db result `r` is :done
+   by label. Audits + bumps. The db result `r` is :done
    (saved), :duplicate (already-exists), or nil (fact gone / not literal) —
    only :done is a real save. Returns {:success bool :error str}."
   [user-id fact-id value literal?]
   #?(:clj (let [r (if literal?
                     (when (db/update-kg-fact-literal! user-id fact-id value) :done)
                     (db/relink-kg-fact-object! user-id fact-id value))]
-            (when (= :duplicate r)
-              (toasts/push! user-id
-                {:level :error
-                 :message "That fact already exists in this document."}))
             (commands/bump! user-id :distill)
             (when (= :done r)
               (log/audit! {:id ::edit-fact :user-id user-id :action :update
@@ -127,6 +127,33 @@
   [user-id doc-id]
   #?(:clj (kg-dedup/sweep-document-command! user-id doc-id) :cljs nil))
 
+(defn dedup-enabled*
+  "Whether the near-duplicate detector is on. `_settings-refresh` is the
+   dependency: a change in Settings re-reads it."
+  [_settings-refresh user-id]
+  #?(:clj (boolean (:enabled (settings/get-kg-dedup-thresholds user-id))) :cljs nil))
+
+(defn settings-refresh-atom* [user-id]
+  #?(:clj (us/get-atom user-id :settings-refresh) :cljs nil))
+
+(defn sweep-text
+  "What a finished sweep did, in words, for the ResultLine beside its button.
+   Pre:  `r` is a success of kg-dedup's sweep commands.
+   Post: a non-blank string."
+  [{:keys [marked documents]}]
+  (let [facts (str "Marked " marked " duplicate fact" (when (not= 1 marked) "s"))]
+    (cond
+      (zero? marked) "No duplicates found."
+      documents (str facts " across " documents " document"
+                  (when (not= 1 documents) "s") ".")
+      :else (str facts "."))))
+
+(defn sweep-failure-text
+  "The failed part of a sweep over every document, or nil."
+  [{:keys [failed]}]
+  (when (pos? (or failed 0))
+    (str failed " document" (when (not= 1 failed) "s") " failed.")))
+
 (defn sweep-duplicates-all!*
   "Mark near-duplicate facts across every document holding facts."
   [user-id]
@@ -139,34 +166,39 @@
    Enter saves (Offload), Escape cancels. Literal objects rewrite the literal;
    entity objects RELINK this fact to the matched-or-created entity — other
    facts of the old entity are untouched (rename-everywhere lives in the
-   Entities tab). A relink that would duplicate an existing s/p/o toasts and
-   leaves the fact unchanged."
+   Entities tab). A relink that would duplicate an existing s/p/o
+   leaves the fact unchanged, and says why beside the input."
   [user-id fact-id object_label object_literal !editing editing]
   (e/client
-    (if (= editing fact-id)
-      (dom/input
-        (dom/props {:value (or object_label object_literal) :class "input"
-                    :aria-label "Edit object"})
-        (let [keyev (dom/On "keydown"
-                      (fn [ev]
-                        (let [k (.-key ev) v (.. ev -target -value)]
-                          (cond
-                            (= k "Enter") {:id (str (random-uuid)) :value v}
-                            (= k "Escape") (do (reset! !editing nil) nil)
-                            :else nil)))
-                      nil)
-              [t _] (e/Token keyev)
-              literal? (some? object_literal)]
-          (when t
-            (let [result (e/server
-                           (e/Offload
-                             #(edit-fact-value!* user-id fact-id (:value keyev) literal?)))]
-              (case result
-                (if (:success result)
-                  (do (reset! !editing nil) (t))
-                  (t (:error result))))))))
-      (dom/span (dom/props {:class "tape-cell-text" :dir "auto"})
-        (dom/text (or object_label object_literal))))))
+    (let [!edit-error (atom nil) edit-error (e/watch !edit-error)]
+      (if (= editing fact-id)
+        (do
+          (dom/input
+            (dom/props {:value (or object_label object_literal) :class "input"
+                        :aria-label "Edit object"})
+            (let [keyev (dom/On "keydown"
+                          (fn [ev]
+                            (let [k (.-key ev) v (.. ev -target -value)]
+                              (cond
+                                (= k "Enter") (do (reset! !edit-error nil)
+                                                  {:id (str (random-uuid)) :value v})
+                                (= k "Escape") (do (reset! !editing nil) nil)
+                                :else nil)))
+                          nil)
+                  [t _] (e/Token keyev)
+                  literal? (some? object_literal)]
+              (when t
+                (let [result (e/server
+                               (e/Offload
+                                 #(edit-fact-value!* user-id fact-id (:value keyev) literal?)))]
+                  (case result
+                    (if (:success result)
+                      (do (reset! !editing nil) (t))
+                      (case (reset! !edit-error (:error result))
+                        (t (:error result)))))))))
+          (ie/InlineError edit-error))
+        (dom/span (dom/props {:class "tape-cell-text" :dir "auto"})
+          (dom/text (or object_label object_literal)))))))
 
 (e/defn FactStatusFilter
   "Which status the Facts table lists. A1-fallback select (Forms5 has no tracked
@@ -190,55 +222,88 @@
 
    Blocking JDBC through e/Offload, and the token gates on the server result so
    the button stays disabled for the whole run — the sweep compares every approved
-   pair on every page and is not instant on a large document.
+   pair on every page and is not instant on a large document. The result, or the
+   failure, shows beside the button. `off?` disables it while detection is off.
    Publishes a command-bus invoker so the palette can reach it; retracts on unmount
    (a stale invoker makes the command look available from another tab)."
-  [user-id doc-id]
+  [user-id doc-id off?]
   (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in this document"})
-      (tooltip/Tooltip! "Find near-duplicate facts in this document and mark them")
-      (icons/Icon :git-compare :size 14)
-      (dom/span (dom/props {:class "icon-label"}) (dom/text "Mark duplicates"))
-      (let [node dom/node]
-        (bus/publish-invoker! :sweep-duplicates (fn [] (.click node)))
-        (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates))))
-      ;; A FRESH value per click, never doc-id: work-skipping compares handler
-      ;; results with =, so a stable value makes the second click a no-op and the
-      ;; button fires exactly once per mount. This button never unmounts, so
-      ;; nothing would re-arm it.
-      (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-            [t ?error] (e/Token click)]
-        (dom/props {:disabled (some? t) :aria-busy (some? t)
+    (let [!click (atom nil) click (e/watch !click)
+          !result (atom nil) result (e/watch !result)
+          [t ?error] (e/Token click)]
+      (dom/button
+        (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in this document"
+                    :disabled (or (some? t) off?) :aria-busy (some? t)
                     :aria-invalid (some? ?error)})
-        (when t
-          (let [r (e/server (e/Offload #(sweep-duplicates!* user-id doc-id)))]
-            (case r
-              (if (:success r) (t) (t (:error r))))))))))
+        (tooltip/Tooltip! "Find near-duplicate facts in this document and mark them")
+        (icons/Icon :git-compare :size 14)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Mark duplicates"))
+        (let [node dom/node]
+          (bus/publish-invoker! :sweep-duplicates (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates))))
+        ;; A FRESH value per click, never doc-id: work-skipping compares handler
+        ;; results with =, so a stable value makes the second click a no-op and the
+        ;; button fires exactly once per mount. This button never unmounts, so
+        ;; nothing would re-arm it.
+        (dom/On "click" (fn [_] (reset! !result nil)
+                          (reset! !click {:id (str (random-uuid))}))
+          nil))
+      (ie/InlineError ?error)
+      (rl/ResultLine result)
+      (when t
+        (let [r (e/server (e/Offload #(sweep-duplicates!* user-id doc-id)))]
+          (case r
+            (if (:success r)
+              (case (reset! !result (sweep-text r)) (t))
+              (t (:error r)))))))))
 
 (e/defn SweepAllDuplicatesButton
   "Run the sweep over every document holding facts.
 
    Separate from the per-document button rather than a scope toggle on it: the two
    differ in blast radius, and a hidden scope would make the wider one impossible
-   to name in the palette."
-  [user-id]
+   to name in the palette. Documents that failed show as an error beside the
+   button, and the count of what it marked as a result line."
+  [user-id off?]
   (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in all documents"})
-      (tooltip/Tooltip! "Sweep every document that has facts. One Undo per document.")
-      (dom/text "All docs")
-      (let [node dom/node]
-        (bus/publish-invoker! :sweep-duplicates-all (fn [] (.click node)))
-        (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates-all))))
-      (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-            [t ?error] (e/Token click)]
-        (dom/props {:disabled (some? t) :aria-busy (some? t)
+    (let [!click (atom nil) click (e/watch !click)
+          !result (atom nil) result (e/watch !result)
+          [t ?error] (e/Token click)]
+      (dom/button
+        (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in all documents"
+                    :disabled (or (some? t) off?) :aria-busy (some? t)
                     :aria-invalid (some? ?error)})
-        (when t
-          (let [r (e/server (e/Offload #(sweep-duplicates-all!* user-id)))]
-            (case r
-              (if (:success r) (t) (t (:error r))))))))))
+        (tooltip/Tooltip! "Sweep every document that has facts. One Undo per document.")
+        (dom/text "All docs")
+        (let [node dom/node]
+          (bus/publish-invoker! :sweep-duplicates-all (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates-all))))
+        (dom/On "click" (fn [_] (reset! !result nil)
+                          (reset! !click {:id (str (random-uuid))}))
+          nil))
+      (ie/InlineError ?error)
+      (rl/ResultLine result)
+      (when t
+        (let [r (e/server (e/Offload #(sweep-duplicates-all!* user-id)))]
+          (case r
+            (if (:success r)
+              (case (reset! !result (sweep-text r))
+                (if-some [failed (sweep-failure-text r)] (t failed) (t)))
+              (t (:error r)))))))))
+
+(e/defn DedupOffNote
+  "Why the sweep buttons are disabled, with the way to turn detection back on.
+   Mounted always; its text is empty while detection is on or still unknown."
+  [off? navigate!]
+  (e/client
+    (dom/span
+      (dom/props {:class "result-line" :role "status"})
+      (when off?
+        (dom/text "Detection is off. ")
+        (dom/button
+          (dom/props {:type "button" :class "btn btn-sm"})
+          (dom/text "Open Settings")
+          (dom/On "click" (fn [_] (navigate! :settings)) nil))))))
 
 (e/defn SelectDocumentButton
   "Select every fact of the document in the listed status, ignoring the search.
@@ -320,6 +385,12 @@
           !action (atom nil) action (e/watch !action)
           !confirm-delete (atom nil) confirm-delete (e/watch !confirm-delete)
           !editing (atom nil) editing (e/watch !editing)
+          ;; Known-off only: an empty read (the round trip) leaves the buttons on.
+          dedup-off? (false? (peek (e/as-vec
+                                     (e/server
+                                       (dedup-enabled*
+                                         (e/watch (settings-refresh-atom* user-id))
+                                         user-id)))))
           ;; Actions: Edit (~44px) and ⋯ (~38px), the cell's gap and padding.
           grid-cols "34px minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 70px 104px"]
       ;; Spinner covers the first offloaded fetch (blank otherwise); filter changes
@@ -337,7 +408,8 @@
                 selecting? (pos? n-selected)
                 searching? (not (str/blank? query))
                 filtered? (or searching? (not= "approved" status))
-                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))]
+                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))
+                [action-t action-error] (e/Token action)]
             (dom/div
               (dom/props {:class "knowledge-view"})
               (dom/div
@@ -348,8 +420,10 @@
                   (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
                 (scope/SearchInput "Search facts…" query !query search-epoch)
                 (FactStatusFilter !status status)
-                (SweepDuplicatesButton user-id doc-id)
-                (SweepAllDuplicatesButton user-id)
+                (SweepDuplicatesButton user-id doc-id dedup-off?)
+                (SweepAllDuplicatesButton user-id dedup-off?)
+                (DedupOffNote dedup-off? navigate!)
+                (ie/InlineError action-error)
                 (dom/span (dom/props {:class "knowledge-count"})
                   (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
               (when filtered?
@@ -421,12 +495,11 @@
                         r)))))
               ;; The one place a row or batch action runs; it outlives the menu
               ;; that wrote it.
-              (let [[t _] (e/Token action)]
-                (when t
-                  (let [r (e/server (e/Offload #(run-fact-action!* user-id action)))]
-                    (case r
-                      (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
-                        (t))))))
+              (when action-t
+                (let [r (e/server (e/Offload #(run-fact-action!* user-id action)))]
+                  (case r
+                    (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
+                      (if (:success r) (action-t) (action-t (action-error* r)))))))
               (scope/UrlState {"q" query
                                "status" (when (not= "approved" status) status)
                                "sort" (scope/sort-param order default-sort)}))))))))

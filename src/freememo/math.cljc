@@ -281,6 +281,16 @@
            (.replaceWith text-node frag))))
      :clj nil))
 
+(defn has-tex?
+  "Whether stored-form `html` can hold a math region: one substring search.
+
+   pre : `html` is a string or nil.
+   post: true iff `html` contains an opening `\\(`. A lone delimiter counts —
+         this is the cheap screen in front of the parse, not the parse itself.
+   inv : pure, and defined on both peers, so a reactive body may call it."
+  [html]
+  (boolean (and html (str/includes? html "\\("))))
+
 (defn stored->editor-html
   "Convert stored-form math into the DOM shape Quill's `Formula` blot reads.
 
@@ -300,7 +310,7 @@
   [html]
   #?(:cljs
      (let [s (or html "")]
-       (if-not (str/includes? s "\\(")
+       (if-not (has-tex? s)
          s
          (let [holder (.createElement js/document "div")]
            (set! (.-innerHTML holder) s)
@@ -375,6 +385,74 @@
      ;; editor existed to wait on it.
      (atom nil)))
 
+(defonce ^{:doc "What the page's KaTeX gate has seen. See `plans/katex-timeout-notice.md`.
+
+   nil until the first `on-katex-ready!` settles, then
+   `{:status s :elapsed-ms n :message str-or-nil}` where `s` is one of
+   `:ready` `:timeout` `:failed` `:late`. Only `advance-outcome` decides a
+   transition.
+
+   Defined on both peers, with no reader conditional, because
+   `freememo.math-notice/MathNotice` watches it from a reactive body. A CLJ-only
+   def read there would desynchronize the frame and close the socket with 1011.
+   Only the client ever writes it."}
+  !katex-outcome
+  (atom nil))
+
+(defn advance-outcome
+  "The gate outcome after `event`, given the current `outcome`.
+
+   pre : `event` is `:loaded`, `:load-failed` or `:timed-out`; `elapsed-ms` is
+         the time since the gate started; `message` is a str or nil.
+   post: nil → `:ready` | `:failed` | `:timeout`, by the first event.
+         `:timeout` → `:late` on `:loaded`, `:failed` on `:load-failed`.
+         Any other pair returns `outcome` unchanged, so `:ready`, `:failed` and
+         `:late` are terminal and a second timer event is a no-op.
+   inv : pure."
+  [outcome event elapsed-ms message]
+  (let [to (fn [status] {:status status :elapsed-ms elapsed-ms :message message})]
+    (case [(:status outcome) event]
+      [nil :loaded]           (to :ready)
+      [nil :load-failed]      (to :failed)
+      [nil :timed-out]        (to :timeout)
+      [:timeout :loaded]      (to :late)
+      [:timeout :load-failed] (to :failed)
+      outcome)))
+
+(defn notice-for
+  "The editor notice for a gate `outcome`, or nil when none is owed.
+
+   pre : `tex?` says whether the document shown can hold math (`has-tex?`).
+   post: nil while the gate is pending, after `:ready`, or when `tex?` is false.
+         Otherwise `{:tone :error|:ready :text str}`. `:late` is the only
+         `:ready` tone: KaTeX is usable now, and this editor was built without it.
+   inv : pure."
+  [outcome tex?]
+  (when tex?
+    (case (:status outcome)
+      :timeout {:tone :error
+                :text "Formulas are showing as code. The math library did not load in time."}
+      :failed  {:tone :error
+                :text "Formulas are showing as code. The math library could not load."}
+      :late    {:tone :ready
+                :text "The math library is ready. Reload to show the formulas."}
+      nil)))
+
+(defn outcome-log-entry
+  "The client-error log entry for a gate `outcome`, as `[op message]`, or nil.
+
+   post: nil for nil and `:ready`. Otherwise an `op` keyword under `:math/` and a
+         one-line message carrying the elapsed time.
+   inv : pure. The `:timeout` message names `katex-wait-ms`, the cap that fired."
+  [outcome]
+  (let [ms (:elapsed-ms outcome)]
+    (case (:status outcome)
+      :timeout [:math/katex-timeout (str "KaTeX not ready after " katex-wait-ms " ms")]
+      :failed  [:math/katex-failed (str "KaTeX load failed after " ms " ms: "
+                                     (or (:message outcome) "no error message"))]
+      :late    [:math/katex-late (str "KaTeX arrived after " ms " ms")]
+      nil)))
+
 (defn- katex-gate!
   "The page's one KaTeX-readiness promise. The first call starts the load.
 
@@ -382,20 +460,36 @@
    post: a Promise<boolean> that always resolves — true iff `window.katex` and
          `renderMathInElement` are usable, false on a failed load or a stall past
          `katex-wait-ms`. It never rejects, so no caller needs a `.catch`.
+         `!katex-outcome` records every transition, including a load that
+         settles after the timer gave up (`:late`, or a later `:failed`).
    inv : one promise and one timer per page, however many editors mount; with
-         `ensure!`'s own memo, one script injection."
+         `ensure!`'s own memo, one script injection. The boolean and the outcome
+         come from the same first event, so they cannot disagree."
   []
   #?(:cljs
      (or @!katex-gate
        ;; Nothing awaits between the read above and the write below, and JS is
        ;; single-threaded, so two callers cannot both claim the gate.
-       (let [p (js/Promise.race
-                 #js [(-> (vendor/ensure! :katex)
-                        (.then (fn [_] true))
-                        (.catch (fn [_] false)))
-                      (js/Promise.
-                        (fn [resolve]
-                          (js/setTimeout #(resolve false) katex-wait-ms)))])]
+       (let [t0 (js/performance.now)
+             p (js/Promise.
+                 (fn [resolve]
+                   (let [settle! (fn [event message]
+                                   (let [before @!katex-outcome
+                                         after (advance-outcome before event
+                                                 (js/Math.round (- (js/performance.now) t0))
+                                                 message)]
+                                     ;; reset! notifies watches even on an equal
+                                     ;; value; the reporter must see transitions only.
+                                     (when (not= before after)
+                                       (reset! !katex-outcome after))
+                                     ;; Only the first call settles the promise.
+                                     (resolve (= :ready (:status after)))))]
+                     ;; Two-arg .then: a throw inside the success branch must not
+                     ;; be read as a failed load.
+                     (.then (vendor/ensure! :katex)
+                       (fn [_] (settle! :loaded nil))
+                       (fn [err] (settle! :load-failed (or (ex-message err) (str err)))))
+                     (js/setTimeout #(settle! :timed-out nil) katex-wait-ms))))]
          (reset! !katex-gate p)
          p))
      :clj nil))

@@ -21,7 +21,6 @@
             [freememo.priority :as priority]
             [freememo.settings :as settings]
             [freememo.staged-delete :as staged-delete]
-            [freememo.toasts :as toasts]
             [freememo.topic-move :as topic-move]
             [freememo.user-state :as us]))
 
@@ -34,22 +33,29 @@
   (when (and (integer? id) (db/owns-topic? user-id id))
     (db/get-topic id)))
 
-(defn- refuse!
-  "Toast `message` and return the failure outcome."
-  [user-id message]
-  (toasts/push! user-id {:level :error :message message})
+(defn- refuse
+  "The failure outcome for `message`. The dispatcher records it as a banner
+   (optimistic/record-command-failure!), so this pushes nothing."
+  [message]
   {:ok? false :error message})
 
 (defn- each-owned!
   "Run `f` on each subject topic `user-id` owns. A subject it does not own
    refuses the whole command before anything runs.
+   `failure`, when given, is `(fn [result])` returning an error string for a
+   result that means the write did not land, else nil. The first error fails
+   the command.
    Post: {:ok? true :results [...]} or a refusal."
-  [user-id payload f]
-  (let [ids (subject-ids payload)
-        topics (mapv #(owned-topic user-id %) ids)]
-    (if (or (empty? ids) (some nil? topics))
-      (refuse! user-id "That topic is not available.")
-      {:ok? true :results (mapv f topics)})))
+  ([user-id payload f] (each-owned! user-id payload f (constantly nil)))
+  ([user-id payload f failure]
+   (let [ids (subject-ids payload)
+         topics (mapv #(owned-topic user-id %) ids)]
+     (if (or (empty? ids) (some nil? topics))
+       (refuse "That topic is not available.")
+       (let [results (mapv f topics)]
+         (if-some [error (some failure results)]
+           (refuse error)
+           {:ok? true :results results}))))))
 
 (defn- enc-key-for
   "The key that decrypts `user-id`'s stored API keys — the value the session
@@ -69,13 +75,20 @@
         (do (log/audit! {:id ::rename-topic :user-id user-id :action :update
                          :entity :document :entity-id id})
             {:ok? true})
-        (refuse! user-id "That topic is not available."))
+        (refuse "That topic is not available."))
       (catch clojure.lang.ExceptionInfo e
-        (refuse! user-id (str "Could not rename: " (ex-message e)))))))
+        (refuse (str "Could not rename: " (ex-message e)))))))
 
+;; A topic already at top level has nothing to move, and `move-topic!` answers
+;; that no-op with the same nil as a rejected move. So it is skipped here as a
+;; success, and a nil from `move-topic!` means the move really did not land.
 (defmethod opt/run-command! :move-topic-to-top-level [user-id {:keys [payload]}]
   (each-owned! user-id payload
-    (fn [topic] (topic-move/move-topic! user-id (:topics/id topic) nil))))
+    (fn [topic]
+      (if (nil? (:topics/parent_id topic))
+        ::already-top-level
+        (topic-move/move-topic! user-id (:topics/id topic) nil)))
+    (fn [moved] (when (nil? moved) "Could not move the topic."))))
 
 (defn- review-unit-id
   "The topic a priority belongs to: a PDF page's priority is its document's."
@@ -88,7 +101,8 @@
   (let [value (priority/normalize (:input payload))]
     (each-owned! user-id payload
       (fn [topic]
-        (db/update-topic-priority! user-id (review-unit-id topic) value)))))
+        (db/update-topic-priority! user-id (review-unit-id topic) value))
+      (fn [outcome] (when (= :denied outcome) "Could not set the priority.")))))
 
 (defmethod opt/run-command! :mark-topic-done [user-id {:keys [payload]}]
   (each-owned! user-id payload
@@ -97,17 +111,21 @@
         ;; A page's completion lives on its PDF, keyed by page number: the
         ;; write the PDF toolbar's :set-page-done makes.
         (db/set-page-done! user-id (:topics/parent_id topic) (:topics/page_number topic) true)
-        (db/done-topic! user-id (:topics/id topic))))))
+        (db/done-topic! user-id (:topics/id topic))))
+    (fn [done] (when-not done "Could not mark the topic done."))))
 
 (defn- set-dismissed! [user-id payload dismissed?]
   (each-owned! user-id payload
     (fn [topic]
-      (let [id (:topics/id topic)]
-        (if dismissed?
-          (db/dismiss-topic! user-id id)
-          (db/undismiss-topic! user-id id))
-        (log/audit! {:id (if dismissed? ::topic-dismissed ::topic-undismissed)
-                     :user-id user-id :action :update :entity :document :entity-id id})))))
+      (let [id (:topics/id topic)
+            changed (if dismissed?
+                      (db/dismiss-topic! user-id id)
+                      (db/undismiss-topic! user-id id))]
+        (when changed
+          (log/audit! {:id (if dismissed? ::topic-dismissed ::topic-undismissed)
+                       :user-id user-id :action :update :entity :document :entity-id id}))
+        changed))
+    (fn [changed] (when-not changed "That topic is not available."))))
 
 (defmethod opt/run-command! :dismiss [user-id {:keys [payload]}]
   (set-dismissed! user-id payload true))
@@ -126,6 +144,7 @@
     (if (:ok? outcome)
       (let [staged (remove nil? (:results outcome))]
         {:ok? (boolean (seq staged))
+         :error (when-not (seq staged) "Could not delete the topic.")
          :anki-note-ids (vec (mapcat :note-ids staged))
          :deleted-topic-ids (mapv :topic-id staged)})
       outcome)))
@@ -147,7 +166,7 @@
         content-text (or (:topics/content_text topic) "")
         root-id (if page? (:topics/parent_id topic) (db/get-root-topic-id id))]
     (if (and (str/blank? content-text) (not code?))
-      (refuse! user-id "Extract text first to generate flashcards.")
+      (refuse "Extract text first to generate flashcards.")
       (let [{:keys [content context]}
             (helpers/build-gen-context*
               {:selection-html nil
@@ -167,14 +186,14 @@
                          :topic-id id :root-topic-id root-id
                          :pre-prompt nil :pre-prompt-mode nil})]
           (if (= :enqueued outcome) {:ok? true}
-              {:ok? false :error (:error outcome)}))))))
+              {:ok? false :error (or (not-empty (str (:error outcome))) "Could not start card generation.")}))))))
 
 (defmethod opt/run-command! :generate-cards-for-topic [user-id {:keys [payload]}]
   (let [topic (owned-topic user-id (first (subject-ids payload)))]
     (cond
-      (nil? topic) (refuse! user-id "That topic is not available.")
+      (nil? topic) (refuse "That topic is not available.")
       (and (nil? (:topics/parent_id topic)) (= "pdf" (:topics/kind topic)))
-      (refuse! user-id "Generate cards from a page of this PDF.")
+      (refuse "Generate cards from a page of this PDF.")
       :else (enqueue-generation! user-id topic))))
 
 ;; ---------------------------------------------------------------------------
@@ -199,40 +218,34 @@
           (pdf-actions/start-ocr-scan! user-id doc page (enc-key-for user-id)
             (settings/get-scan-dpi user-id)))
         {:ok? true})
-    (refuse! user-id "That page is not available.")))
+    (refuse "That page is not available.")))
 
 (defmethod opt/run-command! :generate-cards-for-page [user-id {:keys [payload]}]
   (if-let [topic (some->> (owned-pdf-page user-id payload) (apply page-topic))]
     (enqueue-generation! user-id topic)
-    (refuse! user-id "That page is not available.")))
+    (refuse "That page is not available.")))
 
 ;; ---------------------------------------------------------------------------
-;; Image pins and error toasts
+;; Image pins and client-side errors
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-pin [user-id {:keys [payload]}]
   (let [{:keys [topic-id media-id placement]} payload]
     (if-not (owned-topic user-id topic-id)
-      (refuse! user-id "That topic is not available.")
+      (refuse "That topic is not available.")
       (try
         (db/set-pin! {:topic-id topic-id :media-id media-id :placement placement})
         (log/audit! {:id ::add-pin :user-id user-id :action :create
                      :entity :pin :entity-id media-id})
         {:ok? true}
         (catch clojure.lang.ExceptionInfo e
-          (refuse! user-id (if (= :pin-cap-exceeded (:reason (ex-data e)))
+          (refuse (if (= :pin-cap-exceeded (:reason (ex-data e)))
                              "This topic already has 2 pins. Remove one first."
                              "Couldn't pin this image.")))))))
 
-;; A client-side failure (a clipboard write, an upload) has no server scope to
-;; toast from. The handler queues this instead.
-(defmethod opt/run-command! :show-error-toast [user-id {:keys [payload]}]
-  (toasts/push! user-id {:level :error :message (str (:message payload))})
-  {:ok? true})
-
 (comment
-  ;; Every queued target command needs a method here, or the pump toasts
-  ;; "Unknown action".
+  ;; Every queued target command needs a method here, or the pump returns
+  ;; an "Unknown action" failure.
   (->> commands/registry
     (filter (fn [[_ e]] (and (:target e) (= :queue (commands/exec-mode e)))))
     (map first)

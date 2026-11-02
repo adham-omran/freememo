@@ -241,7 +241,7 @@
    [[:path {:d "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"}]
     [:path {:d "M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"}]]
 
-   ;; Toast level glyphs (lucide: circle-check / circle-alert / triangle-alert / info)
+   ;; Level glyphs (lucide: circle-check / circle-alert / triangle-alert / info)
    :circle-check
    [[:circle {:cx "12" :cy "12" :r "10"}]
     [:path {:d "m9 12 2 2 4-4"}]]

@@ -12,9 +12,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.icons :as icons]
-   [freememo.command-bus :as bus]
+   [freememo.inline-error :as inline-error]
    [freememo.modal-shell :as modal]
    [freememo.tooltip :as tooltip]
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.read-region :as read-region])
    ;; Loads the :undo-newest / :undo-entry run-command! methods server-side.
@@ -137,6 +138,17 @@
           {:seen {} :rows []}
           entries)))))
 
+(defn undo-entry!*
+  "Undo one entry for the Actions modal. Returns {:ok? bool :error str?}.
+   A partial restore is a success with a warning. The row leaves the list at
+   once, so the warning goes to the failure banner instead."
+  [user-id entry-id]
+  #?(:clj (let [r (undo/undo-entry! user-id entry-id)]
+            (when-let [w (:warning r)]
+              (activity/record-failure! user-id {:error w :what "Part of the undo"}))
+            (select-keys r [:ok? :error]))
+     :cljs nil))
+
 (defn get-undo-views* [_refresh user-id]
   #?(:clj (read-region/timed-read :undo-history
             #(annotate-views (db/get-undo-entries user-id)))
@@ -191,12 +203,22 @@
             (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"}})
             (tooltip/Tooltip! "A newer action changed the same item")
             (dom/text "Superseded"))
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"})
-            (dom/text "Undo")
-            ;; Fire-and-forget through the command queue: undo-entry! is
-            ;; idempotent, and the row re-renders when :undo-mutations bumps.
-            (dom/On "click" (fn [_] (bus/dispatch! :undo-entry {:id (:id row)})) nil)))))))
+          (let [[t ?error] (e/Token
+                             (dom/button
+                               (dom/props {:class "btn btn-sm btn-secondary"})
+                               (dom/text "Undo")
+                               (dom/On "click" identity nil)))]
+            (inline-error/InlineError ?error)
+            ;; The result decides the token: success spends it, a failure
+            ;; hands the message back to InlineError on this row. A partial
+            ;; restore is recorded server-side by undo-entry!*, because the
+            ;; row leaves the list when the entry is undone.
+            (when t
+              (let [r (e/server (e/Offload #(undo-entry!* user-id (:id row))))]
+                (when (some? r)
+                  (if (:ok? r)
+                    (t)
+                    (t (:error r))))))))))))
 
 (e/defn UndoHistoryModal
   "Modal listing reversible actions; refreshes on :undo-mutations."

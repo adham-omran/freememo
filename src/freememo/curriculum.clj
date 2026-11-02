@@ -10,7 +10,6 @@
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.db :as db]
-   [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
@@ -238,11 +237,6 @@
     (cancel-curriculum-form-generations! user-id work-keys)
     (commands/bump-channels! user-id
       #{:curriculum-mutations :schedule-mutations :undo-mutations})
-    (toasts/push! user-id
-      {:level :success
-       :message (str "Deleted \"" title "\". You can undo this for 12 hours.")
-       :dedup? false
-       :actions [{:label "Undo" :undo-id entry-id}]})
     staged))
 
 (defn restore-staged-curriculum!

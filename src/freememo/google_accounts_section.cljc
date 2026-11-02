@@ -12,6 +12,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.inline-error :refer [InlineError]]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.google-accounts :as accounts])
    #?(:clj [freememo.user-state :as us])))
@@ -21,6 +22,13 @@
   [_refresh user-id]
   #?(:clj (accounts/accounts user-id)
      :cljs []))
+
+(defn connect-error*
+  "Post: the message of the last connection that failed, or nil. `_refresh` is
+   the reactive dependency: the callback bumps `:settings-refresh`."
+  [_refresh user-id]
+  #?(:clj (accounts/connect-error user-id)
+     :cljs nil))
 
 (defn disconnect!*
   "Post: account `sub` is no longer connected; :settings-refresh is bumped."
@@ -52,7 +60,8 @@
 (e/defn GoogleAccountsSection
   "Pre : `user-id` is signed in.
    Post: the connected accounts are listed by email, each removable, and a link
-         connects another."
+         connects another. The last failed connection, if any, reads beside
+         that link."
   [user-id]
   (e/client
     (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
@@ -77,4 +86,7 @@
                 (e/for [[t _] (forms/Button! [::disconnect] :class "btn btn-sm btn-danger" :label "Disconnect")]
                   (case (e/server (e/Offload #(disconnect!* user-id sub)))
                     (t)))))))
-        (ConnectLink settings-path "Connect a Google account")))))
+        (ConnectLink settings-path "Connect a Google account")
+        ;; Always mounted. A connection that failed is an error on the page it
+        ;; returned to, beside the link that started it (A-8).
+        (InlineError (e/server (connect-error* settings-refresh user-id)))))))

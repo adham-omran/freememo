@@ -28,7 +28,6 @@
    [freememo.cards :as cards]
    [freememo.settings :as settings]
    [freememo.text :as text]
-   [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [taoensso.telemere :as tel]
    [clojure.string :as str]))
@@ -65,36 +64,25 @@
   (if (= verdict "correct") 3 1))
 
 (defn- grade-failure!
-  "Shared failure path for both graders: log it, tell the learner, return the failure
-   value. The session flows persist the typed answer before grading, so Submit works
-   again; the Review flow persists nothing, and this toast is its only recovery path.
+  "Shared failure path for both graders: log it and return the failure value.
+   The caller shows the error where the learner acted, beside Submit.
 
-   A credit refusal is not a fault, and Submit cannot succeed again until the balance
-   is topped up, so its toast says that instead. `toast-refusal?` false leaves the
-   refusal to the caller: the Review flow answers it inline with the self-rating bar,
-   and a toast on every turn of a sitting would be noise.
+   A credit refusal is not a fault, and Submit cannot succeed again until the
+   balance is topped up, so its error says that instead. The text never claims
+   the answer was kept. The session flows persist the typed answer before
+   grading and add that sentence themselves (`grade-answer!`). The Review flow
+   saves nothing, and answers a refusal with the self-rating bar.
    Post: {:success false :error msg :error-type kw?}."
-  [user-id log-id e toast-refusal?]
+  [user-id log-id e]
   (let [refused? (llm/insufficient-credits? e)]
     (if refused?
       (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}
         "Grading refused: out of credits")
       (tel/error! {:id log-id} e))
-    (cond
-      (not refused?)
-      (toasts/push! user-id
-        {:level :error
-         :message (str "Grading failed: " (ex-message (llm/root-cause e))
-                    " — your answer was kept, try Submit again.")
-         :actions []})
-
-      toast-refusal?
-      (toasts/push! user-id
-        {:level :error
-         :message "AI grading needs credits, and your balance is empty. Your answer was kept."
-         :actions [{:label "Top up credits" :nav :settings}]}))
     {:success false
-     :error (ex-message (llm/root-cause e))
+     :error (if refused?
+              "AI grading needs credits, and your balance is empty."
+              (str "Grading failed: " (ex-message (llm/root-cause e)) "."))
      :error-type (when refused? :insufficient-credits)}))
 
 (defn ai-grading-available?
@@ -120,16 +108,14 @@
 (defn grade-question
   "Grade one answer against its question's facts WITHOUT persisting anything —
    the session-less core shared by the session quiz/exam (grade-answer!) and
-   the FSRS Review flow (review-question!). Charges the grading call and toasts
-   on failure; the caller owns all DB writes.
+   the FSRS Review flow (review-question!). Charges the grading call and returns
+   the failure; the caller owns all DB writes and shows the error.
    Post: {:success true :verdict str :explanation str :missed-fact-ids [int]
           :missed-facts [fact-map] :matched-keywords [str]
           :reference-answer str :keywords [str]} or
-         {:success false :error msg :error-type kw?}.
-   `toast-refusal?` (default true) is grade-failure!'s, for a credit refusal only."
-  ([user-id question-id user-answer]
-   (grade-question user-id question-id user-answer true))
-  ([user-id question-id user-answer toast-refusal?]
+         {:success false :error msg :error-type kw?}."
+  [user-id question-id user-answer]
+  (do
    (try
      (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
            {:keys [facts keywords question reference-answer]}
@@ -173,7 +159,7 @@
         :matched-keywords matched
         :reference-answer reference-answer
         :keywords keywords})
-     (catch Exception e (grade-failure! user-id ::grade-question e toast-refusal?)))))
+     (catch Exception e (grade-failure! user-id ::grade-question e)))))
 
 (defn grade-card
   "Grade one answer to a card item against that card's own reference answer.
@@ -182,17 +168,15 @@
    than fact grading by construction — D2 accepts that, and D3 gives the learner a
    self-rating arm instead. HTML is stripped before the call: the model gets the text
    the learner sees, and the markup would only cost tokens. Charges the grading call
-   and toasts on failure; the caller owns all DB writes.
+   and returns the failure; the caller owns all DB writes and shows the error.
    Pre:  ord is live for this card (db/get-card-item enforces it).
    Post: {:success true :verdict str :explanation str :reference-answer html
           :missed-fact-ids [] :missed-facts [] :matched-keywords []} or
          {:success false :error msg :error-type kw?}. The empty fact and keyword keys
          are present so one feedback shape serves both item types; :reference-answer
-         keeps its HTML so the caller can render formatting and math.
-   `toast-refusal?` (default true) is grade-failure!'s, for a credit refusal only."
-  ([user-id card-id ord user-answer]
-   (grade-card user-id card-id ord user-answer true))
-  ([user-id card-id ord user-answer toast-refusal?]
+         keeps its HTML so the caller can render formatting and math."
+  [user-id card-id ord user-answer]
+  (do
    (try
      (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
            {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
@@ -214,7 +198,7 @@
         :explanation (:explanation grade)
         :reference-answer answer
         :missed-fact-ids [] :missed-facts [] :matched-keywords []})
-     (catch Exception e (grade-failure! user-id ::grade-card e toast-refusal?)))))
+     (catch Exception e (grade-failure! user-id ::grade-card e)))))
 
 (defn grade-answer!
   "Record + grade one answer inside a session (quiz/exam). Persists the answer
@@ -223,16 +207,21 @@
    Pre:  session belongs to user-id and question-id is in its draw (the UI
          iterates the session's own question_ids — violation = caller bug).
    Post: grade-question's result, with the verdict persisted to kg_answers; the
-         raw answer is persisted even on grade failure."
+         raw answer is persisted even on grade failure, and a failure's error
+         says so (this flow keeps the answer, Review does not)."
   [user-id session-id question-id position user-answer]
   (let [answer-id (db/record-kg-answer! user-id session-id question-id position user-answer)]
     (if-not answer-id
       {:success false :error "Session not found"}
       (let [res (grade-question user-id question-id user-answer)]
-        (when (:success res)
-          (db/grade-kg-answer! answer-id (:verdict res) (:explanation res)
-            (:missed-fact-ids res) (:matched-keywords res)))
-        res))))
+        (if (:success res)
+          (do (db/grade-kg-answer! answer-id (:verdict res) (:explanation res)
+                (:missed-fact-ids res) (:matched-keywords res))
+              res)
+          (update res :error str
+            (if (= :insufficient-credits (:error-type res))
+              " Your answer was kept."
+              " Your answer was kept. Try Submit again.")))))))
 
 (defn- schedule-review!
   "Advance one item's FSRS schedule and append its kg_reviews row.
@@ -242,19 +231,19 @@
    the Electric session — the UI latches on \"Grading…\" with no way back and the
    user has already paid. Catching it degrades to graded-but-unscheduled: the verdict
    is shown, the item keeps its previous due date and so returns later.
-   Post: the apply-fsrs-review! map, or nil when the write failed or the item is not
-         this user's. Never throws for a DB fault."
+   Post: {:schedule <apply-fsrs-review! map|nil>}, plus :schedule-error (a
+         message for the learner) when the write threw. :schedule is nil when the
+         write failed or the item is not this user's. Never throws for a DB fault."
   [user-id item-ref rating record]
   (let [{:keys [scheduler enable-fuzzing]} (settings/fsrs-config user-id)]
     (try
-      (db/apply-fsrs-review! user-id item-ref rating record scheduler enable-fuzzing)
+      {:schedule (db/apply-fsrs-review! user-id item-ref rating record scheduler enable-fuzzing)}
       (catch Exception e
         (tel/error! {:id ::review-schedule-failed
                      :data {:user-id user-id :item item-ref}} e)
-        (toasts/push! user-id
-          {:level :error
-           :message "Your answer was graded, but its schedule could not be saved — this review will come up again."})
-        nil))))
+        {:schedule nil
+         :schedule-error (str "Your answer was graded, but its schedule could not be saved. "
+                           "This review will come up again.")}))))
 
 (defn- refusal-with-reference
   "A failed grade, plus the item's reference answer when the failure was a credit
@@ -273,30 +262,31 @@
    kg_answers/kg_sessions row — that row IS this flow's answer history.
 
    A failed grade writes nothing at all, so the typed answer is not retained; unlike
-   the session flows there is no pre-grade persist to fall back on, and the toast
-   pushed by grade-question is the only recovery path.
+   the session flows there is no pre-grade persist to fall back on, and the error
+   in the result is the only recovery path.
    Pre:  `duration-ms` is the client's turn-mount-to-submit measurement, or nil when
          it is unavailable. It is untrusted — db/apply-fsrs-review! bounds it.
-   Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>};
+   Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>}
+         plus :schedule-error when scheduling threw;
          :schedule is nil when grading failed (nothing written) OR when scheduling
          failed (grade shown, no review row, schedule untouched).
-   Post: a credit refusal toasts nothing and carries the question's
+   Post: a credit refusal carries the question's
          :reference-answer, so the turn can offer rate-question! in its place."
   [user-id question-id user-answer duration-ms]
-  (let [res (grade-question user-id question-id user-answer false)]
+  (let [res (grade-question user-id question-id user-answer)]
     (if-not (:success res)
       {:result (refusal-with-reference res
                  #(:reference-answer (db/get-kg-question-for-session user-id question-id)))
        :schedule nil}
-      {:result res
-       :schedule (schedule-review! user-id [:question question-id]
-                   (verdict->rating (:verdict res))
-                   {:verdict (:verdict res)
-                    :explanation (:explanation res)
-                    :user-answer user-answer
-                    :missed-fact-ids (:missed-fact-ids res)
-                    :duration-ms duration-ms
-                    :grade-source "ai"})})))
+      (merge {:result res}
+        (schedule-review! user-id [:question question-id]
+          (verdict->rating (:verdict res))
+          {:verdict (:verdict res)
+           :explanation (:explanation res)
+           :user-answer user-answer
+           :missed-fact-ids (:missed-fact-ids res)
+           :duration-ms duration-ms
+           :grade-source "ai"})))))
 
 (defn review-card!
   "The LLM-graded card arm: grade the answer against the card's reference answer,
@@ -305,23 +295,24 @@
    Pre:  the card-quiz LLM setting is on (settings/card-quiz-llm-grading?) — the
          caller owns that check, since it also decides which UI arm to render.
    Pre:  `duration-ms` as in review-question!.
-   Post: {:result <grade-card map> :schedule <apply-fsrs-review! map|nil>}.
-   Post: a credit refusal toasts nothing and carries the card's :reference-answer
+   Post: {:result <grade-card map> :schedule <apply-fsrs-review! map|nil>}, plus
+         :schedule-error when scheduling threw.
+   Post: a credit refusal carries the card's :reference-answer
          (HTML), so the turn can offer rate-card! in its place."
   [user-id card-id ord user-answer duration-ms]
-  (let [res (grade-card user-id card-id ord user-answer false)]
+  (let [res (grade-card user-id card-id ord user-answer)]
     (if-not (:success res)
       {:result (refusal-with-reference res
                  #(:answer (db/get-card-item user-id card-id ord)))
        :schedule nil}
-      {:result res
-       :schedule (schedule-review! user-id [:card card-id ord]
-                   (verdict->rating (:verdict res))
-                   {:verdict (:verdict res)
-                    :explanation (:explanation res)
-                    :user-answer user-answer
-                    :duration-ms duration-ms
-                    :grade-source "ai"})})))
+      (merge {:result res}
+        (schedule-review! user-id [:card card-id ord]
+          (verdict->rating (:verdict res))
+          {:verdict (:verdict res)
+           :explanation (:explanation res)
+           :user-answer user-answer
+           :duration-ms duration-ms
+           :grade-source "ai"})))))
 
 (defn- self-rate!
   "Record the learner's own rating as the grade of one item: no LLM call, no verdict.
@@ -331,7 +322,8 @@
          value is a caller bug and is refused here rather than scheduled).
    Pre:  `user-answer` is what the learner typed before rating, or nil when the turn
          asked for none.
-   Post: {:result {:success true :rating n} :schedule <map|nil>}, or
+   Post: {:result {:success true :rating n} :schedule <map|nil>} (plus
+         :schedule-error when scheduling threw), or
          {:result {:success false …} :schedule nil} for a rating outside 1..4."
   [user-id item-ref rating duration-ms user-answer]
   (if-not (#{1 2 3 4} rating)
@@ -339,10 +331,10 @@
                      :data {:user-id user-id :item item-ref :rating rating}}
           (ex-info "Rating outside 1..4" {:rating rating}))
       {:result {:success false :error "Invalid rating"} :schedule nil})
-    {:result {:success true :rating rating}
-     :schedule (schedule-review! user-id item-ref rating
-                 (cond-> {:grade-source "self" :duration-ms duration-ms}
-                   (some? user-answer) (assoc :user-answer user-answer)))}))
+    (merge {:result {:success true :rating rating}}
+      (schedule-review! user-id item-ref rating
+        (cond-> {:grade-source "self" :duration-ms duration-ms}
+          (some? user-answer) (assoc :user-answer user-answer))))))
 
 (defn rate-card!
   "The self-rated card arm, and the fallback when a card's LLM grade is refused for

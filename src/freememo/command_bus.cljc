@@ -41,7 +41,8 @@
             [freememo.commands :as commands]
             [freememo.interaction-trail :as trail]
             [freememo.navigation :as nav]
-            [freememo.optimistic :as opt]))
+            [freememo.optimistic :as opt]
+            [freememo.undo-scope :as undo-scope]))
 
 ;; ── Context ────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,31 @@
            (assoc m command-id remaining)
            (dissoc m command-id)))))
    nil))
+
+;; A command that is refused for now but stays visible. The palette lists it
+;; disabled, with the reason beside it. `available?` stays false, so the chord
+;; and every other caller do nothing. A publisher sets it while the cause holds
+;; and clears it on unmount (plans/remove-toasts.md A-12).
+(defonce !blocked (atom {}))   ; command-id -> reason string
+
+(defn block!
+  "Show `command-id` as disabled with `reason` in the palette.
+   Post: `blocked-reason` returns `reason`. Returns nil."
+  [command-id reason]
+  (swap! !blocked assoc command-id reason)
+  nil)
+
+(defn unblock!
+  "Undo `block!`. Returns nil."
+  [command-id]
+  (swap! !blocked dissoc command-id)
+  nil)
+
+(defn blocked-reason
+  "The reason `command-id` is shown disabled, or nil. Pre: `blocked` is the map
+   in `!blocked` (a caller that watches it passes its value)."
+  [blocked command-id]
+  (get blocked command-id))
 
 (defn- invoker-for
   "Any one mounted publisher's handle, or nil.
@@ -382,6 +408,14 @@
 ;; ── App-shell handlers ─────────────────────────────────────────────────────
 ;; Owned here because they act purely on shell context published by Main.
 
+;; Cmd-Z undoes the newest entry the current view shows (plans/remove-toasts.md
+;; 1.8.1). The server cannot see the view, so the payload carries the subjects.
+;; Body-level reader conditional: the var must exist on both peers.
+(register-preparer! :undo-newest
+  (fn [ctx]
+    #?(:cljs {:shown (undo-scope/shown-undo-subjects ctx)}
+       :clj {:shown []})))
+
 (register-handler! :open-undo-history
   (fn [ctx _payload]
     (some-> (:undo-modal-open-atom ctx) (reset! true))))
@@ -489,8 +523,11 @@
 
 ;; The poem reader publishes :poem-topic-id while it is mounted, and it mounts
 ;; for exactly the topics that have a package — so an absent key IS "this is not
-;; a poem". RightSidePanel owns both outcomes because the toast queue is a
-;; server atom and a handler has no Electric scope to reach it from.
+;; a poem". The preparer hides the command on other topics, so the handler
+;; only runs for a poem.
+(register-preparer! :show-poem-panel
+  (fn [ctx] (when (:poem-topic-id ctx) {})))
+
 (register-handler! :show-poem-panel
   (fn [ctx _payload]
     (when-let [request! (:request-poem-panel! ctx)]

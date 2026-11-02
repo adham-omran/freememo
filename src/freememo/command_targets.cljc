@@ -60,8 +60,16 @@
    :cross-origin-src   (fn [s] (and (string? (:src s)) (not (same-origin-src? (:src s)))))
    ;; An enable test, never a hide test. A card field cannot count its topic's
    ;; pins, so an unknown count leaves the row enabled: :add-pin re-checks the
-   ;; cap in its transaction and toasts a refusal.
+   ;; cap in its transaction and a refusal reaches the banner strip.
    :pin-room           (fn [s] (let [n (:pin-count s)] (or (nil? n) (< n 2))))
+   ;; The next four are enable tests too. Each reads a fact that is false only
+   ;; when the surface or the browser KNOWS the action cannot work, so an
+   ;; absent fact leaves the row enabled. The context menu states the first
+   ;; three from the browser when it opens (freememo.context-menu).
+   :secure-context     (fn [s] (not (false? (:clipboard-ok? s))))
+   :clipboard-api      (fn [s] (not (false? (:menu-copy-ok? s))))
+   :card-gen-available (fn [s] (not (false? (:card-gen-available? s))))
+   :has-text           (fn [s] (not (false? (:has-text? s))))
    :looping            (fn [s] (true? (:looping? s)))
    :not-looping        (fn [s] (false? (:looping? s)))
    :math-ready         (fn [s] (true? (:math-ready? s)))
@@ -74,7 +82,31 @@
 
 (def enable-reasons
   "Why an item shows disabled, for each test an `:enable-if` may name."
-  {:pin-room "Max 2 pins. Remove one first."})
+  {:pin-room "Max 2 pins. Remove one first."
+   :secure-context "Copying needs a secure connection. Open the app over https or on localhost."
+   :clipboard-api "This browser cannot copy from a menu. Use Ctrl+C or Cmd+C."
+   :card-gen-available "Card generation is not available here."
+   :has-text "Extract the text first."})
+
+(def implicit-enable-if
+  "Enable tests a command always carries, by command id, whatever its registry
+   entry says. They state what the browser or the surface can do, not what a
+   user may do, so they belong to the handler and not to the registry. Each
+   vector is in the order the reasons should win: a plain-http page reports
+   the connection before the missing API."
+  {:copy-image               [:secure-context :clipboard-api]
+   :copy-image-address       [:secure-context :clipboard-api]
+   :copy-editor-selection    [:secure-context :clipboard-api]
+   :cut-editor-selection     [:secure-context :clipboard-api]
+   :copy-pdf-selection       [:secure-context :clipboard-api]
+   :generate-document-cards  [:card-gen-available]
+   :generate-cards-for-topic [:has-text]})
+
+(defn effective-enable-if
+  "The enable tests of command `id`: its implicit ones, then its entry's.
+   Post: a vector, so the first failing test is the same on every call."
+  [id entry]
+  (vec (distinct (concat (implicit-enable-if id) (sort (:enable-if entry))))))
 
 (defn- holds? [test-key subjects]
   (let [test (get subject-tests test-key)]
@@ -127,7 +159,9 @@
                :group (first (:menu entry))
                :rank (second (:menu entry))
                :danger? (true? (:danger? entry))
-               :disabled-reason (disabled-reason entry target)})))
+               :disabled-reason (disabled-reason
+                                  (assoc entry :enable-if (effective-enable-if id entry))
+                                  target)})))
     (sort-by (juxt :group :rank :label))
     (mapv #(dissoc % :rank))))
 

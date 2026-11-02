@@ -2,7 +2,7 @@
   "Question generation from the knowledge graph (plan M3).
 
    Atomic: one question per approved fact not yet covered, batched ~15 facts
-   per LLM call, background run per document (executor + toasts + cancel,
+   per LLM call, background run per document (executor + Activity row + cancel,
    mirroring kg-extract). Synthesis: one call over an entity's fact
    neighborhood, run inline from the UI (single call, e/Offload).
 
@@ -12,7 +12,8 @@
    [freememo.db :as db]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
+   [freememo.activity :as activity]
+   [freememo.activity-registry :as registry]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
    [freememo.user-state :as us]
@@ -209,18 +210,17 @@
 
 (defn generate-synthesis-questions!
   "1–3 multi-fact questions over an entity's approved neighborhood. Inline
-   (one LLM call); pushes its own outcome toast so UI callers stay dumb.
+   (one LLM call). It reports nothing itself: the new questions are the
+   confirmation, and the caller shows a failure beside its button.
    Pre:  entity owned by user-id.
    Post: {:success true :questions n} (0 when the model finds no multi-fact
-         angle or the neighborhood is < 2 facts), or {:success false ...}."
+         angle), or {:success false :error msg}. A neighborhood of fewer than
+         two facts is a failure with that reason, not a success of 0."
   [user-id entity-id entity-label]
   (try
     (let [facts (db/entity-fact-neighborhood user-id entity-id)]
       (if (< (count facts) 2)
-        (do (toasts/push! user-id
-              {:level :error
-               :message "Needs at least two facts touching this entity."})
-          {:success true :questions 0})
+        {:success false :error "Needs at least two facts touching this entity."}
         (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
               {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
                                              (cards/load-prompt-template "kg-question-synthesis.md")
@@ -236,23 +236,14 @@
                                     valid-ids 2 parsed)]
           (credits/record-cost-charge! user-id :kg.questions (:id entry) cost tokens)
           (commands/bump! user-id :generate-questions)
-          (toasts/push! user-id
-            {:level :success
-             :message (str persisted " synthesis question"
-                        (when (not= 1 persisted) "s") " for “" entity-label "”")})
           {:success true :questions persisted})))
     (catch Exception e
       (if (llm/insufficient-credits? e)
         (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}
           "Synthesis generation refused: out of credits")
         (tel/error! {:id ::generate-synthesis-questions} e))
-      (toasts/push! user-id
-        {:level :error
-         :message (ex-message (llm/root-cause e))
-         :actions (if (llm/insufficient-credits? e)
-                    [{:label "Top up credits" :nav :settings}]
-                    [])})
-      {:success false :error (ex-message (llm/root-cause e))})))
+      {:success false :error (ex-message (llm/root-cause e))
+       :error-type (when (llm/insufficient-credits? e) :insufficient-credits)})))
 
 ;; ---------------------------------------------------------------------------
 ;; Async entry point for atomic runs — mirrors kg-extract/start-distill!
@@ -262,55 +253,77 @@
 
 (def ^:private generation-timeout-ms (* 20 60 1000))
 
+(defn generation-summary
+  "One sentence for the run's Activity row: counts only.
+   `:omitted` is surfaced, not just logged: without it a run that writes 12
+   questions for 40 facts looks like a silent failure. Failed batches are NOT here;
+   they go to the banner strip (`generation-failure-text`).
+   Pre : `result` is a successful `generate-atomic-questions!` return."
+  [{:keys [questions omitted]}]
+  (str questions " question" (when (not= 1 questions) "s") " generated"
+    (when (pos? (or omitted 0))
+      (str ". " omitted " fact" (when (not= 1 omitted) "s")
+        " skipped because too few facts set them apart"))))
+
+(defn generation-failure-text
+  "The failed part of a successful run, or nil when every batch worked."
+  [{:keys [batch-errors]}]
+  (when (pos? (or batch-errors 0))
+    (str "Generating questions: " batch-errors " batch"
+      (when (not= 1 batch-errors) "es") " failed.")))
+
 (defn start-atomic-generation!
   "Submit an atomic-generation run for (uid, root-topic-id). No-op when one is
    already in flight for that document. Progress in :generating-questions,
-   cancel fn in :question-cancellers; completion toasts + bumps
-   :generate-questions (:kg-mutations)."
+   cancel fn in :question-cancellers. The summary or the error is kept for the
+   Activity row before membership drops. A successful run bumps
+   :generate-questions (:kg-mutations); batches that failed go to the banner."
   [uid root-topic-id]
   (when-not (contains? @(us/get-atom uid :generating-questions) root-topic-id)
+    (registry/clear-run! uid :generate-questions root-topic-id)
     (swap! (us/get-atom uid :generating-questions) conj root-topic-id)
     (tel/log! {:level :info :id ::atomic-generation-started
                :data {:user-id uid :root root-topic-id}}
       "Atomic question generation started")
-    (let [cancel-fn
+    (let [done! (fn []
+                  (swap! (us/get-atom uid :question-cancellers) dissoc root-topic-id)
+                  (swap! (us/get-atom uid :generating-questions) disj root-topic-id))
+          cancel-fn
           ((m/timeout
              (m/via question-executor (generate-atomic-questions! uid root-topic-id))
              generation-timeout-ms
              {:success false :error "Question generation timed out after 20 minutes"})
            (fn [result]
-             (swap! (us/get-atom uid :question-cancellers) dissoc root-topic-id)
-             (swap! (us/get-atom uid :generating-questions) disj root-topic-id)
+             ;; Kept BEFORE `done!`: the reporter closes the row with what it
+             ;; finds when it sees the work gone.
              (if (:success result)
-               (do (commands/bump! uid :generate-questions)
-                 (toasts/push! uid
-                   {:level :success
-                    ;; :omitted is surfaced, not just logged: without it a run that
-                    ;; writes 12 questions for 40 facts looks like a silent failure.
-                    :message (str (:questions result) " question"
-                               (when (not= 1 (:questions result)) "s")
-                               " generated"
-                               (when (pos? (:omitted result 0))
-                                 (str "; " (:omitted result)
-                                   " fact(s) skipped — too few distinguishing facts"))
-                               (when (pos? (:batch-errors result 0))
-                                 (str " (" (:batch-errors result) " batch(es) failed)")))}))
-               (toasts/push! uid
-                 {:level :error
-                  :message (:error result)
-                  :actions (if (= :insufficient-credits (:error-type result))
-                             [{:label "Top up credits" :nav :settings}]
-                             [])})))
+               (registry/record-summary! uid :generate-questions root-topic-id
+                 (generation-summary result))
+               (registry/record-error! uid :generate-questions root-topic-id result))
+             (done!)
+             (when (:success result)
+               (commands/bump! uid :generate-questions)
+               (when-some [text (generation-failure-text result)]
+                 (activity/record-failure! uid
+                   {:error text :what "Generate questions" :subject-id root-topic-id
+                    :retry {:command :generate-questions
+                            :payload {:topic-id root-topic-id}}}))))
            (fn [e]
-             (swap! (us/get-atom uid :question-cancellers) dissoc root-topic-id)
-             (swap! (us/get-atom uid :generating-questions) disj root-topic-id)
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::atomic-generation-task} e)
-               (toasts/push! uid {:level :error :message (ex-message e)}))))]
+               (registry/record-error! uid :generate-questions root-topic-id
+                 (or (ex-message e) "Question generation failed")))
+             (done!)))]
       (swap! (us/get-atom uid :question-cancellers) assoc root-topic-id cancel-fn)
       ;; After the canceller: discovery reads cancellability when it opens the row.
       (us/work-started! uid))
     nil))
+
+(activity/register-retry-handler! :generate-questions
+  (fn [user-id {:keys [topic-id]}]
+    (if (some? (db/get-topic-for-user user-id topic-id))
+      (do (start-atomic-generation! user-id topic-id) {:ok? true})
+      {:ok? false :error "That document is not available."})))
 
 (defn cancel-atomic-generation!
   "Cancel an in-flight atomic run for (uid, root-topic-id), if any."

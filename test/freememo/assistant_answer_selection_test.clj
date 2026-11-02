@@ -180,7 +180,7 @@
               :context "Shape is how many items ."
               :card-type "cloze" :card-count 3 :user-id 7 :enc-key nil
               :topic-id 301 :root-topic-id 300
-              :pre-prompt nil :pre-prompt-mode nil :success-toast? true}
+              :pre-prompt nil :pre-prompt-mode nil}
             (dissoc @queued :id))
         "a page under a PDF root takes the PDF as its root, as the toolbar does"))))
 

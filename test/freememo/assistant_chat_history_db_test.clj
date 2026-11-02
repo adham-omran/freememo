@@ -150,7 +150,7 @@
           _ (assistant/stage-chat-deletion! owner chat-id)
           entry-id (:staged_delete_id (chat-row chat-id))]
       (jdbc/execute! db/ds ["DELETE FROM topics WHERE id = ?" topic-id])
-      (is (= {:success false :error "Undo failed"} (undo/undo-entry! owner entry-id)))
+      (is (= {:ok? false :success false :error "Undo failed"} (undo/undo-entry! owner entry-id)))
       (is (nil? (:undone_at (db/get-undo-entry entry-id)))))))
 
 (deftest the-purge-removes-the-chat-and-every-child-row

@@ -15,7 +15,7 @@
 
      :external        Import + View
      :in-app          navigate inside FreeMemo, then scroll to :fragment
-     :fragment        scroll to a heading in this document; toast when absent
+     :fragment        scroll to a heading in this document; the link card says why when absent
      :no-base         a relative href with no document URL to resolve against
      :handler         mailto:/tel: — hand to the OS, show no popover
      :inert-citation  reference plumbing whose target was never imported
@@ -29,7 +29,7 @@
 ;; 93.6% of the fragment links in the corpus point into a reference list that
 ;; the importer never carried into the document — 97371 `#cite_note`, 42421
 ;; `#cite_ref`, 3976 `#CITEREF`. No heading can ever satisfy them, so they get
-;; no affordance at all: a toast on each would be noise, not information.
+;; no affordance at all: a message on each would be noise, not information.
 ;;
 ;; If an importer ever carries reference lists in, this set must shrink.
 (def ^:private citation-fragment-re

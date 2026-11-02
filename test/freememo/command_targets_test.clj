@@ -44,7 +44,11 @@
                :has-selection      [{:selection-text "a"} {:selection-text " "}]
                :has-text-selection [{:selection-length 3} {:selection-length 0}]
                :no-text-selection  [{:selection-length 0} {:selection-length 3}]
-               :document-editor    [{:document-editor? true} {:document-editor? false}]}]
+               :document-editor    [{:document-editor? true} {:document-editor? false}]
+               :secure-context     [{:clipboard-ok? true} {:clipboard-ok? false}]
+               :clipboard-api      [{:menu-copy-ok? true} {:menu-copy-ok? false}]
+               :card-gen-available [{:card-gen-available? true} {:card-gen-available? false}]
+               :has-text           [{:has-text? true} {:has-text? false}]}]
     (is (= (set (keys targets/subject-tests)) (set (keys cases)))
       "every subject test has a case here")
     (doseq [[k [pass fail]] cases]
@@ -87,6 +91,30 @@
     (is (nil? (targets/disabled-reason entry (topic-target {:pin-count 0}))))
     (is (= "Max 2 pins. Remove one first."
           (targets/disabled-reason entry (topic-target {:pin-count 2}))))))
+
+(deftest an-enable-test-reads-an-absent-fact-as-enabled
+  (doseq [k [:pin-room :secure-context :clipboard-api :card-gen-available :has-text]]
+    (is (passes? k {}) (str k " leaves a row enabled when the fact is absent"))))
+
+(deftest a-copy-row-is-disabled-with-the-reason-when-the-browser-cannot-copy
+  (let [registry {:copy-image {:label "Copy image" :target :image :menu [1 1]}}
+        item (fn [subject]
+               (first (targets/menu-items registry {:kind :image :subjects [subject]})))]
+    (is (nil? (:disabled-reason (item {:src "/api/media/1"}))))
+    (is (nil? (:disabled-reason (item {:clipboard-ok? true :menu-copy-ok? true}))))
+    (is (= "Copying needs a secure connection. Open the app over https or on localhost."
+          (:disabled-reason (item {:clipboard-ok? false :menu-copy-ok? true}))))
+    (testing "an insecure page reports the connection before the missing API"
+      (is (= (:secure-context targets/enable-reasons)
+            (:disabled-reason (item {:clipboard-ok? false :menu-copy-ok? false})))))
+    (is (= (:clipboard-api targets/enable-reasons)
+          (:disabled-reason (item {:clipboard-ok? true :menu-copy-ok? false}))))))
+
+(deftest generate-document-cards-is-disabled-without-an-owner
+  (let [registry {:generate-document-cards {:label "G" :target :caret :menu [1 1]}}
+        item (first (targets/menu-items registry
+                      {:kind :caret :subjects [{:card-gen-available? false}]}))]
+    (is (= "Card generation is not available here." (:disabled-reason item)))))
 
 (deftest menu-items-are-ordered-by-group-then-rank
   (let [registry {:b {:label "B" :target :topic :menu [2 1]}

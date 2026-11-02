@@ -13,8 +13,8 @@
    publishing an atom gets an activity for free.
 
    The cost of that choice is stated where it bites: `registry/work-error` reads
-   an outcome from the owners that record one, and the rest report failure only
-   as a toast — so a failed run of theirs closes as 'success' in history.
+   an outcome from the owners that record one, and the rest report failure
+   only to their caller — so a failed run of theirs closes as 'success' in history.
 
    PULL, not push, and that is load-bearing. A keepalive that merely advanced
    `updated_at` for every live row would prove the SERVER is alive, not the WORK
@@ -180,6 +180,7 @@ an activity reporter bug."}
                 (let [err (registry/work-error type user_id work_key)]
                   (activity/terminate! user_id id (if err "failure" "success")
                     {:error err
+                     :retry (when err (registry/work-retry type work_key))
                      :summary (when-not err
                                 (registry/work-summary type user_id work_key))})
                   (swap! locally-observed-activity-ids disj id)

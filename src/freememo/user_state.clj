@@ -140,10 +140,24 @@
           ;; by the next claim.
           :anki-run-errors  (atom {})
           ;; "collection" -> what the last finished or cancelled sync did, in
-          ;; the words of its closing toast. Written before the lease drops so
+          ;; the words of its summary. Written before the lease drops so
           ;; the reporter closes the row with it; cleared by the next claim.
           :anki-run-results (atom {})
-          :toasts           (atom []))))))
+          ;; NeoReader syncs (freememo.neoreader): the document topic ids with a
+          ;; sync in flight. The error and the summary of the last sync outlive
+          ;; membership, so the reporter can close the row with either one.
+          ;; The next sync of that document clears both at its start.
+          :neoreader-syncs  (atom #{})
+          :neoreader-sync-errors (atom {})
+          :neoreader-sync-results (atom {})
+          ;; The error and the summary of the last run of a type whose owner keeps
+          ;; no atom of its own for them: transcription, distillation, question
+          ;; generation, card generation. Keyed [type work-key]. Written by
+          ;; `activity-registry/record-error!` BEFORE the run drops from its
+          ;; in-flight set, so the reporter closes the row with them. The next
+          ;; run of the same work clears its entry at its start.
+          :run-errors       (atom {})
+          :run-summaries    (atom {}))))))
 ;; Three keys are deliberately absent, each for its own reason.
 ;;
 ;; :pending-commands and :pending-cards moved to freememo.client-state (per page

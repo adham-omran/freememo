@@ -29,6 +29,17 @@
 ;; Server
 ;; ---------------------------------------------------------------------------
 
+(defn embed-warning*
+  "True when the topic was imported with a hint that the owner disabled
+   embedding. The flag is stored on `topic_youtube`, so it survives a reload.
+
+   Pre : `topic-id` is a YouTube topic the caller may read (the pane only
+         mounts for one the user opened).
+   Post: a boolean."
+  [topic-id]
+  #?(:clj (boolean (:embed_warning (db/get-topic-youtube topic-id)))
+     :cljs false))
+
 (defn create-clip!*
   "Server side of Extract clip. Bumps :extract-clip (→ :tree-mutations) so the
    hierarchy panel shows the new child without a :refresh that would re-init
@@ -58,6 +69,11 @@
     (or (= code 101) (= code 150)) "The owner does not allow this video to play outside YouTube."
     (= code 153) "The YouTube player rejected its configuration, so the video cannot play here."
     :else "The YouTube player failed. Open the topic again, or watch it on YouTube."))
+
+(def embed-warning-text
+  "The line under the player for a video flagged at import. It warns and never
+   blocks: the player's error 101 or 150 is the certain answer."
+  "The owner may not allow embedding, so this video may not play here.")
 
 (defn embed-blocked?
   "True for the errors that only YouTube itself can play past."
@@ -242,6 +258,12 @@
               (e/on-unmount #(destroy-player! !handle topic-id))))
           (when (some? error)
             (PlayerError error yt))
+          ;; A stored caveat from import. Its own leaf, so a read still in
+          ;; flight leaves the player and the controls where they are.
+          (when (e/server (e/Offload #(embed-warning* topic-id)))
+            (dom/div
+              (dom/props {:class "youtube-notice" :role "note"})
+              (dom/text embed-warning-text)))
           (ClipControls topic-id yt !handle))))))
 
 (e/defn DesktopNotice

@@ -9,6 +9,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.a11y :as a11y]
+   [freememo.inline-error :as ie]
    [freememo.knowledge-scope :as scope]
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
@@ -61,19 +62,24 @@
 
 (defn run-question-action!*
   "Run one question action over `ids` — one row from its menu, or a selection
-   from the batch bar. The bulk fns push their own toast.
+   from the batch bar. The changed rows confirm a success.
    Pre:  kind ∈ #{:delete :flag :unflag :suspend :unsuspend}.
-   Post: {:success true …} or {:success false :error msg}."
+   Post: {:success true …} or {:success false :error msg}. The view shows the
+         error beside its filters (`action-error*`)."
   [user-id {:keys [kind ids]}]
-  #?(:clj (bulk/report-failure! user-id
-            (case kind
-              :delete (bulk/reject-questions! user-id ids)
-              :flag (bulk/set-questions-flags! user-id ids {:flagged true})
-              :unflag (bulk/set-questions-flags! user-id ids {:flagged false})
-              :suspend (bulk/set-questions-flags! user-id ids {:suspended true})
-              :unsuspend (bulk/set-questions-flags! user-id ids {:suspended false})
-              {:success false :error "That action is not available."}))
+  #?(:clj (case kind
+            :delete (bulk/reject-questions! user-id ids)
+            :flag (bulk/set-questions-flags! user-id ids {:flagged true})
+            :unflag (bulk/set-questions-flags! user-id ids {:flagged false})
+            :suspend (bulk/set-questions-flags! user-id ids {:suspended true})
+            :unsuspend (bulk/set-questions-flags! user-id ids {:suspended false})
+            {:success false :error "That action is not available."})
      :cljs nil))
+
+(defn action-error*
+  "The words a failed `result` of `run-question-action!*` shows, or nil."
+  [result]
+  #?(:clj (bulk/failure-text result) :cljs nil))
 
 ;; ── Rows ───────────────────────────────────────────────────────────
 
@@ -159,7 +165,8 @@
                 selecting? (boolean (seq selected))
                 filtered? (or (not (str/blank? query)) (some? source-id) (some? entity-id)
                             flagged? suspended?)
-                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))]
+                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))
+                [action-t action-error] (e/Token action)]
             (dom/div
               (dom/props {:class "knowledge-view"})
               (dom/div
@@ -176,6 +183,7 @@
                     [kg-bump source-id] "Filter by entity…" nil nil))
                 (scope/FilterToggle "Flagged" flagged? !flagged?)
                 (scope/FilterToggle "Suspended" suspended? !suspended?)
+                (ie/InlineError action-error)
                 (dom/span (dom/props {:class "knowledge-count"})
                   (dom/text (str item-count " question" (when (not= 1 item-count) "s")))))
               (when filtered?
@@ -265,12 +273,11 @@
                         r)))))
               ;; The one place a row or batch action runs. It outlives the menu
               ;; that wrote it, so closing the menu never tears down the work.
-              (let [[t _] (e/Token action)]
-                (when t
-                  (let [r (e/server (e/Offload #(run-question-action!* user-id action)))]
-                    (case r
-                      (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
-                        (t))))))
+              (when action-t
+                (let [r (e/server (e/Offload #(run-question-action!* user-id action)))]
+                  (case r
+                    (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
+                      (if (:success r) (action-t) (action-t (action-error* r)))))))
               (curate/QuestionEditorModal user-id !editing)
               (stats/QuizItemStatsModal user-id !stats)
               (scope/ReflectScopeInUrl navigate! :knowledge-questions route-doc-id source-id)

@@ -17,7 +17,6 @@
             [freememo.model-context :as model-context]
             [freememo.openrouter :as openrouter]
             [freememo.settings :as settings]
-            [freememo.toasts :as toasts]
             [freememo.undo :as undo]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
@@ -262,19 +261,17 @@
 
 (deftest deleting-a-chat-stages-its-forks-and-undo-restores-them
   (with-users [owner]
-    (let [topic-id (create-topic! owner)
-          !toasts (atom [])]
+    (let [topic-id (create-topic! owner)]
       (with-provider {:!requests (atom [])}
         (fn []
-          (with-redefs [toasts/push! (fn [_ toast] (swap! !toasts conj toast))]
+          (do
             (let [{root :chat-id} (send! owner topic-id nil "ABC")
                   {a :chat-id} (send! owner topic-id root "/fork A")
                   {a1 :chat-id} (send! owner topic-id a "/fork A1")
                   {b :chat-id} (send! owner topic-id root "/fork B")
                   {other :chat-id} (send! owner topic-id nil "Unrelated")]
               (is (:success (assistant/stage-chat-deletion! owner root)))
-              (is (= "Chat and its 3 branches deleted. You can undo this for 12 hours."
-                    (:message (last @!toasts))))
+              (is (some? (chat-row root)) "the undo entry is written with no other side effect")
               (is (= [other] (mapv :id (db/get-assistant-chats owner topic-id)))
                 "every descendant is hidden with the chat")
               (is (every? nil? (map #(db/get-assistant-chat owner %) [root a a1 b])))

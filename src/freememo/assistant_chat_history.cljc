@@ -25,6 +25,7 @@
    [freememo.assistant-composer :as composer]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
+   [freememo.inline-error :as inline-error]
    [freememo.interaction-trail :as trail]
    [freememo.modal-shell :as modal-shell]
    [freememo.measured-list :as measured]
@@ -195,9 +196,15 @@
   [op chat-id & {:as more}]
   (merge {:op op :chat-id chat-id :nonce (str (random-uuid))} more))
 
+(defonce !chat-action-error
+  ;; The failure of the last rename, pin, delete or exclude. ChatActionEffect
+  ;; has no element of its own, so the chat bar and the history bar show it.
+  (atom nil))
+
 (defn request-chat-action!
-  "Queue one chat action. Returns nil."
+  "Queue one chat action and clear the last failure. Returns nil."
   [!chat-action op chat-id & more]
+  (reset! !chat-action-error nil)
   (reset! !chat-action (apply chat-action op chat-id more))
   nil)
 
@@ -416,14 +423,19 @@
    Pre: mounted where it outlives the controls that write `!chat-action` —
    RightSidePanel — so neither a closed view nor a collapsed panel cancels a
    write in flight.
-   Post: one server call per request. The server reports a failure as a toast."
+   Post: one server call per request. A failed rename, pin, delete or exclude
+   writes its error to `!chat-action-error`, which the chat bar and the history
+   bar show with InlineError. A failed :open is silent: it only feeds the seed."
   [user-id !chat-action]
   (e/client
     (let [action (e/watch !chat-action)
           [t _] (e/Token action)]
       (when t
         (let [result (e/server (e/Offload #(apply-chat-action!* user-id action)))]
-          (case result (t)))))))
+          (case (reset! !chat-action-error
+                  (when (and (not (:success result)) (not= :open (:op action)))
+                    (or (:error result) "The chat change failed.")))
+            (t)))))))
 
 (e/defn ChatTitleEditor
   "The rename input, shared by the bar title and a history row (§3.4).
@@ -678,6 +690,7 @@
           (tooltip/Tooltip! "Start a new chat about this page")
           (dom/text "＋ New")
           (dom/On "click" (fn [_] (new-chat!)) nil)))
+      (inline-error/InlineError (e/watch !chat-action-error))
       (dom/div
         (dom/props {:class "assistant-history__list measured-list-scroll"})
         (let [scroller dom/node
@@ -780,7 +793,8 @@
                     :type "button"})
         (tooltip/Tooltip! "Start a new chat about this page")
         (dom/text "＋ New")
-        (dom/On "click" (fn [_] (new-chat!)) nil)))))
+        (dom/On "click" (fn [_] (new-chat!)) nil)))
+    (inline-error/InlineError (e/watch !chat-action-error))))
 
 (e/defn ChatBarWithHistory
   "The bar and the history view, as two siblings in the assistant panel.

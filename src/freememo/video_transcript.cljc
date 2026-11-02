@@ -155,7 +155,7 @@
   "Launch (or re-launch) the ffmpeg + Whisper pipeline for a video.
 
    Pre:  topic-id is a kind='video' topic owned by user-id with a topic_videos row.
-   Post: returns immediately; the run reports through toasts and :refresh.
+   Post: returns immediately; the run reports through its Activity row and :refresh.
          A second request while one is in flight is dropped by
          `video/start-processing!`'s own dedup, so the disabled state below is
          a courtesy, not the guard.
@@ -269,7 +269,7 @@
           (case op
             ;; start-processing! returns immediately after launching the task,
             ;; so the token spends on ACCEPTANCE, not completion. Progress and
-            ;; failure surface through :processing-videos and toasts.
+            ;; failure surface through :processing-videos and the Activity row.
             ::transcribe (case (e/server (start-processing!* user-id topic-id))
                            (t))
             ;; Copy is synchronous and can fail (no transcript yet) — spend with

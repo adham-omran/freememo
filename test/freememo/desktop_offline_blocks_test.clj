@@ -12,7 +12,7 @@
             [freememo.desktop-link :as link]
             [freememo.desktop-version :as desktop-version]
             [freememo.sync-schema :as schema]
-            [freememo.toasts :as toasts])
+            [freememo.activity :as activity])
   (:import [java.time Duration Instant]))
 
 (def ^:private opts {:builder-fn rs/as-unqualified-lower-maps})
@@ -104,14 +104,14 @@
                 (auth/allocate-block! db/ds (:user a) (:token-id a)))))
         (is (nil? (one "SELECT 1 FROM id_blocks WHERE token_id = ?" (:token-id a))))))))
 
-(deftest an-error-toast-for-a-local-account-offers-the-sign-in
-  (testing "15.4.2"
-    (is (= [{:label "Sign in" :href "/desktop/sign-in"}]
-          (toasts/error-actions :error link/sign-in-message)))
-    (is (= [{:label "Sign in" :href "/desktop/sign-in"}]
-          (toasts/error-actions :error (str "Card generation failed: " link/sign-in-message))))
-    (is (= [] (toasts/error-actions :info link/sign-in-message)))
-    (is (= [] (toasts/error-actions :error "Rate limited.")))))
+(deftest a-failure-for-a-local-account-offers-the-sign-in
+  (testing "15.4.2: the failure banner reads the kind and shows Sign in"
+    (is (= "needs-account" (activity/error-kind link/sign-in-message)))
+    (is (= "needs-account"
+          (activity/error-kind (str "Card generation failed: " link/sign-in-message))))
+    (is (= "needs-account"
+          (activity/error-kind (ex-info link/sign-in-message {:type ::link/sign-in-required}))))
+    (is (nil? (activity/error-kind "Rate limited.")))))
 
 (deftest the-server-peer-never-reports-offline
   (testing "15.2.3: the offline guard is a desktop guard"

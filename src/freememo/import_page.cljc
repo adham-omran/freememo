@@ -20,9 +20,12 @@
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.a11y :as a11y]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    [freememo.import-types :as itypes]
+   [freememo.import-waiting :as iw]
    [freememo.navigation :as nav]
    [freememo.command-bus :as bus]
    [freememo.import-modal :refer [ImportModal]]
@@ -399,6 +402,41 @@
           (set! (-> e .-target .-value) ""))
         nil))))
 
+;; Imports a link click fetched and left for the reader (plan item 2.12). The
+;; staging area holds the bytes; Review opens the Import dialog at its confirm
+;; step, and Discard drops them. The section is a stable element
+;; and mounts its rows only while some wait, so an empty list takes no room.
+;;
+;; Pre:  `review!` takes one waiting item {:upload-id :filename :flow :size}.
+(e/defn WaitingImports [user-id review!]
+  (e/client
+    (let [;; A client e/as-vec reads the Offload's empty first value as nil.
+          items (peek (e/as-vec
+                        (e/server
+                          (let [rev (e/watch (iw/rev-atom* user-id))]
+                            (e/Offload #(iw/waiting* rev user-id))))))]
+      (dom/section
+        (dom/props {:class (if (seq items) "import-waiting" "import-waiting is-empty")
+                    :aria-label "Imports waiting for you"})
+        (dom/props {:style {:display (if (seq items) "" "none")}})
+        (dom/h2 (dom/props {:class "import-waiting__title"})
+          (dom/text (str (count items) " waiting for you")))
+        (e/for [item (e/diff-by :upload-id (or items []))]
+          (dom/div
+            (dom/props {:class "import-waiting__row"})
+            (dom/span
+              (dom/props {:class "import-waiting__name"})
+              (tooltip/Tooltip! (:filename item))
+              (dom/text (str (iw/kind-label (:flow item)) ": " (:filename item))))
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-sm btn-primary"})
+              (dom/text "Review")
+              (dom/On "click" (fn [_] (review! item)) nil))
+            (e/for [[t _] (forms/Button! [::discard (:upload-id item)]
+                            :class "btn btn-sm btn-secondary" :label "Discard")]
+              (case (e/server (e/Offload #(iw/discard!* user-id (:upload-id item))))
+                (t)))))))))
+
 ;; Native <details> owns its own open state and its own keyboard operability, so
 ;; nothing here writes the `open` attribute: an Electric-managed `:open` prop
 ;; would fight the browser's toggle, and any string value at all opens the
@@ -449,6 +487,11 @@
                             (reset! !intake (:intake plan))
                             (reset! !open-source (:source plan))))
           open-file-dialog! (fn [] (when-some [el @!file-input] (.click el)))
+          ;; Open the Import dialog on a waiting import's confirm step.
+          review! (fn [{:keys [upload-id filename flow size]}]
+                    (reset! !intake {:staged {:upload-id upload-id :filename filename
+                                              :dispatch flow :size size}})
+                    (reset! !open-source :url))
           pending (e/watch !pending-import)]
 
       ;; A palette-dispatched intent opens its modal once. The watch above is what
@@ -473,6 +516,8 @@
             (dom/p
               (dom/props {:class "import-intro"})
               (dom/text "Add material to your library. FreeMemo makes cards from it.")))
+
+          (WaitingImports user-id review!)
 
           ;; The chip row is derived server-side: `ceilings` is a server-form
           ;; binding, and formatting there ships the seven small chip maps instead

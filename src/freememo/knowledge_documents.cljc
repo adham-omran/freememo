@@ -11,7 +11,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
    [freememo.icons :as icons]
+   [freememo.inline-error :as ie]
    [freememo.knowledge-scope :as scope]
+   [freememo.result-line :as rl]
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.row-menu :as menu]
@@ -119,20 +121,41 @@
 
 (defn run-document-action!*
   "Run one document action over `ids` — one row from its menu, or a selection
-   from the batch bar. Both start background runs that toast when they end.
+   from the batch bar. Both start background runs, which the Activity monitor
+   shows until they end.
    Pre:  kind ∈ #{:distill :generate}.
-   Post: {:success true …} or {:success false :error msg}."
+   Post: {:success true …} or {:success false :error msg}. The view shows the
+         error beside its filters (`action-error*`) and the counts as a result
+         line (`run-note*`)."
   [user-id {:keys [kind ids]}]
-  #?(:clj (bulk/report-failure! user-id
-            (case kind
-              :distill (bulk/start-distills! user-id ids)
-              :generate (bulk/start-question-generations! user-id ids)
-              {:success false :error "That action is not available."}))
+  #?(:clj (case kind
+            :distill (bulk/start-distills! user-id ids)
+            :generate (bulk/start-question-generations! user-id ids)
+            {:success false :error "That action is not available."})
      :cljs nil))
 
+(defn action-error*
+  "The words a failed `result` of `run-document-action!*` shows, or nil."
+  [result]
+  #?(:clj (bulk/failure-text result) :cljs nil))
+
+(defn run-note*
+  "What a started run left out, in counts, for the result line. The runs that did
+   start are the Activity monitor's to show.
+   Post: a string, or nil when nothing was skipped and nothing was running."
+  [{:keys [success skipped running]}]
+  (when success
+    (let [parts (cond-> []
+                  (pos? (or skipped 0))
+                  (conj (str skipped " document" (when (not= 1 skipped) "s")
+                          " skipped: no approved facts"))
+                  (pos? (or running 0))
+                  (conj (str running " already running")))]
+      (when (seq parts) (str (str/join ", " parts) ".")))))
+
 (defn start-distill!*
-  "Start one document's distill. Fire-and-forget: the run toasts and bumps
-   :distill from its background thread."
+  "Start one document's distill. Fire-and-forget: the run keeps its Activity row
+   and bumps :distill from its background thread."
   [user-id doc-id]
   #?(:clj (kg/start-distill! user-id doc-id) :cljs nil))
 
@@ -170,8 +193,8 @@
               [t _] (e/Token click)]
           (when t
             ;; fire-and-forget: kg/start-distill! dispatches to a bounded async
-            ;; executor and returns before the run finishes; completion toasts +
-            ;; bumps :distill later from the background thread.
+            ;; executor and returns before the run finishes; the Activity row
+            ;; shows the end, and :distill is bumped later from the background thread.
             (case (e/server (start-distill!* user-id doc-id))
               (t))))))
     (when distilling?
@@ -288,6 +311,7 @@
           !confirm-bulk (atom nil) confirm-bulk (e/watch !confirm-bulk)
           !redistill (atom nil)               ; doc-id pending a re-distill confirm, or nil
           !forget (atom nil)                  ; doc-id pending a forget-extractions confirm
+          !run-note (atom nil) run-note (e/watch !run-note) ; {:id action-id :text …}
           grid-cols "34px minmax(240px,1fr) 70px 110px minmax(150px,max-content)"]
       ;; Spinner covers the first offloaded fetch (blank otherwise); the search
       ;; input lives inside Loaded and revalidates in place via the Offload latch.
@@ -303,12 +327,15 @@
                 searching? (not (str/blank? query))
                 clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))
                 preview (e/server (when-let [ids (:ids confirm-bulk)]
-                                    (e/Offload #(bulk-preview* kg-bump user-id ids))))]
+                                    (e/Offload #(bulk-preview* kg-bump user-id ids))))
+                [action-t action-error] (e/Token action)]
             (dom/div
               (dom/props {:class "knowledge-view"})
               (dom/div
                 (dom/props {:class "knowledge-filters"})
                 (scope/SearchInput "Search documents…" query !query search-epoch)
+                (ie/InlineError action-error)
+                (rl/ResultLine (when (= (:id run-note) (:id action)) (:text run-note)))
                 (dom/span (dom/props {:class "knowledge-count"})
                   (dom/text (str item-count " document" (when (not= 1 item-count) "s")))))
               (when searching?
@@ -403,11 +430,11 @@
                 (e/fn [doc-id] (e/server (clear-extraction-records!* user-id doc-id))))
               ;; The one place a row or batch action runs; it outlives the menu and
               ;; the confirmation that wrote it.
-              (let [[t _] (e/Token action)]
-                (when t
-                  (let [r (e/server (e/Offload #(run-document-action!* user-id action)))]
-                    (case r
+              (when action-t
+                (let [r (e/server (e/Offload #(run-document-action!* user-id action)))]
+                  (case r
+                    (case (reset! !run-note {:id (:id action) :text (run-note* r)})
                       (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
-                        (t))))))
+                        (if (:success r) (action-t) (action-t (action-error* r))))))))
               (scope/UrlState {"q" query
                                "sort" (scope/sort-param order default-sort)}))))))))

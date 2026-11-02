@@ -341,10 +341,13 @@
      [!staged !flow !stage staged-result]
      (reset! !staged {:upload-id (:upload-id staged-result)
                       :filename (:filename staged-result)
-                      :size 0
+                      :size (or (:size staged-result) 0)
                       :flow (name (:dispatch staged-result))})
      (reset! !flow (name (:dispatch staged-result)))
-     (reset! !stage :confirming)))
+     (reset! !stage :confirming))
+   ;; Named in the ImportModal body, which the CLJ compiler reads too.
+   :clj
+   (defn- url-set-staged! [_!staged _!flow _!stage _staged-result] nil))
 
 #?(:cljs
    (defn- url-set-error!
@@ -1100,7 +1103,9 @@
      "Hand whatever the intake area collected to `consume!`, once.
 
       Pre : `!intake` is nil, or an atom holding nil or exactly ONE of
-            {:file F} / {:paste {:format S :content S :title S?}} / {:url S}.
+            {:file F} / {:paste {:format S :content S :title S?}} / {:url S} /
+            {:staged {:upload-id S :filename S :dispatch :pdf|:epub :size N}},
+            a fetched file waiting on the Import page.
       Post: the atom holds nil, and `consume!` ran at most once. Clearing before
             the call is what makes a remount a no-op rather than a second import.
       One plain fn rather than a `do` in the reactive body — `do` is concurrent in
@@ -1429,14 +1434,16 @@
           on-manage-library (fn []
                               (reset! !show false)
                               (navigate! :library))
-          ;; Exactly one of the three intake shapes, applied at mount. A file
+          ;; Exactly one of the four intake shapes, applied at mount. A file
           ;; reuses handle-file, so the ceilings and the transport split stay in
           ;; one place. A url arms `!auto-url`, which mounts `AutoUrlImport`.
-          consume-intake! (fn [{:keys [file paste url]}]
+          consume-intake! (fn [{:keys [file paste url staged]}]
                             (cond
                               file (handle-file file)
                               paste (seed-paste! paste !format !title !html-text !md-text)
-                              url (reset! !auto-url url)))
+                              url (reset! !auto-url url)
+                              ;; Already on the server: go straight to the confirm step.
+                              staged (url-set-staged! !staged !flow !stage staged)))
           ;; Universal drop handler — switches to file source on any drop.
           ;; Score has two typed dropzones of its own; hijacking those drops
           ;; into the single-file flow would discard the slot pairing.

@@ -3,7 +3,6 @@
   (:require [freememo.commands :as commands]
             [freememo.logging :as log]
             [freememo.page-ocr :as page]
-            [freememo.toasts :as toasts]
             [freememo.user-state :as us]
             [freememo.work-run :as run]
             [missionary.core :as m])
@@ -33,11 +32,9 @@
           :else
           (do (log/log-info (str "OCR scan failed topic-id=" (first key) " page=" (second key)
                                 " error=" (:error result)))
-              (swap! (us/get-atom uid :ocr-errors) assoc key (:error result))
-              (toasts/push! uid
-                {:level :error :message (:error result)
-                 :actions (if (= :insufficient-credits (:error-type result))
-                            [{:label "Top up credits" :nav :settings}] [])})))
+              ;; The error is the :scan activity's :error-fn, so the closed
+              ;; row reaches the banner strip; the PDF toolbar reads it too.
+              (swap! (us/get-atom uid :ocr-errors) assoc key (:error result))))
         (swap! owners dissoc key)
         (swap! (us/get-atom uid :scan-cancellers) dissoc key)
         (swap! (us/get-atom uid :scan-cancelled) disj key)

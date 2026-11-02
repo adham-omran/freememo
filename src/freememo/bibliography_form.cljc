@@ -14,8 +14,7 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.anki-sync-helpers :as anki-helpers])
    #?(:clj [taoensso.telemere :as tel])
-   [freememo.optimistic :as opt]
-   #?(:clj [freememo.toasts :as toasts])
+   [freememo.commands :as commands]
    #?(:clj [freememo.biblio-import :as biblio-import])))
 
 (def csl-type-options
@@ -260,20 +259,19 @@
          {:ok false :error (.getMessage e)}))
      :cljs nil))
 
-;; Optimistic-update dispatch (freememo.optimistic). Pre: payload has :topic-id
-;; and :data. Post: source persisted (success toast) or error toast. Effect +
-;; toast only — optimistic/execute! bumps the registry :views and removes the
-;; command. Returns :done.
-#?(:clj
-   (defmethod opt/run-command! :save-biblio [user-id {:keys [payload]}]
-     (let [{:keys [topic-id data]} payload
-           r (save-source-for-topic!* user-id topic-id data)]
+;; The Save button's server call. The dialog stays open until it returns, so a
+;; failure shows in the form with the typed values kept. Not a queued command:
+;; it bumps `:save-biblio`'s views itself, as `run-command-effect!` would.
+;; Returns {:ok true :source-id N} or {:ok false :error str}.
+;; Body-level #?(:clj …): the dialog names this var inside (e/server …).
+(defn save-bibliography!* [user-id topic-id data]
+  #?(:clj
+     (let [r (save-source-for-topic!* user-id topic-id data)]
        (if (:ok r)
-         (do (toasts/push! user-id {:level :success :message "Bibliography saved"})
-             {:ok? true})
-         (do (toasts/push! user-id {:level :error
-                                    :message (or (:error r) "Failed to save bibliography")})
-             {:ok? false :error (:error r)})))))
+         (do (commands/bump! user-id :save-biblio) r)
+         (assoc r :ok false
+           :error (or (not-empty (str (:error r))) "Could not save the bibliography."))))
+     :cljs nil))
 
 ;; ---------------------------------------------------------------------------
 ;; UI
@@ -457,12 +455,14 @@
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [data (nth cmd 2)]
-        ;; Optimistic: enqueue the save and close immediately; the
-        ;; CommandDispatcher persists it server-side and toasts the outcome.
-        (case (opt/enqueue! {:type :save-biblio
-                             :payload {:topic-id topic-id :data data}})
-          (do (reset! !show false) (token)))))))
+      (let [data (nth cmd 2)
+            r (e/server (e/Offload #(save-bibliography!* user-id topic-id data)))]
+        ;; Closes only on success. A failure spends the token with the error,
+        ;; and Forms5 prints it in the form, so the typed values stay.
+        (when (some? r)
+          (if (:ok r)
+            (do (e/on-unmount #(reset! !show false)) (token))
+            (token (:error r))))))))
 
 (e/defn BibliographyForm [!show user-id topic-id]
   (e/client

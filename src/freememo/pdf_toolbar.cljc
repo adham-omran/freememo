@@ -50,8 +50,7 @@
    [freememo.focus-reader :refer [FocusReaderToggle]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.settings :as settings])))
 
 ;; ---------------------------------------------------------------------------
 ;; Page-done status read. Wraps the DB call with a _refresh-first arg so the
@@ -73,10 +72,7 @@
            persisted-done? (db/set-page-done! user-id pdf-root-id page-number done?)]
        (if (some? persisted-done?)
          {:ok? true}
-         (do
-           (toasts/push! user-id {:level :error
-                                  :message "Page completion failed. Try again."})
-           {:ok? false :error "Page was not found"})))))
+         {:ok? false :error "Page was not found"}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Control groups — extracted so both the desktop (inline) and phone (overflow

@@ -6,11 +6,12 @@
    reference for it:
      - ownership is re-checked in SQL, never trusted from the client's id list;
      - the write is ONE transaction (or, for runs, one pass over owned ids);
-     - one audit line, one `commands/bump!` and one toast, however many rows moved;
+     - one audit line and one `commands/bump!`, however many rows moved. The changed rows confirm a success, and the
+       Undo history lists the undoable ones (plans/remove-toasts.md 2.1, 2.2);
      - the result is {:success true ...} or {:success false :error msg}, and an
        exception is logged and returned, never thrown into the reactive graph.
 
-   A count of 0 is a success with no toast, bump or audit line: nothing changed, and
+   A count of 0 is a success with no bump or audit line: nothing changed, and
    a bump would re-query every consumer for no reason."
   (:require
    [clojure.string :as str]
@@ -21,31 +22,23 @@
    [freememo.kg-questions :as kgq]
    [freememo.logging :as log]
    [freememo.settings :as settings]
-   [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [taoensso.telemere :as tel]))
-
-(defn- plural
-  "\"1 question\", \"2 questions\"."
-  [n word]
-  (str n " " word (when (not= 1 n) "s")))
 
 (defn- failure [id user-id ^Exception e]
   (tel/error! {:id id :data {:user-id user-id}} e)
   {:success false :error (or (.getMessage e) "Unexpected error")})
 
-(defn report-failure!
-  "Toast a failed result. The view that asked has closed its menu or dialog and
-   holds no error slot, so the toast is the only place the user reads it. A credit
-   refusal carries Top up credits, as a failed run's own toast does.
-   Post: returns `result` unchanged."
-  [user-id result]
+(defn failure-text
+  "The words a failed `result` shows beside the control that asked.
+   The control stays on screen through the result, so the failure renders there
+   through `InlineError`: the view spends its token with `(t (failure-text r))`
+   (plans/remove-toasts.md 2.5).
+   Post: nil for a success, else a non-blank string."
+  [result]
   (when (false? (:success result))
-    (toasts/push! user-id
-      (cond-> {:level :error :message (or (:error result) "That action failed.")}
-        (= :insufficient-credits (:error-type result))
-        (assoc :actions [{:label "Top up credits" :nav :settings}]))))
-  result)
+    (let [text (:error result)]
+      (if (str/blank? (str text)) "That action failed." text))))
 
 ;; ---------------------------------------------------------------------------
 ;; Questions
@@ -53,23 +46,18 @@
 
 (defn reject-questions!
   "Reject a selection of questions as one operation: one undo entry, one bump, one
-   audit line, one toast.
+   audit line. The Undo history lists the entry.
    Pre:  question-ids is the user's selection; foreign ids are skipped in SQL.
-   Post: {:success true :rejected n}, with the Undo toast pushed when n > 0, or
+   Post: {:success true :rejected n}, or
          {:success false :error msg}. n counts only owned questions that were not
          already rejected."
   [user-id question-ids]
   (try
-    (let [{:keys [rejected undo-id]} (db/reject-kg-questions! user-id question-ids)]
+    (let [{:keys [rejected]} (db/reject-kg-questions! user-id question-ids)]
       (when (pos? rejected)
         (commands/bump! user-id :bulk-reject-questions)
         (log/audit! {:id ::reject-questions :user-id user-id :action :delete
-                     :entity :kg-question :entity-id nil :n rejected})
-        (toasts/push! user-id
-          (cond-> {:level :success
-                   :message (str "Deleted " (plural rejected "question"))
-                   :dedup? false}
-            undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+                     :entity :kg-question :entity-id nil :n rejected}))
       {:success true :rejected rejected})
     (catch Exception e
       (failure ::reject-questions user-id e))))
@@ -88,20 +76,11 @@
       (if-not (and (#{:flagged :suspended} flag) (boolean? value))
         {:success false :error "Choose one flag and a true or false value."}
         (let [changed (db/set-kg-questions-flag! user-id question-ids flag value)
-              command (if (= flag :flagged) :bulk-flag-questions :bulk-suspend-questions)
-              verb (case [flag value]
-                     [:flagged true] "Flagged"
-                     [:flagged false] "Unflagged"
-                     [:suspended true] "Suspended"
-                     [:suspended false] "Unsuspended")]
+              command (if (= flag :flagged) :bulk-flag-questions :bulk-suspend-questions)]
           (when (pos? changed)
             (commands/bump! user-id command)
             (log/audit! {:id ::set-questions-flags :user-id user-id :action :update
-                         :entity :kg-question :entity-id nil :n changed})
-            (toasts/push! user-id
-              {:level :success
-               :message (str verb " " (plural changed "question"))
-               :dedup? false}))
+                         :entity :kg-question :entity-id nil :n changed}))
           {:success true :changed changed})))
     (catch Exception e
       (failure ::set-questions-flags user-id e))))
@@ -121,11 +100,7 @@
       (when (pos? restored)
         (commands/bump! user-id :bulk-unmark-duplicate-facts)
         (log/audit! {:id ::unmark-duplicate-facts :user-id user-id :action :update
-                     :entity :kg-fact :entity-id nil :n restored})
-        (toasts/push! user-id
-          {:level :success
-           :message (str "Restored " (plural restored "fact"))
-           :dedup? false}))
+                     :entity :kg-fact :entity-id nil :n restored}))
       {:success true :restored restored})
     (catch Exception e
       (failure ::unmark-duplicate-facts user-id e))))
@@ -149,11 +124,6 @@
           (commands/bump! user-id :bulk-merge-entities)
           (log/audit! {:id ::merge-entities :user-id user-id :action :delete
                        :entity :kg-entity :entity-id keep-id :n merged})
-          (toasts/push! user-id
-            {:level :success
-             :message (str "Merged " merged (if (= 1 merged) " entity" " entities")
-                        " into " label)
-             :dedup? false})
           {:success true :merged merged})))
     (catch Exception e
       (failure ::merge-entities user-id e))))
@@ -174,11 +144,11 @@
 
    Each run already checks credits itself, in `kg-llm/resolve-model+gate!` on the
    executor thread. For a bulk start that is not enough: N runs would fail one by
-   one and push N 'out of credits' toasts. This asks the same two questions once,
+   one and report N 'out of credits' failures. This asks the same two questions once,
    up front, so one refusal replaces N failures.
 
    It cannot know what a run will cost, so a run can still hit zero balance part of
-   the way through a large batch. That run then fails with its own toast, as a single
+   the way through a large batch. That run then fails with its own error, as a single
    run does today.
    Post: {:ok true}, or {:ok false :error msg :error-type kw}. :error-type is
          :insufficient-credits when a top-up would fix it."
@@ -228,16 +198,7 @@
             (when (or (pos? started) (pos? running))
               (log/audit! {:id ::start-distills :user-id user-id :action :create
                            :entity :kg-distill-run :entity-id nil :n started})
-              (when (pos? started) (commands/bump! user-id :bulk-distill))
-              (toasts/push! user-id
-                {:level (if (pos? started) :success :info)
-                 :dedup? false
-                 :message (str (if (pos? started)
-                                 (str "Started distilling " (plural started "document"))
-                                 "No new distill started")
-                            (when (pos? running)
-                              (str (if (pos? started) ", " ". ")
-                                running " already running")))}))
+              (when (pos? started) (commands/bump! user-id :bulk-distill)))
             {:success true :started started :running running}))))
     (catch Exception e
       (failure ::start-distills user-id e))))
@@ -271,18 +232,8 @@
             (log/audit! {:id ::start-question-generations :user-id user-id :action :create
                          :entity :kg-question-run :entity-id nil :n started})
             (when (pos? started) (commands/bump! user-id :bulk-generate-questions))
-            (toasts/push! user-id
-              {:level (if (pos? started) :success :info)
-               :dedup? false
-               :message (str (if (pos? started)
-                               (str "Started question generation for "
-                                 (plural started "document"))
-                               "No question generation started")
-                          (when (pos? running) (str ", " running " already running"))
-                          (when (pos? skipped)
-                            (str (if (or (pos? started) (pos? running)) ", " ". ")
-                              "Skipped " (plural skipped "document")
-                              " with no approved facts")))})
+            ;; The Activity monitor shows each run, and the view reads
+            ;; `:skipped` and `:running` into a ResultLine at its batch bar.
             {:success true :started started :skipped skipped :running running}))))
     (catch Exception e
       (failure ::start-question-generations user-id e))))

@@ -28,6 +28,7 @@
    [freememo.commands :as commands]
    [freememo.help-content :as help]
    [freememo.icons :as icons]
+   [freememo.import-waiting :as import-waiting]
    [freememo.navigation :as nav]
    [freememo.undo-history-modal :refer [ActionsNavButton]]
    [freememo.viewport :as viewport]
@@ -379,6 +380,34 @@
       (case (item-dom/item! dom/node label icon tour active? extra-class) nil)
       (dom/On "click" (fn [_] (on-click)) nil))))
 
+(e/defn WaitingCount
+  "A count of imports that wait for the reader, as a dot on the closed rail's
+   icon or a pill on the open rail's row. Renders nothing at 0
+   (plan item 2.12)."
+  [n text class]
+  (e/client
+    (when (pos? (or n 0))
+      (dom/span
+        (dom/props {:class class})
+        (dom/text text)))))
+
+(e/defn ImportItem
+  "Import, the rail's one action, carrying the number of imports that wait for
+   the reader on the Import page. `waiting` comes from a server read, so it
+   only ever reaches a text node."
+  [{:keys [label icon tour]} active? waiting navigate!]
+  (e/client
+    (dom/button
+      (dom/props {:class (str "nav-rail__item nav-rail__import" (when active? " is-active"))
+                  :aria-current (when active? "page")})
+      (dom/props {:data-tour tour})
+      (dom/span
+        (case (item-dom/icon! dom/node icon 18) nil)
+        (WaitingCount waiting (import-waiting/badge-text (or waiting 0)) "nav-rail__dot"))
+      (RailLabel label)
+      (WaitingCount waiting (str (or waiting 0) " waiting") "nav-rail__count")
+      (dom/On "click" (fn [_] (navigate! :import)) nil))))
+
 (e/defn ContinueItem
   "Continue: the last document read, with its title on a second line (W1).
    `target` comes from a server read, so it only ever reaches a text node."
@@ -469,9 +498,9 @@
 
 (e/defn RailDestinations
   "Import, then every destination group."
-  [active continue-target due navigate!]
+  [active continue-target due waiting navigate!]
   (e/client
-    (RailItem import-item (= active :import) "nav-rail__import" (fn [] (navigate! :import)))
+    (ImportItem import-item (= active :import) waiting navigate!)
     (dom/div
       (dom/props {:class "nav-rail__scroll"})
       (e/for [group (e/diff-by (comp :tab first) destinations)]
@@ -563,6 +592,16 @@
                             (let [rev (e/watch (us/get-atom user-id :tree-mutations))]
                               (e/Offload #(continue-target* rev user-id continue-id))))
           visible-tick (e/watch !visible-tick)
+          ;; Imports a link click staged and left for the Import page. The
+          ;; staging area keeps its own counter, so a claim or a new entry
+          ;; re-reads this. A client e/as-vec reads the Offload's empty first
+          ;; value as 0, so the Import item, the rail's one action, never waits
+          ;; on this read to mount.
+          waiting (or (peek (e/as-vec
+                              (e/server
+                                (let [rev (e/watch (import-waiting/rev-atom* user-id))]
+                                  (e/Offload #(count (import-waiting/waiting* rev user-id)))))))
+                    0)
           due (e/server
                 (let [q (e/watch (us/get-atom user-id :queue-mutations))
                       r (e/watch (us/get-atom user-id :refresh))
@@ -600,7 +639,7 @@
               (dom/span (dom/props {:class "nav-rail__label nav-rail__wordmark"}) (dom/text "FreeMemo"))
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
-            (RailDestinations active continue-target due navigate!)
+            (RailDestinations active continue-target due waiting navigate!)
             (RailFoot user-id active route
               navigate! !undo-modal-open? !activity-open? !page-help-slug)
             (KeepOpenButton kept? toggle-kept)))))))

@@ -231,7 +231,7 @@
 
 (e/defn Spotlight
   "Mount once at the Main root, as the last form, so the card paints over the
-   page and under the toasts (3.3). `key` is `(route-key tab topic-id)`."
+   page (3.3). `key` is `(route-key tab topic-id)`."
   [key]
   (e/client
     (let [request (e/watch !spotlight)]

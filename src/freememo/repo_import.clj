@@ -36,6 +36,7 @@
             [clojure.string :as str]
             [next.jdbc :as jdbc]
             [freememo.activity :as activity]
+            [freememo.activity-registry :as registry]
             [freememo.commands :as commands]
             [freememo.db :as db]
             [freememo.forge :as forge]
@@ -45,7 +46,6 @@
             [freememo.input-check :as input]
             [freememo.priority :as priority]
             [freememo.repo-tree :as tree]
-            [freememo.toasts :as toasts]
             [freememo.user-state :as us]
             [taoensso.telemere :as tel])
   (:import [java.io File]
@@ -103,6 +103,16 @@
   (when (cancelled? user-id key)
     (throw (ex-info "Repository import cancelled" {:type ::cancelled}))))
 
+(defn- run-summary
+  "Post: what a successful run did, in counts, or nil for a step that adds nothing
+   to say (a download). `key` names the repository when `r` carries no path."
+  [key {:keys [path report unchanged?]}]
+  (cond
+    unchanged? (str (or path key) " is already up to date.")
+    (:topics-created report) (str "Imported " (or path key) ": "
+                               (:topics-created report) " topics.")
+    :else nil))
+
 (defn- run-as-activity
   "Run `f` while `key` is published in `:importing-repos`.
 
@@ -127,10 +137,15 @@
         (if (false? (:ok r))
           (swap! errors assoc key (:error r))
           (swap! errors dissoc key))
+        ;; Counts only, kept before membership drops (plans/remove-toasts.md 2.4.2).
+        (if-some [summary (when (true? (:ok r)) (run-summary key r))]
+          (registry/record-summary! user-id :repo-import key summary)
+          (registry/clear-run! user-id :repo-import key))
         r)
       (catch Throwable t
         (if (cancelled? user-id key)
           (do (swap! errors dissoc key)
+              (registry/clear-run! user-id :repo-import key)
               {:ok false :cancelled? true})
           (do (swap! errors assoc key (or (.getMessage t) "Import failed"))
               (throw t))))
@@ -529,38 +544,20 @@
   (* 60 60 1000))
 
 (defonce ^:private !import-runs
-  ;; run key -> {:user-id :delivery promise :success-message :backgrounded?
-  ;; :result :settled-at}. A run key is a stage id, or [:add-files id] for an
-  ;; Add files run.
-  ;; The result and the Close mark are each written with `swap-vals!`, so
-  ;; whichever lands second sees the other and pushes the one toast.
+  ;; run key -> {:user-id :delivery promise :result :settled-at}. A run key is a
+  ;; stage id, or [:add-files id] for an Add files run.
   (atom {}))
 
-(defn- import-success-message [{:keys [path report]}]
-  (str "Imported " path ": " (:topics-created report) " topics."))
-
-(defn- push-result-toast!
-  "Post: one toast for `r`, or none for a cancelled run — the user chose it.
-   `success-message` words a successful `r`."
-  [user-id success-message {:keys [ok cancelled? topic-id error] :as r}]
-  (cond
-    cancelled? nil
-    ok (toasts/push! user-id
-         {:level :info
-          :message (success-message r)
-          :actions [{:label "Open" :nav [:viewer {:type :topic :topic-id topic-id}]}]})
-    :else (toasts/push! user-id {:level :error :message error})))
-
 (defn- settle-run!
-  "Record `r` for `run-key`, hand it to the waiting picker, and toast it when
-   the picker already closed."
+  "Record `r` for `run-key` and hand it to the waiting picker. A picker that
+   closed first needs nothing more: the run's Activity row already holds its
+   summary or its error (`run-as-activity`)."
   [run-key r]
   (let [[old _] (swap-vals! !import-runs update run-key assoc
                   :result r :settled-at (System/currentTimeMillis))
         run (get old run-key)]
     (deliver (:delivery run) r)
-    (when (:backgrounded? run)
-      (push-result-toast! (:user-id run) (:success-message run import-success-message) r))))
+    nil))
 
 (defn- without-expired-runs [runs now]
   (into {} (remove (fn [[_ {:keys [settled-at]}]]
@@ -576,8 +573,8 @@
          returns, and only for the call that starts the run.
    Invariant: a throw from `run!` settles as {:ok false :error S}, so the
          promise is always delivered."
-  [user-id run-key success-message hold! run!]
-  (let [fresh {:user-id user-id :delivery (promise) :success-message success-message}
+  [user-id run-key hold! run!]
+  (let [fresh {:user-id user-id :delivery (promise)}
         run (get (swap! !import-runs
                    (fn [runs]
                      (let [runs (without-expired-runs runs (System/currentTimeMillis))]
@@ -606,27 +603,10 @@
    Invariant: the stage is held before this returns, so a picker that unmounts
          at once cannot release the tree the run reads."
   [user-id stage-id selection]
-  (or (start-run! user-id stage-id import-success-message
+  (or (start-run! user-id stage-id
         #(swap! !importing-stages conj stage-id)
         #(import-staged! user-id stage-id selection))
     (doto (promise) (deliver {:ok false :error "This download expired. Start the import again."}))))
-
-(defn background-import!
-  "The picker waiting on the run of `run-key` — a stage id, or an Add files
-   run key — closed.
-   Post: the run's result reaches the user as a toast exactly once — now if it
-         already settled, else when it settles. Nothing for a run `user-id`
-         does not own. Returns nil."
-  [user-id run-key]
-  (let [[old _] (swap-vals! !import-runs
-                  (fn [runs]
-                    (if (= user-id (get-in runs [run-key :user-id]))
-                      (assoc-in runs [run-key :backgrounded?] true)
-                      runs)))
-        run (get old run-key)]
-    (when (and (= user-id (:user-id run)) (not (:backgrounded? run)) (contains? run :result))
-      (push-result-toast! user-id (:success-message run import-success-message) (:result run)))
-    nil))
 
 (defn cancel-import!
   "Abandon the running download or import published under `key`.
@@ -833,15 +813,12 @@
         {:ok false :error (failure-message t)}))
     {:ok false :error "This topic is not an imported repository."}))
 
-(defn- added-files-message [{:keys [path report]}]
-  (str "Added " (:topics-created report) " topics to " path "."))
-
 (defn start-add-files!
   "Run `add-repository-files!` on a server thread, once per `run-id`.
    Pre : `run-id` is fresh for each Add press.
    Post: a promise of its result; a refusal for a `run-id` another user holds.
          Closing the picker leaves the run going (§5.3.4)."
   [user-id run-id repo-id commit-id selection]
-  (or (start-run! user-id [:add-files run-id] added-files-message (fn [])
+  (or (start-run! user-id [:add-files run-id] (fn [])
         #(add-repository-files! user-id repo-id commit-id selection))
     (doto (promise) (deliver {:ok false :error "This run belongs to another user."}))))

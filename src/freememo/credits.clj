@@ -10,6 +10,7 @@
    [freememo.commands :as commands]
    [freememo.config :as config]
    [freememo.db :as db]
+   [freememo.storage-meter :as storage-meter]
    [freememo.wayl :as wayl]
    [taoensso.telemere :as tel]))
 
@@ -203,6 +204,7 @@
         (cond
           (#{"Complete" "Delivered"} s)
           (let [r (db/complete-credit-order! reference-id)]
+            (when (:credited r) (storage-meter/top-up-landed! (:user-id r)))
             (assoc r :ok true :wayl-status s))
 
           (#{"Cancelled" "Rejected" "Returned"} s)

@@ -5,7 +5,6 @@
    [freememo.settings :as settings]
    [freememo.credits :as credits]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [freememo.pre-prompt-mode :as ppm]
@@ -222,7 +221,7 @@
    signals carry it, because nothing downstream can recover it from the result.
    Pre:  `e` was thrown by openrouter/message-content or parse-card-response.
    Post: {:success false :error msg :error-type kw} — the two error-types are
-         distinct so the toast layer can tell a refusal from a dead end."
+         distinct so a caller can tell a refusal from a dead end."
   [e user-id endpoint-tag attempts unbilled-cost-usd]
   (let [data (ex-data e)
         refused? (= :freememo.openrouter/refused (:type data))]
@@ -757,22 +756,6 @@
                     (mapv :flashcards/id deleted)
                     (assoc groups :cards (vec deleted))))})))
 
-(defn- deleted-summary
-  "\"5 cards\", or \"5 cards (1 occlusion)\" when the delete took whole groups.
-   The parenthetical counts GROUPS, not their members: the leading number names
-   the Anki notes that died, the parenthetical names the rows the user acted
-   on. Same dual idiom the card tables use."
-  [rows]
-  (let [n (count rows)
-        groups (into []
-                 (keep (fn [[k label]]
-                         (let [c (count (into #{} (keep k) rows))]
-                           (when (pos? c) (str c " " label)))))
-                 [[:flashcards/occlusion_group_id "occlusion"]
-                  [:flashcards/score_group_id "score"]])]
-    (str n " card" (when (not= 1 n) "s")
-      (when (seq groups) (str " (" (str/join ", " groups) ")")))))
-
 (defn delete-card-row!
   "Delete one card-table row — every flashcard it stands for.
    pre:  card-ids are one display row's :member-ids (freememo.card-rows); a
@@ -787,11 +770,7 @@
       (when (seq deleted)
         (log/audit! {:id ::delete-card-row! :user-id user-id :action :delete
                      :entity :card :n (count deleted)})
-        (toasts/push! user-id
-          (cond-> {:level :success
-                   :message (str "Deleted " (deleted-summary deleted))
-                   :dedup? false}
-            undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+        nil)
       {:success true :anki-note-ids note-ids :undo-id undo-id})
     (catch Exception e
       (tel/error! {:id ::delete-card-row!} e)
@@ -811,12 +790,7 @@
       (when (seq deleted)
         (commands/bump! user-id :bulk-delete-cards)
         (log/audit! {:id ::delete-cards! :user-id user-id :action :delete
-                     :entity :card :n (count deleted)})
-        (toasts/push! user-id
-          (cond-> {:level :success
-                   :message (str "Deleted " (deleted-summary deleted))
-                   :dedup? false}
-            undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+                     :entity :card :n (count deleted)}))
       {:success true :deleted (count deleted) :anki-note-ids note-ids})
     (catch Exception e
       (tel/error! {:id ::delete-cards!} e)

@@ -19,6 +19,8 @@
    [freememo.tooltip :as tooltip]
    [freememo.video-format :refer [format-ms]]
    [freememo.video-extract :refer [VideoExtractButton]]
+   #?(:clj [freememo.storage-meter :as meter])
+   #?(:clj [freememo.user-state :as us])
    #?(:cljs [freememo.video-wavesurfer :as vws])
    #?(:cljs [freememo.vendor-libs :as vendor])))
 
@@ -304,9 +306,53 @@
                   (fn [r] (reset! !video-region r)))
                 (e/on-unmount (fn [] (destroy-waveform! !handle)))))))))))
 
+(defn video-status*
+  "What the pane says about this video, as plain data: `:paused?`, `:removed-on`
+   and `:notice` (see `storage-meter/video-pane-status`). `_rev` makes the call
+   re-run on a credit change or a refresh."
+  [_rev user-id topic-id]
+  #?(:clj (meter/video-pane-status user-id topic-id)
+     :cljs nil))
+
+(e/defn VideoStatusLines
+  "The reasons a video cannot play, or ran with a caveat, in the pane itself
+   (plans/remove-toasts.md 1.3.3, 2.11.2). They repeat the account banners on
+   purpose: the banner may sit above the page the user scrolled from, and these
+   lines are where the user is looking when playback fails.
+
+   The wrapper is always mounted and the lines inside it come and go, so a line
+   never changes the count of children the pane's parent places by index."
+  []
+  (e/client
+    (dom/div
+      (dom/props {:class "video-status-lines"})
+      (let [user-id dctx/user-id
+            topic-id dctx/video-topic-id
+            credits (e/server (e/watch (us/get-atom user-id :credits-refresh)))
+            refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+            status (e/server (video-status* [credits refresh] user-id topic-id))
+            {:keys [paused? removed-on notice]} status]
+        (when paused?
+          (dom/div
+            (dom/props {:class "video-status-line"})
+            (dom/span (dom/text "Playback paused: out of credits."))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-primary" :type "button"})
+              (dom/text "Top up")
+              (dom/On "click" (fn [_] (dctx/navigate! :settings)) nil))))
+        (when (some? removed-on)
+          (dom/div
+            (dom/props {:class "video-status-line"})
+            (dom/text (str "Video file removed on " removed-on "."))))
+        (when (some? notice)
+          (dom/div
+            (dom/props {:class "video-status-line"})
+            (dom/text notice)))))))
+
 (e/defn VideoPane
   "Player + waveform strip, stacked above the editor/transcript row."
   []
   (e/client
+    (VideoStatusLines)
     (VideoPlayer)
     (VideoWaveformStrip)))

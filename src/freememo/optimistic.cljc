@@ -2,7 +2,7 @@
   "Optimistic-update command pipeline (per-session, client-local).
 
    A modal enqueues a plain-data command and closes immediately; a single
-   always-mounted CommandDispatcher (mounted in Main, sibling to ToastStack)
+   always-mounted CommandDispatcher (mounted in Main, sibling to FailureBanners)
    runs each command's effect server-side, and the client applies the outcome to
    the :pending-cards row overlay. Decoupling the effect from the modal's
    lifecycle means closing (unmounting) the modal never tears down an in-flight
@@ -23,12 +23,14 @@
      :id       unique per submit; supplied by the client for add-* (so the
                overlay entry and the command share identity), else generated.
      :type     a freememo.commands registry id with a run-command! method;
-               unknown types toast a warning.
+               unknown types return a failure.
      :payload  type-specific map.
 
    Execution contract:
-     run-command! methods own the EFFECT and its toast, and RETURN an outcome map
-     {:ok? bool :real-ids [id...]? :error str?}. They MUST NOT touch the queue,
+     run-command! methods own the EFFECT, and RETURN an outcome map
+     {:ok? bool :real-ids [id...]? :error str?}. A failure returns
+     {:ok? false :error str} and pushes nothing: the dispatcher records it
+     (see record-command-failure!). They MUST NOT touch the queue,
      the overlay, or invalidation channels. run-command-effect! bumps the
      registry :views; the client dispatcher acks — applying the outcome to the
      overlay and dropping the command from the queue."
@@ -36,8 +38,9 @@
    [hyperfiddle.electric3 :as e]
    [freememo.client-state :as cs]
    [freememo.commands :as commands]
+   #?(:clj [clojure.string :as str])
    #?(:clj [taoensso.telemere :as tel])
-   #?(:clj [freememo.toasts :as toasts])
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.user-state :as us])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])))
 
@@ -232,13 +235,13 @@
     vec))
 
 ;; ---------------------------------------------------------------------------
-;; Server effect. run-command! methods (domain namespaces) perform the effect,
-;; toast, and RETURN an outcome map — no queue/overlay/channel side effects.
+;; Server effect. run-command! methods (domain namespaces) perform the effect
+;; and RETURN an outcome map — no queue/overlay/channel side effects.
 ;; ---------------------------------------------------------------------------
 
 #?(:clj
    (defmulti run-command!
-     "Perform one command's effect server-side and toast the outcome. Returns
+     "Perform one command's effect server-side. Returns
       {:ok? bool :real-ids [id...]? :error str?}. MUST NOT touch the queue, the
       overlay, or invalidation channels — run-command-effect! bumps :views and
       the client dispatcher acks. Dispatched on (:type command); domain
@@ -246,10 +249,8 @@
      (fn [_user-id command] (:type command))))
 
 #?(:clj
-   (defmethod run-command! :default [user-id command]
-     (toasts/push! user-id {:level :warning
-                            :message (str "Unknown action: " (pr-str (:type command)))})
-     {:ok? false :error "unknown command"}))
+   (defmethod run-command! :default [_user-id command]
+     {:ok? false :error (str "Unknown action: " (pr-str (:type command)))}))
 
 (defn run-command-effect!
   "Server unit of work: run the effect, bump the registry-declared :views, and
@@ -277,15 +278,90 @@
                                      :data {:user-id user-id :type (:type command)
                                             :command-id (:id command)}}
                           t)
-                        (toasts/push! user-id {:level :error
-                                               :message (str (name (:type command)) " failed: "
-                                                          (.getMessage t))})
-                        {:ok? false :error (.getMessage t)}))]
+                        {:ok? false :error (or (not-empty (.getMessage t))
+                                               "The action failed.")}))]
          (when (commands/command (:type command))
            (commands/bump! user-id (:type command)))
          (cond-> result
            (= :delete-card (:type command))
            (assoc :card-revision @(us/get-atom user-id :card-mutations)))))
+     :cljs nil))
+
+;; The failure boundary (plans/remove-toasts.md 1.1.7). A command whose failure
+;; already shows where the user is looking records nothing: the pending card row
+;; carries its own error and Retry.
+#?(:clj
+   (def in-place-failure-commands
+     "Command types whose failure has an in-place surface (PendingCardRow)."
+     #{:add-card :add-score-group :add-occlusion}))
+
+#?(:clj
+   (def ^:private command-whats
+     {:set-page-done "Mark page done"
+      :set-pdf-done "Mark PDF done"
+      :delete-card "Delete card"
+      :delete-topic "Delete topic"
+      :rename-topic "Rename topic"
+      :move-topic-to-top-level "Move topic"
+      :set-topic-priority "Set priority"
+      :mark-topic-done "Mark topic done"
+      :dismiss "Dismiss topic"
+      :undismiss "Restore topic"
+      :scan-pdf-page "Scan page"
+      :generate-cards-for-page "Generate cards"
+      :generate-cards-for-topic "Generate cards"
+      :add-pin "Pin image"}))
+
+#?(:clj
+   (defn- command-what [command-type]
+     (or (command-whats command-type)
+         (str/capitalize (str/replace (name command-type) "-" " ")))))
+
+#?(:clj
+   (defn- command-subject-id
+     "The topic a failed command acted on, or nil."
+     [{:keys [payload]}]
+     (let [id (or (-> payload :subjects first :topic-id)
+                  (:topic-id payload)
+                  (:pdf-root-id payload))]
+       (when (integer? id) id))))
+
+(defn record-command-failure!
+  "Record one failed command as a banner. Does nothing for a success and for a
+   type in `in-place-failure-commands`. Never throws: a failure to record must
+   not stop the ack that frees the queue.
+
+   Pre : `result` is the map `run-command-effect!` returned.
+   Post: one `activity/record-failure!` call for a failed, banner-bound command.
+   Body-level #?(:clj …): see run-command-effect!."
+  [user-id command result]
+  #?(:clj
+     (when (and (not (:ok? result))
+                (not (in-place-failure-commands (:type command))))
+       (try
+         (activity/record-failure!
+           user-id
+           {:error (or (not-empty (str (:error result))) "The action failed.")
+            :what (command-what (:type command))
+            :subject-id (command-subject-id command)
+            :retry {:command (:type command) :payload (:payload command)}})
+         (catch Throwable t
+           (tel/error! {:id ::record-command-failure
+                        :data {:user-id user-id :type (:type command)}}
+             t)))
+       nil)
+     :cljs nil))
+
+(defn run-command-and-record!
+  "What the dispatcher runs: the effect, then a banner when it failed.
+   Retry does not come through here (it runs `run-command-effect!`), so one
+   failed Retry makes one banner, recorded by `activity/retry!`.
+   Body-level #?(:clj …): see run-command-effect!."
+  [user-id command]
+  #?(:clj
+     (let [result (run-command-effect! user-id command)]
+       (record-command-failure! user-id command result)
+       result)
      :cljs nil))
 
 (e/defn CommandDispatcher
@@ -299,7 +375,7 @@
       (when cmd
         (let [[t _] (e/Token (:id cmd))]
         (when t
-          (let [result (e/server (e/Offload #(run-command-effect! user-id cmd)))]
+          (let [result (e/server (e/Offload #(run-command-and-record! user-id cmd)))]
             (when (some? result)
               ;; ack (overlay + queue drop) mutates the queue → unmounts this
               ;; branch, so per the token lifecycle it fires from e/on-unmount

@@ -1633,6 +1633,12 @@
     (jdbc/execute! ds ["ALTER TABLE topic_videos
                         ADD COLUMN IF NOT EXISTS remux_pending BOOLEAN NOT NULL DEFAULT FALSE"])
 
+    ;; plans/remove-toasts.md 2.11.2 — a reason the pipeline gave for a run that
+    ;; still succeeded, such as a Transcribe request on a video with no audio
+    ;; track. The video pane shows it. Plain text with no id, so account
+    ;; transfer carries it with the row and needs no remap.
+    (jdbc/execute! ds ["ALTER TABLE topic_videos ADD COLUMN IF NOT EXISTS notice TEXT"])
+
     ;; §4.2 2.1 — usage_bytes is now SUM(topic_files.file_size) +
     ;; SUM(topic_videos.byte_size). Recomputed once, at the moment the table is
     ;; introduced: the video term is provably 0 then, so this only repairs
@@ -1704,6 +1710,11 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_youtube_video
                       ON topic_youtube(video_id)"])
+  ;; Set when oEmbed answered 401 at import: the owner probably disabled
+  ;; embedding, so the video pane says so beside the player. A fact about the
+  ;; video, stored so it survives a reload (plans/remove-toasts.md 2.11.1).
+  (jdbc/execute! ds ["ALTER TABLE topic_youtube
+                      ADD COLUMN IF NOT EXISTS embed_warning BOOLEAN NOT NULL DEFAULT FALSE"])
 
   ;; Chunked-upload sessions (§4.3). The large object is created — and the
   ;; quota reserved — at init, so an abandoned session leaks BOTH until the
@@ -1753,6 +1764,15 @@
   ;; are counting down to reclamation.
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS last_metered_at TIMESTAMP"])
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_grace_started_at TIMESTAMP"])
+  ;; plans/remove-toasts.md 1.3.2 — the removal notice. The reclamation sweep
+  ;; writes the count and date, and clears `storage_removal_seen`. The banner
+  ;; strip shows the notice until the user dismisses it. The date stays after
+  ;; Dismiss, because the video pane reads it for "Video file removed on <date>".
+  ;; `users` is excluded from account transfer, so these columns need no
+  ;; export or remap rule.
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_removal_count INTEGER"])
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_removal_at TIMESTAMP"])
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_removal_seen BOOLEAN NOT NULL DEFAULT TRUE"])
   ;; Sub-unit carry, in millionths of an IQD. Credits are whole IQD, but one
   ;; hourly tick of a small library prices below 1 IQD; without a carry the
   ;; charge would round to zero every hour forever and the storage meter would
@@ -2234,6 +2254,27 @@
   ;; `error` says why a run failed; nothing said what a success did, so a Done
   ;; row read blank (plans/feedback-activity-biblio-youtube.md 3.1.1).
   (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS summary TEXT"])
+  ;; Failure state (plans/remove-toasts.md 1.1). `seen_at` is when the user
+  ;; acknowledged a failed row; the banner strip lists failures where it is NULL.
+  ;; `error_kind` is derived by `activity/error-kind` and drives the banner's
+  ;; Top up and Sign in actions. `retry` holds {command, payload} for the Retry
+  ;; action. Only `freememo.activity` writes it, and the client never sees it.
+  ;; A failure that existed before the column was seen through its toast, so the
+  ;; boot that creates the column marks it seen. Without that, every user's
+  ;; retained failures would open as banners at once. Later boots skip the
+  ;; UPDATE, because a failure from before a restart has not been seen.
+  (let [had-seen-at? (seq (jdbc/execute! ds ["SELECT 1 FROM information_schema.columns
+                                              WHERE table_name = 'activities'
+                                                AND column_name = 'seen_at'"]))]
+    (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ"])
+    (when-not had-seen-at?
+      (jdbc/execute! ds ["UPDATE activities SET seen_at = COALESCE(terminated_at, now())
+                          WHERE outcome = 'failure'"])))
+  (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS error_kind TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE activities ADD COLUMN IF NOT EXISTS retry JSONB"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_activities_unseen_failures
+                      ON activities(user_id, terminated_at DESC)
+                      WHERE outcome = 'failure' AND seen_at IS NULL"])
   ;; The idempotency contract of `activity/start!`: at most one in-flight run per
   ;; (user, type, work_key). Partial, so a completed run does not block a retry.
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_inflight
@@ -2496,6 +2537,8 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_runs
                       ADD COLUMN IF NOT EXISTS question_map_id BIGINT
                         REFERENCES question_maps(id) ON DELETE SET NULL"])
+  ;; Plain-text caveat on an answer, e.g. "The question map was not updated."
+  (jdbc/execute! ds ["ALTER TABLE assistant_runs ADD COLUMN IF NOT EXISTS notice TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_runs_question_map
                       ON assistant_runs(question_map_id, created_at)
                       WHERE question_map_id IS NOT NULL"])
@@ -4232,6 +4275,14 @@
             {:builder-fn rs/as-unqualified-maps})
     :response_text))
 
+(defn set-assistant-run-notice!
+  "Store a plain-text caveat on a run, shown under its answer.
+   Post: true when the run exists."
+  [run-uuid notice]
+  (some? (jdbc/execute-one! ds
+           ["UPDATE assistant_runs SET notice = ? WHERE run_uuid = ? RETURNING run_uuid"
+            notice run-uuid])))
+
 (defn replace-assistant-run-text!
   "Replace an active run's stored text before it completes. Used once, after
    the stream ends, to drop a question-map block the reply started with
@@ -4462,7 +4513,7 @@
   (jdbc/execute! ds
     [(str "SELECT r.id, r.run_uuid, r.chat_id, r.kind, r.status, "
        "r.user_message_id, r.assistant_message_id, r.retry_of_run_uuid, "
-       "r.response_text, r.error_text, r.created_at, r.started_at, "
+       "r.response_text, r.error_text, r.notice, r.created_at, r.started_at, "
        "r.first_token_at, r.stopped_at, r.completed_at, r.failed_at "
        "FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
        "WHERE c.user_id = ? AND c.id = ? ORDER BY r.id")
@@ -7937,7 +7988,7 @@
 
 (defn list-anki-conflicts
   "Card ids `user-id` currently has flagged as reconcile conflicts, oldest
-   first. The Library filter and the run toast read the same set."
+   first. The Library filter and the run summary read the same set."
   [user-id]
   (mapv :flashcards/id
     (jdbc/execute! ds
@@ -10116,6 +10167,14 @@
             {:builder-fn rs/as-unqualified-maps})
     parse-undo-row))
 
+(defn topic-parent-id
+  "The parent_id of topic-id (a staged topic keeps its parent), or nil."
+  [topic-id]
+  (when topic-id
+    (:parent_id (jdbc/execute-one! ds
+                  ["SELECT parent_id FROM topics WHERE id = ?" topic-id]
+                  {:builder-fn rs/as-unqualified-maps}))))
+
 (defn undo-entry-within-window?
   "True when entry-id remains live in the database's 12-hour Undo window.
    The server, not a stale client, owns the deadline check."
@@ -11064,7 +11123,8 @@
   "The topic_youtube row of a topic, or nil. Unqualified keys."
   [topic-id]
   (jdbc/execute-one! ds
-    ["SELECT topic_id, video_id, start_ms, end_ms, duration_ms, last_pos_ms
+    ["SELECT topic_id, video_id, start_ms, end_ms, duration_ms, last_pos_ms,
+             embed_warning
       FROM topic_youtube WHERE topic_id = ?" topic-id]
     {:builder-fn rs/as-unqualified-maps}))
 
@@ -11107,11 +11167,12 @@
 
    Pre:  `video-id` satisfies `youtube-url/video-id?`; `title` is non-blank;
          `channel` is a string or nil; `start-ms` is the URL's start time or
-         nil. The caller has checked `find-youtube-root`.
+         nil; `embed-warning?` is true when oEmbed hinted that embedding is off.
+         The caller has checked `find-youtube-root`.
    Post: {:topic-id N :title S}. The source, the topic and its topic_youtube
          row all exist, or none does. The audit line follows the commit.
    Blame: a malformed video-id is a caller bug, and the table CHECK rejects it."
-  [user-id {:keys [video-id title channel start-ms]}]
+  [user-id {:keys [video-id title channel start-ms embed-warning?]}]
   (let [clean-title (input/prettify-title (input/sanitize-title title))
         _ (input/check-length! :title clean-title input/title-max)
         url (youtube-url/watch-url video-id)
@@ -11141,9 +11202,9 @@
                                          :source-id (:sources/id source)})
                 topic-id (:topics/id topic)]
             (jdbc/execute! tx
-              ["INSERT INTO topic_youtube (topic_id, video_id, last_pos_ms)
-                VALUES (?, ?, ?)"
-               topic-id video-id (int (max 0 (or start-ms 0)))])
+              ["INSERT INTO topic_youtube (topic_id, video_id, last_pos_ms, embed_warning)
+                VALUES (?, ?, ?, ?)"
+               topic-id video-id (int (max 0 (or start-ms 0))) (boolean embed-warning?)])
             {:topic-id topic-id :title (:topics/title topic)}))]
     (audit-doc-created! user-id (:topic-id created))
     created))
@@ -12176,6 +12237,55 @@
    (jdbc/execute-one! ds
      ["SELECT storage_grace_started_at FROM users WHERE id = ?" user-id]
      {:builder-fn rs/as-unqualified-maps})))
+
+(defn record-storage-removal!
+  "Note that the reclamation sweep removed `videos` video files for `user-id`.
+   An unread notice keeps its count and adds to it, so two sweeps before the
+   user looks read as one total.
+   Post: `storage_removal_at` is now and `storage_removal_seen` is false."
+  [user-id videos]
+  (jdbc/execute! ds
+    ["UPDATE users
+         SET storage_removal_count = CASE WHEN storage_removal_seen
+                                          THEN ? ELSE COALESCE(storage_removal_count, 0) + ? END,
+             storage_removal_at = now(),
+             storage_removal_seen = FALSE
+       WHERE id = ?" (int videos) (int videos) user-id]))
+
+(defn dismiss-storage-removal!
+  "Mark the removal notice read. Keeps the count and date.
+   Post: returns the number of rows changed, 1 when a notice was unread."
+  [user-id]
+  (:next.jdbc/update-count
+   (jdbc/execute-one! ds
+     ["UPDATE users SET storage_removal_seen = TRUE
+        WHERE id = ? AND storage_removal_seen = FALSE" user-id])))
+
+(defn get-storage-removal
+  "`{:count n :at timestamp :seen? bool}` for the last removal, or nil when the
+   sweep never removed a video for this user."
+  [user-id]
+  (when-some [r (jdbc/execute-one! ds
+                  ["SELECT storage_removal_count, storage_removal_at, storage_removal_seen
+                      FROM users WHERE id = ?" user-id]
+                  {:builder-fn rs/as-unqualified-maps})]
+    (when (:storage_removal_at r)
+      {:count (:storage_removal_count r)
+       :at (:storage_removal_at r)
+       :seen? (:storage_removal_seen r)})))
+
+(defn set-video-notice!
+  "Store (or with nil, clear) the pipeline's notice for a video topic."
+  [topic-id notice]
+  (jdbc/execute! ds
+    ["UPDATE topic_videos SET notice = ? WHERE topic_id = ?" notice topic-id]))
+
+(defn get-video-notice
+  "The stored notice for a video topic, or nil."
+  [topic-id]
+  (:notice (jdbc/execute-one! ds
+             ["SELECT notice FROM topic_videos WHERE topic_id = ?" topic-id]
+             {:builder-fn rs/as-unqualified-maps})))
 
 (def ^:const micro-per-iqd
   "Denominator of the storage-rent carry. Rent accrues in millionths of an IQD
@@ -13285,7 +13395,7 @@
       (some? row))))
 
 (defn reject-kg-question!
-  "Reject a question and log an undo entry (so the toast can offer Undo).
+  "Reject a question and log an undo entry (so the Undo history lists it).
    Returns the undo entry id, or nil when the question was missing or already
    rejected. The undo insert follows the mutation non-transactionally, matching
    insert-undo-entry!'s contract."
@@ -13405,7 +13515,7 @@
    undo entry. `target-status` is \"rejected\" (a human's judgement) or
    \"duplicate\" (freememo.kg-dedup's sweep); `action-type` names the undo entry.
 
-   Not a loop over reject-kg-fact!. That would write one undo entry, one toast and
+   Not a loop over reject-kg-fact!. That would write one undo entry and
    one invalidation bump per fact — and the undo log is hard-capped at 100 rows per
    user, so a large selection would evict the user's unrelated undo history and
    truncate its own reversal.
@@ -14040,7 +14150,7 @@
    Pre:  flag is :flagged or :suspended; value is a boolean; ownership re-checked
          in SQL. Ids bind as ONE int4[] parameter.
    Post: the number of rows whose flag CHANGED. A question already in the target
-         state is not counted, so the toast does not claim work that did not happen."
+         state is not counted, so the count does not claim work that did not happen."
   [user-id question-ids flag value]
   (let [col (case flag :flagged "flagged" :suspended "suspended")
         ids (vec (distinct question-ids))]

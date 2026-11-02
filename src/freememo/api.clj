@@ -13,11 +13,11 @@
    [freememo.google-docs :as gdocs]
    [freememo.neoreader-sync :as neoreader]
    [freememo.neoreader-kinds :as nrkinds]
-   [freememo.toasts :as toasts]
    [freememo.deployment-hook :as hook]
    [freememo.extractor :as extractor]
    [freememo.quota :as quota]
    [freememo.commands :as commands]
+   [freememo.user-state :as us]
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.input-check :as input]
@@ -30,6 +30,7 @@
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
    [freememo.settings :as settings]
+   [freememo.storage-meter :as storage-meter]
    [freememo.credits :as credits]
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
@@ -944,8 +945,10 @@
    (plans/google-docs-pull.md, row 2.1).
    Pre:  `gaccounts/authorization-state?` is true for this request's `state`.
    Post: 302 to the `return_to` the state carries. On success the account is
-         stored and a toast names it. On failure a toast says why, and nothing
-         is stored. The user stays signed in either way."
+         stored. On failure the redirect goes to the Google accounts section of
+         Settings, where `google-accounts-section` renders the stored message
+         beside the Connect link, and nothing is stored. A cancelled connection
+         says nothing. The user stays signed in either way."
   [request]
   (let [state (get-in request [:params "state"])
         code (get-in request [:params "code"])
@@ -954,17 +957,20 @@
         landing (app-relative-path (:return-to (gaccounts/parse-state state)) "/settings")
         back {:status 302 :headers {"Location" landing}
               :session (dissoc (:session request) :google-account-oauth-state)}
-        fail! (fn [msg] (when user-id (toasts/push! user-id {:level :error :message msg})) back)]
+        fail! (fn [msg]
+                (when user-id
+                  (gaccounts/record-connect-error! user-id msg)
+                  (commands/bump! user-id :set-setting))
+                (assoc-in back [:headers "Location"] "/settings#settings-google"))]
     (cond
       (nil? user-id) back
       (not= state expected) (fail! "Connecting the Google account failed: the request did not match. Try again.")
-      (str/blank? code) (fail! "Connecting the Google account was cancelled.")
+      (str/blank? code) back
       :else
       (try
         (let [r (gaccounts/connect! user-id code)]
           (if (:ok r)
-            (do (toasts/push! user-id {:level :success
-                                       :message (str "Connected " (:email r) ".")})
+            (do (gaccounts/clear-connect-error! user-id)
                 (commands/bump! user-id :set-setting)
                 back)
             (fail! (:error r))))
@@ -1000,6 +1006,8 @@
       (json-response 503 {:success false :error "Google is not configured"})
       (let [return-to (app-relative-path (get-in request [:params "return_to"]) "/settings")
             state (gaccounts/authorization-state (str (random-uuid)) return-to)]
+        (when-let [user-id (require-auth request)]
+          (gaccounts/clear-connect-error! user-id))
         {:status 302
          :headers {"Location" (gaccounts/authorize-url state)}
          :session (assoc (:session request) :google-account-oauth-state state)}))))
@@ -1145,6 +1153,59 @@
                                         (drive/file-name file-id))}))))
     (json-response 401 {:success false :error "Not authenticated"})))
 
+(defn- record-neoreader-outcome!
+  "Write the outcome of one sync where the Activity reporter reads it.
+   Pre : called INSIDE `us/with-in-flight`, so membership is still published.
+   Post: the document's summary or error is stored under its topic id, and the
+         other is cleared. A sync that needs a file pick records neither: the
+         browser answers it at once, and there is nothing to report. A
+         reauthorize records a summary, since the browser sends the user to
+         Google next and the failure is already being handled."
+  [user-id topic-id r]
+  (let [errors (us/get-atom user-id :neoreader-sync-errors)
+        results (us/get-atom user-id :neoreader-sync-results)]
+    (cond
+      (:ok r)
+      (do (swap! errors dissoc topic-id)
+          (swap! results assoc topic-id (neoreader/summary r)))
+
+      (:needs-pick? r) nil
+
+      (:reauthorize? r)
+      (swap! results assoc topic-id "Google Drive access expired. Reconnecting.")
+
+      :else
+      (do (swap! results dissoc topic-id)
+          (swap! errors assoc topic-id (:error r))))
+    nil))
+
+(defn- run-neoreader-sync!
+  "Run one sync as an Activity (`:neoreader-sync`, plans/remove-toasts.md 2.4.4).
+   Post: the `sync-document!` result map, or `{:ok false :exception e}` when it
+         threw. The error is stored BEFORE membership drops, which is what lets
+         the reporter close the row as failed. A document with no bound file
+         does no work, so it publishes no membership and opens no row.
+         `us/with-in-flight` calls `us/work-started!` after publishing, so a
+         short sync is still seen. No branch throws: the binding lookup and the
+         unbound sync are guarded too, so the handler always answers JSON."
+  [user-id topic-id]
+  (let [failed (fn [e]
+                 (tel/error! {:id ::neoreader-sync-handler} e)
+                 {:ok false :exception e
+                  :error "NeoReader sync failed. Please try again."})]
+    (try
+      (if-not (neoreader/bound-file-id user-id topic-id)
+        (neoreader/sync-document! user-id topic-id)
+        (us/with-in-flight user-id :neoreader-syncs topic-id
+          (swap! (us/get-atom user-id :neoreader-sync-errors) dissoc topic-id)
+          (swap! (us/get-atom user-id :neoreader-sync-results) dissoc topic-id)
+          (let [r (try
+                    (neoreader/sync-document! user-id topic-id)
+                    (catch Exception e (failed e)))]
+            (record-neoreader-outcome! user-id topic-id r)
+            r)))
+      (catch Exception e (failed e)))))
+
 (defn neoreader-sync-handler
   "POST /api/neoreader/sync — run one sync.
    Pre:  authenticated; param topic_id names an EPUB or PDF document this user owns.
@@ -1152,36 +1213,32 @@
          :needs_pick set when the browser can act on it. The status is 200 for a
          reported failure — the browser reads :success, and a 5xx here would look
          like a server fault rather than a sync that could not run.
-   Post: every outcome the user should see is ALSO pushed as a toast, so the
-         message lives beside the counts that produced it. :needs_pick is the one
-         exception: the browser answers it by opening the Picker, and a toast for
-         a step that resolves itself would be noise."
+   Post: the outcome is the `:neoreader-sync` Activity row: its summary beside
+         the counts that produced it, or its error. Nothing else reports it.
+         :needs_pick is the one outcome with no row: the browser answers it by
+         opening the Picker."
   [request]
   (if-let [user-id (require-auth request)]
     (let [topic-id (param-long request "topic_id")]
       (if (or (nil? topic-id) (nil? (syncable-topic-for user-id topic-id)))
         (json-response 400 {:success false :error "Missing or unknown topic_id"})
-        (try
-          (let [r (neoreader/sync-document! user-id topic-id)]
-            (cond
-              (:ok r)
-              (do (toasts/push! user-id {:level :success :message (neoreader/summary r)})
-                  (json-response 200 {:success true
-                                      :counts (:counts r)
-                                      :sections (:sections-written r)
-                                      :notes (:notes r)}))
+        (let [r (run-neoreader-sync! user-id topic-id)]
+          (cond
+            (:exception r)
+            (json-response 500 {:success false :error "Sync failed. Please try again."})
 
-              (:needs-pick? r)
-              (json-response 200 {:success false :needs_pick true :error (:error r)})
+            (:ok r)
+            (json-response 200 {:success true
+                                :counts (:counts r)
+                                :sections (:sections-written r)
+                                :notes (:notes r)})
 
-              :else
-              (do (toasts/push! user-id {:level :error :message (:error r)})
-                  (json-response 200 (cond-> {:success false :error (:error r)}
-                                       (:reauthorize? r) (assoc :reauthorize true))))))
-          (catch Exception e
-            (tel/error! {:id ::neoreader-sync-handler} e)
-            (toasts/push! user-id {:level :error :message "NeoReader sync failed. Please try again."})
-            (json-response 500 {:success false :error "Sync failed. Please try again."})))))
+            (:needs-pick? r)
+            (json-response 200 {:success false :needs_pick true :error (:error r)})
+
+            :else
+            (json-response 200 (cond-> {:success false :error (:error r)}
+                                 (:reauthorize? r) (assoc :reauthorize true)))))))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn- authenticate->session-response
@@ -1323,6 +1380,7 @@
                            :data {:reference-id reference-id :user-id (:user-id r)}}
                   "Wayl payment granted a desktop license"))
               (when (:credited r)
+                (storage-meter/top-up-landed! (:user-id r))
                 (commands/bump! (:user-id r) :credits-granted)
                 (tel/log! {:level :info :id ::wayl-credited
                            :data {:reference-id reference-id :amount (:amount r)

@@ -11,6 +11,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.forms-ext :as forms-ext]
+   [freememo.inline-error :refer [InlineError]]
    [freememo.navigation :as nav]
    [freememo.question-pin-state :as pin-state]
    [freememo.knowledge-scope :as scope]
@@ -21,7 +22,6 @@
    [freememo.util :as util]
    #?(:clj [freememo.known-ideas :as ki])
    #?(:clj [freememo.logging :as log])
-   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ── Server reads and writes ────────────────────────────────────────
@@ -155,15 +155,32 @@
 
 (defn run-known-action!*
   "Run one menu action of the list. `kind` is :make, :undo or :unlearn and
-   `ids` holds one entity id. An error goes to a toast, because the menu that
-   asked has closed and holds no error slot.
+   `ids` holds one entity id. The menu stays open while this runs, so an error
+   in the result shows on the menu (plan item 1.6.3).
    Post: the command's result map."
   [user-id {:keys [kind ids]}]
-  #?(:clj (let [r (run-idea-command!* user-id kind (first ids))]
-            (when (:error r)
-              (toasts/push! user-id {:level :error :message (:error r)}))
-            r)
+  #?(:clj (run-idea-command!* user-id kind (first ids))
      :cljs nil))
+
+(defn close-menu-opened!
+  "Close the view's menu when it is still the one opened as `menu-key`. A menu
+   the reader opened since (on another row) is not touched.
+   Returns nil."
+  [!menu menu-key]
+  (swap! !menu (fn [m] (if (= menu-key (:key m)) nil m)))
+  nil)
+
+(e/defn ActionMenuItem
+  "One menu item that runs a server action. Unlike `menu/MenuItem` it does not
+   close the menu: the view closes it when the action succeeds, and shows the
+   error on the menu when it fails. `busy?` blocks a second click."
+  [label busy? pick!]
+  (e/client
+    (dom/button
+      (dom/props {:type "button" :role "menuitem" :tabindex "-1" :class "row-menu-item"})
+      (dom/props {:aria-busy (when busy? "true")})
+      (dom/text label)
+      (dom/On "click" (fn [_] (when-not busy? (pick!))) nil))))
 
 (e/defn IdeaRow
   "One known idea (§3.2). The label opens the idea's page; Check me is the one
@@ -250,6 +267,7 @@
           !selected (atom #{}) selected (e/watch !selected)
           !menu (atom nil) menu (e/watch !menu)
           !action (atom nil) action (e/watch !action)
+          [action-token ?action-error] (e/Token action)
           rows (e/server
                  (let [rev (+ (e/watch (us/get-atom user-id :question-mutations))
                              (e/watch (us/get-atom user-id :card-mutations))
@@ -314,20 +332,28 @@
               (IdeaRow user-id row i navigate! !selected selected !menu (:row-key menu) selecting?))))
         (menu/RowMenu !menu menu
           (e/fn [m]
-            (let [{:keys [entity_id card_count self?]} (:row m)]
+            (let [{:keys [entity_id card_count self?]} (:row m)
+                  menu-key (:key m)
+                  mine? (= menu-key (:menu-key action))
+                  busy? (and mine? (some? action-token))
+                  start! (fn [kind] (reset! !action (assoc (scope/action kind [entity_id] false)
+                                                      :menu-key menu-key)))]
               (when (pos? card_count)
-                (menu/MenuItem !menu "Make more" false
-                  (fn [] (reset! !action (scope/action :make [entity_id] false)))))
+                (ActionMenuItem "Make more" busy? (fn [] (start! :make))))
               (when self?
-                (menu/MenuItem !menu "Undo my mark" false
-                  (fn [] (reset! !action (scope/action :undo [entity_id] false)))))
-              (menu/MenuItem !menu "Not learned yet" false
-                (fn [] (reset! !action (scope/action :unlearn [entity_id] false)))))))
+                (ActionMenuItem "Undo my mark" busy? (fn [] (start! :undo))))
+              (ActionMenuItem "Not learned yet" busy? (fn [] (start! :unlearn)))
+              (InlineError (when mine? ?action-error)))))
         ;; The one place a menu action runs; it outlives the menu that wrote it.
-        (let [[t _] (e/Token action)]
-          (when t
-            (case (e/server (e/Offload #(run-known-action!* user-id action)))
-              (t))))
+        ;; The menu closes when the action succeeds. A failure keeps it open
+        ;; and shows the error under the items.
+        (when action-token
+          (let [r (e/server (e/Offload #(run-known-action!* user-id action)))]
+            (case r
+              (if (:error r)
+                (action-token (:error r))
+                (do (e/on-unmount #(close-menu-opened! !menu (:menu-key action)))
+                    (action-token))))))
         (scope/UrlState {"q" query
                          "source" (when-not (str/blank? source) source)
                          "due" (scope/flag-param due-only?)

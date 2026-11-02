@@ -91,7 +91,7 @@
          one.
    Inv : the Drive consent flow NAVIGATES AWAY. After :authorizing nothing else
          in this call runs.
-   Note: a :done status needs no message — the server pushes the toast, beside
+   Note: a :done status needs no message — the server records the summary, beside
          the counts that produced it. `on-status` exists for the phases the
          server never sees: a cancelled Picker, and a Picker that would not load."
   [topic-id return-to on-status]
