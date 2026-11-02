@@ -8,12 +8,16 @@
    server what it may do: a server effect goes through a :queue command, whose
    method in freememo.target-commands checks ownership.
 
-   A failure only the browser sees (a clipboard write, an upload) is reported
-   through :show-error-toast, because the toast stack is server state."
+   A failure only the browser sees (a clipboard write, an upload) shows on the
+   menu row that started it. A handler that can fail that way runs its work
+   through `context-menu/run-on-row!`, and its command id is listed in
+   `holds-row!` below, so the menu waits for the result."
   (:require [freememo.anki-subtree-request :as anki-subtree]
             [freememo.card-components :as card-components]
             [freememo.card-export-modal :as card-export]
             [freememo.command-bus :as bus]
+            [freememo.command-targets :as targets]
+            [freememo.context-menu :as cm]
             [freememo.editor-actions :as editor-actions]
             [freememo.formula-ui :as formula-ui]
             [freememo.image-actions :as image]
@@ -24,11 +28,11 @@
             [freememo.rich-text-editor :as rich-text-editor]
             [freememo.target-modals :as modals]))
 
-(defn- report!
-  "Toast `message` to the user. Returns nil."
-  [message]
-  (opt/enqueue! {:type :show-error-toast :payload {:message message}})
-  nil)
+;; The commands below run browser work that can fail, so their rows wait for it.
+(cm/holds-row! #{:copy-image :save-image :copy-image-address
+                 :pin-image-front :pin-image-back :open-image-occlusion
+                 :copy-editor-selection :cut-editor-selection
+                 :copy-pdf-selection})
 
 (defn- subject [target] (first (:subjects target)))
 
@@ -53,10 +57,9 @@
   (fn [_ctx target]
     (anki-subtree/request-subtree-sync! (:topic-id (subject target)))))
 
-;; Every outcome the user should see arrives as a server-pushed toast, because
-;; the server holds the counts. A cancelled Picker and a Picker that will not
-;; load reach the console only — the gap library_row_actions recorded when it
-;; owned this call.
+;; The server records what the user should see (the NeoReader sync is an
+;; Activity type). A cancelled Picker and a Picker that will not load reach the
+;; console only, the gap library_row_actions recorded when it owned this call.
 (bus/register-handler! :sync-topic-with-neoreader
   (fn [_ctx target]
     (neoreader/sync-document! (:topic-id (subject target))
@@ -127,23 +130,30 @@
 ;; ---------------------------------------------------------------------------
 
 (bus/register-handler! :copy-image
-  (fn [_ctx target] (image/copy-image! (:src (subject target)) report!)))
+  (fn [_ctx target]
+    (cm/run-on-row! #(image/copy-image! (:src (subject target)) %))))
 
 (bus/register-handler! :save-image
-  (fn [_ctx target] (image/save-image! (:src (subject target)) report!)))
+  (fn [_ctx target]
+    (cm/run-on-row! #(image/save-image! (:src (subject target)) %))))
 
 (bus/register-handler! :copy-image-address
-  (fn [_ctx target] (image/copy-image-address! (:src (subject target)) report!)))
+  (fn [_ctx target]
+    (cm/run-on-row! #(image/copy-image-address! (:src (subject target)) %))))
 
 (defn- with-media-id!
   "Resolve the image's media id (uploading its bytes when it has none), then
-   call `f` with it. A failure toasts `failure`."
+   call `f` with it once the menu has closed. A failure shows `failure` on the
+   menu row, and `f` does not run."
   [target failure f]
-  (-> (image/resolve-src->media-id! (:src (subject target)))
-    (.then f)
-    (.catch (fn [err]
-              (js/console.warn "[context-menu] media id:" (str err))
-              (report! failure)))))
+  (cm/run-on-row!
+    (fn [fail!]
+      (-> (image/resolve-src->media-id! (:src (subject target)))
+        (.catch (fn [err]
+                  (js/console.warn "[context-menu] media id:" (str err))
+                  (fail! failure)
+                  nil))))
+    (fn [media-id] (when (some? media-id) (f media-id)))))
 
 (defn- pin-image! [target placement]
   (with-media-id! target "Couldn't pin this image."
@@ -182,13 +192,15 @@
 
 (defn- clipboard-blocked
   "Nil when the async clipboard API can write, else a message naming why not.
-   The API exists only in a secure context (https or localhost)."
+   The API exists only in a secure context (https or localhost). The menu
+   disables the copy rows with the same reasons, so this only answers a
+   handler that the palette ran."
   []
   (cond
     (not (.-isSecureContext js/window))
-    "Copying needs a secure connection. Open the app over https or on localhost."
+    (:secure-context targets/enable-reasons)
     (nil? (.-clipboard js/navigator))
-    "This browser cannot copy from a menu. Use Ctrl+C or Cmd+C."
+    (:clipboard-api targets/enable-reasons)
     :else nil))
 
 (defn- write-selection!
@@ -210,16 +222,18 @@
 
 (defn- copy-selection!
   "Copy, then run `after!` with the editor and the subject once the write
-   succeeded. A failure toasts and runs nothing, so Cut never deletes text the
-   clipboard did not take."
+   succeeded and the menu has closed. A failure shows on the menu row and runs
+   nothing, so Cut never deletes text the clipboard did not take."
   [target after!]
   (let [^js ed (-> target :surface :quill)
         s (subject target)]
-    (if-let [blocked (clipboard-blocked)]
-      (report! blocked)
-      (-> (write-selection! ed s)
-        (.then (fn [_] (after! ed s)))
-        (.catch (fn [_] (report! "Couldn't copy the selected text.")))))))
+    (cm/run-on-row!
+      (fn [fail!]
+        (if-let [blocked (clipboard-blocked)]
+          (do (fail! blocked) nil)
+          (-> (write-selection! ed s)
+            (.catch (fn [_] (fail! "Could not copy the selected text.") nil)))))
+      (fn [_] (after! ed s)))))
 
 (bus/register-handler! :copy-editor-selection
   (fn [_ctx target] (copy-selection! target (fn [_ _] nil))))
@@ -239,7 +253,7 @@
 ;; Post: Add new card opens AddCardModal, with the selection the right-click
 ;;       kept in the front field, or empty with none: the range is restored
 ;;       or cleared first, because the owner reads the editor's selection. Generate cards opens the
-;;       whole-document form, or toasts when no owner is mounted.
+;;       whole-document form, or does nothing when no owner is mounted.
 (bus/register-handler! :add-new-card-at-caret
   (fn [_ctx target]
     (let [^js ed (-> target :surface :quill)
@@ -251,10 +265,13 @@
         (rich-text-editor/release-selection!))
       (bus/dispatch! :add-new))))
 
+;; The menu row is disabled with a reason while no owner is mounted
+;; (:card-gen-available?), so a miss here only means the owner left between the
+;; menu opening and the click, and the click does nothing.
 (bus/register-handler! :generate-document-cards
   (fn [_ctx _target]
-    (when-not (bus/run-invoker! :open-document-generate-form)
-      (report! "Card generation is not available here."))))
+    (bus/run-invoker! :open-document-generate-form)
+    nil))
 
 (defn- at-caret!
   "Focus the target's editor with the caret at the subject's index, then call
@@ -310,7 +327,9 @@
 (bus/register-handler! :copy-pdf-selection
   (fn [_ctx target]
     (let [text (:selection-text (subject target))]
-      (if (and (.-isSecureContext js/window) (.-clipboard js/navigator))
-        (-> (.writeText js/navigator.clipboard text)
-          (.catch (fn [_] (report! "Couldn't copy the selected text."))))
-        (report! "Copying needs a secure connection. Open the app over https or on localhost.")))))
+      (cm/run-on-row!
+        (fn [fail!]
+          (if-let [blocked (clipboard-blocked)]
+            (do (fail! blocked) nil)
+            (-> (.writeText js/navigator.clipboard text)
+              (.catch (fn [_] (fail! "Could not copy the selected text.") nil)))))))))

@@ -23,7 +23,6 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.image-rehost :as image-rehost])
-   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.web-import :as web-import])))
 
 ;; ---------------------------------------------------------------------------
@@ -58,48 +57,33 @@
          strings.
    Inv : only a DUPLICATE can navigate immediately. A fresh import has nowhere
          to go — its topic does not exist until the fetch lands — so this
-         governs the duplicate case and the completion toast governs the rest."
+         governs the duplicate case and the Activity monitor governs the rest."
   [_refresh user-id]
   #?(:clj (settings/get-link-import-navigates user-id)
      :cljs true))
 
-(defn announce-duplicate!
-  "Tell the user what Import found, when it found it at once.
+(defn publish-import-answer!
+  "Tell the link card what Import found, when it found it at once.
 
-   Pre : `result` is `start-url-import!*`'s return.
-   Post: :announced. A duplicate toasts with a button that opens the topic; a
-         queued fetch says so; anything else is an error the user can see.
-   Inv : always returns a value, so a `case` in the caller can sequence on it."
-  [user-id result]
-  #?(:clj
-     (do (case (:flow result)
-           :already-exists
-           (toasts/push! user-id
-             {:level :info
-              :message (str "Already imported — \"" (:title result) "\"")
-              :actions [{:label "Open"
-                         :nav [:viewer {:type :topic :topic-id (:topic-id result)}]}]})
-
-           (:queued :busy)
-           (toasts/push! user-id
-             {:level :info :message "Importing in the background…"})
-
-           (toasts/push! user-id
-             {:level :error :message "Could not start the import."}))
-         :announced)
-     :cljs :announced))
-
-(defn push-link-toast!
-  "Surface what a click could only explain — a missing heading, or a relative
-   href with no address to resolve against.
-
-   Pre : `data` is `editor/!link-toast`'s value.
-   Post: :announced."
-  [user-id data]
-  #?(:clj (do (toasts/push! user-id {:level (or (:level data) :info)
-                                     :message (:message data)})
-              :announced)
-     :cljs :announced))
+   Pre : `result` is `start-url-import!*`'s return. Client scope.
+   Post: `!import-open-topic` names the existing topic for a duplicate, and
+         `!import-status` is :already-exists, :queued or :error. The open topic
+         is written first, because the card reads it when the status lands.
+         The card shows the answer: a duplicate says Already imported and
+         offers Open, and a queued fetch says Queued. The fetch's own outcome
+         reaches the Activity monitor and, on failure, the banner strip.
+   Inv : always returns :published, so a `case` in the caller can sequence on
+         it."
+  [result]
+  (reset! editor/!import-open-topic
+    (when (= :already-exists (:flow result)) (:topic-id result)))
+  (reset! editor/!import-status
+    (case (:flow result)
+      :already-exists :already-exists
+      :queued :queued
+      :busy :queued
+      :error))
+  :published)
 
 (defn count-pins-for-topic*
   "Server-side pin count. Takes _pin-rev as first arg so the value is part of
@@ -228,8 +212,8 @@
         ;; `start-url-import!*` answers a duplicate synchronously and hands the
         ;; fetch off to a thread that publishes its Activity membership, so a
         ;; reader never waits on a network round trip inside their editor. The
-        ;; import's own outcome arrives later as a toast; only the immediate
-        ;; answer is handled here.
+        ;; import's own outcome arrives later through the Activity monitor; only
+        ;; the immediate answer is handled here, on the link card.
         (let [import-data (e/watch editor/!import-url)
               navigate-on-import? (e/server
                                     (let [rev (e/watch (us/get-atom user-id :settings-refresh))]
@@ -240,18 +224,12 @@
             (let [url (:url import-data)
                   result (e/server (e/Offload #(web-import/start-url-import!* user-id url)))]
               (case result
-                (let [dupe? (= :already-exists (:flow result))]
-                  (reset! editor/!import-status
-                    (case (:flow result)
-                      :already-exists :already-exists
-                      :queued :queued
-                      :busy :queued
-                      :error))
-                  (if (and dupe? (:topic-id result) navigate-on-import?)
+                (case (publish-import-answer! result)
+                  (if (and (= :already-exists (:flow result))
+                        (:topic-id result) navigate-on-import?)
                     ;; A duplicate is the one case with somewhere to go now.
-                    (case (e/server (announce-duplicate! user-id result))
-                      (case (on-imported-navigate! (:topic-id result)) (t)))
-                    (case (e/server (announce-duplicate! user-id result)) (t))))))))
+                    (case (on-imported-navigate! (:topic-id result)) (t))
+                    (t)))))))
 
         ;; -----------------------------------------------------------------------
         ;; In-document topic link
@@ -272,18 +250,6 @@
             (if (and (:topic-id nav-data) on-imported-navigate!)
               (case (on-imported-navigate! (:topic-id nav-data)) (t))
               (t))))
-
-        ;; -----------------------------------------------------------------------
-        ;; A click the editor could only explain
-        ;; -----------------------------------------------------------------------
-        ;; A fragment with no matching heading, or a relative href in a document
-        ;; with no source address. The DOM listener cannot reach the toast queue,
-        ;; which lives per-user on the server.
-        (let [toast-data (e/watch editor/!link-toast)
-              [t _] (e/Token toast-data)]
-          (when t
-            (e/on-unmount #(reset! editor/!link-toast nil))
-            (case (e/server (push-link-toast! user-id toast-data)) (t))))
 
         ;; -----------------------------------------------------------------------
         ;; Audio player (audio topics) — sits on top of the editor; the

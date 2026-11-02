@@ -163,7 +163,7 @@
     (> absent-count (quot synced-count 2))))
 
 (defn summarize
-  "Counts per outcome, for the run report and the conflict toast.
+  "Counts per outcome, for the run report and the conflict count.
    pre : `results` is a seq of members of `outcomes`.
    post: a map from every outcome in `results` to its count."
   [results]
@@ -346,7 +346,7 @@
 (defn batch-progress
   "Progress after batch `i` is recorded: `{:phase \"writing\" :done :total}`.
    `:done` counts the cards the run has handed to Anki so far, not the ones Anki
-   accepted — a refusal is reported in the run's closing toast."
+   accepted — a refusal is reported in the run's error."
   [card-ids i]
   (let [total (count card-ids)]
     {:phase "writing" :done (min total (* (inc i) batch-size)) :total total}))

@@ -13,8 +13,8 @@
    or nil. The menu writes `!job`, and this component watches it.
    Post: gs/!gen-settings holds the saved settings when nothing has set it
          yet, so the menu's count starts at the saved count. The job is queued
-         with the job's count, or its error is in `!error`. Success reports
-         itself with a toast when the cards are saved."
+         with the job's count, or its error is in `!error`. Success is reported
+         by the card job, which raises its own activity row."
   [user-id page-topic-id !job !error]
   (e/client
     (let [saved (e/server (settings/get-generate-settings user-id))

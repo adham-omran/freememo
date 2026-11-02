@@ -14,12 +14,6 @@
 
 (def ^:private oembed-timeout-ms 5000)
 
-(def embedding-warning
-  "The toast text for an import whose oEmbed answered 401. A 401 is a probable
-   sign that the owner disabled embedding; the player's error 101/150 is the
-   certain one, so this warns and never refuses."
-  "Imported. The owner may not allow embedding, so it may not play here.")
-
 (defn fetch-oembed
   "YouTube's oEmbed answer for `video-id`.
 
@@ -66,8 +60,11 @@
 
    Pre:  `parsed` is a non-nil `youtube-url/parse` answer.
    Post: {:ok true :flow :already-exists :topic-id N :title S}, or
-         {:ok true :flow :imported :topic-id N :title S}, with
-         :warning S when oEmbed answered 401."
+         {:ok true :flow :imported :topic-id N :title S}. When oEmbed answered
+         401 the topic's `embed_warning` flag is set in the same transaction
+         that creates it. A 401 is a probable sign that the owner disabled
+         embedding; the player's error 101/150 is the certain one, so this
+         warns and never refuses."
   [user-id {:keys [video-id start-ms]}]
   (if-let [existing (db/find-youtube-root user-id video-id)]
     (assoc existing :ok true :flow :already-exists)
@@ -76,7 +73,7 @@
                     {:video-id video-id
                      :title (or title (str "YouTube video " video-id))
                      :channel channel
-                     :start-ms start-ms})]
+                     :start-ms start-ms
+                     :embed-warning? (= :unauthorized status)})]
       (commands/bump! user-id :import-document)
-      (cond-> (assoc created :ok true :flow :imported)
-        (= :unauthorized status) (assoc :warning embedding-warning)))))
+      (assoc created :ok true :flow :imported))))

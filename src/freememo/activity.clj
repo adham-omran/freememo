@@ -30,13 +30,17 @@
    a close would mark live work dead. Staleness cannot make that mistake: it
    observes only whether anything is still reporting."
   (:require
+   [cheshire.core :as json]
+   [clojure.edn :as edn]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
    [clojure.string :as str]
    [taoensso.telemere :as tel]
    [freememo.db :as db]
    [freememo.commands :as commands]
-   [freememo.activity-registry :as registry]))
+   [freememo.desktop-link :as link]
+   [freememo.activity-registry :as registry])
+  (:import [org.postgresql.util PGobject]))
 
 ;; ---------------------------------------------------------------------------
 ;; Vocabulary
@@ -92,6 +96,101 @@
    re-query every consumer watching the channel for no state change."
   [user-id]
   (commands/bump-channels! user-id #{:activity-mutations}))
+
+;; ---------------------------------------------------------------------------
+;; Failure vocabulary (plans/remove-toasts.md 1.1.2)
+;; ---------------------------------------------------------------------------
+
+(def insufficient-credits-text
+  "The start of the message `credits/check-cost-billed-balance!` returns when the
+   balance is empty. A failure that reaches this namespace as a plain string
+   has only its text to say why, so the text is the test for that one shape."
+  "Out of credits.")
+
+(defn- cause-chain [^Throwable t]
+  (take-while some? (iterate #(.getCause ^Throwable %) t)))
+
+(defn- credits-type?
+  "True for an `:type` value that names the credits gate. Matches the name only,
+   because `cards` and `kg-llm` each throw their own namespaced keyword and this
+   namespace must not require either."
+  [t]
+  (and (keyword? t) (= "insufficient-credits" (name t))))
+
+(defn error-kind
+  "Why a failure happened, in the two cases the banner has an action for.
+
+   Pre : `error` is a string, a result map, an exception, or nil.
+   Post: \"insufficient-credits\" when the failure is an empty balance,
+         \"needs-account\" when it is a feature that needs a freememo.net account
+         (the `link/sign-in-message` case), else nil. Total: never throws.
+
+   Three shapes, because owners report in three ways. A result map is
+   `{:insufficient-credits true}` or `{:error-type :insufficient-credits}`. An
+   exception is read through its cause chain, since the gate's ex-info is often
+   wrapped. A string is read by its text."
+  [error]
+  (cond
+    (nil? error) nil
+
+    (instance? Throwable error)
+    (let [chain (cause-chain error)]
+      (cond
+        (some #(credits-type? (:type (ex-data %))) chain) "insufficient-credits"
+        (some #(str/includes? (str (ex-message %)) link/sign-in-message) chain) "needs-account"
+        :else nil))
+
+    (map? error)
+    (cond
+      (or (:insufficient-credits error)
+          (credits-type? (:error-type error))) "insufficient-credits"
+      (string? (:error error)) (error-kind (:error error))
+      :else nil)
+
+    :else
+    (let [text (str error)]
+      (cond
+        (str/includes? text link/sign-in-message) "needs-account"
+        (str/starts-with? text insufficient-credits-text) "insufficient-credits"
+        :else nil))))
+
+(defn error-message
+  "The text to store in `activities.error` for an error value of any of the
+   shapes `error-kind` reads. Nil when the value holds no text."
+  [error]
+  (let [text (cond
+               (nil? error) nil
+               (instance? Throwable error) (or (ex-message error) (.getName (class error)))
+               (map? error) (some-> (:error error) str)
+               :else (str error))]
+    (when-not (str/blank? text) text)))
+
+(defn- ->jsonb [v]
+  (doto (PGobject.)
+    (.setType "jsonb")
+    (.setValue (json/generate-string v))))
+
+(defn- retry-param
+  "A `{:command kw :payload map}` as a JSONB parameter, or nil.
+
+   The payload is stored as an EDN string inside the JSON, because JSON turns
+   keyword values into strings: `{:kind :topic}` would replay as
+   `{:kind \"topic\"}`. `read-retry` reads it back with `clojure.edn`, so keys
+   and values, nested ones included, round-trip. The payload must be EDN data
+   (keywords, strings, numbers, collections), which is what a command payload is."
+  [retry]
+  (when (and (map? retry) (some? (:command retry)))
+    (let [command (:command retry)]
+      (->jsonb {:command (if-some [ns-part (namespace command)]
+                           (str ns-part "/" (name command))
+                           (name command))
+                :payload-edn (pr-str (:payload retry))}))))
+
+(defn- read-retry [^PGobject v]
+  (when v
+    (let [m (json/parse-string (.getValue v) true)]
+      {:command (keyword (:command m))
+       :payload (some-> (:payload-edn m) edn/read-string)})))
 
 ;; ---------------------------------------------------------------------------
 ;; Writes
@@ -222,22 +321,29 @@
    Post: `outcome` and `terminated_at` set in ONE statement, so
          `activities_terminal_agrees` is never transiently violated. Returns
          :done whether or not this call was the one that ended it.
+         `error_kind` is derived from `error` here, never passed in. `:retry`,
+         `{:command kw :payload map}`, is kept for the Retry action and is
+         written only when given.
    Invariant: FIRST WRITER WINS. `terminated_at IS NULL` guards the update, so
          a staleness promoter cannot overwrite a 'success' that landed
          concurrently with its sweep. This is what makes lazy promotion safe to
          run from a read path."
-  [user-id activity-id outcome {:keys [error summary done total]}]
+  [user-id activity-id outcome {:keys [error summary done total retry]}]
   {:pre [(contains? terminal-outcomes outcome) (progress-ok? done total)]}
-  (let [row (jdbc/execute-one! db/ds
+  (let [row (jdbc/execute! db/ds
               ["UPDATE activities
-                   SET outcome = ?, error = ?, summary = ?,
+                   SET outcome = ?, error = ?, error_kind = ?, summary = ?,
                        terminated_at = now(), updated_at = now(),
                        done = COALESCE(?, done), total = COALESCE(?, total),
+                       retry = COALESCE(?, retry),
                        cancellable = FALSE, unrecoverable = FALSE
                  WHERE id = ? AND user_id = ? AND terminated_at IS NULL
                 RETURNING id, type"
-               outcome error (bounded-summary summary) done total activity-id user-id]
-              {:builder-fn rs/as-unqualified-maps})]
+               outcome (error-message error) (error-kind error)
+               (bounded-summary summary) done total (retry-param retry)
+               activity-id user-id]
+              {:builder-fn rs/as-unqualified-maps})
+        row (first row)]
     (when row
       (tel/log! {:level :info :id ::activity-terminated
                  :data {:user-id user-id :activity-id activity-id
@@ -460,6 +566,181 @@
              user-id (/ stale-after-ms 1000.0)]
             {:builder-fn rs/as-unqualified-maps}))
     0))
+
+;; ---------------------------------------------------------------------------
+;; Failures the user has not seen (plans/remove-toasts.md 1.1). The banner strip
+;; reads these. A failure stays here until the user acknowledges it, however
+;; many times the page reloads and in whatever tab.
+;; ---------------------------------------------------------------------------
+
+(def failure-error-max-chars
+  "Longest `error` that `record-failure!` stores. An exception message can hold
+   a whole response body."
+  2000)
+
+(def unseen-failures-limit
+  "Most unseen failures the strip reads. Past this the oldest stay unread until
+   a newer one is dismissed."
+  100)
+
+(defn record-failure!
+  "Record a failure that has no run of its own: a command, a menu action, an undo.
+   The strip shows it until the user acknowledges it.
+
+   Pre : `user-id` is a user. `:error` is a string, a result map or an exception
+         (see `error-kind`) that holds non-blank text (violation = caller bug).
+         `:what` names the action in a few words (\"Delete card\"). `:subject-id`
+         is a topic to open, or nil. `:retry` is `{:command kw :payload map}`
+         for the Retry action, or nil. The payload must be JSON data.
+   Post: exactly one terminated row of type `action-failure` with outcome
+         `failure`, `error`, `error_kind`, `seen_at` NULL, and `:activity-mutations`
+         bumped once. Returns the new row id. A `:subject-id` that is not this
+         user's topic is stored as NULL, so a stale id cannot lose the failure."
+  [user-id {:keys [error what subject-id retry]}]
+  {:pre [(some? user-id) (some? (error-message error))]}
+  (let [text (error-message error)
+        text (if (> (count text) failure-error-max-chars)
+               (subs text 0 failure-error-max-chars)
+               text)
+        row (jdbc/execute-one! db/ds
+              ["INSERT INTO activities
+                  (user_id, type, work_key, subject_id, phase, outcome, error,
+                   error_kind, retry, terminated_at)
+                VALUES (?, 'action-failure', ?,
+                        (SELECT id FROM topics WHERE id = ? AND user_id = ?),
+                        ?, 'failure', ?, ?, ?, now())
+                RETURNING id"
+               user-id (str (random-uuid)) subject-id user-id
+               (if (str/blank? what) "Action" what)
+               text (error-kind error) (retry-param retry)]
+              {:builder-fn rs/as-unqualified-maps})]
+    (tel/log! {:level :info :id ::failure-recorded
+               :data {:user-id user-id :activity-id (:id row) :what what
+                      :error-kind (error-kind error)}}
+      "failure recorded")
+    (bump! user-id)
+    (:id row)))
+
+(defn unseen-failures
+  "The failed rows `user-id` has not acknowledged, newest first.
+
+   Post: only rows with `outcome = 'failure'` AND `seen_at IS NULL`, as plain
+         data safe for the wire. `:retry?` says a Retry exists; the stored
+         command itself never leaves the server."
+  [user-id]
+  (mapv
+    (fn [r]
+      {:id (:id r)
+       :type (:type r)
+       :label (registry/label (:type r))
+       :what (:phase r)
+       :error (:error r)
+       :error-kind (:error_kind r)
+       :subject-id (:subject_id r)
+       :retry? (boolean (:retry r))
+       :terminated-at (some-> (:terminated_at r) .toInstant .toEpochMilli)})
+    (jdbc/execute! db/ds
+      ["SELECT id, type, phase, error, error_kind, subject_id,
+               (retry IS NOT NULL) AS retry, terminated_at
+          FROM activities
+         WHERE user_id = ? AND outcome = 'failure' AND seen_at IS NULL
+         ORDER BY terminated_at DESC, id DESC
+         LIMIT ?"
+       user-id unseen-failures-limit]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn- mark-seen!
+  "Set `seen_at` on the unseen failures among `ids` that belong to `user-id`.
+   Returns the ids it changed. The ownership clause makes a foreign id a no-op."
+  [user-id ids]
+  (let [ids (vec (filter some? ids))]
+    (if (empty? ids)
+      []
+      (mapv :id
+        (jdbc/execute! db/ds
+          (into [(str "UPDATE activities SET seen_at = now()
+                        WHERE user_id = ? AND outcome = 'failure' AND seen_at IS NULL
+                          AND id IN (" (str/join ", " (repeat (count ids) "?")) ")
+                       RETURNING id")
+                 user-id]
+            ids)
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn acknowledge!
+  "Acknowledge failures: set `seen_at` so they leave the strip.
+
+   Pre : `ids` is a collection of activity ids.
+   Post: every id that is this user's unseen failure has `seen_at` set, and
+         `:activity-mutations` is bumped once, through the `:acknowledge-failure`
+         command, when at least one changed. Another user's id changes nothing.
+         Idempotent. Returns :done."
+  [user-id ids]
+  (when (seq (mark-seen! user-id ids))
+    (commands/bump! user-id :acknowledge-failure))
+  :done)
+
+(defonce ^:private !retry-handlers (atom {}))
+
+(defn register-retry-handler!
+  "Register how a stored retry command runs.
+
+   `f` is `(fn [user-id payload])` and returns the optimistic contract
+   `{:ok? bool :error str?}`. It MUST NOT record a failure itself: `retry!`
+   does that when `:ok?` is false, so one failed Retry makes one banner.
+   Last registration wins. A command with no handler runs through
+   `optimistic/run-command-effect!` when it is a registered command."
+  [command f]
+  (swap! !retry-handlers assoc command f)
+  nil)
+
+(defn- run-retry [user-id command payload]
+  (if-some [f (get @!retry-handlers command)]
+    (f user-id payload)
+    (if (commands/command command)
+      ((requiring-resolve 'freememo.optimistic/run-command-effect!)
+       user-id {:id (random-uuid) :type command :payload payload})
+      {:ok? false :error (str "No way to retry " (name command))})))
+
+(defn retry!
+  "Run the stored retry command of one failed row.
+
+   Pre : `activity-id` is any id (a foreign or unknown id is not a violation).
+   Post: when the row is this user's unseen failure with a stored retry, the row
+         is acknowledged in one atomic UPDATE, so a double click dispatches once,
+         and the command runs. The strip is told once, after the command ends. A command that returns `{:ok? false}` or throws
+         records a new failure with the same retry. Returns the command's result
+         map, or :gone when there was nothing to retry. Another user's id
+         returns :gone and changes nothing."
+  [user-id activity-id]
+  (if-some [row (first
+                  (jdbc/execute! db/ds
+                    ["UPDATE activities SET seen_at = now()
+                       WHERE id = ? AND user_id = ? AND outcome = 'failure'
+                         AND seen_at IS NULL AND retry IS NOT NULL
+                      RETURNING retry, subject_id, phase"
+                     activity-id user-id]
+                    {:builder-fn rs/as-unqualified-maps}))]
+    (let [{:keys [command payload] :as retry} (read-retry (:retry row))
+          what (:phase row)]
+      (let [result (try
+                     (run-retry user-id command payload)
+                     (catch Throwable t
+                       (tel/error! {:id ::retry-failed
+                                    :data {:user-id user-id :activity-id activity-id
+                                           :command command}}
+                         t)
+                       {:ok? false :error (or (error-message t) "Retry failed")}))]
+        (when-not (:ok? result)
+          (record-failure! user-id {:error (or (:error result) "Retry failed")
+                                    :what what
+                                    :subject-id (:subject_id row)
+                                    :retry retry}))
+        ;; Bumped AFTER the command, never before. The strip re-queries on this
+        ;; bump and unmounts the Retry button, which cancels its `e/Offload`
+        ;; thread. Bumping first would interrupt the command it just started.
+        (commands/bump! user-id :retry-failure)
+        result))
+    :gone))
 
 ;; ---------------------------------------------------------------------------
 ;; Cancellation

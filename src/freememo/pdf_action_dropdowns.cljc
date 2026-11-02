@@ -36,7 +36,8 @@
 ;; :generate-questions act on the PDF open in the viewer (plan doc, palette
 ;; integration, design C). No visible UI — the Knowledge tab keeps the
 ;; browsing buttons. Guards live server-side: start-distill! no-ops on an
-;; in-flight run; exhausted question generation toasts.
+;; in-flight run. A run that fails closes its Activity row as a failure, and the
+;; banner strip shows it.
 ;; ---------------------------------------------------------------------------
 
 (e/defn KgCommandSources []

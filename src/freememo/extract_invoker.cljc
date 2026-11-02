@@ -11,22 +11,24 @@
    [freememo.command-bus :as bus]
    [freememo.commands :as commands]
    [freememo.logging :as log]
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.activity :as activity])))
 
 (defn create-extract!*
   "Save `html` as a child topic of `topic-id`.
    Pre : `html` is a selection from `selected-passage/current`; `code-pane?`
          says it came from a read-only surface rather than the editor.
-   Post: as `helpers/create-extract-topic-safe!`. A failure is also toasted,
-         because no control is on screen to show it."
+   Post: as `helpers/create-extract-topic-safe!`. A failure is also recorded
+         for the banner strip, because no control is on screen to show it."
   [topic-id user-id html title code-pane?]
   #?(:clj (let [r (if code-pane?
                     (helpers/create-code-pane-extract! topic-id user-id html title)
                     (helpers/create-extract-topic-safe! topic-id user-id html title))]
             (when-not (:success r)
-              (toasts/push! user-id {:level :error
-                                     :message (str "Couldn't save the extract: "
-                                                (or (:error r) "unknown error"))}))
+              (activity/record-failure!
+                user-id {:what "Save extract"
+                         :subject-id topic-id
+                         :error (str "Could not save the extract: "
+                                  (or (:error r) "unknown error"))}))
             r)
      :cljs nil))
 

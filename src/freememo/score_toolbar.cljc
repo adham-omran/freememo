@@ -7,8 +7,8 @@
    decision — push time only fetches stored bytes, so headless Quick Sync
    works): cut+encode the MP3 clip from wavesurfer's already-decoded
    AudioBuffer, crop every rect from a fresh page render, upload all blobs to
-   /api/upload-media, then enqueue :add-score-group / :update-score-group
-   through the optimistic command queue (freememo.score)."
+   /api/upload-media, then enqueue :add-score-group through the optimistic command queue, or
+   call the update directly and wait for its result (freememo.score)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -135,8 +135,20 @@
 (defn enqueue-add-score!* [id payload]
   (opt/enqueue-pending! :add-score-group id payload))
 
-(defn enqueue-update-score!* [payload]
-  (opt/enqueue! {:type :update-score-group :payload payload}))
+(defn update-score-group!*
+  "Replace a saved group's clip and rectangles, then bump the views of
+   `:update-score-group`. The toolbar waits for the result, so a failure stays
+   beside the Update button and the selection is kept.
+   Post: {:success true} or {:success false :error str}.
+   Body-level #?(:clj …): the toolbar names this var inside (e/server …)."
+  [user-id payload]
+  #?(:clj (let [result (score/update-group! user-id payload)]
+            (if (:success result)
+              (do (commands/bump! user-id :update-score-group) result)
+              (assoc result :success false
+                :error (or (not-empty (str (:error result)))
+                           "Could not update the score card."))))
+     :cljs nil))
 
 (defn get-score-group-for-edit* [user-id group-id]
   #?(:clj (score/get-group-for-edit user-id group-id)
@@ -430,9 +442,12 @@
           (let [payload (:payload submit)
                 add-id (e/snapshot (random-uuid))]
             (if (:group-id payload)
-              (case (enqueue-update-score!* payload)
-                (do (clear-selection! !score-region !score-pages !score-edit)
-                  (t)))
+              (let [result (e/server (e/Offload #(update-score-group!* user-id payload)))]
+                (when (some? result)
+                  (if (:success result)
+                    (do (clear-selection! !score-region !score-pages !score-edit)
+                      (t))
+                    (t (:error result)))))
               (case (enqueue-add-score!* add-id payload)
                 (do (clear-selection! !score-region !score-pages !score-edit)
                   (t))))))))))

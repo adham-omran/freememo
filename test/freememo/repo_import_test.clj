@@ -13,7 +13,8 @@
   (doseq [k [:importing-repos :repo-import-errors :repo-import-cancellers]]
     (reset! (us/get-atom user-id k) {}))
   (reset! (us/get-atom user-id :repo-import-cancelled) #{})
-  (reset! (us/get-atom user-id :toasts) [])
+  (reset! (us/get-atom user-id :run-summaries) {})
+  (reset! (us/get-atom user-id :run-errors) {})
   (reset! @#'repo-import/!import-runs {}))
 
 (use-fixtures :each (fn [t] (reset-state!) (t) (reset-state!)))
@@ -48,6 +49,8 @@
   (is (= "boom" (get @(us/get-atom user-id :repo-import-errors) work-key))))
 
 ;; ── Background hand-off ────────────────────────────────────────────
+;; The picker's Close no longer pushes anything: the run's Activity row holds the
+;; summary or the error (plans/remove-toasts.md 2.4.2, 2.6).
 
 (def ^:private settle-run! @#'repo-import/settle-run!)
 
@@ -58,40 +61,27 @@
 (def ^:private success
   {:ok true :topic-id 42 :path "owner/name" :report {:topics-created 7}})
 
-(defn- toasts [] @(us/get-atom user-id :toasts))
-
-(deftest close-before-the-result-toasts-once-at-settle
+(deftest a-settled-run-reaches-the-waiting-picker
   (seed-run! "s1")
-  (repo-import/background-import! user-id "s1")
-  (is (empty? (toasts)))
   (settle-run! "s1" success)
-  (is (= 1 (count (toasts))))
-  (is (= [{:label "Open" :nav [:viewer {:type :topic :topic-id 42}]}]
-        (:actions (first (toasts))))))
+  (is (= success (deref (get-in @@#'repo-import/!import-runs ["s1" :delivery]) 0 nil))))
 
-(deftest close-after-the-result-toasts-once-at-close
-  (seed-run! "s2")
-  (settle-run! "s2" success)
-  (is (empty? (toasts)) "the picker is still open and navigates instead")
-  (repo-import/background-import! user-id "s2")
-  (is (= 1 (count (toasts))))
-  (repo-import/background-import! user-id "s2")
-  (is (= 1 (count (toasts))) "a second Close does not toast again"))
+(deftest a-successful-import-keeps-its-count-for-the-activity-row
+  (run-as-activity user-id work-key "creating topics" (fn [] success))
+  (is (= "Imported owner/name: 7 topics."
+        (get @(us/get-atom user-id :run-summaries) [:repo-import work-key]))))
 
-(deftest a-run-nobody-closed-never-toasts
-  (seed-run! "s3")
-  (settle-run! "s3" success)
-  (is (empty? (toasts)))
-  (is (= success (deref (get-in @@#'repo-import/!import-runs ["s3" :delivery]) 0 nil))))
+(deftest a-step-with-nothing-to-count-keeps-no-summary
+  (run-as-activity user-id work-key "cloning" (fn [] {:ok true :dir "x"}))
+  (is (nil? (get @(us/get-atom user-id :run-summaries) [:repo-import work-key]))))
 
-(deftest a-cancelled-run-toasts-nothing
-  (seed-run! "s4")
-  (repo-import/background-import! user-id "s4")
-  (settle-run! "s4" {:ok false :cancelled? true})
-  (is (empty? (toasts))))
+(deftest an-unchanged-update-says-so
+  (run-as-activity user-id work-key "fetching" (fn [] {:ok true :unchanged? true :topic-id 1}))
+  (is (= (str work-key " is already up to date.")
+        (get @(us/get-atom user-id :run-summaries) [:repo-import work-key]))))
 
-(deftest another-users-close-is-ignored
-  (seed-run! "s5")
-  (repo-import/background-import! (inc user-id) "s5")
-  (settle-run! "s5" success)
-  (is (empty? (toasts))))
+(deftest a-failed-run-keeps-its-error-and-no-summary
+  (run-as-activity user-id work-key "creating topics" (fn [] success))
+  (run-as-activity user-id work-key "creating topics" (fn [] {:ok false :error "disk full"}))
+  (is (= "disk full" (get @(us/get-atom user-id :repo-import-errors) work-key)))
+  (is (nil? (get @(us/get-atom user-id :run-summaries) [:repo-import work-key]))))

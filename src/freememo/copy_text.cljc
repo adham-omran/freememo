@@ -11,6 +11,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.icons :as icons]
+   [freememo.inline-error :refer [InlineError]]
+   [freememo.result-line :refer [ResultLine]]
    [freememo.modal-shell :as modal]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
@@ -20,8 +22,7 @@
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.settings :as settings])))
 
 ;; ── Server bridges (plain defns; CLJS gets a no-op) ────────────────────────
 
@@ -61,11 +62,16 @@
             r)
      :cljs nil))
 
-(defn push-toast!*
-  "Push a toast to the user's queue. Errors auto-sticky (toasts/push! default)."
-  [user-id level message]
-  #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
-     :cljs nil))
+(defn copied-line
+  "The count line for a batch copy, such as \"Copied text for 12 pages\"."
+  [ok]
+  (str "Copied text for " ok (if (= 1 ok) " page" " pages")))
+
+(defn failed-line
+  "The error for the pages of a batch copy that failed, or nil when none did."
+  [failed]
+  (when (pos? (or failed 0))
+    (str failed (if (= 1 failed) " page" " pages") " failed")))
 
 (defn- summarize [results]
   (let [ok (count (filter :success results))
@@ -124,32 +130,36 @@
 
 (e/defn PickButton
   "Commit the chosen text to the page; if Remember is checked, also persist the
-   style. Closes the modal on success; on failure toasts the error and leaves
-   the modal open so the user isn't left thinking the pick was saved."
+   style. Closes the modal on success. On failure it leaves the modal open and
+   shows the error beside the button, so the user isn't left thinking the pick
+   was saved. A style that could not be remembered is the same case: the text
+   is saved, the modal stays open and the error says what is left undone."
   [label user-id root-topic-id page html style enabled? !remember !compare]
   (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm btn-primary" :disabled (not enabled?)
-                  :style {:width "100%"}})
-      (dom/text label)
-      (let [click (dom/On "click" (fn [_] @!remember) nil)
-            [t _] (e/Token click)]
-        (when t
-          (let [commit-r (e/server (e/Offload #(commit-html!* user-id root-topic-id page html)))]
-            (case commit-r
-              (if (:success commit-r)
-                (let [style-r (if click
-                                (e/server (save-style!* user-id root-topic-id style))
-                                {:success true})]
-                  (case style-r
-                    (if (:success style-r)
-                      (do (e/on-unmount #(reset! !compare nil)) (t))
-                      (case (e/server (e/Offload #(push-toast!* user-id :warning
-                                                    (str "Saved the text, but couldn't remember the style: " (:error style-r)))))
-                        (do (e/on-unmount #(reset! !compare nil)) (t))))))
-                (case (e/server (e/Offload #(push-toast!* user-id :error
-                                              (str "Couldn't save text: " (:error commit-r)))))
-                  (t (:error commit-r)))))))))))
+    (let [!click (atom nil)
+          click (e/watch !click)
+          [t ?error] (e/Token click)]
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-primary" :disabled (not enabled?)
+                    :style {:width "100%"}})
+        (dom/text label)
+        (dom/On "click" (fn [_] (reset! !click {:id (str (random-uuid))
+                                                :remember @!remember}))
+          nil))
+      (InlineError ?error)
+      (when t
+        (let [commit-r (e/server (e/Offload #(commit-html!* user-id root-topic-id page html)))]
+          (case commit-r
+            (if (:success commit-r)
+              (let [style-r (if (:remember click)
+                              (e/server (save-style!* user-id root-topic-id style))
+                              {:success true})]
+                (case style-r
+                  (if (:success style-r)
+                    (do (e/on-unmount #(reset! !compare nil)) (t))
+                    (t (str "Saved the text, but could not remember the style: "
+                         (:error style-r))))))
+              (t (str "Could not save text: " (:error commit-r))))))))))
 
 (e/defn CompareModal
   "Runs both previews on mount, shows them side-by-side, commits the picked text
@@ -233,6 +243,7 @@
     (let [!remote-run (atom nil) remote-run (e/watch !remote-run)
           !client-save (atom nil) client-save (e/watch !client-save)
           !compare (atom nil) compare (e/watch !compare)
+          !error (atom nil)
           busy? (or (some? remote-run) (some? client-save) (some? compare))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
@@ -247,11 +258,16 @@
         (dom/On "click"
           (fn [_]
             (let [pg page-number id (str (random-uuid)) style extract-style]
+              (reset! !error nil)
               (case style
                 "remote" (reset! !remote-run {:id id :page pg})
                 "client" (kick-client! !client-save id pg)
                 (kick-client! !compare id pg))))
           nil))
+
+      ;; Beside the button. Always mounted, so a failure that arrives after the
+      ;; run's frame unmounts still has a place to show.
+      (InlineError (e/watch !error))
 
       ;; Remote direct path: extract + save on the server.
       (when remote-run
@@ -262,8 +278,8 @@
               (case r
                 (if (:success r)
                   (t)
-                  (case (e/server (e/Offload #(push-toast!* user-id :error (str "Couldn't copy text: " (:error r)))))
-                    (t (:error r)))))))))
+                  (do (e/on-unmount #(reset! !error (str "Could not copy text: " (:error r))))
+                      (t))))))))
 
       ;; Client direct path: save the client-extracted raw text.
       (when client-save
@@ -274,8 +290,8 @@
               (case r
                 (if (:success r)
                   (t)
-                  (case (e/server (e/Offload #(push-toast!* user-id :error (str "Couldn't save text: " (:error r)))))
-                    (t (:error r)))))))))
+                  (do (e/on-unmount #(reset! !error (str "Could not save text: " (:error r))))
+                      (t))))))))
 
       ;; Compare path (style unset): run both previews in a modal.
       (when compare
@@ -326,20 +342,29 @@
      \"remote\" → extract+saves every page server-side via PDFBox.
      \"client\" → extract every page client-side via PDF.js, in sequential
                  chunks of `client-batch-limit`.
-     \"ask\"/nil → toasts a warning asking the user to set a default method
-                  first (via Copy text's compare modal or Document options)."
+     \"ask\"/nil → the button is disabled, and its tooltip says to set a default
+                  method first (via Copy text's compare modal or Document
+                  options).
+   The count of pages copied shows beside the button, and the count of pages
+   that failed shows as an error beside it."
   [user-id root-topic-id extract-style]
   (e/client
     (let [!remote-run (atom nil) remote-run (e/watch !remote-run)
           !client-run (atom nil) client-run (e/watch !client-run)
           !client-all (atom nil) client-all (e/watch !client-all)
-          !warned (atom nil) warned (e/watch !warned)
+          !result (atom nil)
+          !error (atom nil)
+          no-method? (not (#{"remote" "client"} extract-style))
           busy? (or (some? remote-run) (some? client-run) (some? client-all))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Copy text for all pages"
-                    :disabled busy?})
-        (tooltip/Tooltip! "Copy the PDF's own text for all pages (no AI)")
+                    :disabled (or busy? no-method?)})
+        (tooltip/Tooltip! (if no-method?
+                            (str "Set a default text-extraction method first. "
+                              "Click Copy text on a single page and pick one, "
+                              "or choose one in Document options.")
+                            "Copy the PDF's own text for all pages (no AI)"))
         (icons/Icon :library :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if busy? "Copying…" "Copy all text")))
@@ -349,62 +374,38 @@
         (dom/On "click"
           (fn [_]
             (let [id (str (random-uuid)) style extract-style]
+              (reset! !result nil)
+              (reset! !error nil)
               (case style
                 "remote" (reset! !remote-run {:id id})
                 "client" (do
                            (reset! !client-run {:id id})
                            (kick-client-all! !client-all id))
-                (reset! !warned {:id id}))))
+                nil)))
           nil))
 
-      ;; No preferred method → warn the user once per click.
-      (when warned
-        (let [[t _] (e/Token warned)]
-          (when t
-            (e/on-unmount #(reset! !warned nil))
-            (case (e/server
-                    (e/Offload
-                      (fn []
-                        (push-toast!*
-                          user-id :warning
-                          (str "Set a default text-extraction method first — "
-                            "click 'Copy text' on a single page and pick one "
-                            "(or choose one in Document options).")))))
-              (t)))))
+      (ResultLine (e/watch !result))
+      (InlineError (e/watch !error))
 
-      ;; Remote batch path: extract+saves every page on the server, then toast.
+      ;; Remote batch path: extract+saves every page on the server.
       (when remote-run
         (let [[t _] (e/Token remote-run)]
           (when t
             (e/on-unmount #(reset! !remote-run nil))
             (let [summary (e/server (e/Offload #(remote-extract-all!* user-id root-topic-id)))]
-              (case (e/server
-                      (e/Offload
-                        (fn []
-                          (push-toast!*
-                            user-id
-                            (if (pos? (:failed summary)) :warning :success)
-                            (str "Copied text for " (:ok summary) " page(s)"
-                              (when (pos? (:failed summary))
-                                (str " (" (:failed summary) " failed)"))
-                              ".")))))
+              (when (some? summary)
+                (e/on-unmount #(do (reset! !result (copied-line (:ok summary)))
+                                   (reset! !error (failed-line (:failed summary)))))
                 (t))))))
 
-      ;; Client batch path: save the client-extracted raw text per page, then toast.
+      ;; Client batch path: save the client-extracted raw text per page.
       (when client-all
         (let [[t _] (e/Token client-all)]
           (when t
             (e/on-unmount #(do (reset! !client-run nil) (reset! !client-all nil)))
             (let [results (:results client-all)
                   summary (e/server (e/Offload #(client-save-all!* user-id root-topic-id results)))]
-              (case (e/server
-                      (e/Offload
-                        (fn []
-                          (push-toast!*
-                            user-id
-                            (if (pos? (:failed summary)) :warning :success)
-                            (str "Copied text for " (:ok summary) " page(s) (client)"
-                              (when (pos? (:failed summary))
-                                (str " (" (:failed summary) " failed)"))
-                              ".")))))
+              (when (some? summary)
+                (e/on-unmount #(do (reset! !result (copied-line (:ok summary)))
+                                   (reset! !error (failed-line (:failed summary)))))
                 (t)))))))))

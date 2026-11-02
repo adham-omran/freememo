@@ -9,8 +9,14 @@
 
    One menu exists at a time, on `document.body`, in the TOP LAYER through
    `popover=\"manual\"`. The top layer paints above every z-index, so the menu
-   is above the card modals and the toast stack alike, and the card modals'
-   `pointer-events: none` overlay cannot reach it: it is not their descendant.
+   is above the card modals, and the card modals' `pointer-events: none`
+   overlay cannot reach it: it is not their descendant.
+
+   A row whose action can fail in the browser (a clipboard write, an upload)
+   keeps the menu open while the action runs. A failure shows on that row, and
+   an outside click closes the menu (plan item 1.6.2). The handler
+   asks for this through `run-on-row!`, and the command's id is listed in
+   `holds-row!` so the menu knows to wait before it closes.
 
    A command with `:menu-input` swaps the menu body for one field in the same
    element (§3.10). The bus asks for that field through
@@ -57,6 +63,119 @@
 
 (defonce ^:private unregister-popover!
   (editor-popovers/register! open? #(close! true)))
+
+;; ---------------------------------------------------------------------------
+;; A row that runs a promise
+;; ---------------------------------------------------------------------------
+
+;; Command ids whose handler calls `run-on-row!`. Those rows keep the menu open
+;; until the handler's promise settles; every other row closes the menu first,
+;; as it always did, so a handler that moves focus is not undone by the close.
+(defonce ^:private !holding (atom #{}))
+
+(defn holds-row!
+  "Declare that the handlers of `command-ids` call `run-on-row!`.
+   Returns nil."
+  [command-ids]
+  (swap! !holding into command-ids)
+  nil)
+
+;; {:menu <el> :button <el> :held? bool} while a menu row dispatches, else nil.
+(defonce ^:private !row (atom nil))
+
+(defn- clear-row-error! [^js button]
+  (when-let [^js sibling (.-nextElementSibling button)]
+    (when (.contains (.-classList sibling) "context-menu__error")
+      (.remove sibling))))
+
+(defn- set-row-error!
+  "Show `message` under `button`, in the menu, and put focus back on the row."
+  [^js button message]
+  (clear-row-error! button)
+  (let [err (js/document.createElement "div")]
+    (set! (.-className err) "context-menu__error")
+    (.setAttribute err "role" "alert")
+    (set! (.-textContent err) message)
+    (.insertAdjacentElement button "afterend" err)
+    (.focus button #js {:preventScroll true})))
+
+(defn- set-busy! [^js button busy?]
+  (if busy?
+    (do (.setAttribute button "aria-busy" "true")
+        (.add (.-classList button) "is-busy"))
+    (do (.removeAttribute button "aria-busy")
+        (.remove (.-classList button) "is-busy"))))
+
+(declare mount! center-anchor)
+
+(defn- show-error-popup!
+  "A menu that holds only `message`. A handler that ran with no menu row to
+   show on (the command palette ran it) ends here. An outside click or Escape
+   closes it, like the menu."
+  [message]
+  (let [anchor (center-anchor)
+        menu (mount! anchor
+               (fn [^js m]
+                 (.setAttribute m "role" "alert")
+                 (.setAttribute m "tabindex" "-1")
+                 (let [p (js/document.createElement "p")]
+                   (set! (.-className p) "context-menu__error")
+                   (set! (.-textContent p) message)
+                   (.appendChild m p))))]
+    (.focus menu #js {:preventScroll true})))
+
+(defn run-on-row!
+  "Run a handler's browser work on the menu row that started it.
+
+   Pre : called synchronously from a command handler, so the row that
+         dispatched it is still known. `f` takes `fail!` and returns a promise.
+         `fail!` records a message a user can read. `on-success`, when given,
+         takes the promise's value.
+   Post: while the promise runs the row is busy and the menu stays open. On
+         success the menu closes, then `on-success` runs. On failure, the
+         message `fail!` recorded (else the rejection's message) shows under
+         the row, and the menu stays open. A handler run with no menu row, such
+         as one the palette ran, shows the message in a menu of its own.
+         Returns nil."
+  ([f] (run-on-row! f nil))
+  ([f on-success]
+   (let [row (when (and (:menu @!row) (not (:held? @!row))
+                        (identical? (:menu @!row) (some-> @!menu :el)))
+               @!row)
+         !message (atom nil)
+         fail! (fn [m] (reset! !message m) nil)
+         button (:button row)]
+     (when row
+       (swap! !row assoc :held? true)
+       (set-busy! button true))
+     (let [settle! (fn [value message]
+                     (cond
+                       message
+                       (cond
+                         (and row (.-isConnected button))
+                         (do (set-busy! button false)
+                             (set-row-error! button message))
+
+                         ;; The reader closed the menu while this ran. They
+                         ;; chose to leave it, so no menu opens again.
+                         row (js/console.warn "[context-menu] row failed after close:" message)
+
+                         :else (show-error-popup! message))
+
+                       :else
+                       (do (when row
+                             (when (.-isConnected button) (set-busy! button false))
+                             (when (identical? (:menu row) (some-> @!menu :el))
+                               (close! true)))
+                           (when on-success (on-success value)))))]
+       (-> (try (js/Promise.resolve (f fail!))
+                (catch :default err (js/Promise.reject err)))
+         (.then (fn [value] (settle! value @!message)))
+         (.catch (fn [err]
+                   (js/console.warn "[context-menu] row failed:" (str err))
+                   (settle! nil (or @!message (some-> err .-message not-empty)
+                                  "Could not finish this action."))))))
+     nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; DOM
@@ -182,9 +301,21 @@
     (.addEventListener b "click"
       (fn [^js e]
         (.stopPropagation e)
-        (when-not disabled-reason
-          (if (:menu-input (commands/command id))
+        (when-not (or disabled-reason
+                      (.querySelector menu "[aria-busy=true]"))
+          (clear-row-error! b)
+          (cond
+            (:menu-input (commands/command id))
             (bus/dispatch! id target :menu)          ; the requester swaps the body
+
+            (contains? @!holding id)
+            (do (reset! !row {:menu menu :button b :held? false})
+                (bus/dispatch! id target :menu)
+                (let [held? (:held? @!row)]
+                  (reset! !row nil)
+                  (when-not held? (close! true))))
+
+            :else
             (do (close! true)
                 (bus/dispatch! id target :menu))))))
     (.appendChild menu b)))
@@ -240,6 +371,26 @@
                      :teardown (install-dismissal! menu)})
       menu)))
 
+(defn- browser-facts
+  "What the browser can do, stated for the subjects of a target. A row that
+   needs one reads it through an enable test (freememo.command-targets), so
+   the menu shows the row disabled with the reason instead of failing on a
+   click.
+   :clipboard-ok? is true in a secure context (https or localhost).
+   :menu-copy-ok? is true when the async clipboard API exists.
+   :card-gen-available? is true while a card generation form is mounted."
+  []
+  {:clipboard-ok? (boolean (.-isSecureContext js/window))
+   :menu-copy-ok? (some? (.-clipboard js/navigator))
+   :card-gen-available? (contains? @bus/!invokers :open-document-generate-form)})
+
+(defn- with-browser-facts
+  "`target` with the browser's facts under each subject. A fact a surface
+   already stated wins."
+  [target]
+  (let [facts (browser-facts)]
+    (update target :subjects (fn [subjects] (mapv #(merge facts %) subjects)))))
+
 (defn has-items?
   "True when at least one command applies to `target`."
   [target]
@@ -253,7 +404,8 @@
    Post: true and one menu with focus on its first row when any command
          applies to `target`. Otherwise false, and nothing opens."
   [anchor target]
-  (let [items (targets/menu-items commands/registry target)]
+  (let [target (with-browser-facts target)
+        items (targets/menu-items commands/registry target)]
     (if (empty? items)
       false
       (let [menu (mount! anchor

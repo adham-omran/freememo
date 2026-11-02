@@ -74,8 +74,7 @@
                       @(us/get-atom user-id :exam-form-generations) work-key))
               1000))
         (is (not (contains?
-                   @(us/get-atom user-id :exam-form-generation-errors) work-key)))
-        (is (empty? @(us/get-atom user-id :toasts))))
+                   @(us/get-atom user-id :exam-form-generation-errors) work-key))))
       (deliver release :continue))))
 
 (deftest form-generation-shutdown-waits-for-running-work

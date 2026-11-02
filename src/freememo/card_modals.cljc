@@ -18,7 +18,6 @@
    [freememo.cloze :as cloze]
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
-   #?(:clj [freememo.toasts :as toasts])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
@@ -786,17 +785,17 @@
          {:success false :error (.getMessage e)}))))
 
 ;; Optimistic add-card effect (freememo.optimistic). Pre: payload has
-;; :topic-id :root-topic-id :kind :card-data. Post: cards saved + success toast,
-;; or error toast. Effect + toast only, returning the outcome map — the client
-;; dispatcher flips the overlay entry (:confirmed with real ids, or :error) and
-;; run-command-effect! bumps the registry :views.
+;; :topic-id :root-topic-id :kind :card-data. Post: cards saved, or a failure
+;; whose :error the PendingCardRow shows. Effect only, returning the outcome
+;; map — the client dispatcher flips the overlay entry (:confirmed with real ids,
+;; or :error) and run-command-effect! bumps the registry :views.
 ;;
 ;; An all-duplicate save is reported as a FAILURE here, though save-cards calls
 ;; it a success. The two are not in conflict: save-cards serves batch generate,
 ;; where re-proposing a card the topic already holds is normal and inserting
 ;; nothing is not an error. This path submits exactly one card at a user's
 ;; request, so "nothing was inserted" is the whole outcome and must reach them.
-;; Without this branch the modal toasts "Card added", closes, and leaves no
+;; Without this branch the modal reports the add, closes, and leaves no
 ;; card — the shape Create copy… would hit on every unedited copy, because the
 ;; flashcard uniqueness indexes key on (topic_id, kind, md5(question|cloze)).
 #?(:clj
@@ -823,17 +822,13 @@
            duplicate-msg "That card already exists in this topic"]
        (cond
          dropped-every-row?
-         (do (toasts/push! user-id {:level :error :message duplicate-msg})
-             {:ok? false :error duplicate-msg})
+         {:ok? false :error duplicate-msg}
 
          (:success result)
-         (do (toasts/push! user-id {:level :success :message "Card added"})
-             {:ok? true :real-ids (:ids result)})
+         {:ok? true :real-ids (:ids result)}
 
          :else
-         (do (toasts/push! user-id {:level :error
-                                    :message (or (:error result) "Failed to add card")})
-             {:ok? false :error (:error result)})))))
+         {:ok? false :error (or (not-empty (str (:error result))) "Could not add the card.")}))))
 
 ;; Cancel affordance for the Add-Card Form!. MUST be :type "button" — a bare
 ;; <button> inside a <form> defaults to type=submit and would submit on click.

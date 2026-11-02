@@ -1,7 +1,7 @@
 (ns freememo.link-target-test
   "One deftest per row of the affordance table in
    plans/uniform-anchor-links.md — the rows a pure function can decide. The
-   popover, the scroll and the toast are browser checks.
+   popover, the scroll and the link card are browser checks.
 
    The hrefs are real shapes taken from the production census, not invented
    ones: exrx.net's `../Articulations/...`, SuperMemo's `book-partN.xhtml#...`,

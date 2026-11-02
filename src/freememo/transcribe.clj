@@ -16,7 +16,8 @@
    [freememo.logging :as log]
    [freememo.openrouter :as openrouter]
    [freememo.settings :as settings]
-   [freememo.toasts :as toasts]
+   [freememo.activity :as activity]
+   [freememo.activity-registry :as registry]
    [freememo.user-state :as us]
    [freememo.commands :as commands]
    [missionary.core :as m]
@@ -121,9 +122,12 @@
 (defn start-transcribe!
   "Launch transcription as a Missionary task on a bounded executor.
    Adds topic-id to the per-user :transcribing-topics set for the duration;
-   bumps :refresh on success (the editor reloads reactively); pushes an error
-   toast on failure or timeout. Returns nil immediately."
+   bumps :refresh on success (the editor reloads reactively). A failure or a
+   timeout is kept with `registry/record-error!` BEFORE membership drops, so the
+   Activity row closes as a failure with its text and the banner strip shows it.
+   Returns nil immediately."
   [user-id topic-id]
+  (registry/clear-run! user-id :transcribe topic-id)
   (swap! (us/get-atom user-id :transcribing-topics) conj topic-id)
   (us/work-started! user-id)
   (log/log-info (str "Transcription started topic-id=" topic-id))
@@ -136,11 +140,18 @@
        (do (log/log-info (str "Transcription complete topic-id=" topic-id))
            (commands/bump! user-id :transcribe))
        (do (log/log-warn (str "Transcription failed topic-id=" topic-id " error=" (:error result)))
-           (toasts/push! user-id {:level :error :message (:error result)})))
+           (registry/record-error! user-id :transcribe topic-id result)))
      (swap! (us/get-atom user-id :transcribing-topics) disj topic-id))
    (fn [e]
      (when-not (instance? Cancelled e)
        (tel/error! {:id ::transcribe :data {:user-id user-id :topic-id topic-id}} e)
-       (toasts/push! user-id {:level :error :message (.getMessage e)}))
+       (registry/record-error! user-id :transcribe topic-id
+         (or (.getMessage e) "Transcription failed")))
      (swap! (us/get-atom user-id :transcribing-topics) disj topic-id)))
   nil)
+
+(activity/register-retry-handler! :transcribe
+  (fn [user-id {:keys [topic-id]}]
+    (if (some? (db/get-topic-for-user user-id topic-id))
+      (do (start-transcribe! user-id topic-id) {:ok? true})
+      {:ok? false :error "That topic is not available."})))

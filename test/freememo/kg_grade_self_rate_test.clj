@@ -1,27 +1,25 @@
 (ns freememo.kg-grade-self-rate-test
   "The Review flow's answer to a credit refusal: the grade returns the reference
-   answer and toasts nothing, and the learner's own 1-4 rating schedules the item.
-   Every database, credit and toast seam is stubbed, so this runs with no
-   PostgreSQL."
+   answer, and the learner's own 1-4 rating schedules the item. A grade failure
+   returns its error to the caller. Every database and credit
+   seam is stubbed, so this runs with no PostgreSQL."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.credits :as credits]
             [freememo.db :as db]
             [freememo.kg-grade :as grade]
             [freememo.kg-llm :as llm]
-            [freememo.settings :as settings]
-            [freememo.toasts :as toasts]))
+            [freememo.settings :as settings]))
 
 (defn- refuse! [& _]
   (throw (ex-info "Out of credits. Top up in Settings to keep using AI features."
            {:type :freememo.kg-llm/insufficient-credits})))
 
 (defmacro ^:private with-seams
-  "Run body with the grader refused for credits. Binds `toasts` and `reviews` to
-   atoms holding every toast pushed and every apply-fsrs-review! call."
-  [[toasts reviews] & body]
-  `(let [~toasts (atom []) ~reviews (atom [])]
+  "Run body with the grader refused for credits. Binds `reviews` to an atom
+   holding every apply-fsrs-review! call."
+  [[reviews] & body]
+  `(let [~reviews (atom [])]
      (with-redefs [llm/resolve-model+gate! refuse!
-                   toasts/push! (fn [_# t#] (swap! ~toasts conj t#))
                    settings/fsrs-config (fn [_#] {:scheduler {} :enable-fuzzing false})
                    db/apply-fsrs-review!
                    (fn [user-id# item-ref# rating# record# _# _#]
@@ -35,45 +33,57 @@
        ~@body)))
 
 (deftest a-refused-question-grade-carries-its-reference-and-writes-nothing
-  (with-seams [toasts reviews]
+  (with-seams [reviews]
     (let [{:keys [result schedule]} (grade/review-question! 50 7 "cocci" 1200)]
       (is (false? (:success result)))
       (is (= :insufficient-credits (:error-type result)))
       (is (= "Staphylococcus aureus" (:reference-answer result)))
       (is (nil? schedule))
-      (is (empty? @reviews) "a refused grade schedules nothing")
-      (is (empty? @toasts) "the Review flow answers a refusal inline, not by toast"))))
+      (is (empty? @reviews) "a refused grade schedules nothing"))))
 
 (deftest a-refused-card-grade-carries-the-card-answer
-  (with-seams [toasts reviews]
+  (with-seams [reviews]
     (let [{:keys [result]} (grade/review-card! 50 11 0 "my answer" 900)]
       (is (= :insufficient-credits (:error-type result)))
       (is (= "<p>A</p>" (:reference-answer result)) "the HTML is kept for CardHtml")
-      (is (empty? @reviews))
-      (is (empty? @toasts)))))
+      (is (empty? @reviews)))))
 
-(deftest a-session-refusal-still-toasts-without-a-retry-hint
-  (with-seams [toasts _reviews]
+(deftest a-session-refusal-returns-an-error-without-a-retry-hint
+  (with-seams [_reviews]
     (let [res (grade/grade-question 50 7 "cocci")]
       (is (= :insufficient-credits (:error-type res)))
       (is (nil? (:reference-answer res)) "only the Review flow reveals the reference")
-      (is (= 1 (count @toasts)))
-      (let [{:keys [message actions]} (first @toasts)]
-        (is (not (re-find #"try Submit again" message))
-          "Submit cannot succeed until the balance is topped up")
-        (is (= [{:label "Top up credits" :nav :settings}] actions))))))
+      (is (re-find #"needs credits" (:error res)))
+      (is (not (re-find #"(?i)try Submit again" (:error res)))
+        "Submit cannot succeed until the balance is topped up"))))
 
-(deftest any-other-failure-keeps-the-reference-hidden
-  (with-seams [toasts _reviews]
+(deftest a-session-grade-failure-says-the-answer-was-kept
+  (with-seams [_reviews]
+    (with-redefs [db/record-kg-answer! (constantly 9)]
+      (let [res (grade/grade-answer! 50 3 7 0 "cocci")]
+        (is (false? (:success res)))
+        (is (re-find #"Your answer was kept" (:error res)))))))
+
+(deftest a-review-failure-never-claims-the-answer-was-kept
+  (with-seams [_reviews]
     (with-redefs [llm/resolve-model+gate! (fn [& _] (throw (ex-info "Provider down" {})))]
       (let [{:keys [result]} (grade/review-question! 50 7 "cocci" 1200)]
         (is (nil? (:error-type result)))
         (is (nil? (:reference-answer result)) "Submit may work again, so no reveal")
-        (is (= 1 (count @toasts)))
-        (is (re-find #"try Submit again" (:message (first @toasts))))))))
+        (is (re-find #"Provider down" (:error result)))
+        (is (not (re-find #"(?i)kept" (:error result)))
+          "Review saves nothing, so it must not say the answer was kept")))))
+
+(deftest a-schedule-write-failure-is-returned-with-the-grade
+  (with-seams [_reviews]
+    (with-redefs [db/apply-fsrs-review! (fn [& _] (throw (ex-info "db down" {})))]
+      (let [out (grade/rate-question! 50 7 3 100 "x")]
+        (is (true? (get-in out [:result :success])))
+        (is (nil? (:schedule out)))
+        (is (re-find #"schedule could not be saved" (:schedule-error out)))))))
 
 (deftest a-self-rated-question-schedules-with-its-typed-answer
-  (with-seams [_toasts reviews]
+  (with-seams [reviews]
     (let [{:keys [result schedule]} (grade/rate-question! 50 7 2 3400 "cocci")]
       (is (= {:success true :rating 2} result))
       (is (= {:due-today? false} schedule))
@@ -82,7 +92,7 @@
             @reviews)))))
 
 (deftest a-self-rated-card-records-an-answer-only-when-one-was-typed
-  (with-seams [_toasts reviews]
+  (with-seams [reviews]
     (grade/rate-card! 50 11 0 3 800)
     (grade/rate-card! 50 11 0 1 900 "typed")
     (is (= [[50 [:card 11 0] 3 {:grade-source "self" :duration-ms 800}]
@@ -91,7 +101,7 @@
           @reviews))))
 
 (deftest a-rating-outside-one-to-four-is-refused
-  (with-seams [_toasts reviews]
+  (with-seams [reviews]
     (doseq [bad [0 5 nil "3"]]
       (is (false? (:success (:result (grade/rate-question! 50 7 bad 100 "x"))))))
     (is (empty? @reviews))))

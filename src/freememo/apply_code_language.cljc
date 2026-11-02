@@ -42,6 +42,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.result-line :refer [ResultLine]]
    [freememo.code-languages :as langs]
    [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal-shell]
@@ -49,8 +50,7 @@
    [freememo.rich-text-editor :as editor]
    #?(:clj [freememo.code-language-html :as clh])
    #?(:clj [freememo.commands :as commands])
-   #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.db :as db])))
 
 ;; ── Prose: the live editor ─────────────────────────────────────────────────
 
@@ -170,29 +170,29 @@
          (db/update-flashcard-versioned! user-id (:flashcards/id card) fields)
          true))))
 
-#?(:clj
-   (defn- report!
-     "Toast the whole run — prose and cards in one line, because the user asked
-      for one operation."
-     [user-id label prose-blocks cards]
-     (toasts/push! user-id
-       {:level :info
-        :message (cond
-                   (and (zero? prose-blocks) (zero? cards))
-                   (str "No code blocks to set to " label)
-                   (zero? cards)
-                   (str "Set " prose-blocks " code block" (when (not= 1 prose-blocks) "s")
-                     " to " label)
-                   :else
-                   (str "Set " prose-blocks " code block" (when (not= 1 prose-blocks) "s")
-                     " to " label ", " cards " card" (when (not= 1 cards) "s") " updated"))})))
+(defn result-message
+  "The whole run in one line, prose and cards together, because the user asked
+   for one operation. The picker shows it beside its Done button.
+
+   Pre : `label` is the language's display name; the counts are integers.
+   Post: a string."
+  [label prose-blocks cards]
+  (cond
+    (and (zero? prose-blocks) (zero? cards))
+    (str "No code blocks to set to " label)
+    (zero? cards)
+    (str "Set " prose-blocks " code block" (when (not= 1 prose-blocks) "s")
+      " to " label)
+    :else
+    (str "Set " prose-blocks " code block" (when (not= 1 prose-blocks) "s")
+      " to " label ", " cards " card" (when (not= 1 cards) "s") " updated")))
 
 (defn apply-code-language!*
   "Rewrite the topic's cards, then report the run.
 
    `prose-blocks` is DISPLAY ONLY — the client has already applied the prose
-   half against its live editor, and passes the count so one call produces one
-   toast instead of two round trips for a message.
+   half against its live editor, and passes the count so one call produces the
+   whole result line instead of two round trips for a message.
 
    Pre : `language` ∈ `langs/code-language-keys`. A caller that fails this gets
          `{:ok false}` rather than an assertion, because the value reaches here
@@ -200,7 +200,7 @@
    Post: every card of `topic-id` whose HTML holds a code block now names
          `language`; unchanged cards are not written. `:card-mutations` is
          bumped iff at least one card changed. Returns
-         `{:ok true :cards n}` or `{:ok false :error msg}`."
+         `{:ok true :cards n :message s}` or `{:ok false :error msg}`."
   [user-id topic-id language label prose-blocks]
   #?(:clj
      (if-not (contains? langs/code-language-keys language)
@@ -211,8 +211,8 @@
                        count)]
            (when (pos? cards)
              (commands/bump! user-id :apply-code-language))
-           (report! user-id label prose-blocks cards)
-           {:ok true :cards cards})
+           {:ok true :cards cards
+            :message (result-message label prose-blocks cards)})
          (catch Exception e
            {:ok false :error (or (.getMessage e) "Could not apply the language")})))
      :cljs nil))
@@ -290,6 +290,8 @@
           dismiss! (fn [] (when (nil? @!stage) (close!)))
           !pick (atom nil)
           pick (e/watch !pick)
+          !result (atom nil)
+          result (e/watch !result)
           [t ?error] (e/Token pick)
           prose-blocks (e/snapshot (editor-code-block-count))
           card-count (e/server (e/Offload #(card-code-block-count* topic-id)))]
@@ -344,8 +346,22 @@
             (dom/span (dom/props {:class "spinner"}))
             (dom/span (dom/text (or busy ""))))
 
+          ;; The result row and the grid swap by `display` too. After a pick the
+          ;; modal stays open and says what changed, with a Done button. The
+          ;; line is set as the token spends, so it never describes a run that
+          ;; has not finished.
           (dom/div
-            (dom/props {:style {:display (if busy? "none" "grid")
+            (dom/props {:style {:display (if (some? result) "flex" "none")
+                                :align-items "center" :justify-content "space-between"
+                                :gap "12px" :padding "6px 2px"}})
+            (ResultLine result)
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-primary"})
+              (dom/text "Done")
+              (dom/On "click" (fn [_] (close!)) nil)))
+
+          (dom/div
+            (dom/props {:style {:display (if (or busy? (some? result)) "none" "grid")
                                 :gap "6px" :max-height "50vh"
                                 :overflow "auto"
                                 :grid-template-columns "repeat(2, minmax(0, 1fr))"}})
@@ -385,15 +401,16 @@
                   ;; over the very error the branch below is showing. The
                   ;; success branch only mounts on success.
                   ;;
-                  ;; It must also be an unmount callback rather than a sibling
-                  ;; of the server call: consume! destroys this frame, and a
-                  ;; sibling would race the effect it is meant to follow.
-                  (do (e/on-unmount close!)
-                      (case r (t)))
+                  ;; It sets local state and does not close the modal: the
+                  ;; picker stays open with the result line and a Done button.
+                  (let [message (:message r)]
+                    (e/on-unmount #(do (reset! !stage nil)
+                                       (reset! !result message)))
+                    (case r (t)))
                   ;; The failure branch clears the stage the same way, so the
                   ;; grid comes back under the error and Escape closes again.
                   ;; The prose half has already been written; only the cards
-                  ;; failed, and the toast is what says so.
+                  ;; failed, and the error paragraph above is what says so.
                   (do (e/on-unmount #(reset! !stage nil))
                       (t (:error r))))))))))))
 

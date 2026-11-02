@@ -24,6 +24,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.inline-error :as inline-error]
    [freememo.math :as math]
    [freememo.modal-shell :as modal-shell]
    [freememo.motion :as motion]
@@ -159,16 +160,28 @@
 (defn graded-feedback
   "What a turn shows once its grade call returns, shared by the card and question
    turns.
-   Post: the graded map {:result :answer :schedule} on success; {:self-rate result
-         :answer} on a credit refusal, which the turn answers with SelfRateFallback;
-         nil on any other failure, which leaves the answer box up so Submit can be
-         tried again (the grader's toast says why)."
+   Post: the graded map {:result :answer :schedule} on success, plus
+         :schedule-error when the grade was shown but its schedule was not saved;
+         {:self-rate result :answer} on a credit refusal, which the turn answers
+         with SelfRateFallback; nil on any other failure, which leaves the answer
+         box up so Submit can be tried again (`grade-error` says why)."
   [res answer]
   (let [result (:result res)]
     (cond
-      (:success result) {:result result :answer answer :schedule (:schedule res)}
+      (:success result) (cond-> {:result result :answer answer :schedule (:schedule res)}
+                          (:schedule-error res) (assoc :schedule-error (:schedule-error res)))
       (= :insufficient-credits (:error-type result)) {:self-rate result :answer answer}
       :else nil)))
+
+(defn grade-error
+  "The error a turn shows beside Submit after a failed grade, or nil.
+   A credit refusal is not one: the turn answers it with the self-rating bar.
+   Pre: `res` is the {:result …} map review-card! or review-question! returned."
+  [res]
+  (let [result (:result res)]
+    (when (and (not (:success result))
+            (not= :insufficient-credits (:error-type result)))
+      (or (:error result) "Grading failed."))))
 
 (e/defn AnswerForm
   "LLM arm, before the grade: the answer box and Submit.
@@ -178,6 +191,7 @@
    at once (no server round-trip per keystroke); Submit grades on the server."
   [user-id card-id ord !draft draft !grading? grading? !feedback started-at]
   (e/client
+    (let [!grade-error (atom nil) grade-error (e/watch !grade-error)]
     (dom/div
       (e/for [[t edit] (e/amb
                          (forms/Input! :card/answer draft :as :textarea
@@ -196,6 +210,7 @@
             (if (str/blank? answer)
               (t) ; defence in depth — the button is disabled for this
               (do (reset! !grading? true)
+                (reset! !grade-error nil)
                 ;; Client scope: pass the number, never the mark inside the
                 ;; server-sited closure (CLAUDE.md, unserializable capture).
                 (let [ms (timing/elapsed-ms started-at)
@@ -203,8 +218,10 @@
                             (e/Offload #(grade-card-answer!* user-id card-id ord answer ms)))]
                   (case res ; wait on the value — `do` would race the token
                     (do (reset! !grading? false)
+                      (reset! !grade-error (grade-error res))
                       (reset! !feedback (graded-feedback res answer))
-                      (t))))))))))))
+                      (t)))))))))
+      (inline-error/InlineError grade-error)))))
 
 (e/defn RatingBar
   "Self arm: the four ratings. The rating IS the grade, so pressing one records the
@@ -223,6 +240,7 @@
    answer when this bar stands in for a refused grade, else nil."
   [user-id item-ref user-answer !rating-busy? rating-busy? advance! started-at]
   (e/client
+    (let [!rate-error (atom nil) rate-error (e/watch !rate-error)]
     (dom/div
       (dom/props {:style {:display "flex" :gap "8px" :margin-top "12px"}})
       ;; data-rating is what rating-key-press! resolves a keystroke through, so the
@@ -239,17 +257,21 @@
         ;; Latch before the call so a second rating cannot race the first. The keyed
         ;; frame in ReviewFlow remounts this component per item, which clears it.
         (reset! !rating-busy? true)
+        (reset! !rate-error nil)
         (let [rating (second cmd)
               ms (timing/elapsed-ms started-at)
               res (e/server
                     (e/Offload #(rate-item!* user-id item-ref rating ms user-answer)))]
           (case res
-            (if (:success (:result res))
+            (if (and (:success (:result res)) (not (:schedule-error res)))
               (do (e/on-unmount
                     #(advance! (boolean (get-in res [:schedule :due-today?]))))
                 (t))
               (do (reset! !rating-busy? false)
-                (t "That rating could not be recorded.")))))))))
+                (reset! !rate-error (or (:schedule-error res)
+                                      "That rating could not be recorded."))
+                (t))))))
+      (inline-error/InlineError rate-error)))))
 
 (e/defn SelfArm
   "Self arm: prompt, then Show answer, then the reference answer plus the ratings.
@@ -348,7 +370,8 @@
             (e/snapshot (modal-shell/focus-on-mount! dom/node))
             (dom/On "click"
               (fn [_] (advance! (boolean (get-in feedback [:schedule :due-today?]))))
-              nil)))))))
+              nil))
+          (inline-error/InlineError (:schedule-error feedback)))))))
 
 (e/defn CardReviewBody
   "History detail for one CARD review: the prompt as asked, the reference answer, and

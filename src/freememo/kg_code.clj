@@ -28,7 +28,7 @@
    [freememo.db :as db]
    [freememo.user-state :as us]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
+   [freememo.activity-registry :as registry]
    [taoensso.telemere :as tel]
    [missionary.core :as m])
   (:import
@@ -266,14 +266,17 @@
 (defn start-repo-distill!
   "Submit an async fact-distillation run for (user-id, root-id) over root-dir,
    then delete root-dir. Mirrors kg-extract/start-distill!: bounded executor,
-   20-min timeout, completion toast, cancel fn. No-op when one is already in
+   20-min timeout, Activity summary or error, cancel fn. No-op when one is already in
    flight for that root. TAKES OWNERSHIP of root-dir — deletes it when the run
    ends (success, failure, or cancel).
    Pre:  root-id owned by user-id; root-dir is unzip-repo!'s temp tree.
    Post: nil. Progress in :distilling-repos; cancel fn in
-         :repo-distill-cancellers; success toasts + bumps :distill."
+         :repo-distill-cancellers; the run's summary or error is kept for
+         the Activity row (`registry/record-summary!`, `record-error!`) before
+         membership drops; success bumps :distill."
   [user-id root-id root-dir]
   (when-not (contains? @(us/get-atom user-id :distilling-repos) root-id)
+    (registry/clear-run! user-id :distill-repo root-id)
     (swap! (us/get-atom user-id :distilling-repos) conj root-id)
     (tel/log! {:level :info :id ::repo-distill-started
                :data {:user-id user-id :root root-id}}
@@ -287,19 +290,22 @@
              distill-timeout-ms
              {:success false :error "Repo distillation timed out after 20 minutes"})
            (fn [result]
-             (finish)
+             ;; Kept BEFORE `finish` drops membership: the reporter closes the
+             ;; row with whatever it finds when it sees the work gone.
              (if (:success result)
-               (do (commands/bump! user-id :distill)
-                 (toasts/push! user-id
-                   {:level :success
-                    :message (str (:facts result) " code fact"
-                               (when (not= 1 (:facts result)) "s") " extracted")}))
-               (toasts/push! user-id {:level :error :message (:error result)})))
-           (fn [e]
+               (registry/record-summary! user-id :distill-repo root-id
+                 (str (:facts result) " code fact"
+                   (when (not= 1 (:facts result)) "s") " extracted"))
+               (registry/record-error! user-id :distill-repo root-id result))
              (finish)
+             (when (:success result)
+               (commands/bump! user-id :distill)))
+           (fn [e]
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::repo-distill-task} e)
-               (toasts/push! user-id {:level :error :message (ex-message e)}))))]
+               (registry/record-error! user-id :distill-repo root-id
+                 (or (ex-message e) "Repo distillation failed")))
+             (finish)))]
       (swap! (us/get-atom user-id :repo-distill-cancellers) assoc root-id cancel-fn)
       ;; After the canceller: discovery reads cancellability when it opens the row.
       (us/work-started! user-id))

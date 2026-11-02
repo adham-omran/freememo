@@ -46,7 +46,6 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
    [clojure.set :as set]
    [clojure.string :as str]
    [taoensso.telemere :as tel]))
@@ -135,8 +134,8 @@
    Reads thresholds ONCE and passes them down; the O(n²) predicate must not carry
    a settings round trip.
 
-   Does NOT bump an invalidation channel and does NOT toast — callers own that, so
-   an all-documents run reports once rather than per document.
+   Does NOT bump an invalidation channel — callers own that, so an all-documents
+   run reports once rather than per document.
    Pre:  graph-topic-id owned by user-id.
    Post: {:marked n :undo-id id-or-nil :pairs n :skipped-pages [k…]}; :marked 0
          with :undo-id nil when the detector is disabled or finds nothing."
@@ -171,53 +170,43 @@
 ;; Commands — the two user-invoked entry points
 ;; ---------------------------------------------------------------------------
 
-(defn- push-disabled-toast!
-  "Both manual sweeps refuse the same way when the detector is switched off, and
-   both say where to switch it back on. Returning a silent {:marked 0} instead
-   would read as \"no duplicates here\", which is a different and wrong answer."
-  [user-id]
-  (toasts/push! user-id
-    {:level :info :dedup? false
-     :message "Duplicate detection is off — turn it on in Settings → AI Features → Advanced → Knowledge graph"
-     :actions [{:label "Settings" :nav :settings}]})
+(defn- disabled-result
+  "Both manual sweeps refuse the same way when the detector is switched off.
+   The Facts view disables their buttons and says where to switch it back on
+   (plans/remove-toasts.md 2.10), so this is a backstop for a stale tab or the
+   palette. Returning a silent {:marked 0} with no flag would read as \"no
+   duplicates here\", which is a different and wrong answer.
+   Post: a success the view reads as 'detection is off'."
+  []
   {:success true :marked 0 :disabled? true})
 
-(defn- push-failure-toast!
-  "A sweep failure must reach the user. The calling button carries the message
-   only in its e/Token error slot, which nothing in the Facts view renders."
-  [user-id ^Exception e]
-  (toasts/push! user-id
-    {:level :error :dedup? false
-     :message (str "Duplicate sweep failed: " (.getMessage e))})
-  {:success false :error (.getMessage e)})
+(defn- failure-result
+  "A sweep failure returns to the button that asked, which shows it beside itself.
+   Post: {:success false :error msg}."
+  [^Exception e]
+  {:success false :error (str "Duplicate sweep failed: " (.getMessage e))})
 
 (defn sweep-document-command!
-  "User-invoked sweep of one document: sweep, bump, toast with Undo.
+  "User-invoked sweep of one document: sweep and bump. The Undo history lists the
+   undo entry.
 
    The enabled check lives here rather than inside sweep-document! so a switched
    off detector is reported once, at the boundary, instead of once per document.
    Pre:  graph-topic-id owned by user-id.
    Post: {:success true :marked n} — plus :disabled? true when the detector is
-         off — or {:success false :error msg}. Every outcome toasts."
+         off — or {:success false :error msg}."
   [user-id graph-topic-id]
   (try
     (let [thresholds (settings/get-kg-dedup-thresholds user-id)]
       (if-not (:enabled thresholds)
-        (push-disabled-toast! user-id)
-        (let [{:keys [marked undo-id]}
+        (disabled-result)
+        (let [{:keys [marked]}
               (sweep-document! user-id graph-topic-id nil thresholds)]
           (commands/bump! user-id :sweep-duplicates)
-          (toasts/push! user-id
-            (cond-> {:level :success :dedup? false
-                     :message (if (pos? marked)
-                                (str "Marked " marked " duplicate fact"
-                                  (when (not= 1 marked) "s"))
-                                "No duplicates found")}
-              undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}])))
           {:success true :marked marked})))
     (catch Exception e
       (tel/error! {:id ::sweep-document :data {:user-id user-id :root graph-topic-id}} e)
-      (push-failure-toast! user-id e))))
+      (failure-result e))))
 
 (defn sweep-all-documents-command!
   "User-invoked sweep of every document holding approved facts.
@@ -225,8 +214,7 @@
    One transaction and one undo entry PER DOCUMENT, never one across all: the undo
    log is capped at 100 rows per user, so a per-document entry over a large library
    would evict unrelated history — but a single transaction spanning every document
-   would hold row locks across the user's whole graph. Per-document is the balance,
-   and only the last document's entry carries an Undo action on the toast.
+   would hold row locks across the user's whole graph. Per-document is the balance.
 
    Thresholds are read ONCE and threaded through every document; the sweep is
    already O(n²) per page and must not add a settings round trip per document.
@@ -234,14 +222,15 @@
    A failure on one document is logged and skipped; the rest still run, and the
    result names how many failed rather than reporting partial work as complete.
    Post: {:success true :marked n :documents n :failed n}, or :disabled? true, or
-         {:success false :error msg}. Every outcome toasts."
+         {:success false :error msg}. The view words :marked, :documents and
+         :failed beside its button."
   [user-id]
   (try
     (let [thresholds (settings/get-kg-dedup-thresholds user-id)]
       (if-not (:enabled thresholds)
-        (push-disabled-toast! user-id)
+        (disabled-result)
         (let [docs (db/kg-documents-with-facts user-id)
-              {:keys [marked failed undo-id]}
+              {:keys [marked failed]}
               (reduce
                 (fn [acc doc-id]
                   (try
@@ -259,16 +248,7 @@
                 {:marked 0 :failed 0 :undo-id nil}
                 docs)]
           (commands/bump! user-id :sweep-duplicates-all)
-          (toasts/push! user-id
-            (cond-> {:level (if (pos? failed) :warning :success) :dedup? false
-                     :message (str "Marked " marked " duplicate fact"
-                                (when (not= 1 marked) "s")
-                                " across " (count docs) " document"
-                                (when (not= 1 (count docs)) "s")
-                                (when (pos? failed)
-                                  (str " (" failed " document(s) failed)")))}
-              undo-id (assoc :actions [{:label "Undo last document" :undo-id undo-id}])))
           {:success true :marked marked :documents (count docs) :failed failed})))
     (catch Exception e
       (tel/error! {:id ::sweep-all-documents :data {:user-id user-id}} e)
-      (push-failure-toast! user-id e))))
+      (failure-result e))))

@@ -49,8 +49,20 @@
   #?(:clj (occ/duplicate-group! user-id payload)
      :cljs nil))
 
-(defn enqueue-update-occlusion!* [payload]
-  (opt/enqueue! {:type :update-occlusion :payload payload}))
+(defn update-occlusion-group!*
+  "Replace a saved group's masks and fields, then bump the views of
+   `:update-occlusion`. The modal waits for the result, so a failure keeps it
+   open with the user's work.
+   Post: {:success true} or {:success false :error str}.
+   Body-level #?(:clj …): the modal names this var inside (e/server …)."
+  [user-id payload]
+  #?(:clj (let [result (occ/update-group! user-id payload)]
+            (if (:success result)
+              (do (commands/bump! user-id :update-occlusion) result)
+              (assoc result :success false
+                :error (or (not-empty (str (:error result)))
+                           "Could not update the occlusion card."))))
+     :cljs nil))
 
 (defn get-card-font-size* [user-id]
   #?(:clj (settings/get-card-font-size user-id)
@@ -415,42 +427,40 @@
                        !fields initial-fields)]
           (if (or (nil? geometry) (empty? (:rects geometry)))
             (t "Draw at least one mask first")
-            ;; `case` sequences the ENQUEUE, not the write. enqueue-update-
-            ;; occlusion!* hands the command to the optimistic queue and returns;
-            ;; the row is written later by the pump. The weaker guarantee is
-            ;; enough here because the duplicate shares no state with the update:
-            ;; it reads the source's topic ids from the database, which the
-            ;; update never touches, and its geometry from this client buffer.
-            ;; The one consequence is that a failed update still leaves the copy,
-            ;; holding the buffer the user was looking at. That failure toasts.
-            (case (if dirty?
-                    (enqueue-update-occlusion!*
-                      {:group-id (:group-id group) :mode (:mode group)
-                       :geometry geometry :io-fields io-fields})
-                    :clean)
-              (let [result (e/server
-                             (e/Offload
-                               #(duplicate-group!* user-id
-                                  {:group-id (:group-id group) :mode (:mode group)
-                                   :geometry geometry :io-fields io-fields})))]
-                (if (:success result)
-                  ;; e/snapshot freezes the new group id as a plain number for
-                  ;; the callback. An e/on-unmount closure reads a SIGNAL at fire
-                  ;; time, not at creation time, so closing over `result` would
-                  ;; have it read a server binding during its own teardown — the
-                  ;; hazard video_pane records. A frozen scalar cannot move.
-                  (let [copy-group-id (e/snapshot (:group-id result))]
-                    ;; :kind is REQUIRED, not decoration. In ContentCardTable
-                    ;; this atom IS !editing-card, and that host routes on :kind
-                    ;; — a request without it falls through to EditCardModal,
-                    ;; which then opens a card modal with a nil card id over an
-                    ;; occlusion group. Matches the request CardRow writes.
-                    (e/on-unmount
-                      (fn [] (reset! !request {:kind "occlusion" :mode :edit
-                                               :group-id copy-group-id})))
-                    (case (e/server (commands/bump! user-id :add-occlusion))
-                      (t)))
-                  (t (:error result)))))))))))
+            ;; The update runs first and the copy only after it succeeded, so a
+            ;; failed update stops here with the error and leaves no copy.
+            (let [updated (if dirty?
+                            (e/server
+                              (e/Offload
+                                #(update-occlusion-group!* user-id
+                                   {:group-id (:group-id group) :mode (:mode group)
+                                    :geometry geometry :io-fields io-fields})))
+                            {:success true})]
+              (if-not (:success updated)
+                (t (:error updated))
+                (let [result (e/server
+                               (e/Offload
+                                 #(duplicate-group!* user-id
+                                    {:group-id (:group-id group) :mode (:mode group)
+                                     :geometry geometry :io-fields io-fields})))]
+                  (if (:success result)
+                    ;; e/snapshot freezes the new group id as a plain number for
+                    ;; the callback. An e/on-unmount closure reads a SIGNAL at fire
+                    ;; time, not at creation time, so closing over `result` would
+                    ;; have it read a server binding during its own teardown — the
+                    ;; hazard video_pane records. A frozen scalar cannot move.
+                    (let [copy-group-id (e/snapshot (:group-id result))]
+                      ;; :kind is REQUIRED, not decoration. In ContentCardTable
+                      ;; this atom IS !editing-card, and that host routes on :kind
+                      ;; — a request without it falls through to EditCardModal,
+                      ;; which then opens a card modal with a nil card id over an
+                      ;; occlusion group. Matches the request CardRow writes.
+                      (e/on-unmount
+                        (fn [] (reset! !request {:kind "occlusion" :mode :edit
+                                                 :group-id copy-group-id})))
+                      (case (e/server (commands/bump! user-id :add-occlusion))
+                        (t)))
+                    (t (:error result))))))))))))
 
 (e/defn OcclusionActions
   "Create mode: two generate buttons (each = save with that mode).
@@ -529,13 +539,18 @@
                              :mode (:mode submit)
                              :geometry geometry
                              :io-fields @!fields}]
-                ;; Fire-and-forget Anki note deletion for removed masks —
-                ;; mirrors the card delete flow (server owns rows, client
-                ;; owns AnkiConnect).
-                (case (try-delete-anki-notes! removed-note-ids)
-                  (case (enqueue-update-occlusion!* payload)
-                    (do (e/on-unmount #(reset! !request nil))
-                      (t)))))
+                ;; The modal closes only after the update landed. A failure
+                ;; spends the token with the error and keeps the masks.
+                ;; Fire-and-forget Anki note deletion for removed masks runs
+                ;; after the success — mirrors the card delete flow (server
+                ;; owns rows, client owns AnkiConnect).
+                (let [result (e/server (e/Offload #(update-occlusion-group!* user-id payload)))]
+                  (when (some? result)
+                    (if (:success result)
+                      (case (try-delete-anki-notes! removed-note-ids)
+                        (do (e/on-unmount #(reset! !request nil))
+                          (t)))
+                      (t (:error result))))))
               ;; :kind marks the overlay entry so PendingCardRow renders the
               ;; occlusion summary; create-group! ignores it.
               (let [payload {:kind "occlusion"

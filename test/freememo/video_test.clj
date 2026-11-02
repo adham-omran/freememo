@@ -181,7 +181,7 @@
       "a failed probe has no :audio-codec either, but there it means unknown")
     (is (false? (video/no-audio-track? nil))))
 
-  (testing "a video with no audio track is a success, never an error toast"
+  (testing "a video with no audio track is a success, never an error"
     (let [r (video/no-audio-result false)]
       (is (:success r))
       (is (= 0 (:segments r)))

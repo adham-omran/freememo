@@ -20,7 +20,7 @@
    While a step runs, `!running` names it, and every exit goes through
    `request-exit!` (plans/repo-import-progress.md §4). A running download has
    one exit, which abandons it. A running import has two: Close, after which the
-   import continues and ends in a toast, and Cancel import, which rolls it back."
+   import continues and ends in its Activity row, and Cancel import, which rolls it back."
   (:require
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
@@ -66,20 +66,18 @@
 (defn exit-running-step!*
   "Pre : `running` is the value of `!running` when the user asked to leave.
    Post: a running download is abandoned; a running import or Add files run
-         (`repo-add-files`) is abandoned for `exit` :cancel and backgrounded for
-         :close. Returns :done."
+         (`repo-add-files`) is abandoned for `exit` :cancel and left running for
+         :close: its Activity row reports the result. Returns :done."
   [user-id running exit]
   #?(:clj (do (case (:step running)
                 :download (repo-import/cancel-import! user-id
                             (repo-import/form-work-key (:form running)))
-                :import (if (= :cancel exit)
+                :import (when (= :cancel exit)
                           (repo-import/cancel-import! user-id
-                            (repo-import/source-work-key (:source running)))
-                          (repo-import/background-import! user-id (:stage-id running)))
-                :add-files (if (= :cancel exit)
+                            (repo-import/source-work-key (:source running))))
+                :add-files (when (= :cancel exit)
                              (repo-import/cancel-import! user-id
-                               (repo-import/repo-url-work-key (:repo-url running)))
-                             (repo-import/background-import! user-id (:run-key running)))
+                               (repo-import/repo-url-work-key (:repo-url running))))
                 nil)
               :done)
      :cljs nil))
@@ -519,8 +517,8 @@
    Post: closing writes false to it; `Upload a .zip file instead` writes
          :code-zip, which opens the archive upload.
    Invariant: after the user asks to leave a running step, the modal never
-         navigates. A backgrounded import reports through a toast instead, so
-         the user gets exactly one of the two."
+         navigates. A backgrounded import reports through its Activity row
+         instead, so the user gets exactly one of the two."
   [!show user-id navigate!]
   (e/client
     (let [!stage (atom {:stage :form})

@@ -316,7 +316,7 @@
      :error "Choose the NeoReader file for this document"}))
 
 (defn summary
-  "One line describing a finished sync, for a toast.
+  "One line describing a finished sync, for the Activity row's summary.
 
    Pre : `result` is a `sync-document!` map with `:ok` true.
    Post: a sentence naming how many highlights were marked, how many needed a
@@ -329,8 +329,8 @@
    Note: that clause is SUPPRESSED when no chapter label resolved to a section
          (spec 10.5.2). On a PDF that is permanent — every page is titled `Page N`
          — so the clause would fire for every highlight of every PDF sync and
-         carry no information. A toast the reader learns to ignore is also the
-         toast carrying the unplaced count.
+         carry no information. A line the reader learns to ignore is also the
+         line carrying the unplaced count.
    Note: the unmatched count names WHERE to look, because a count with no place to
          look is not actionable (spec 7.2)."
   [{:keys [counts sections-written notes titles-resolved kind]}]

@@ -93,6 +93,33 @@
 
 ;; ── Stored accounts ──────────────────────────────────────────────────
 
+;; ── The last failed connection ────────────────────────────────────────
+
+(defonce ^:private !connect-errors
+  ;; user id -> the message of the last connection that failed. The callback is
+  ;; a redirect, so no Electric session is on the other end of it. The
+  ;; Settings section reads this on its next render and shows it beside the
+  ;; Connect link (plans/remove-toasts.md 2.6.1).
+  (atom {}))
+
+(defn record-connect-error!
+  "Post: `message` is what `connect-error` answers for `user-id`, until the next
+   connection starts or succeeds. Returns nil."
+  [user-id message]
+  (swap! !connect-errors assoc user-id message)
+  nil)
+
+(defn clear-connect-error!
+  "Post: `connect-error` answers nil for `user-id`. Returns nil."
+  [user-id]
+  (swap! !connect-errors dissoc user-id)
+  nil)
+
+(defn connect-error
+  "Post: the message of `user-id`'s last failed connection, or nil."
+  [user-id]
+  (get @!connect-errors user-id))
+
 (defn- read-row
   "Post: the decoded row of `sub`, or nil when none is stored."
   [user-id sub]

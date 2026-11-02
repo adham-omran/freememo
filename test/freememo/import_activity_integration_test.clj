@@ -8,7 +8,6 @@
             [freememo.db :as db]
             [freememo.import-activity :as imports]
             [freememo.user-state :as us]
-            [freememo.toasts :as toasts]
             [freememo.web-import :as web]
             [freememo.wikipedia :as wiki]
             [next.jdbc :as jdbc]
@@ -89,18 +88,30 @@
           (is (= "cancelled" (:outcome (first rows))))
           (is (zero? (activity/live-count uid))))))))
 
+(defn- await-outcome
+  "The first retained URL-import run that has an outcome, or :timeout."
+  [uid]
+  (loop [n 0]
+    (if-let [run (->> @(us/get-atom uid :url-import-runs) vals (filter :outcome) first)]
+      run
+      (if (> n 100) :timeout (do (Thread/sleep 50) (recur (inc n)))))))
+
 (deftest editor-link-import-does-not-open-a-second-activity
   (with-user!
     (fn [uid]
-      (let [finished (promise)]
-        (with-redefs [wiki/fetch-url (fn [_] {:success false :error "Fetch failed"})
-                      toasts/push! (fn [& _] (deliver finished true))]
-          (is (= {:flow :queued}
-                (web/start-url-import!* uid "https://example.test/editor-link")))
-          (is (= true (deref finished 5000 :timeout))))
-        (reporter/open-rows! uid)
-        (reporter/open-rows! uid)
-        (let [rows (activity/user-activities uid)]
-          (is (= 1 (count rows)))
-          (is (= "url-import" (:type (first rows))))
-          (is (= "failure" (:outcome (first rows)))))))))
+      (with-redefs [wiki/fetch-url (fn [_] {:success false :error "Fetch failed"})]
+        (is (= {:flow :queued}
+              (web/start-url-import!* uid "https://example.test/editor-link")))
+        ;; The retained run announces the end. Its
+        ;; outcome and its error text are what the banner strip reads.
+        (let [run (await-outcome uid)]
+          (is (not= :timeout run))
+          (is (= "failure" (:outcome run)))
+          (is (= "Fetch failed" (:error run)))))
+      (reporter/open-rows! uid)
+      (reporter/open-rows! uid)
+      (let [rows (activity/user-activities uid)]
+        (is (= 1 (count rows)))
+        (is (= "url-import" (:type (first rows))))
+        (is (= "failure" (:outcome (first rows))))
+        (is (= "Fetch failed" (:error (first rows))))))))

@@ -10,7 +10,6 @@
    [freememo.fsrs :as fsrs]
    [freememo.input-check :as input]
    [freememo.pre-prompt-mode :as ppm]
-   [freememo.toasts :as toasts]
    [freememo.transcribe-language :as tlang]
    [taoensso.telemere :as tel]
    [clojure.edn :as edn]
@@ -1687,19 +1686,16 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
 
 (defn- reset-prompt!
   "Delete `user-id`'s saved prompt of `kind` and its stamp, snapshotting both
-   for undo with an Undo toast. No undo entry when nothing was saved."
+   for undo. No undo entry when nothing was saved."
   [user-id kind]
   (let [{:keys [key base-key label]} (saved-prompts kind)
         old (db/get-settings user-id [key base-key])]
     (db/delete-setting user-id key)
     (db/delete-setting user-id base-key)
     (when (contains? old key)
-      (let [undo-id (db/insert-undo-entry! user-id "reset-prompt" "setting"
-                      [key] (mapv (fn [[k v]] {:key k :value v}) old))]
-        (toasts/push! user-id {:level :success
-                               :message (str label " reset")
-                               :dedup? false
-                               :actions [{:label "Undo" :undo-id undo-id}]})))))
+      (db/insert-undo-entry! user-id "reset-prompt" "setting"
+        [key] (mapv (fn [[k v]] {:key k :value v}) old))
+      nil)))
 
 (defn reset-system-prompt [user-id]
   (try

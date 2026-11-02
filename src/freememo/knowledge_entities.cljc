@@ -10,6 +10,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.knowledge-scope :as scope]
+   [freememo.inline-error :as ie]
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.row-menu :as menu]
@@ -65,17 +66,26 @@
      :cljs nil))
 
 (defn run-entity-action!*
-  "Run one entity action. `:synthesize` is one LLM call that pushes its own
-   outcome toast; `:merge` keeps `:keep` and absorbs every other id, and toasts
-   its own failure through `bulk/report-failure!`.
-   Post: {:success true …} or {:success false :error msg}."
+  "Run one entity action. `:synthesize` is one LLM call; the new questions are its
+   confirmation. `:merge` keeps `:keep` and absorbs every other id.
+   Post: {:success true …} or {:success false :error msg}. A synthesis that made
+         no question is a failure with that reason, so the view says why nothing
+         changed. The view shows the error beside its filters (`action-error*`)."
   [user-id {:keys [kind ids keep label]}]
   #?(:clj (case kind
-            :synthesize (kgq/generate-synthesis-questions! user-id (first ids) label)
-            :merge (bulk/report-failure! user-id
-                     (bulk/merge-entities! user-id keep (vec (remove #{keep} ids))))
+            :synthesize (let [r (kgq/generate-synthesis-questions! user-id (first ids) label)]
+                          (if (and (:success r) (zero? (:questions r 0)))
+                            {:success false
+                             :error "The model found no new question for this entity."}
+                            r))
+            :merge (bulk/merge-entities! user-id keep (vec (remove #{keep} ids)))
             {:success false :error "That action is not available."})
      :cljs nil))
+
+(defn action-error*
+  "The words a failed `result` of `run-entity-action!*` shows, or nil."
+  [result]
+  #?(:clj (bulk/failure-text result) :cljs nil))
 
 ;; ── Rows ───────────────────────────────────────────────────────────
 
@@ -209,12 +219,14 @@
                 n-selected (count selected)
                 selecting? (pos? n-selected)
                 filtered? (or (not (str/blank? query)) (some? source-id))
-                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))]
+                clear-search! (fn [] (reset! !query "") (swap! !search-epoch inc))
+                [action-t action-error] (e/Token action)]
             (dom/div
               (dom/props {:class "knowledge-view"})
               (dom/div
                 (dom/props {:class "knowledge-filters"})
                 (scope/SearchInput "Search entities…" query !query search-epoch)
+                (ie/InlineError action-error)
                 (dom/div (dom/props {:class "knowledge-filter-pick"})
                   (picker/DocumentPicker !source-id kg-bump user-id :source nil "Filter by source…"))
                 (dom/span (dom/props {:class "knowledge-count"})
@@ -263,12 +275,11 @@
               (MergeChoiceModal user-id !merge-pick merge-pick !action)
               ;; The one place a row or batch action runs; it outlives the menu and
               ;; the merge dialog that wrote it.
-              (let [[t _] (e/Token action)]
-                (when t
-                  (let [r (e/server (e/Offload #(run-entity-action!* user-id action)))]
-                    (case r
-                      (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
-                        (t))))))
+              (when action-t
+                (let [r (e/server (e/Offload #(run-entity-action!* user-id action)))]
+                  (case r
+                    (case (when (and (:bulk? action) (:success r)) (reset! !selected #{}))
+                      (if (:success r) (action-t) (action-t (action-error* r)))))))
               (scope/ReflectScopeInUrl navigate! :knowledge-entities route-doc-id source-id)
               (scope/UrlState {"q" query
                                "sort" (scope/sort-param order default-sort)}))))))))

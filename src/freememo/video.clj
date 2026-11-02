@@ -24,7 +24,6 @@
    [freememo.quota :as quota]
    [freememo.video-format :as vfmt]
    [freememo.settings :as settings]
-   [freememo.toasts :as toasts]
    [freememo.user-state :as us]
    [missionary.core :as m]
    [next.jdbc :as jdbc]
@@ -348,13 +347,13 @@
   (boolean (and (:ok probe) (nil? (:audio-codec probe)))))
 
 (def no-audio-notice
-  "The toast for a Transcribe request on a video that has no audio track."
+  "The notice for a Transcribe request on a video that has no audio track."
   "This video has no audio track, so there is nothing to transcribe.")
 
 (def extract-failed-message
-  "The toast for an audio extraction that failed.
+  "The message for an audio extraction that failed.
 
-   ffmpeg's stderr goes to the log, never to the toast. Its text names a temp
+   ffmpeg's stderr goes to the log, never to the user. Its text names a temp
    path and a muxer address, and it does not tell the user what was lost."
   "Could not read this video's audio track. The video plays, but it has no waveform and no transcript.")
 
@@ -368,7 +367,7 @@
 
    Only a Transcribe request gets `:notice`. The user asked for a transcript and
    gets none, so the result says why. An upload with transcription off asked
-   for nothing that is missing, so it gets no toast.
+   for nothing that is missing, so it gets no notice.
 
    Post: {:success true :segments 0 :transcribed false :audio? false}, plus
          `:notice` when `transcribe?`."
@@ -396,7 +395,7 @@
    A skip (§15.3 2.2/2.3) reaches the SAME outcome the out-of-credits and
    missing-key branches already produce, and by the same route: it exits after
    `save-video-audio!` and before the credit gate. What differs is only that it
-   is a success, so no error toast fires for something the user asked for."
+   is a success, so no error is reported for something the user asked for."
   [user-id topic-id transcribe?]
   (let [api-key (settings/get-openrouter-api-key user-id)]
     (ffmpeg/with-temp-dir "fm-video-"
@@ -558,6 +557,9 @@
         ;; Cleared BEFORE membership is published: the reporter must never see
         ;; this run live beside the previous run's error.
         (swap! !errors dissoc topic-id)
+        ;; The stored notice belongs to the previous run, so it goes too.
+        (try (db/set-video-notice! topic-id nil)
+             (catch Exception e (tel/error! {:id ::clear-video-notice} e)))
         (swap! !in-flight conj topic-id)
         (us/work-started! user-id)
         (commands/bump! user-id :process-video)
@@ -584,18 +586,22 @@
                                    " segments=" (:segments result)
                                    " transcribed=" (boolean (:transcribed result))))
                    ;; A success can still owe the user a reason, e.g. a
-                   ;; Transcribe request on a video with no audio track.
+                   ;; Transcribe request on a video with no audio track. It is
+                   ;; stored on the video, and the video pane shows it.
                    (when-let [notice (:notice result)]
-                     (toasts/push! user-id {:level :info :message notice})))
+                     (try (db/set-video-notice! topic-id notice)
+                          (catch Exception e
+                            (tel/error! {:id ::store-video-notice} e)))))
+               ;; A failure is the run's error: `fail!` records it for the
+               ;; :video-process :error-fn, so the Activity row closes as failed
+               ;; and the banner strip shows it.
                (do (log/log-warn (str "Video processing failed topic=" topic-id
                                    " stage=" (:stage result) " error=" (:error result)))
-                   (fail! (:error result))
-                   (toasts/push! user-id {:level :error :message (:error result)})))
+                   (fail! (:error result))))
              (finish!))
            (fn [e]
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::process-video :data {:user-id user-id :topic-id topic-id}} e)
-               (fail! (.getMessage e))
-               (toasts/push! user-id {:level :error :message (.getMessage e)}))
+               (fail! (.getMessage e)))
              (finish!))))
         nil))))

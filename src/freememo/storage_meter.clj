@@ -18,11 +18,13 @@
    schedule all survive — which is exactly why video extracts copy their text
    in at creation instead of deriving it on read."
   (:require
+   [freememo.commands :as commands]
    [freememo.config :as config]
    [freememo.db :as db]
    [freememo.logging :as log]
-   [freememo.toasts :as toasts]
-   [taoensso.telemere :as tel]))
+   [taoensso.telemere :as tel])
+  (:import [java.time.format DateTimeFormatter]
+           [java.util Locale]))
 
 ;; ── Tunables ───────────────────────────────────────────────────────────────
 
@@ -116,7 +118,8 @@
    and no balance is simply a free-tier user, not someone whose data is counting
    down. `db/set-storage-grace!` only writes on a real transition, so the
    deadline is measured from the FIRST zero-balance observation, not the latest
-   sweep, and the toast below fires once per entry rather than hourly."
+   sweep, and the `:credits-refresh` bump below fires once per entry rather
+   than hourly."
   [user-id]
   (let [{:keys [credit_balance_iqd storage_grace_started_at has_video]}
         (db/get-storage-meter-state user-id)]
@@ -125,18 +128,16 @@
       (do (db/set-storage-grace! user-id (java.sql.Timestamp/from (java.time.Instant/now)))
           (tel/log! {:level :warn :id ::grace-opened :data {:user-id user-id}}
             "Storage grace window opened")
-          ;; §4.6 6.6 — one notification per entry.
-          (toasts/push! user-id
-            {:level :error
-             :message (str "Out of credits. Video playback is paused; your videos are kept for "
-                        grace-days " days.")
-             :actions [{:label "Top up credits" :nav :settings}]})
+          ;; §4.6 6.6 — the pause banner derives from the grace column
+          ;; (`account-banner-state`), so the notification is a bump.
+          (commands/bump-channels! user-id #{:credits-refresh})
           :opened)
 
       (and (pos? (or credit_balance_iqd 0)) (some? storage_grace_started_at))
       (do (db/set-storage-grace! user-id nil)
           (tel/log! {:level :info :id ::grace-cleared :data {:user-id user-id}}
             "Storage grace window cleared")
+          (commands/bump-channels! user-id #{:credits-refresh})
           :cleared)
 
       :else nil)))
@@ -183,6 +184,85 @@
   (and (metering-enabled?)
        (some? (db/storage-grace-started-at user-id))))
 
+;; ── Account-state banners (plans/remove-toasts.md 1.3) ────────────────────
+
+(def ^:private date-format
+  (DateTimeFormatter/ofPattern "d MMMM yyyy" Locale/ENGLISH))
+
+(defn- format-date
+  "A timestamp as \"16 November 2026\". The columns are `timestamp` without
+   zone, written in the JVM's zone, so the local date is the right one."
+  [^java.sql.Timestamp ts]
+  (.format (.toLocalDateTime ts) date-format))
+
+(defn top-up-landed!
+  "Close the grace window as soon as a top-up credits the user. Without this
+   the window closes only when `accrue!` next runs, which can be hours away,
+   and playback and the pause banner stay blocked until then.
+
+   Pre : `user-id` was just credited (`complete-credit-order!` returned
+         `:credited`). Post: one forced `accrue!` pass. Total, as `accrue!` is."
+  [user-id]
+  (accrue! user-id true))
+
+(defn- grace-started-at
+  "The grace start, as `playback-blocked?` reads it, so the banner and the
+   playback path agree. A pure read: `top-up-landed!` closes the window when the
+   credits land, and a banner read never writes or charges."
+  [user-id]
+  (db/storage-grace-started-at user-id))
+
+(defn account-banner-state
+  "What the account-state banners say, as plain data.
+
+   Pre : `user-id` is a user.
+   Post: `{:paused {:until \"16 November 2026\"} :removal {:count n :on \"…\"}}`.
+         `:paused` is present while playback is blocked, and `:until` is the
+         grace start plus `grace-days`. `:removal` is present while the removal
+         notice is unread. Both keys are nil with metering off. Total: a read
+         failure is logged and gives no banner, because a banner must never
+         cost the user the page."
+  [user-id]
+  (when (metering-enabled?)
+    (try
+      (let [grace (grace-started-at user-id)
+            removal (db/get-storage-removal user-id)]
+        {:paused (when grace
+                   {:until (format-date
+                             (java.sql.Timestamp/valueOf
+                               (.plusDays (.toLocalDateTime ^java.sql.Timestamp grace)
+                                 (long grace-days))))})
+         :removal (when (and removal (not (:seen? removal)))
+                    {:count (:count removal)
+                     :on (format-date (:at removal))})})
+      (catch Exception e
+        (tel/error! {:id ::account-banner-state :data {:user-id user-id}} e)
+        nil))))
+
+(defn dismiss-removal!
+  "Mark the removal notice read, through the `:dismiss-storage-removal` command.
+   Post: the notice leaves the strip in every tab. Another user's notice is not
+   reachable, because the write is keyed on `user-id`. Returns :done."
+  [user-id]
+  (when (pos? (or (db/dismiss-storage-removal! user-id) 0))
+    (commands/bump! user-id :dismiss-storage-removal))
+  :done)
+
+(defn video-pane-status
+  "The lines the video pane shows for one topic, as plain data.
+
+   Post: `:paused?` is true while playback is blocked and the topic has a video.
+         `:removed-on` is the date string when the topic is a video whose file
+         the sweep removed, else nil. It is the date of the user's latest
+         removal, because a deleted `topic_videos` row cannot hold its own.
+         `:notice` is the pipeline's stored notice, or nil."
+  [user-id topic-id]
+  (let [video (db/get-topic-video-for-user user-id topic-id)
+        removal (when-not video (db/get-storage-removal user-id))]
+    {:paused? (boolean (and video (playback-blocked? user-id)))
+     :removed-on (when removal (format-date (:at removal)))
+     :notice (when video (db/get-video-notice topic-id))}))
+
 ;; ── Sweep jobs (§4.6 6.4) ──────────────────────────────────────────────────
 
 (defn sweep-accrue!
@@ -208,11 +288,9 @@
       (doseq [id ids]
         (let [r (db/reclaim-user-videos! id)]
           (when (pos? (:videos r 0))
-            (toasts/push! id
-              {:level :error
-               :message (str "Storage grace expired — " (:videos r)
-                          " video file(s) were removed. Transcripts, extracts and cards were kept.")
-               :actions [{:label "Top up credits" :nav :settings}]}))))
+            ;; The removal notice (account-banner-state) reads these columns.
+            (db/record-storage-removal! id (:videos r))
+            (commands/bump-channels! id #{:credits-refresh}))))
       (count ids))))
 
 (defn sweep-reap-uploads!

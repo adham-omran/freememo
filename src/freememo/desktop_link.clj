@@ -75,7 +75,8 @@
   "15.4.1 — refuse a feature that needs a FreeMemo account on a local account.
    Post: returns nil on the server peer and on a signed-in desktop. Otherwise
          throws an ex-info whose message is `sign-in-message` and whose data
-         is {:type ::sign-in-required}, which `toasts/error-actions` reads."
+         is {:type ::sign-in-required}. `activity/error-kind` reads the message as
+         `needs-account`."
   [feature]
   (when (local-account?)
     (throw (ex-info sign-in-message {:type ::sign-in-required :feature feature}))))

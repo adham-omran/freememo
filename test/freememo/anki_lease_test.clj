@@ -104,6 +104,18 @@
     (lease/claim! uid)
     (is (nil? (registry/work-summary "anki-reconcile" uid collection)))))
 
+(deftest a-second-tab-claims-the-moment-the-first-releases
+  ;; ReconcileOutcome releases after it records the run's outcome and before it
+  ;; resets the tab (plans/remove-toasts.md 2.4.2). Nothing waits for the 60 s
+  ;; ttl, and the row's summary is readable up to the next claim.
+  (let [{run-id :run-id} (lease/claim! uid)]
+    (is (= :busy (lease/claim! uid)) "a held lease refuses the second tab")
+    (is (= :released (lease/release! uid run-id nil "12 sent to Anki")))
+    (is (= "12 sent to Anki" (registry/work-summary "anki-reconcile" uid collection)))
+    (let [second-claim (lease/claim! uid)]
+      (is (map? second-claim) "the second tab claims at once")
+      (is (not= run-id (:run-id second-claim))))))
+
 (deftest a-late-release-records-no-summary
   (let [{old :run-id} (lease/claim! uid)]
     (age-heartbeat! (inc lease/ttl-ms))

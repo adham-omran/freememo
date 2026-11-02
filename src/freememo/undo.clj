@@ -7,14 +7,20 @@
    snapshot, stamps undone_at, bumps the matching per-user mutation channel so
    live views re-query, and bumps :undo-mutations so the Actions modal
    refreshes. Anki notes deleted client-side cannot be re-added server-side, so
-   restoring an Anki-synced card surfaces a divergence warning toast."
+   restoring an Anki-synced card returns a divergence warning.
+
+   undo-entry! returns {:ok? bool :error str? :warning str?} and shows no
+   message itself. The caller shows the result: UndoRow on its row, the Cmd-Z command
+   through the activity banner."
   (:require
+   [clojure.string :as str]
+   [freememo.activity :as activity]
    [freememo.db :as db]
    [freememo.article-split :as article-split]
    [freememo.commands :as commands]
    [freememo.curriculum :as curriculum]
    [freememo.optimistic :as opt]
-   [freememo.toasts :as toasts]
+   [freememo.undo-scope :as scope]
    [freememo.logging :as log]
    [taoensso.telemere :as tel]))
 
@@ -72,68 +78,81 @@
             (commands/entity-views (:entity_type entry) #{}))
       :undo-mutations)))
 
+(defn- join-warnings [& ws]
+  (when-let [ws (seq (remove nil? ws))]
+    (str/join " " ws)))
+
 (defn undo-entry!
   "Reverse a single undo entry owned by user-id.
-   Returns {:success bool, :nothing? bool, :warning? bool, :error str}.
-   Idempotent: undoing an already-undone or missing entry is a safe no-op."
+   Returns {:ok? false :error str} when nothing was restored,
+   {:ok? true :nothing? true} when the entry was already undone,
+   {:ok? true :warning str} on a partial restore, and {:ok? true} otherwise.
+   :success mirrors :ok? for callers that predate it.
+   Idempotent: undoing an already-undone entry is a safe no-op."
   [user-id entry-id]
   (try
-    (let [entry (db/get-undo-entry entry-id)]
+    (let [entry (db/get-undo-entry entry-id)
+          fail (fn [msg] {:ok? false :success false :error msg})]
       (cond
         (or (nil? entry) (not= (:user_id entry) user-id))
-        {:success false :error "Action not found"}
+        (fail "Action not found")
 
         (:undone_at entry)
-        {:success true :nothing? true}
+        {:ok? true :success true :nothing? true}
 
         (not (db/undo-entry-within-window? entry-id))
-        {:success false :error "The 12-hour recovery window has ended."}
+        (fail "The 12-hour recovery window has ended.")
 
         :else
         (let [anki-warn? (boolean (anki-divergence? entry))
               result (restore! user-id entry)
               source-highlights-kept? (boolean (:source-highlights-kept? result))
-              warn? (or anki-warn? source-highlights-kept?)
-              over-quota? (boolean (:over-quota? result))]
+              over-quota? (boolean (:over-quota? result))
+              warning (join-warnings
+                        (when anki-warn?
+                          "Restored in FreeMemo, but the Anki notes were not added again.")
+                        (when source-highlights-kept?
+                          "Topics removed. Source highlights were kept because the article changed.")
+                        (when over-quota?
+                          "Document restored. You are now over your storage quota."))]
           (db/mark-undone! entry-id)
           (log/audit! {:id ::undo :user-id user-id :action :restore
                        :entity (keyword (:entity_type entry)) :entity-id entry-id})
           (bump-views! user-id entry)
-          (when anki-warn?
-            (toasts/push! user-id
-              {:level :warning
-               :message "Restored in FreeMemo, but the Anki note(s) were not re-added."}))
-          (when source-highlights-kept?
-            (toasts/push! user-id
-              {:level :warning
-               :message "Topics removed. Source highlights were kept because the article changed."}))
-          (when over-quota?
-            (toasts/push! user-id
-              {:level :warning
-               :message "Document restored — you're now over your storage quota."}))
-          (cond-> {:success true :warning? warn? :over-quota? over-quota?}
+          (cond-> {:ok? true :success true :over-quota? over-quota?}
+            warning (assoc :warning warning :warning? true)
             source-highlights-kept? (assoc :source-highlights-kept? true)))))
     (catch Exception e
       (tel/error! {:id ::undo-entry} e)
-      {:success false :error "Undo failed"})))
+      {:ok? false :success false :error "Undo failed"})))
 
 (defn undo-newest!
-  "Reverse the user's most recent live action (LIFO). When the log is empty,
-   surfaces a 'Nothing to undo' toast and returns {:success true :nothing? true}."
-  [user-id]
-  (if-let [newest (first (db/get-undo-entries user-id))]
-    (undo-entry! user-id (:id newest))
-    (do (toasts/push! user-id {:level :info :message "Nothing to undo"})
-        {:success true :nothing? true})))
+  "Reverse the newest live action whose subject the view shows.
+   `shown` is the collection of subjects from undo-scope/shown-undo-subjects.
+   With no entry in view it does nothing and returns
+   {:ok? true :nothing? true}: no message, because the view never offered one."
+  [user-id shown]
+  (let [shown (set shown)
+        parent-of (memoize db/topic-parent-id)
+        match (when (seq shown)
+                (first (filter #(scope/shown? % shown parent-of)
+                         (db/get-undo-entries user-id))))]
+    (if match
+      (undo-entry! user-id (:id match))
+      {:ok? true :nothing? true})))
 
 ;; ── Command methods ─────────────────────────────────────────────────────────
 ;; Effects only: execute! owns queue removal; bumps happen inside undo-entry!
 ;; because the channels are only known once the entry's entity type is read.
+;; The dispatcher records {:ok? false}. A Cmd-Z partial restore has no control
+;; on screen, so :undo-newest records its warning itself.
 
-(defmethod opt/run-command! :undo-newest [user-id _command]
-  (undo-newest! user-id)
-  {:ok? true})
+(defmethod opt/run-command! :undo-newest [user-id command]
+  (let [r (undo-newest! user-id (get-in command [:payload :shown]))]
+    (when-let [w (:warning r)]
+      (activity/record-failure! user-id {:error w :what "Part of the undo"}))
+    (select-keys r [:ok? :error])))
 
 (defmethod opt/run-command! :undo-entry [user-id command]
-  (undo-entry! user-id (get-in command [:payload :id]))
-  {:ok? true})
+  (let [r (undo-entry! user-id (get-in command [:payload :id]))]
+    (select-keys r [:ok? :error :warning])))

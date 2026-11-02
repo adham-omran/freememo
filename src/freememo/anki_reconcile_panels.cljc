@@ -32,9 +32,9 @@
    [freememo.anki-reconcile :as rec]
    [freememo.task-request :as request]
    [freememo.logging :as log]
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.anki-reconcile-server :as recon])
-   #?(:clj [freememo.anki-sync-server :as sync])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.anki-sync-server :as sync])))
 
 ;; --- server wrappers: keep #?(:clj …) out of every reactive body -------------
 
@@ -71,8 +71,22 @@
                 (do (e/on-unmount #(request/resolve! item result))
                     (t))))))))))
 
-(defn toast!* [user-id level message]
-  #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
+(defn record-refused!*
+  "Record the cards Anki refused as one failure the banner strip shows. The
+   Activity summary is visible only inside the popover, and a refused card is
+   a failure the user has to act on (plans/remove-toasts.md 2.4.2).
+
+   Pre : `refused` is a count.
+   Post: one `:action-failure` row when `refused` is positive, none otherwise.
+         Returns nil, so a `case` over the call sequences the next step."
+  [user-id refused]
+  #?(:clj (do (when (pos? refused)
+                (activity/record-failure!
+                  user-id
+                  {:what "Anki sync"
+                   :error (str refused (if (= 1 refused) " card" " cards")
+                            " Anki refused. Check the cards in Anki and sync again.")}))
+              nil)
      :cljs nil))
 
 ;; --- plain transitions --------------------------------------------------------
@@ -111,44 +125,48 @@
   (reset! (:!phase recon) nil)
   nil)
 
-(defn outcome-message
-  "The run's closing toast as `[level text]`.
+(defn refused-count
+  "How many cards Anki refused during the run, from its tally."
+  [{:keys [tally]}]
+  (count (:errors tally)))
+
+(defn outcome-summary
+  "The run's closing line, for the Activity row's summary. Nil for a failed
+   run: its error reaches the row through the lease release, and a summary
+   beside it would say the run did something.
 
    The text reports what HAPPENED, never what the plan intended. A run that
-   planned 46 creates and wrote none must not say 46 — that was the shape of the
+   planned 46 creates and wrote none must not say 46. That was the shape of the
    first defect here, where `anki-write-bundles` (then filtering to already-
-   pushed cards) silently dropped every create while the toast read them off the
-   plan and claimed success.
+   pushed cards) silently dropped every create while the message read them off
+   the plan and claimed success.
 
-   Anki-side write errors are surfaced for the same reason. `do-anki-push!`
-   returns them per card, and a run in which every `addNote` failed must not
-   look identical to one that worked."
-  [phase {:keys [result plan tally error branch?]}]
-  (let [written (:written tally 0)
-        errors (count (:errors tally))
-        refused (when (pos? errors)
-                  (str " — " errors (if (= 1 errors) " card" " cards") " Anki refused"))]
+   Cards Anki refused are NOT in the summary. A refusal is a failure, and the
+   summary is visible only inside the Activity popover, so `record-refused!*`
+   sends it to the banner strip. Cards that need a decision stay here: they
+   are a state to resolve in Library, not a failure (plans/remove-toasts.md
+   A-13). A cancelled run reports how far it got."
+  [phase {:keys [result plan tally branch?]}]
+  (let [written (:written tally 0)]
     (case phase
-      :error [:error (str "Sync failed: " error)]
-      :cancelled [:info (str "Sync cancelled. " written " of "
-                          (count (:write-card-ids plan)) " cards sent to Anki."
-                          refused)]
+      :error nil
+      :cancelled (str "Sync cancelled. " written " of "
+                   (count (:write-card-ids plan)) " cards sent to Anki.")
       (if (nil? result)
-        [:success (str "Dry run — nothing applied. " (:report plan))]
+        (str "Dry run, nothing applied. " (:report plan))
         (let [conflicts (get-in result [:counts :conflicts] 0)]
-          [(if (or (not (:success result)) (pos? errors)) :warning :success)
-           (str (when branch? "This branch: ")
-             (rec/outcome-text (assoc (:counts result) :writes written))
-             (when (pos? conflicts)
-               (str " — " conflicts
-                 (if (= 1 conflicts) " card needs" " cards need")
-                 " a decision in Library"))
-             refused)])))))
+          (str (when branch? "This branch: ")
+            (rec/outcome-text (assoc (:counts result) :writes written))
+            (when (pos? conflicts)
+              (str ". " conflicts
+                (if (= 1 conflicts) " card needs" " cards need")
+                " a decision in Library"))
+            "."))))))
 
 ;; --- phases -----------------------------------------------------------------
 
 (e/defn ReconcileClaim
-  "Phase 0 — take the account's lease, or report that another tab holds it.
+  "Phase 0 — take the account's lease, or stop quietly when another tab holds it.
 
    `root-id` is deref'd, not watched, here and in every phase below: `start!`
    sets it once before the phase moves, and the value is a plain number (or nil)
@@ -160,15 +178,16 @@
         (when t
           (let [root-id @(:!root-id recon)
                 claim (e/server (lc/claim!* user-id root-id))]
+            ;; Another tab holds the lease: say nothing. Every Sync control is
+            ;; disabled by that lease and the Activity badge shows the run, so
+            ;; this is only a click that raced past a stale `false`.
             (if (= :busy claim)
-              (case (e/server (toast!* user-id :info "Sync already in progress"))
-                (do (e/on-unmount #(reset! (:!phase recon) nil))
-                    (t)))
-              (case (e/server (toast!* user-id :info "Syncing with Anki…"))
-                (do (e/on-unmount (fn []
-                                    (reset! (:!run-id recon) (:run-id claim))
-                                    (reset! (:!phase recon) :scanning)))
-                    (t))))))))))
+              (do (e/on-unmount #(reset! (:!phase recon) nil))
+                  (t))
+              (do (e/on-unmount (fn []
+                                  (reset! (:!run-id recon) (:run-id claim))
+                                  (reset! (:!phase recon) :scanning)))
+                  (t)))))))))
 
 (e/defn ReconcileScan
   "Phase 1 — ask the server what to look at, then read all of it from Anki."
@@ -205,12 +224,13 @@
                   (t))
               (let [p (e/server (e/Offload #(plan* user-id (:digests scan) (:absent scan) root-id)))]
                 (if (:aborted? p)
-                  (case (e/server
-                          (toast!* user-id :error
-                            (str "Sync stopped: Anki reported most of your notes missing. "
-                              "Check that the right profile is open.")))
-                    (do (e/on-unmount #(rc/fail! recon "aborted — most notes absent"))
-                        (t)))
+                  ;; The text is the run's error, so it reaches the Activity row
+                  ;; through the lease release.
+                  (do (e/on-unmount
+                        #(rc/fail! recon
+                           (str "Anki reported most of your notes missing. "
+                             "Check that the right profile is open.")))
+                      (t))
                   ;; A dry run stops here: the plan IS the answer, and every phase
                   ;; after this one writes. Deref rather than `e/watch`: the flag
                   ;; is set once by `start!` before the phase moves.
@@ -326,33 +346,37 @@
 (e/defn ReconcileOutcome
   "Reports the run, once, then releases the lease.
 
-   Release comes after the toast and before the local reset, so no tab can see
-   the account free while this one still thinks it is running. The error goes
-   with it, so the Activity row closes as failed; otherwise the toast's text
-   goes as the row's summary."
+   Release comes after the refused-cards failure and before the local reset, so
+   no tab can see the account free while this one still thinks it is running.
+   The release carries the run's error, so the Activity row closes as failed,
+   or the outcome line as the row's summary. Nothing else tells the user: the
+   summary is the success text, the lease release error is the failure text,
+   and the cards Anki refused go to the banner strip.
+
+   The nested `case` is the sequence. `record-refused!*` returns nil and
+   `release!*` returns the lease verdict; a `case` over each makes `(t)` wait
+   for both, and it spends the token only after the lease is free."
   [user-id recon]
   (e/client
     (let [phase (e/watch (:!phase recon))]
       (when (contains? #{:done :error :cancelled} phase)
         (let [run-id (e/watch (:!run-id recon))
               err (e/watch (:!error recon))
-              [level msg] (outcome-message phase
-                            {:result (e/watch (:!result recon))
-                             :plan (e/watch (:!plan recon))
-                             :tally (e/watch (:!tally recon))
-                             :error err
-                             ;; Watched: a deref would read the value from
-                             ;; whenever this branch first mounted.
-                             :branch? (some? (e/watch (:!root-id recon)))})
+              summary (outcome-summary phase
+                        {:result (e/watch (:!result recon))
+                         :plan (e/watch (:!plan recon))
+                         :tally (e/watch (:!tally recon))
+                         ;; Watched: a deref would read the value from
+                         ;; whenever this branch first mounted.
+                         :branch? (some? (e/watch (:!root-id recon)))})
+              refused (refused-count {:tally (e/watch (:!tally recon))})
               [t _] (e/Token [:reconcile-end phase])]
           (when t
-            (log/log-info (str "[reconcile] " (name phase) ": " msg))
-            (case (e/server (toast!* user-id level msg))
-              ;; The toast's text is the row's summary too, so the panel and
-              ;; the toast cannot disagree about what the sync did.
+            (log/log-info (str "[reconcile] " (name phase) ": " (or summary err)))
+            (case (e/server (record-refused!* user-id refused))
               (case (e/server (lc/release!* user-id run-id
                                 (when (= :error phase) err)
-                                (when-not (= :error phase) msg)))
+                                summary))
                 (do (e/on-unmount #(reset-run! recon))
                     (t))))))))))
 

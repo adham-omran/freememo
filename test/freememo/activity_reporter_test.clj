@@ -60,12 +60,12 @@
                   (fn [& args] (swap! terminations conj args))]
       (is (= {:opened 1 :refreshed 0 :closed 1}
             (reporter/tick-once!)))
-      (is (= [[8 450 "success" {:error nil :summary nil}]] @terminations)))))
+      (is (= [[8 450 "success" {:error nil :retry nil :summary nil}]] @terminations)))))
 
 (deftest reporter-closes-with-the-owner-summary-unless-it-failed
   (doseq [[err summary expected]
-          [[nil "12 sent to Anki" ["success" {:error nil :summary "12 sent to Anki"}]]
-           ["boom" "12 sent to Anki" ["failure" {:error "boom" :summary nil}]]]]
+          [[nil "12 sent to Anki" ["success" {:error nil :retry nil :summary "12 sent to Anki"}]]
+           ["boom" "12 sent to Anki" ["failure" {:error "boom" :retry nil :summary nil}]]]]
     (reset-local-activity-ownership!)
     (let [state-reads (atom 0)
           terminations (atom [])]

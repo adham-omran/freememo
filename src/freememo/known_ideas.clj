@@ -186,8 +186,10 @@
 (defn make-cards!
   "Queue 3 basic cards from `user-id`'s idea (known-ideas §2): its material,
    on its target topic, linked to the idea when saved. The run has the
-   `:card-gen` Activity row, Cancel and a toast, and the `:cards.basic` charge.
-   Post: {:ok true} once queued, or {:error} when the idea has no material."
+   `:card-gen` Activity row, Cancel and a summary, and the `:cards.basic` charge.
+   Post: {:ok true} once queued, or {:error str} when the idea has no material or
+         the queue refuses the run. The caller shows the error beside its button
+         (plans/remove-toasts.md 2.5.1)."
   [user-id entity-id]
   (if-let [material (db/idea-material user-id entity-id)]
     (let [outcome (card-gen/enqueue-card-gen!
@@ -202,8 +204,7 @@
            :root-topic-id (:root-topic-id material)
            :entity-id entity-id
            :pre-prompt nil
-           :pre-prompt-mode nil
-           :success-toast? true})]
+           :pre-prompt-mode nil})]
       (if (= :enqueued outcome) {:ok true} outcome))
     {:error "There is no passage to make cards from."}))
 

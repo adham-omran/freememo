@@ -442,6 +442,69 @@
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
+;; Editor status line (plan item 1.7.1)
+;; ---------------------------------------------------------------------------
+;;
+;; A paste or an upload fails after the user has looked away, in a callback
+;; that no Electric frame observes. The failure shows on a line inside the
+;; editor that took the paste, so it stays with the text it is about. Each
+;; editor has its own line, and the next edit the user makes clears it.
+
+#?(:cljs (defonce ^:private status-lines (js/WeakMap.)))
+
+;; True while this ns edits the document itself (an image swap, an embed
+;; insert). Those edits fire text-change with source "user", and they are not
+;; the edit that should clear a failure.
+#?(:cljs (defonce ^:private !internal-edit? (atom false)))
+
+(defn- internal-edit!
+  "Run `f` as an edit of this ns's own, so it does not clear the status line.
+   Returns what `f` returns."
+  [f]
+  #?(:cljs (do (reset! !internal-edit? true)
+               (try (f) (finally (reset! !internal-edit? false))))
+     :clj (f)))
+
+(defn clear-editor-status!
+  "Empty `ed`'s status line. With `kind`, only when it shows that kind.
+   Returns nil."
+  ([ed] (clear-editor-status! ed nil))
+  ([ed kind]
+   #?(:cljs (when-let [^js el (.get status-lines ed)]
+              (when (or (nil? kind) (= (name kind) (.getAttribute el "data-kind")))
+                (set! (.-textContent el) "")
+                (.removeAttribute el "data-kind")))
+      :clj nil)
+   nil))
+
+(defn show-editor-status!
+  "Show `message` on `ed`'s own status line.
+
+   Pre : `ed` is a live Quill instance. `kind` is :error (the default) or
+         :hint, the quiet style a drag-over uses.
+   Post: the line holds `message`. It is cleared by the next edit the user
+         makes in this editor. Returns nil."
+  ([ed message] (show-editor-status! ed message :error))
+  ([ed message kind]
+   #?(:cljs
+      (let [^js ed ed
+            ^js el (or (.get status-lines ed)
+                     (let [^js el (js/document.createElement "div")]
+                       (set! (.-className el) "editor-status-line")
+                       (.setAttribute el "role" "status")
+                       (.appendChild (.-container ed) el)
+                       (.set status-lines ed el)
+                       (.on ed "text-change"
+                         (fn [_delta _old source]
+                           (when (and (= source "user") (not @!internal-edit?))
+                             (clear-editor-status! ed))))
+                       el))]
+        (set! (.-textContent el) (str message))
+        (.setAttribute el "data-kind" (name kind)))
+      :clj nil)
+   nil))
+
+;; ---------------------------------------------------------------------------
 ;; Paste / drop image re-host — replaces Quill's own Uploader module behaviour.
 ;; ---------------------------------------------------------------------------
 
@@ -506,16 +569,17 @@
                   (let [Quill (.-Quill js/window)
                         Delta (.import Quill "delta")
                         at (.getIndex ed blot)]
-                    (.updateContents ed
-                      (-> (new Delta)
-                        (.retain at)
-                        (.delete 1)
-                        (.insert (clj->js {:image url})))
-                      "user"))))
+                    (internal-edit!
+                      #(.updateContents ed
+                         (-> (new Delta)
+                           (.retain at)
+                           (.delete 1)
+                           (.insert (clj->js {:image url})))
+                         "user")))))
          (.catch (fn [err]
                    (js/console.warn "[editor-actions] image re-host failed:" (str err))
-                   (ce/report! :editor/image-rehost err
-                     (str "Image could not be stored: " (.-message err))))))))
+                   (ce/report! :editor/image-rehost err)
+                   (show-editor-status! ed (str "Image could not be stored: " (.-message err))))))))
      :clj nil))
 
 (defn- insert-and-rehost-image!
@@ -538,13 +602,13 @@
        (track-editor-upload! ed
          (-> (read-data-url! file)
          (.then (fn [data-url]
-                  (.insertEmbed ed index "image" data-url "user")
+                  (internal-edit! #(.insertEmbed ed index "image" data-url "user"))
                   (.setSelection ed (inc index) 0 "user")
                   (rehost-embed-at! ed index file)
                   (inc index)))
          (.catch (fn [err]
-                   (ce/report! :editor/image-read err
-                     (str "Image could not be read: " (.-message err)))
+                   (ce/report! :editor/image-read err)
+                   (show-editor-status! ed (str "Image could not be read: " (.-message err)))
                    index)))))
      :clj nil))
 
@@ -569,12 +633,13 @@
        (track-editor-upload! ed
          (-> (upload-media-blob! file)
          (.then (fn [url]
-                  (.insertEmbed ed index "audio-clip" #js {:src url :loop false} "user")
+                  (internal-edit!
+                    #(.insertEmbed ed index "audio-clip" #js {:src url :loop false} "user"))
                   (.setSelection ed (inc index) 0 "user")
                   (inc index)))
          (.catch (fn [err]
-                   (ce/report! :editor/audio-upload err
-                     (str "Audio could not be stored: " (.-message err)))
+                   (ce/report! :editor/audio-upload err)
+                   (show-editor-status! ed (str "Audio could not be stored: " (.-message err)))
                    index)))))
      :clj nil))
 
@@ -606,6 +671,61 @@
        (.click input))
      :clj nil))
 
+(def ^:private attachment-formats-hint
+  "PNG, JPEG, GIF, WebP and AVIF images, and MP3 audio")
+
+(defn- unsupported-message
+  "The status line text for `files` that cannot be added. Names each type once."
+  [files]
+  #?(:cljs (let [types (distinct (map (fn [^js f] (if (str/blank? (.-type f)) "unknown type" (.-type f)))
+                                   files))]
+             (str "Cannot add " (str/join ", " types) ". Supported: " attachment-formats-hint "."))
+     :clj ""))
+
+#?(:cljs
+   (defn- dragged-files-refused?
+     "True when `dt` holds files and none of them is a type this editor takes.
+      A mixed drag is allowed: the supported files go in and the rest are
+      named on the status line. Item types are readable during dragover; the
+      file names are not."
+     [^js dt]
+     (let [items (.-items dt)
+           n (.-length items)
+           file-types (keep (fn [i]
+                              (let [^js item (aget items i)]
+                                (when (= "file" (.-kind item)) (.-type item))))
+                        (range n))]
+       (boolean
+         (and (seq file-types)
+              (not-any? #(or (util/storable-image-mime-types %)
+                             (util/storable-audio-mime-types %))
+                file-types))))))
+
+#?(:cljs
+   (defn- install-drag-refusal!
+     "Refuse a drag of unsupported files at dragover.
+      Post: over `ed`, a drag whose files are all unsupported gets the
+            not-allowed cursor and a hint on the status line. The hint goes
+            when the drag leaves or ends. Returns nil."
+     [^js ed]
+     (let [^js root (.-root ed)
+           on-over (fn [^js e]
+                     (when-let [^js dt (.-dataTransfer e)]
+                       (when (dragged-files-refused? dt)
+                         (.preventDefault e)
+                         (set! (.-dropEffect dt) "none")
+                         (show-editor-status! ed
+                           (str "This file type cannot be added. Use " attachment-formats-hint ".")
+                           :hint))))
+           on-leave (fn [^js e]
+                      (when-not (and (.-relatedTarget e) (.contains root (.-relatedTarget e)))
+                        (clear-editor-status! ed :hint)))
+           on-end (fn [_] (clear-editor-status! ed :hint))]
+       (.addEventListener root "dragover" on-over)
+       (.addEventListener root "dragleave" on-leave)
+       (.addEventListener root "drop" on-end)
+       nil)))
+
 (defn install-attachment-upload!
   "Replace Quill's Uploader so pasted and dropped images become /api/media URLs
    instead of inline base64.
@@ -620,14 +740,17 @@
    Pre  : ed is a live Quill instance whose uploader module is constructed.
    Post : every later paste or drop of a util/storable-image-mime-types file
           inserts one image embed, in clipboard order, which becomes
-          /api/media/<id> once its upload resolves; every other file reports one
-          user-visible message and mutates the document not at all.
+          /api/media/<id> once its upload resolves; every other file puts one
+          message on the editor's status line and mutates the document not at
+          all. A drag that holds only files of another type is refused on
+          dragover (a not-allowed cursor and a hint), so the drop never starts.
    Inv  : no data: URI survives a successful upload."
   [ed]
   #?(:cljs
      ;; ^js on the rebinding, not the parameter — the CLJ compiler reads the
      ;; parameter list of this .cljc defn (same rule as init-quill-field!).
      (let [^js ed ed]
+       (install-drag-refusal! ed)
        (when-let [^js uploader (.-uploader ed)]
          (set! (.-upload uploader)
            (fn [^js range files]
@@ -635,13 +758,11 @@
                    clip? (fn [^js f] (util/storable-audio-mime-types (.-type f)))
                    attachable? (fn [^js f] (or (image? f) (clip? f)))
                    fs (vec (array-seq files))]
-               (doseq [^js f (remove attachable? fs)]
+               (when-let [refused (seq (remove attachable? fs))]
                  (ce/report! :editor/attachment-format
-                   (str "Unsupported attachment format: " (.-type f))
-                   (str "Cannot paste "
-                     (if (str/blank? (.-type f)) "this file" (.-type f))
-                     " — supported formats are PNG, JPEG, GIF, WebP and AVIF"
-                     " images, and MP3 audio.")))
+                   (str "Unsupported attachment format: "
+                     (str/join ", " (map #(.-type ^js %) refused))))
+                 (show-editor-status! ed (unsupported-message refused)))
                ;; Chained, not concurrent: each insert awaits the previous one so
                ;; multiple files land in clipboard order. Only the INSERT is
                ;; serialised — the uploads run in parallel behind it.

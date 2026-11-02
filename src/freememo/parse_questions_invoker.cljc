@@ -3,13 +3,15 @@
   (:require
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
    [freememo.command-bus :as bus]
+   [freememo.inline-error :refer [InlineError]]
+   [freememo.result-line :refer [ResultLine]]
    [freememo.rich-text-editor :as editor]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.question-card-parser :as parser])
-   #?(:clj [freememo.text :as text])
-   #?(:clj [freememo.toasts :as toasts])))
+   #?(:clj [freememo.text :as text])))
 
 (defn- counted-noun [n singular]
   (str n " " singular (when (not= 1 n) "s")))
@@ -32,19 +34,14 @@
     (natural-line-list line-numbers)
     ". Each nonblank line must contain one ? with text on both sides."))
 
-(defn card-creation-message
-  "Report inserted cards and duplicates from one successful batch save."
+(defn result-line-text
+  "The count line beside the control, such as \"3 created, 2 skipped as
+   duplicates\". A batch that skipped nothing reads \"3 created\"."
   [created-count duplicate-count]
-  (cond
-    (zero? created-count)
-    (str "No cards created. Skipped " (counted-noun duplicate-count "duplicate") ".")
-
-    (zero? duplicate-count)
-    (str "Created " (counted-noun created-count "card") ".")
-
-    :else
-    (str "Created " (counted-noun created-count "card") ". Skipped "
-      (counted-noun duplicate-count "duplicate") ".")))
+  (if (zero? duplicate-count)
+    (str created-count " created")
+    (str created-count " created, " duplicate-count " skipped as "
+      (if (= 1 duplicate-count) "duplicate" "duplicates"))))
 
 (defn created-cards-highlight-selection?
   "True when a parse result created at least one card from the selection."
@@ -57,7 +54,8 @@
 
    Pre : the caller supplies the current user, topic, root topic, and plain text.
    Post: invalid input writes no cards. Valid input calls save-cards once and
-         reports created and duplicate counts through the user's toast queue.
+         returns the created and duplicate counts and the error text.
+         It reports nothing else: the invoker shows both beside itself.
    Inv : only this server boundary decides whether the batch can persist."
   [user-id topic-id root-topic-id selected-text]
   #?(:clj
@@ -65,13 +63,11 @@
            (parser/parse-question-selection selected-text)]
        (cond
          (zero? record-count)
-         (let [selection-error "Select one or more nonblank question-and-answer lines."]
-           (toasts/push! user-id {:level :error :message selection-error})
-           {:success false :error selection-error})
+         {:success false
+          :error "Select one or more nonblank question-and-answer lines."}
 
          (seq invalid-line-numbers)
          (let [validation-error (invalid-question-lines-message invalid-line-numbers)]
-           (toasts/push! user-id {:level :error :message validation-error})
            {:success false :error validation-error
             :invalid-line-numbers invalid-line-numbers})
 
@@ -90,13 +86,9 @@
                    duplicate-count (or (:skipped save-result) 0)]
                (when (pos? created-count)
                  (commands/bump! user-id :parse-questions))
-               (toasts/push! user-id
-                 {:level :success
-                  :message (card-creation-message created-count duplicate-count)})
                (assoc save-result :created created-count))
              (let [save-error-message (str "Could not create cards: "
                                         (or (:error save-result) "Unknown error"))]
-               (toasts/push! user-id {:level :error :message save-error-message})
                (assoc save-result :error save-error-message))))))
      :cljs nil))
 
@@ -107,17 +99,26 @@
    Post: each invocation captures the current text and range. A batch that
          creates cards marks its source range with the card-source gold.
    Inv : the published command handle exists only while this component mounts,
-         and the request atom is local, so a token fires only on an invocation."
+         and the request atom is local, so a token fires only on an invocation.
+         Its status span is always mounted. It shows the count line after a
+         save and the error after a failure, and the next invocation clears
+         the count."
   [user-id topic-id root-topic-id]
   (e/client
     (let [!parse-request (atom nil)
+          !result-text (atom nil)
           parse-request (e/watch !parse-request)
           [t ?error] (e/Token parse-request)]
       (bus/publish-invoker! :parse-questions
         (fn []
+          (reset! !result-text nil)
           (reset! !parse-request {:request-id (str (random-uuid))
                                   :selection (editor/get-selection!)})))
       (e/on-unmount (fn [] (bus/retract-invoker! :parse-questions)))
+      (dom/span
+        (dom/props {:class "parse-questions-status"})
+        (ResultLine (e/watch !result-text))
+        (InlineError ?error))
       (when t
         (let [creation-result (e/server
                                 (e/Offload
@@ -128,12 +129,17 @@
           ;; then would unmount this branch and cancel the save.
           (when (some? creation-result)
             (if (:success creation-result)
-              (if (created-cards-highlight-selection? creation-result)
-                (case (e/client
-                        (editor/highlight-range!
-                          (get-in parse-request [:selection :index])
-                          (get-in parse-request [:selection :length])
-                          :color "var(--color-highlight-gold)"))
-                  (t))
-                (t))
+              (let [line (result-line-text (or (:created creation-result) 0)
+                           (or (:skipped creation-result) 0))]
+                ;; The line is set as the token spends, so the span never
+                ;; shows a count for a run that has not finished.
+                (e/on-unmount #(reset! !result-text line))
+                (if (created-cards-highlight-selection? creation-result)
+                  (case (e/client
+                          (editor/highlight-range!
+                            (get-in parse-request [:selection :index])
+                            (get-in parse-request [:selection :length])
+                            :color "var(--color-highlight-gold)"))
+                    (t))
+                  (t)))
               (t (:error creation-result)))))))))

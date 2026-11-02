@@ -8,7 +8,7 @@
 
    While the run goes, `!running` names it and every exit goes through
    `request-exit!`, as in the import modal: Close leaves the run going and
-   ends in a toast, and Cancel abandons it.
+   ends in its Activity row, and Cancel abandons it.
 
    Its own namespace for the 64KB method cap: `repo-update-bar` mounts it."
   (:require
@@ -142,7 +142,7 @@
   "Pre : `!open?` is the button's open atom.
    Post: closing writes false to it.
    Invariant: after the user asks to leave a running run, the modal never
-         navigates; the toast reports the result instead."
+         navigates; the Activity row reports the result instead."
   [user-id repo-id !open? navigate!]
   (e/client
     (let [!running (atom nil)

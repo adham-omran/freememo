@@ -5,8 +5,7 @@
             [freememo.config :as config]
             [freememo.db :as db]
             [freememo.landing-copy :as copy]
-            [freememo.storage-meter :as meter]
-            [freememo.toasts :as toasts]))
+            [freememo.storage-meter :as meter]))
 
 (deftest configured-price-and-disabled-metering-agree-with-public-copy
   (doseq [[credits? rate expected] [[false nil nil] [false 5 nil] [true nil nil]
@@ -29,8 +28,7 @@
                   db/get-storage-meter-state (fn [_] {:credit_balance_iqd 0 :has_video true
                                                      :storage_grace_started_at @grace})
                   db/set-storage-grace! (fn [_ value] (swap! writes conj value) (reset! grace value))
-                  db/storage-grace-started-at (fn [_] @grace)
-                  toasts/push! (fn [& _])]
+                  db/storage-grace-started-at (fn [_] @grace)]
       (is (= :opened (#'meter/transition-grace! 1)))
       (is (meter/playback-blocked? 1))
       (is (nil? (#'meter/transition-grace! 1)))

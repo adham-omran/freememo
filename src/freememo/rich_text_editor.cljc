@@ -31,12 +31,12 @@
 (defonce !toolbar-node (atom nil))
 
 ;; ── The editor's link channel ──────────────────────────────────────
-;; `freememo.editor-links` owns the DOM; these five atoms are its only way out.
-;; A click listener cannot reach the server, the router or the toast queue, so
-;; every one of those is published here and answered by an e/Token in
-;; editor_pane. All are defined on BOTH peers with no reader conditional —
-;; they are named in e/defn bodies, and a CLJ-only def read from client scope
-;; makes the two peers disagree on frame shape and kills the WebSocket.
+;; `freememo.editor-links` owns the DOM; these atoms are its only way out.
+;; A click listener cannot reach the server or the router, so every one of
+;; those is published here and answered by an e/Token in editor_pane. All are
+;; defined on BOTH peers with no reader conditional — they are named in e/defn
+;; bodies, and a CLJ-only def read from client scope makes the two peers
+;; disagree on frame shape and kills the WebSocket.
 
 ;; Set by the card's Import button.
 ;; Shape: {:url "https://…" :ts <timestamp>} or nil. The url is already
@@ -54,10 +54,10 @@
 ;; Shape: {:topic-id N :fragment "sec" :ts <timestamp>} or nil.
 (defonce !navigate-topic (atom nil))
 
-;; Set when a click can only be explained, not acted on — a fragment with no
-;; matching heading, or a relative href in a document with no source address.
-;; Shape: {:level :info :message "…" :ts <timestamp>} or nil.
-(defonce !link-toast (atom nil))
+;; The topic an Already imported answer names, so the link card can offer Open.
+;; Written by editor_pane before it sets `!import-status` to :already-exists.
+;; Shape: a topic id or nil.
+(defonce !import-open-topic (atom nil))
 
 ;; The document's own address, for resolving relative hrefs. Written by
 ;; editor_pane from the topic's effective source; nil when it has none, which
@@ -470,7 +470,7 @@
                               :link-actions-teardown (editor-links/install! editor
                                                        {:!import !import-url
                                                         :!navigate !navigate-topic
-                                                        :!toast !link-toast
+                                                        :!import-open !import-open-topic
                                                         :!base-url !document-base-url
                                                         :!import-status !import-status})
                               :format-menu-teardown (format-menu/install! editor {:card-gen? true})

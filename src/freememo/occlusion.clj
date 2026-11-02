@@ -6,7 +6,7 @@
    one 'occlusion' flashcards row per MASK GROUP — rects sharing a mask ordinal
    are one card (freememo.occlusion-ordinals). Geometry writes go through the
    transactional, ordinal-safe fns in freememo.db; this ns adds validation,
-   sanitization, toasts, and the :pending-cards overlay bookkeeping.
+   sanitization, and the :pending-cards overlay bookkeeping.
 
    Mask SVGs are NOT stored — they are generated client-side at push time
    from the geometry here (freememo.occlusion-svg / freememo.occlusion-anki)."
@@ -17,7 +17,6 @@
    [freememo.input-check :as input]
    [freememo.occlusion-ordinals :as ord]
    [freememo.optimistic :as opt]
-   [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
 (def io-field-keys
@@ -214,26 +213,14 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Optimistic-queue commands. Contract (see freememo.optimistic ns docstring):
-;; methods own the effect + toast; optimistic/execute! bumps the registry
-;; :views and removes the command from the queue.
+;; methods own the effect and return the outcome; run-command-effect! bumps the
+;; registry :views. The update commands are not queued: their modals wait for
+;; the result (score_toolbar.cljc, occlusion_modal.cljc).
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-occlusion [user-id {:keys [payload]}]
   (let [result (create-group! user-id payload)]
     (if (:success result)
-      (do (toasts/push! user-id {:level :success
-                                 :message (let [n (count (:ids result))]
-                                            (str n " occlusion card" (when (not= 1 n) "s") " added"))})
-          {:ok? true :real-ids (:ids result)})
-      (do (toasts/push! user-id {:level :error
-                                 :message (or (:error result) "Failed to add occlusion cards")})
-          {:ok? false :error (:error result)}))))
-
-(defmethod opt/run-command! :update-occlusion [user-id {:keys [payload]}]
-  (let [result (update-group! user-id payload)]
-    (if (:success result)
-      (do (toasts/push! user-id {:level :success :message "Occlusion updated"})
-          {:ok? true})
-      (do (toasts/push! user-id {:level :error
-                                 :message (or (:error result) "Failed to update occlusion")})
-          {:ok? false :error (:error result)}))))
+      {:ok? true :real-ids (:ids result)}
+      {:ok? false :error (or (not-empty (str (:error result)))
+                             "Could not add occlusion cards.")})))

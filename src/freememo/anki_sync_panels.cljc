@@ -221,7 +221,7 @@
                 :!push-btn !push-btn}]
       ;; §4 optimistic: the Push button sets :pushing; instead of running the
       ;; executor in-modal, persist the modal's prefs as last-used, close, and
-      ;; fire the headless QuickSync (re-connects, pushes, toasts the outcome).
+      ;; fire the headless QuickSync (re-connects and pushes; the Activity row reports the outcome).
       ;; The in-modal AnkiSyncExecutor is intentionally not mounted here.
       ;; See plans/optimistic-updates.md §4.
       (when (= (e/watch !sync-phase) :pushing)

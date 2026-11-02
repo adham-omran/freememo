@@ -337,7 +337,7 @@
    which is what overwrote edits made in Anki.
 
    The click hands off rather than running the work here: prefs are saved, the
-   modal closes, and `:quick-sync` runs the reconcile headlessly with toasts.
+   modal closes, and `:quick-sync` runs the reconcile headlessly. Its Activity row reports the outcome.
    A run covers the whole collection and outlives the dialog that started it.
 
    Sync is disabled while `busy?` — any tab of the account running a sync — so

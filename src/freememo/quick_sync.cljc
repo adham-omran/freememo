@@ -1,6 +1,6 @@
 (ns freememo.quick-sync
   "Background reconcile (Cmd-Shift-Opt-X): runs a full Anki reconcile without
-   opening the modal, and reports the outcome as a toast.
+   opening the modal. Its outcome is the Activity row's summary or error.
 
    Own namespace per the JVM 64KB method-limit convention (Electric v3 e/defn).
 
@@ -17,28 +17,10 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.anki-lease-client :as lease-client]
    [freememo.anki-reconcile-panels :as recon]
    [freememo.anki-subtree-request :as subtree]
-   [freememo.command-bus :as bus]
-   #?(:clj [freememo.toasts :as toasts])))
-
-(defn push-toast!*
-  "Push a toast to the user's queue. Errors auto-sticky (toasts/push! default)."
-  [user-id level message]
-  #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
-     :cljs nil))
-
-(e/defn QuickSyncBusyToast
-  "One toast per `!busy-bump` increment: the chord pressed while THIS tab is
-   already running a sync. A run in ANOTHER tab is refused by the server claim,
-   which toasts for itself (`anki-reconcile-panels/ReconcileClaim`)."
-  [user-id !busy-bump]
-  (e/client
-    (let [busy-bump (e/watch !busy-bump)]
-      (when (pos? busy-bump)
-        (let [[t _] (e/Token [:qs-busy busy-bump])]
-          (when t
-            (case (e/server (push-toast!* user-id :info "Sync already in progress")) (t))))))))
+   [freememo.command-bus :as bus]))
 
 (e/defn QuickSyncButton
   "Hidden host button for the `:quick-sync` command (Cmd-Shift-Opt-X or the
@@ -56,25 +38,29 @@
    request-subtree-sync!` queues a topic id, and this component collects it and
    starts a run scoped to that topic and its descendants. That run settles no
    tombstones, so a deleted card's note stays until the next full run. Both
-   kinds take the same lease, so a branch request while any run is going gets
-   the \"Sync already in progress\" toast."
+   kinds take the same lease, so a branch request while any run is going does
+   nothing: every Sync control is disabled by the lease and the Activity badge
+   shows the running sync.
+
+   While the account's lease is held, in this tab or another, the invoker is
+   retracted and the command is blocked. The `:quick-sync` palette row is then
+   disabled with \"Sync is running\" and the chord does nothing (plans/remove-toasts.md A-12)."
   [user-id]
   (e/client
     (let [state (recon/fresh-state)
-          !busy-bump (atom 0)
-          start-run! (fn [root-id]
-                       (when (= :busy (recon/start! state false root-id))
-                         (swap! !busy-bump inc)))]
+          sync-busy? (lease-client/SyncBusy user-id)
+          start-run! (fn [root-id] (recon/start! state false root-id) nil)]
       (dom/button
         (dom/props {:style {:display "none"} :aria-hidden "true" :tabindex "-1"
                     :data-quick-sync "1"})
         (let [node dom/node
               unwatch! (subtree/watch! start-run!)]
-          (bus/publish-invoker! :quick-sync (fn [] (.click node)))
-          (e/on-unmount (fn []
-                          (bus/retract-invoker! :quick-sync)
-                          (unwatch!))))
+          (e/on-unmount unwatch!)
+          (if sync-busy?
+            (do (bus/block! :quick-sync "Sync is running")
+                (e/on-unmount (fn [] (bus/unblock! :quick-sync))))
+            (do (bus/publish-invoker! :quick-sync (fn [] (.click node)))
+                (e/on-unmount (fn [] (bus/retract-invoker! :quick-sync))))))
         (dom/On "click" (fn [_] (start-run! nil)) nil))
-      (QuickSyncBusyToast user-id !busy-bump)
       (when (some? (e/watch (:!phase state)))
         (recon/ReconcileExecutor user-id state)))))

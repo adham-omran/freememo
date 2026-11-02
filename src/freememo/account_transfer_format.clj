@@ -150,7 +150,10 @@
    This set exists to be asserted against the schema. A table added to
    `db.clj` with no entry in either list is data silently dropped from every
    export, and `account_transfer_format_test` is what catches that."
-  {:users "account identity — the target instance owns its own user row"
+  {:users "account identity — the target instance owns its own user row. This
+           includes the storage-removal notice columns (`storage_removal_count`,
+           `storage_removal_at`, `storage_removal_seen`): a removal belongs to
+           the instance that ran the sweep, so none of it moves."
    :comprehension_cycles "diagnostic snapshots with source IDs in JSON; account transfer does not yet remap these references"
    :comprehension_submissions "diagnostic attempt history belonging to excluded comprehension cycles"
    :comprehension_gaps "diagnostic evidence belonging to excluded comprehension submissions"
@@ -365,6 +368,10 @@
    :topic_files {:where (str "t.topic_id IN (" owned-topics ")")
                  :params 1 :order "t.id" :drop-keys ["file_data"]}
 
+   ;; `notice` is the pipeline's plain-text caveat for the video pane. It holds
+   ;; no id and no HTML, so it travels with the row and needs no remap.
+   ;; `assistant_runs.notice` is a plain-text caveat on an answer. It holds no
+   ;; id and no HTML, so it travels with the row and needs no remap.
    :topic_videos {:where (str "t.topic_id IN (" owned-topics ")")
                   :params 1 :order "t.topic_id"}
 
@@ -378,6 +385,8 @@
    :topic_code {:where (str "t.topic_id IN (" owned-topics ")")
                 :params 1 :order "t.topic_id" :drop-keys ["source_preview"]}
 
+   ;; `embed_warning` is a plain flag about the video. It holds no id and no
+   ;; HTML, so it travels with the row and needs no remap.
    :topic_youtube {:where (str "t.topic_id IN (" owned-topics ")")
                    :params 1 :order "t.topic_id"}
 

@@ -157,7 +157,7 @@
   (if (seq ids)
     (jdbc/execute! db/ds
       ["SELECT m.id, m.role, m.content, m.client_id,
-               r.run_uuid, r.status, r.error_text, r.retry_of_run_uuid,
+               r.run_uuid, r.status, r.error_text, r.notice, r.retry_of_run_uuid,
                r.response_text
          FROM assistant_messages m JOIN assistant_chats c ON c.id = m.chat_id
          LEFT JOIN assistant_runs r ON r.assistant_message_id = m.id

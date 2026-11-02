@@ -378,9 +378,9 @@
   "Whether Import follows the page it just found.
 
    Only a DUPLICATE can be followed at once — a fresh import has nowhere to go
-   until its fetch lands, and that outcome arrives as a toast with its own Open
-   button. So this governs the duplicate case; off keeps the reader where they
-   are, and the toast is still there to follow.
+   until its fetch lands, and that outcome arrives as an Activity row with its own
+   Open action. So this governs the duplicate case; off keeps the reader where
+   they are, and the row is still there to follow.
 
    Forms5 `Checkbox!`, the standalone persisted-toggle shape."
   [user-id]

@@ -31,6 +31,7 @@
    [clojure.string :as str]
    [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
+   [freememo.inline-error :as inline-error]
    [freememo.modal-shell :as modal-shell]
    [freememo.motion :as motion]
    [freememo.navigation :as nav]
@@ -42,7 +43,6 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
    #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ---------------------------------------------------------------------------
@@ -84,15 +84,12 @@
 #?(:clj
    (defn start-session!*
      "Draw + freeze a session (quiz: nil time limit; exam: seconds). Post:
-      session map (get-active shape) or nil when the scope yields no
-      questions (toasted here, UI stays dumb)."
+      session map (get-active shape), or {:error msg} when the scope yields no
+      questions (the setup view shows it beside the start button)."
      [user-id kind scope-ids n time-limit-seconds]
      (let [qids (db/draw-kg-questions user-id scope-ids n)]
        (if (empty? qids)
-         (do (toasts/push! user-id
-               {:level :error
-                :message "No questions cover the selected documents — generate some first."})
-           nil)
+         {:error "No questions cover the selected documents. Generate some first."}
          (let [sid (db/create-kg-session! user-id kind scope-ids qids time-limit-seconds)]
            {:id sid :kind kind :question-ids qids :answered 0
             :time-limit-seconds time-limit-seconds :elapsed-seconds 0})))))
@@ -157,7 +154,8 @@
           !mode (atom (or initial-mode "quiz")) mode (e/watch !mode)
           !count-str (atom (if (= initial-mode "exam") "20" "10"))
           count-str (e/watch !count-str)
-          !limit-str (atom "30") limit-str (e/watch !limit-str)]
+          !limit-str (atom "30") limit-str (e/watch !limit-str)
+          !start-error (atom nil) start-error (e/watch !start-error)]
       (dom/div
         (dom/props {:style panel-style})
         (dom/div
@@ -271,9 +269,10 @@
                                      #(start-session!* user-id (:kind click) (:scope click)
                                         (:n click) (:limit-s click))))]
                       (case result
-                        nil (t) ; empty draw — server already toasted
-                        (do (reset! !session result)
-                          (t))))))))))))))
+                        (do (reset! !start-error (:error result))
+                          (when-not (:error result) (reset! !session result))
+                          (t)))))))
+              (inline-error/InlineError start-error))))))))
 
 (e/defn QuizActive [user-id !session session !summary !editing navigate-source!]
   (e/client
@@ -282,6 +281,7 @@
           !idx (atom answered) idx (e/watch !idx)
           !draft (atom "") draft (e/watch !draft) ; textarea mirror
           !grading? (atom false) grading? (e/watch !grading?)
+          !grade-error (atom nil) grade-error (e/watch !grade-error)
           !feedback (atom nil) feedback (e/watch !feedback)
           !entity-card (atom nil) entity-card (e/watch !entity-card)
           ;; One latch for every path that ends the sitting: End quiz, Finish on the
@@ -351,15 +351,19 @@
                       (if (str/blank? answer)
                         (t) ; defence in depth — the button is disabled for this
                         (do (reset! !grading? true)
+                          (reset! !grade-error nil)
                           (let [position idx
                                 result (e/server
                                          (e/Offload
                                            #(grade/grade-answer! user-id sid qid position answer)))]
                             (case result ; wait on the value — do would race the token
                               (do (reset! !grading? false)
+                                (reset! !grade-error (when-not (:success result)
+                                                       (:error result)))
                                 (when (:success result)
                                   (reset! !feedback {:result result :answer answer}))
-                                (t))))))))))
+                                (t)))))))))
+                (inline-error/InlineError grade-error))
               (dom/div
                 (fb/QuizFeedback (:result feedback) (:answer feedback)
                   (:entities qdata) !entity-card navigate-source!)
@@ -441,6 +445,7 @@
                     (e/on-unmount (fn [] #?(:cljs (js/clearInterval iv) :clj nil))))
           remaining (max 0 (quot (- deadline now) 1000))
           !submit-req (atom nil) submit-req (e/watch !submit-req)
+          !submit-error (atom nil) submit-error (e/watch !submit-error)
           grading (e/server (e/watch (us/get-atom user-id :exam-grading)))
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           qid (nth qids (min idx (dec total)) nil)
@@ -473,10 +478,8 @@
                               {:success true :counts (grade/grade-exam-session! user-id sid)}
                               (catch Exception e
                                 (tel/error! {:id ::exam-grading-failed} e)
-                                (toasts/push! user-id
-                                  {:level :error
-                                   :message "Grading failed — try submitting again."})
-                                {:success false}))))]
+                                {:success false
+                                 :error "Grading failed. Try submitting again."}))))]
             (dom/h3 (dom/props {:style {:font-size "16px"}}) (dom/text "Grading your Timed Quiz…"))
             (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text (if gtotal (str done " / " gtotal " answers graded") "Preparing…")))
@@ -487,7 +490,9 @@
                   (reset! !submit-req nil))
                 ;; Unlatch so the (now-expired-or-clicked) submit can retry
                 ;; instead of leaving the user stuck on "Grading…" forever.
-                (reset! !submit-req nil))))
+                ;; The error shows beside the answer box the unlatch brings back.
+                (do (reset! !submit-error (:error result))
+                  (reset! !submit-req nil)))))
           (dom/div
             ;; Cmd/Ctrl+Enter → Save & next, and on the last question Save & submit
             ;; exam. That submits the paper with no confirmation, deliberately: the
@@ -545,7 +550,8 @@
                             (reset! !submit-req {:draft nil}))
                           (do (reset! !draft "")
                             (swap! !idx inc)))
-                      (t))))))))))))
+                      (t))))))
+            (inline-error/InlineError submit-error)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; FSRS Review — a live queue of everything due today. Answers grade instantly
@@ -590,6 +596,7 @@
           ;; cannot restart the clock mid-turn. ReviewFlow's keyed frame remounts
           ;; this component per item, which is what makes the mark per-turn.
           started-at (e/snapshot (timing/start-ms))
+          !grade-error (atom nil) grade-error (e/watch !grade-error)
           qdata (e/server (e/Offload #(quiz-question* kg-bump user-id qid)))
           ;; Unanswered: no tally, no return.
           skip! (fn [] (advance! false false))
@@ -640,6 +647,7 @@
                   (if (str/blank? answer)
                     (t) ; defence in depth — the button is disabled for this
                     (do (reset! !grading? true)
+                      (reset! !grade-error nil)
                       ;; Read the clock in CLIENT scope and pass the number. Naming
                       ;; `started-at` inside the server-sited closure would make it a
                       ;; value Electric has to transfer, which is the unserializable
@@ -649,8 +657,10 @@
                                   (e/Offload #(review-answer!* user-id qid answer ms)))]
                         (case res ; wait on the value — do would race the token
                           (do (reset! !grading? false)
+                            (reset! !grade-error (card-turn/grade-error res))
                             (reset! !feedback (card-turn/graded-feedback res answer))
-                            (t))))))))))
+                            (t)))))))))
+            (inline-error/InlineError grade-error))
 
           :else
           (dom/div
@@ -669,7 +679,8 @@
               (dom/On "click"
                 (fn [_]
                   (advance! true (boolean (get-in feedback [:schedule :due-today?]))))
-                nil))))
+                nil))
+            (inline-error/InlineError (:schedule-error feedback))))
         ;; Sibling of the answer/feedback `cond` — must mount for the whole turn.
         (fb/EntityCardPopover user-id !entity-card entity-card)))))
 

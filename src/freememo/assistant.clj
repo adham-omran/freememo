@@ -36,7 +36,6 @@
    [freememo.question-map-block :as map-block]
    [freememo.repo-markdown :as repo-md]
    [freememo.text :as text]
-   [freememo.toasts :as toasts]
    [freememo.topic-kinds :as topic-kinds]
    [freememo.db :as db]
    [freememo.walkthrough :as walkthrough]
@@ -991,22 +990,13 @@
   "Delete an owned chat and its forks with a 12-hour undo window.
    Pre: none — a foreign, missing or already staged chat returns an error.
    Post: the chat and its live descendants are hidden from every chat read, no
-   run in them is active, one live undo entry names them, and an Undo toast
-   that counts the branches is queued (plans/assistant-chat-forks.md §4.1.5). A run that was
+   run in them is active, and one live undo entry names them
+   (plans/assistant-chat-forks.md §4.1.5). The Undo history lists the entry. A run that was
    streaming is stopped first: its provider request keeps draining and its
    credits are spent, but no further text reaches the chat."
   [user-id chat-id]
-  (if-let [{:keys [entry-id count]} (db/stage-assistant-chat-for-deletion! user-id chat-id)]
+  (if (db/stage-assistant-chat-for-deletion! user-id chat-id)
     (do
-      (toasts/push! user-id
-        {:level :success
-         :message (case (dec count)
-                    0 "Chat deleted. You can undo this for 12 hours."
-                    1 "Chat and its 1 branch deleted. You can undo this for 12 hours."
-                    (str "Chat and its " (dec count) " branches deleted. "
-                      "You can undo this for 12 hours."))
-         :dedup? false
-         :actions [{:label "Undo" :undo-id entry-id}]})
       (commands/bump! user-id :delete-assistant-chat)
       {:success true})
     {:success false :error "Chat not found."}))
@@ -1035,19 +1025,16 @@
   "Run one request from the history view (freememo.assistant-chat-history).
    Pre: `op` ∈ #{:open :rename :pin :delete :exclude}; :rename carries :title,
    :pin carries :pinned?, :exclude carries :excluded?.
-   Post: the matching operation's result. A failed rename, pin or delete is
-   also reported as an error toast, because the view that asked may be closed
-   by the time it fails. A failed :open is silent: it only feeds the seed."
+   Post: the matching operation's result. A failure is returned as
+   {:success false :error s}, and ChatActionEffect shows it with InlineError.
+   A failed :open is silent: it only feeds the seed."
   [user-id {:keys [op chat-id title pinned? excluded?]}]
-  (let [result (case op
-                 :open (mark-chat-opened! user-id chat-id)
-                 :rename (rename-chat! user-id chat-id title)
-                 :pin (set-chat-pinned! user-id chat-id pinned?)
-                 :delete (stage-chat-deletion! user-id chat-id)
-                 :exclude (set-chat-excluded! user-id chat-id excluded?))]
-    (when (and (not (:success result)) (not= :open op))
-      (toasts/push! user-id {:level :error :message (:error result)}))
-    result))
+  (case op
+    :open (mark-chat-opened! user-id chat-id)
+    :rename (rename-chat! user-id chat-id title)
+    :pin (set-chat-pinned! user-id chat-id pinned?)
+    :delete (stage-chat-deletion! user-id chat-id)
+    :exclude (set-chat-excluded! user-id chat-id excluded?)))
 
 (defn last-opened-chat-id*
   "The chat the history seed reopens on this document, or nil."
@@ -1166,7 +1153,7 @@
   "Write the map block `response` starts with into the run's question map, and
    store the reply's prose without the block (plans/anchored-questions.md
    §6.3.2). A block that cannot be applied writes nothing and tells the reader
-   in a toast. Never throws: the map is a side effect of the answer, and a
+   in the answer's notice. Never throws: the map is a side effect of the answer, and a
    failure here must not fail the answer the reader already watched stream."
   [user-id run-uuid question-map-run response]
   (try
@@ -1179,12 +1166,12 @@
       (when problem
         (tel/log! {:level :warn :id ::question-map-not-applied
                    :data {:user-id user-id :run-uuid run-uuid :problem problem}})
-        (toasts/push! user-id {:level :warn
-                               :message (str "The question map was not updated. " problem)})))
+        (db/set-assistant-run-notice! run-uuid
+          (str "The question map was not updated. " problem))))
     (catch Throwable t
       (tel/error! {:id ::question-map-apply :data {:user-id user-id :run-uuid run-uuid}} t)
-      (toasts/push! user-id {:level :warn
-                             :message "The question map was not updated. Try asking again."}))))
+      (db/set-assistant-run-notice! run-uuid
+        "The question map was not updated. Try asking again."))))
 
 (defn- apply-walkthrough-reply!
   "Record the ideas the block `response` starts with lists as known, with the
@@ -2115,13 +2102,13 @@
    reading page (`page-topic-id`). `cardable-text` decides what part of the reply
    is used: a Socratic reply contributes its `**Where you are**` body only (never
    the question), a Tutor or General reply contributes the whole thing. Bypasses
-   the KG fact-routing detour that the toolbar Generate applies, reporting the
-   outcome via a toast.
+   the KG fact-routing detour that the toolbar Generate applies.
    Pre: page-topic-id / root-topic-id are the learner's current reading topic;
    reply-text is an assistant reply in any persona. Post: on success (count :ids)
    basic cards exist under page-topic-id and :card-mutations is bumped; when the
    captured text is blank (a Socratic reply that is only a question) nothing is
-   saved and a toast says so; on failure nothing is saved. Returns
+   saved and the error says so; on failure nothing is saved. The caller shows
+   the error. Returns
    {:success true :ids v :count n} | {:success false :error s}."
   [user-id page-topic-id root-topic-id reply-text]
   (let [capture (cardable-text reply-text)
@@ -2142,13 +2129,8 @@
                            {:success true :ids (:ids saved) :count (count (:ids saved))})
                          {:success false :error (:error saved)})))))]
     (if (:success result)
-      (let [n (:count result)]
-        (toasts/push! user-id {:level :success
-                               :message (str "Added " n " card" (when (not= 1 n) "s")
-                                          " from this reply.")}))
-      (toasts/push! user-id {:level :error
-                             :message (or (:error result) "Card capture failed.")}))
-    result))
+      result
+      (update result :error #(or % "Card capture failed.")))))
 
 ;; ── Cards from assistant text ──────────────────────────────────────────────
 
@@ -2171,8 +2153,7 @@
          page would be. `card-count` is the count the panel showed, or nil for
          the saved setting. It is clamped to the toolbar's bounds.
    Post: {:ok true} after the job is queued, or {:error}. The cards land on
-         `page-topic-id`, with the root the toolbar would use, and a toast
-         reports the count. Progress and Cancel are the topic's Activity row."
+         `page-topic-id`, with the root the toolbar would use. Progress and Cancel are the topic's Activity row."
   [user-id page-topic-id content-html context-text card-count]
   (let [page (db/get-topic-for-user user-id page-topic-id)
         root-id (or (db/get-root-topic-id page-topic-id) page-topic-id)
@@ -2197,8 +2178,7 @@
                                   root-kind root-id)
                               root-id)
              :pre-prompt nil
-             :pre-prompt-mode nil
-             :success-toast? true})]
+             :pre-prompt-mode nil})]
         (if (= :enqueued outcome) {:ok true} outcome)))))
 
 (defn selection->cards!
@@ -2442,6 +2422,7 @@
    :assistant_messages/content :assistant_messages/client_id
    :assistant_messages/inherited?
    :assistant_run/uuid :assistant_run/status :assistant_run/error
+   :assistant_run/notice
    :assistant_run/retry_of :assistant_run/evidence
    :assistant_event/type :assistant_event/covered_from
    :assistant_event/covered_through :assistant_event/chat_title])
@@ -2585,6 +2566,7 @@
                 :assistant_run/uuid (:run_uuid run)
                 :assistant_run/status (:status run)
                 :assistant_run/error (:error_text run)
+                :assistant_run/notice (:notice run)
                 :assistant_run/retry_of (:retry_of_run_uuid run)
                 :assistant_run/evidence (get evidence-by-run (:run_uuid run) []))
               message))
@@ -2671,6 +2653,7 @@
                                :assistant_run/uuid (:run_uuid row)
                                :assistant_run/status (:status row)
                                :assistant_run/error (:error_text row)
+                               :assistant_run/notice (:notice row)
                                :assistant_run/retry_of (:retry_of_run_uuid row)
                                :assistant_run/evidence (get evidence (:run_uuid row) [])))]
                [(:id row) (transcript-message-view message)])))

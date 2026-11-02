@@ -22,7 +22,6 @@
             [freememo.import-activity :as import-activity]
             [freememo.page-pipeline :as pipeline]
             [freememo.text :as text]
-            [freememo.toasts :as toasts]
             [freememo.user-state :as us]
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
@@ -66,7 +65,7 @@
   "Fetch a URL and either import as a web topic or stage as binary.
    Pre  : user-id is a logged-in user; url is non-blank.
    Post : returns one of:
-            {:ok true :flow :imported       :topic-id N :title S :warning S?}
+            {:ok true :flow :imported       :topic-id N :title S}
             {:ok true :flow :already-exists :topic-id N :title S}
             {:ok true :flow :staged :dispatch :pdf|:epub
                        :upload-id S :filename S :flow-label S}
@@ -120,22 +119,12 @@
 
 (defn import-url!*
   "Pre: user-id is authenticated and url is non-blank.
-   Post: the shared import records its result and activity outcome. A result
-         with :warning has also reached the user as a warning toast.
-   Invariant: every URL entry point uses this lifecycle.
-
-   The warning toast is pushed here because every link entry point passes
-   through: the Import modal and a clicked link both see it once
-   (plans/youtube-kind.md 2.3.1)."
+   Post: the shared import records its result and activity outcome.
+   Invariant: every URL entry point uses this lifecycle. A YouTube import that
+   may not embed keeps that fact on its topic (`topic_youtube`), where the
+   video pane reads it (plan item 2.11.1)."
   [user-id url]
-  (let [r (import-activity/run-url! user-id url #(fetch-and-import-url!* user-id url))]
-    (when (:warning r)
-      (toasts/push! user-id
-        {:level :warning
-         :message (:warning r)
-         :actions [{:label "Open"
-                    :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]}))
-    r))
+  (import-activity/run-url! user-id url #(fetch-and-import-url!* user-id url)))
 
 (defn import-html!*
   "Pre: title and content are non-blank. run-id is nil or owns HTML review.
@@ -165,9 +154,10 @@
           and handed off when it is not; nothing makes them wait on a network
           round trip inside their editor.
    Inv  : `import-url!*` owns membership and activity outcomes for all callers.
-   Inv  : the outcome reaches the user as a toast, because by the time it
-          lands they may be reading something else. `import-url!*` owns the
-          import itself; this owns only when it runs and who is told."
+   Inv  : the outcome reaches the Activity monitor, and a failure reaches the
+          banner strip, because by the time it lands the reader may be reading
+          something else. A staged PDF or EPUB waits on the Import page.
+          `import-url!*` owns the import itself; this owns only when it runs."
   [user-id url]
   (if-let [existing (find-existing-topic-for-url* user-id url)]
     (assoc existing :flow :already-exists)
@@ -178,36 +168,16 @@
         {:flow :busy}
         (do
           (future
-            (let [r (try (import-url!* user-id url)
-                      (catch Throwable e
-                        (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
-                        {:ok false :error (.getMessage e)}))]
-              (cond
-                ;; Imported with a warning: `import-url!*` already pushed the
-                ;; warning toast, which carries the same Open action.
-                (and (:ok r) (:topic-id r) (:warning r))
-                nil
-
-                (and (:ok r) (:topic-id r))
-                (toasts/push! user-id
-                  {:level :success
-                   :message (str "Imported \"" (:title r) "\"")
-                   :actions [{:label "Open"
-                              :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]})
-
+            ;; A failure reaches the Activity monitor through `import-url!*`:
+            ;; its run records the error, and the banner strip shows it.
+            (try
+              (let [r (import-url!* user-id url)]
                 ;; A PDF or EPUB needs a confirmation step this path cannot
-                ;; drive, so it is reported rather than silently staged.
-                (= :staged (:flow r))
-                (toasts/push! user-id
-                  {:level :info
-                   :message (str (:flow-label r) " downloaded — open Import to finish it.")
-                   :actions [{:label "Import" :nav :import}]})
-
-                :else
-                (toasts/push! user-id
-                  {:level :error
-                   :message (str "Could not import " url
-                             (when (:error r) (str " — " (:error r))))}))))
+                ;; drive. It waits on the Import page, and the nav item counts it.
+                (when (= :staged (:flow r))
+                  (staging/mark-waiting! user-id (:upload-id r))))
+              (catch Throwable e
+                (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e))))
           {:flow :queued})))))
 
 (defn capture-page!*

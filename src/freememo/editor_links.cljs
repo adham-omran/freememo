@@ -12,9 +12,11 @@
    The split is not tidiness: `test/` is Clojure-only, so classification had to
    leave this file to be testable at all.
 
-   **The only channel out is the atoms in `chans`.** Navigation, import and
-   toasts all belong to Electric; a DOM listener that did them itself would be
-   unable to reach the server, the router or the toast queue.
+   **The only channel out is the atoms in `chans`.** Navigation and import
+   belong to Electric; a DOM listener that did them itself would be unable to
+   reach the server or the router. A click that can only be explained (a
+   missing heading, a relative link with no address) is explained on the card
+   itself, beside the link, so it needs no channel.
 
    Pre : the caller owns the atoms and Quill's lifecycle.
    Post: `install!` returns a teardown fn that removes every listener it added.
@@ -36,6 +38,10 @@
 (def ^:private label-style
   (str "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
     "max-width:220px;color:var(--color-text-secondary);"))
+
+(def ^:private note-style
+  (str "max-width:320px;white-space:normal;line-height:1.4;"
+    "color:var(--color-text-secondary);"))
 
 (defn- readable-target
   "What the card shows: host and path, without the scheme's noise.
@@ -66,7 +72,7 @@
    Pre : `root` is the element whose ids the fragment names — the `.ql-editor`,
          or the code pane's rendered Markdown; `id` is a fragment with no `#`.
    Post: true when a target existed and was scrolled to; false otherwise — the
-         caller toasts on false rather than leaving the click silent.
+         caller explains on false rather than leaving the click silent.
    Inv : scoped to `root`. A document-wide lookup would match the app's own
          elements, which imported content can name."
   [^js root id]
@@ -104,31 +110,48 @@
   "Wire every anchor in `editor` to one click listener.
 
    Pre : `editor` is a live Quill instance. `chans` = {:!import :!navigate
-         :!toast :!base-url :!import-status}, all client atoms the caller owns.
+         :!base-url :!import-status :!import-open}, all client atoms the caller
+         owns. `!import-open` holds the topic id an Already imported answer
+         names, or nil.
    Post: a teardown fn removing every listener and the card element.
    Inv : publishes to `chans` and does nothing else server-shaped."
   [editor chans]
-  (let [{:keys [!import !navigate !toast !base-url !import-status]} chans
+  (let [{:keys [!import !navigate !base-url !import-status !import-open]} chans
         ^js ed editor
         ^js root (.-root ed)
         ^js card (js/document.createElement "div")
         ^js label (js/document.createElement "span")
         ^js import-btn (js/document.createElement "button")
+        ^js open-btn (js/document.createElement "button")
         ^js view-btn (js/document.createElement "button")
         !target (atom nil)                 ; the resolved link the card is for
         visible? (fn [] (not= "none" (.. card -style -display)))
         hide! (fn [] (set! (.. card -style -display) "none"))
-        toast! (fn [level message]
-                 (reset! !toast {:level level :message message
-                                 :ts (js/Date.now)}))
+        show-buttons! (fn [shown?]
+                        (doseq [^js b [import-btn view-btn]]
+                          (set! (.. b -style -display) (if shown? "" "none")))
+                        (set! (.. open-btn -style -display) "none"))
+        ;; The reason a click did nothing, on the card, beside the link.
+        explain! (fn [^js a message]
+                   (reset! !target nil)
+                   (set! (.-textContent label) message)
+                   (.setAttribute label "style" note-style)
+                   (show-buttons! false)
+                   (set! (.. card -style -display) "flex")
+                   (place-card! card a))
 
         anchor-at (fn [^js node]
                     (when (and node (.-closest node)) (.closest node "a")))
 
         show-card! (fn [^js a target]
                      (reset! !target target)
+                     (reset! !import-status :idle)
+                     (reset! !import-open nil)
                      (set! (.-textContent label) (readable-target (:url target)))
+                     (.setAttribute label "style" label-style)
+                     (show-buttons! true)
                      (set! (.-textContent import-btn) "Import")
+                     (set! (.-disabled import-btn) false)
                      (.remove (.-classList import-btn) "importing")
                      (set! (.. card -style -display) "flex")
                      (place-card! card a))
@@ -149,15 +172,12 @@
                                  (reset! !navigate {:topic-id topic-id
                                                     :fragment fragment
                                                     :ts (js/Date.now)})))
-                   :fragment (do (hide!)
-                                 (when-not (scroll-to-anchor! root fragment)
-                                   (toast! :info
-                                     (str "No heading named \"" fragment
-                                       "\" in this document."))))
-                   :no-base (do (hide!)
-                                (toast! :info
-                                  (str "This link is relative and the document "
-                                    "has no source address to resolve it against.")))
+                   :fragment (if (scroll-to-anchor! root fragment)
+                               (hide!)
+                               (explain! a (str "No heading named \"" fragment
+                                             "\" in this document.")))
+                   :no-base (explain! a (str "This link is relative and the document "
+                                          "has no source address to resolve it against."))
                    ;; mailto:/tel: — the OS takes it. `contenteditable`
                    ;; suppresses the browser's own handling, so it needs saying.
                    :handler (do (hide!) (set! (.. js/window -location -href) url))
@@ -188,12 +208,15 @@
     (.setAttribute card "style" card-style)
     (.setAttribute label "style" label-style)
     (doseq [[^js b text cls] [[import-btn "Import" "btn btn-sm btn-primary"]
+                              [open-btn "Open" "btn btn-sm btn-primary"]
                               [view-btn "View" "btn btn-sm"]]]
       (set! (.-className b) cls)
       (set! (.-type b) "button")
       (set! (.-textContent b) text))
+    (set! (.. open-btn -style -display) "none")
     (.appendChild card label)
     (.appendChild card import-btn)
+    (.appendChild card open-btn)
     (.appendChild card view-btn)
     (.appendChild (.-body js/document) card)
 
@@ -214,7 +237,19 @@
             (.add (.-classList import-btn) "importing")
             (reset! !import {:url u :ts (js/Date.now)})))))
 
+    ;; Open the topic an Already imported answer names. The navigation itself
+    ;; belongs to Electric, so this only publishes the id.
+    (.addEventListener open-btn "click"
+      (fn [e]
+        (.preventDefault e)
+        (when-let [id @!import-open]
+          (reset! !navigate {:topic-id id :fragment nil :ts (js/Date.now)}))
+        (hide!)
+        (reset! !import-status :idle)))
+
     ;; Status → button text. The Electric side owns the transitions.
+    ;; Already imported and Error stay until the reader dismisses the card,
+    ;; because each carries something to read or to press.
     (add-watch !import-status ::link-card-button
       (fn [_ _ _ st]
         (case st
@@ -226,12 +261,16 @@
           :done (do (set! (.-textContent import-btn) "Imported")
                     (.remove (.-classList import-btn) "importing")
                     (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
-          :already-exists (do (set! (.-textContent import-btn) "Already imported")
+          :already-exists (do (set! (.-textContent label) "Already imported")
                               (.remove (.-classList import-btn) "importing")
-                              (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
-          :error (do (set! (.-textContent import-btn) "Error")
+                              (set! (.. import-btn -style -display) "none")
+                              (set! (.. open-btn -style -display)
+                                (if (some? @!import-open) "" "none")))
+          :error (do (set! (.-textContent label) "Could not start the import.")
+                     (.setAttribute label "style" note-style)
                      (.remove (.-classList import-btn) "importing")
-                     (js/setTimeout (fn [] (reset! !import-status :idle)) 2000))
+                     (set! (.-textContent import-btn) "Try again")
+                     (set! (.-disabled import-btn) false))
           nil)))
 
     (.addEventListener root "click" on-click)

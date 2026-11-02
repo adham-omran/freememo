@@ -1,7 +1,7 @@
 (ns freememo.staged-delete
   "Forward side of staged document deletion. Stages a topic subtree + binary for
-   deletion (hidden, reversible 12h), hard-deletes its cards (snapshotted), and
-   surfaces an Undo toast. Reverse logic lives in freememo.undo; the background
+   deletion (hidden, reversible 12h), hard-deletes its cards (snapshotted).
+   Reverse logic lives in freememo.undo; the background
    hard-delete lives in freememo.db/purge-staged-documents!.
 
    Two callers differ only in which reactive channel they may bump:
@@ -11,11 +11,10 @@
   (:require
    [freememo.db :as db]
    [freememo.commands :as commands]
-   [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
 (defn stage-deletion!
-  "Stage topic-id (and its subtree) for deletion. Pushes an Undo toast.
+  "Stage topic-id (and its subtree) for deletion.
    Returns {:note-ids [...] :parent-id _ :entry-id _} for the client's Anki
    cleanup + navigation, or nil when the topic isn't owned by user-id.
    When refresh? is true also bumps :refresh (library path)."
@@ -26,10 +25,6 @@
       ;; bump-channels! like freememo.undo; :delete-document declares :views #{}.
       (commands/bump-channels! user-id
         (cond-> #{:tree-mutations} refresh? (conj :refresh)))
-      (toasts/push! user-id {:level :success
-                             :message "Document deleted"
-                             :dedup? false
-                             :actions [{:label "Undo" :undo-id (:entry-id r)}]})
       (tel/log! :info (str "Staged document delete topic-id=" topic-id
                         " cards=" (:card-count r)))
       (select-keys r [:note-ids :parent-id :entry-id]))

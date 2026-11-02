@@ -38,8 +38,8 @@
    pre : `root-id` is a topic id, the root of the branch (the topic itself and
          every descendant via `topics.parent_id`).
    post: returns :queued. The run starts when the driver collects it. If a run
-         is already going, the driver answers with its \"Sync already in
-         progress\" toast and drops the request, as it does for the chord.
+         is already going, the driver drops the request, as it does for the chord.
+         The lease has already disabled every Sync control.
 
    Plain fn, safe to call from a DOM event handler or a command. It touches no
    Electric state and makes no server call."

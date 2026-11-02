@@ -55,7 +55,7 @@
 
 (def sign-in-path
   "15.5.1 — the path the desktop app's window stops, to open the browser
-   sign-in. The same value as `freememo.toasts/sign-in-path`."
+   sign-in. The failure banner's Sign in action opens the same path."
   "/desktop/sign-in")
 
 (defn sync-status* [_refresh]

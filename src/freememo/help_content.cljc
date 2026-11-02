@@ -852,11 +852,13 @@
    entries, and the cap only goes down (plans/searchable-help.md 6.4)."
   {:credits-granted           "Bookkeeping after a payment. No user action runs it."
    :debit-credits             "Bookkeeping after a charge. No user action runs it."
-   :show-error-toast          "Shows an error a menu row met in the browser. No user action runs it."
    :save-video-position       "Saved on pause and on leaving. No user action runs it."
    :save-reading-position     "Saved on a scroll pause and on leaving. No user action runs it."
    :mark-assistant-chat-opened "Saved when a chat opens. No user action runs it."
    :set-setting               "The write behind every Settings control. The Settings page is its UI."
+   :acknowledge-failure       "The Dismiss, Open and Retry buttons of a failure banner. The banner is its UI."
+   :retry-failure             "The Retry button of a failure banner. The banner is its UI."
+   :dismiss-storage-removal   "The Dismiss button of the video removal notice. The banner is its UI."
    :add-pin                   :pending
    :apply-code-language       :pending
    :bulk-delete-cards         :pending

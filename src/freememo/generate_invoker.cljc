@@ -16,7 +16,22 @@
    [freememo.gen-settings :as gs]
    [freememo.selected-passage :as selected-passage]
    [freememo.command-bus :as bus]
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.settings :as settings])))
+
+#?(:clj
+   (defn- record-refusal!
+     "Generate has no control that stays on screen through the result: the toolbar
+      button is gone, and the popover closes. A refused run (queue full) therefore
+      goes to the banner strip (plans/remove-toasts.md 2.5.1).
+      Post: returns `outcome` unchanged."
+     [user-id topic-id outcome]
+     (when-not (= :enqueued outcome)
+       (activity/record-failure! user-id
+         {:error (or (not-empty (str (:error outcome))) "Could not start card generation.")
+          :what "Generate cards"
+          :subject-id topic-id}))
+     outcome))
 
 (defn enqueue-generation!*
   "Build the generation's content and context, then enqueue one run.
@@ -34,7 +49,8 @@
                    :root-topic-id root-topic-id :page-number page-number
                    :context-window context-window
                    :is-code? is-code? :user-id user-id})]
-            (helpers/enqueue-card-gen!
+            (record-refusal! user-id topic-id
+             (helpers/enqueue-card-gen!
               {:id (or id (str (java.util.UUID/randomUUID)))
                :content content
                :context context
@@ -45,7 +61,7 @@
                :topic-id topic-id
                :root-topic-id root-topic-id
                :pre-prompt pre-prompt
-               :pre-prompt-mode pre-prompt-mode}))
+               :pre-prompt-mode pre-prompt-mode})))
      :cljs nil))
 
 (defn- take-selection-html!

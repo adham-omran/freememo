@@ -134,6 +134,52 @@
 ;; The registry
 ;; ---------------------------------------------------------------------------
 
+(defn record-error!
+  "Keep `error` as the outcome of the run of `type` on `owner-key`, for the
+   reporter to read once the owner drops the work from its in-flight set.
+
+   Pre : `error` is a string or a result map (see `activity/error-kind`). The
+         owner calls this BEFORE it drops the work from its atom, else the
+         reporter closes the row as a success.
+   Post: `work-error` returns `error` for this run until `clear-run!`."
+  [uid type owner-key error]
+  (let [text (if (map? error) (:error error) error)
+        ;; A blank error would close the row as a failure with no words.
+        error (if (and (not (instance? Throwable error)) (str/blank? (str text)))
+                (if (map? error) (assoc error :error "The run failed.") "The run failed.")
+                error)]
+    (swap! (us/get-atom uid :run-errors) assoc [type (str owner-key)] error))
+  nil)
+
+(defn record-summary!
+  "Keep `summary`, a count line, as what the run of `type` on `owner-key` did.
+   Counts only. A failed part of a run goes to `activity/record-failure!`.
+   Same ordering rule as `record-error!`."
+  [uid type owner-key summary]
+  (swap! (us/get-atom uid :run-summaries) assoc [type (str owner-key)] summary)
+  nil)
+
+(defn clear-run!
+  "Forget the error and the summary of the last run of `type` on `owner-key`.
+   Owners call it when they start a new run of the same work."
+  [uid type owner-key]
+  (swap! (us/get-atom uid :run-errors) dissoc [type (str owner-key)])
+  (swap! (us/get-atom uid :run-summaries) dissoc [type (str owner-key)])
+  nil)
+
+(defn- run-error-fn [type]
+  (fn [uid work-key] (get @(us/get-atom uid :run-errors) [type work-key])))
+
+(defn- run-summary-fn [type]
+  (fn [uid work-key] (get @(us/get-atom uid :run-summaries) [type work-key])))
+
+(defn- topic-retry
+  "A `:retry-fn` for a run keyed by one topic id: `command` with `{:topic-id id}`."
+  [command]
+  (fn [work-key]
+    (when-some [id (key->id work-key)]
+      {:command command :payload {:topic-id id}})))
+
 (def ^:private entries
   "One entry per activity type.
 
@@ -195,8 +241,14 @@
     :state-key :card-gen-status
     :canceller-key :card-gen-cancellers :cancelled-key :card-gen-cancelled
     ;; The owner retains errors after its pending count reaches zero.
+    ;; The whole result map when the owner kept one, so a credit refusal keeps
+    ;; its kind. The status text is the fallback.
     :error-fn (fn [uid work-key]
-                (:error (get @(us/get-atom uid :card-gen-status) (key->id work-key))))
+                (or (get @(us/get-atom uid :run-errors) [:card-gen work-key])
+                    (:error (get @(us/get-atom uid :card-gen-status) (key->id work-key)))))
+    ;; Counts only (plans/remove-toasts.md 2.4.2). The owner records it before
+    ;; the pending count reaches zero.
+    :summary-fn (run-summary-fn :card-gen)
     ;; `:card-gen-status` is keyed by TOPIC and aggregates that topic's runs into
     ;; one `:pending` count, so one activity per topic is the granularity the
     ;; owner already chose. `:pending` counts work OUTSTANDING, not work done,
@@ -248,7 +300,24 @@
    :transcribe
    {:label "Transcribing"
     :tier :server :subject :topic :work-key id->key
-    :state-key :transcribing-topics :phase "transcribing"}
+    :state-key :transcribing-topics :phase "transcribing"
+    :error-fn (run-error-fn :transcribe)
+    :retry-fn (topic-retry :transcribe)}
+
+   ;; A NeoReader sync of one document (freememo.neoreader, driven by
+   ;; `api/neoreader-sync-handler` on a request thread). SERVER tier: the member
+   ;; is the document's topic id, so one document has one row at a time. The
+   ;; owner writes the error or the summary BEFORE membership drops, which is
+   ;; what lets the reporter close the row as failed or as a success that says
+   ;; what it did (plans/remove-toasts.md 2.4.4).
+   :neoreader-sync
+   {:label "Syncing with NeoReader"
+    :tier :server :subject :topic :work-key id->key
+    :state-key :neoreader-syncs :phase "syncing"
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :neoreader-sync-errors) (key->id work-key)))
+    :summary-fn (fn [uid work-key]
+                  (get @(us/get-atom uid :neoreader-sync-results) (key->id work-key)))}
 
    :video-process
    {:label "Processing video"
@@ -276,19 +345,27 @@
    {:label "Distilling facts"
     :tier :server :subject :topic :work-key id->key
     :state-key :distilling-docs :phase "distilling"
-    :canceller-key :distill-cancellers}
+    :canceller-key :distill-cancellers
+    :error-fn (run-error-fn :distill-doc)
+    :summary-fn (run-summary-fn :distill-doc)
+    :retry-fn (topic-retry :distill-doc)}
 
    :distill-repo
    {:label "Distilling code"
     :tier :server :subject :topic :work-key id->key
     :state-key :distilling-repos :phase "distilling"
-    :canceller-key :repo-distill-cancellers}
+    :canceller-key :repo-distill-cancellers
+    :error-fn (run-error-fn :distill-repo)
+    :summary-fn (run-summary-fn :distill-repo)}
 
    :generate-questions
    {:label "Generating questions"
     :tier :server :subject :topic :work-key id->key
     :state-key :generating-questions :phase "generating"
-    :canceller-key :question-cancellers}
+    :canceller-key :question-cancellers
+    :error-fn (run-error-fn :generate-questions)
+    :summary-fn (run-summary-fn :generate-questions)
+    :retry-fn (topic-retry :generate-questions)}
 
    :exam-form-generation
    {:label "Generating exam form"
@@ -339,6 +416,16 @@
     :tier :pushed :subject :none :work-key identity
     :progress-unit :bytes}
 
+   ;; A failure with no run of its own: a queued command, a menu action, an
+   ;; undo (plans/remove-toasts.md A-1). `activity/record-failure!` writes one
+   ;; terminated row, so there is no state-key and nothing for the reporter to
+   ;; tick. `:subject :topic` because a failure names the topic it is about when
+   ;; it has one. The row's `phase` holds the action's name, since the label of
+   ;; a type that covers every action cannot.
+   :action-failure
+   {:label "Action failed"
+    :tier :pushed :subject :topic :work-key identity}
+
    ;; ── Browser-driven, server-held. SERVER tier. ───────────────────────────
    ;; An Anki sync runs in the one tab that holds the AnkiConnect connection,
    ;; but its state is the lease in `:anki-run` (freememo.anki-lease), which
@@ -364,7 +451,7 @@
     :entry->state (fn [entry] (lease/reading entry (System/currentTimeMillis)))
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :anki-run-errors) work-key))
-    ;; The closing toast's text, so the row says what the sync did.
+    ;; The closing text, so the row says what the sync did.
     :summary-fn (fn [uid work-key]
                   (get @(us/get-atom uid :anki-run-results) work-key))}
 
@@ -410,7 +497,7 @@
    ;;
    ;; `:subject :none` although the work produces a topic — the topic does not
    ;; exist while the fetch runs, and by the time it does the user has already
-   ;; been navigated or toasted. A subject that is null for the row's whole
+   ;; been navigated away. A subject that is null for the row's whole
    ;; life is worse than declaring none.
    ;;
    ;; A run keeps its terminal outcome until the reporter acknowledges it.
@@ -443,7 +530,8 @@
     :canceller-key :repo-import-cancellers :cancelled-key :repo-import-cancelled
     ;; Without this a failed download closes as a success (§4.3 3.8).
     :error-fn (fn [uid work-key]
-                (get @(us/get-atom uid :repo-import-errors) work-key))}
+                (get @(us/get-atom uid :repo-import-errors) work-key))
+    :summary-fn (run-summary-fn :repo-import)}
 
    ;; A commit-range walkthrough being grouped (plans/commit-range-walkthrough.md
    ;; §6.5.4). SERVER tier: a future no browser owns runs it. The member is the
@@ -527,10 +615,8 @@
   "The owner's recorded error for one piece of work, or nil.
 
    Only the types with an `:error-fn` publish an error where anything else can
-   read it. The rest report failure as a toast and nothing more, so a run of
-   theirs that failed terminates as 'success' in history — a known limitation,
-   not an oversight. Closing it for a type means giving that owner an
-   `:error-fn` here."
+   read it. A type without one closes every run as a success, so a
+   new type that can fail needs an `:error-fn` here."
   [type uid work-key]
   (when-some [{:keys [error-fn]} (activity-type type)]
     (when error-fn (error-fn uid work-key))))
@@ -544,6 +630,16 @@
   [type uid work-key]
   (when-some [{:keys [summary-fn]} (activity-type type)]
     (when summary-fn (summary-fn uid work-key))))
+
+(defn work-retry
+  "How to run one finished piece of work again, or nil: `{:command kw :payload map}`.
+
+   Only the types with a `:retry-fn` offer it, and only where a command can start
+   the same run from the work key alone. The reporter stores it on a failed row,
+   so the banner shows Retry (`activity/retry!`)."
+  [type work-key]
+  (when-some [{:keys [retry-fn]} (activity-type type)]
+    (when retry-fn (retry-fn work-key))))
 
 (defn server-tier-types
   "The type strings the reporter is responsible for ticking. Pushed-tier rows are

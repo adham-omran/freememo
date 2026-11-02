@@ -546,8 +546,8 @@
      ;; Declared exactly as :show-pins is, and for the same reason: it reveals a
      ;; side panel on one of its tabs, which changes no route and writes no row.
      ;; :when is the surface, NOT "this topic is a poem" — a registry entry
-     ;; cannot say that, so the handler answers a non-poem with a toast rather
-     ;; than by going quiet.
+     ;; cannot say that, so command-bus's preparer narrows it to a topic whose
+     ;; poem reader is mounted, and the command is not offered anywhere else.
      :show-poem-panel {:label "Show poem panel" :class :query :exec :client
                        :when #{:viewer} :views #{}}
      :toggle-card-table-view {:label "Toggle Card Table View" :class :query :exec :client
@@ -751,10 +751,6 @@
                          :target :pdf-page :menu [1 1]
                          ;; start-ocr-scan! bumps :scan when the page text lands
                          :table #{:topics} :views #{}}
-     ;; A client-side failure in a target handler (a clipboard write, an
-     ;; upload) queues this, because the toast stack is server state.
-     :show-error-toast {:label "Show an error" :class :mutation :palette-hidden true
-                        :data {:message :payload} :views #{}}
      :generate-cards-for-page {:label "Generate cards for this PDF page"
                                :menu-label "Generate cards" :class :mutation
                                :target :pdf-page :menu [1 2]
@@ -873,6 +869,18 @@
      ;; covers the Drive file-id binding row this flow writes.
      :neoreader-sync  {:label "Sync with NeoReader" :class :mutation :palette-hidden true
                        :table #{:topics :settings} :views #{:refresh :settings-refresh}}
+     ;; The failure banners (plans/remove-toasts.md 1.2.2). Each writes only
+     ;; `activities` rows and bumps the one channel the strip watches. Retry runs
+     ;; the row's stored command, and that command bumps its own views.
+     :acknowledge-failure {:label "Dismiss a failure notice" :class :mutation :palette-hidden true
+                           :table #{:activities} :views #{:activity-mutations}}
+     :retry-failure   {:label "Retry a failed action" :class :mutation :palette-hidden true
+                       :table #{:activities} :views #{:activity-mutations}}
+     ;; The removal notice (1.3.2). The banner strip watches :credits-refresh
+     ;; for every account-state banner, so that is the channel it bumps.
+     :dismiss-storage-removal {:label "Dismiss the video removal notice" :class :mutation
+                               :palette-hidden true
+                               :table #{:users} :views #{:credits-refresh}}
      :credits-granted {:label "Credits granted" :class :mutation :palette-hidden true
                        :table #{:credit_orders :credit_transactions} :views #{:credits-refresh}}
      ;; A completed AI action's charge. credits/debit-with-retry! bumps it once,

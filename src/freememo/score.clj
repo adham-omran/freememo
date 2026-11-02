@@ -11,7 +11,6 @@
   (:require
    [freememo.db :as db]
    [freememo.optimistic :as opt]
-   [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
 (def directions #{"audio-front" "sheet-front"})
@@ -152,26 +151,14 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Optimistic-queue commands. Contract (see freememo.optimistic ns docstring):
-;; methods own the effect + toast; optimistic/execute! bumps the registry
-;; :views and removes the command from the queue.
+;; methods own the effect and return the outcome; run-command-effect! bumps the
+;; registry :views. The update commands are not queued: their modals wait for
+;; the result (score_toolbar.cljc, occlusion_modal.cljc).
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-score-group [user-id {:keys [payload]}]
   (let [result (create-group! user-id payload)]
     (if (:success result)
-      (do (toasts/push! user-id {:level :success
-                                 :message (let [n (count (:ids result))]
-                                            (str n " score card" (when (not= 1 n) "s") " added"))})
-          {:ok? true :real-ids (:ids result)})
-      (do (toasts/push! user-id {:level :error
-                                 :message (or (:error result) "Failed to add score cards")})
-          {:ok? false :error (:error result)}))))
-
-(defmethod opt/run-command! :update-score-group [user-id {:keys [payload]}]
-  (let [result (update-group! user-id payload)]
-    (if (:success result)
-      (do (toasts/push! user-id {:level :success :message "Score card updated"})
-          {:ok? true})
-      (do (toasts/push! user-id {:level :error
-                                 :message (or (:error result) "Failed to update score card")})
-          {:ok? false :error (:error result)}))))
+      {:ok? true :real-ids (:ids result)}
+      {:ok? false :error (or (not-empty (str (:error result)))
+                             "Could not add score cards.")})))

@@ -29,7 +29,7 @@
             [freememo.landing-page :refer [LandingPage]]
             [freememo.legal-copy :as legal]
             [freememo.legal-page :refer [LegalPage]]
-            [freememo.toast-stack :refer [ToastStack]]
+            [freememo.failure-banners :refer [FailureBanners]]
             [freememo.optimistic :refer [CommandDispatcher]]
             [freememo.client-errors :refer [ClientErrorForwarder]]
             [freememo.interaction-trail :as trail :refer [InteractionForwarder]]
@@ -394,6 +394,12 @@
                 (dom/div
                   (dom/props {:class "app-column"})
 
+                  ;; The banner strip: account state first, then failures the
+                  ;; user has not acknowledged. In the column's flow rather than
+                  ;; a fixed overlay, so it never covers the page it is about
+                  ;; (plans/remove-toasts.md 1.2).
+                  (FailureBanners user-id navigate!)
+
                   ;; Storage warning banner — appears when usage exceeds 80%.
                   (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
                         usage-pct (e/server (get-usage-pct* refresh user-id))
@@ -461,9 +467,6 @@
                 ;; depends on the rail staying open (plans/nav-stage-rail.md N3).
                 (ActivityPanel user-id !activity-open? navigate!)
 
-                ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
-                (ToastStack user-id navigate!)
-
                 ;; Optimistic-update command pump (headless; renders nothing)
                 (CommandDispatcher user-id)
 
@@ -502,8 +505,7 @@
                 (PageHelpModal !page-help-slug navigate!)
 
                 ;; The getting-started spotlight. Last, so it paints over the
-                ;; page, and z-index keeps it under the toasts
-                ;; (plans/getting-started-checklist.md 3.3).
+                ;; page (plans/getting-started-checklist.md 3.3).
                 (Spotlight (spotlight/route-key active-tab (nav-rail/viewer-topic-id r/route))))))
 
           :else

@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [freememo.assistant-chat-tree :as tree]
    [freememo.icons :as icons]
+   [freememo.inline-error :as inline-error]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.assistant :as assistant])))
 
@@ -32,22 +33,28 @@
         (dom/div
           (dom/props {:class "assistant-msg-actions"})
           (when-not (str/blank? content)
-            (dom/button
-              (dom/props {:class "assistant-msg-card" :type "button"
-                          :disabled sending?})
-              (tooltip/Tooltip! "Generate a flashcard from this reply" :aria? true)
-              (let [click (dom/On "click" identity nil)
-                    [generate-token _] (e/Token click)
-                    generating? (some? generate-token)]
-                (dom/props {:disabled (or sending? generating?)
-                            :aria-busy (str generating?)})
-                (dom/text (if generating? "✦…" "✦"))
-                (when generate-token
-                  (case (e/server
-                          (e/Offload
-                            #(assistant/reply->cards!
-                               user-id page-topic-id root-topic-id content)))
-                    (generate-token))))))
+            (let [!card-error (atom nil)]
+              (dom/button
+                (dom/props {:class "assistant-msg-card" :type "button"
+                            :disabled sending?})
+                (tooltip/Tooltip! "Generate a flashcard from this reply" :aria? true)
+                (let [click (dom/On "click" identity nil)
+                      [generate-token _] (e/Token click)
+                      generating? (some? generate-token)]
+                  (dom/props {:disabled (or sending? generating?)
+                              :aria-busy (str generating?)})
+                  (dom/text (if generating? "✦…" "✦"))
+                  (when generate-token
+                    (let [result (e/server
+                                   (e/Offload
+                                     #(assistant/reply->cards!
+                                        user-id page-topic-id root-topic-id content)))]
+                      (case result
+                        (case (reset! !card-error
+                                (when-not (:success result)
+                                  (or (:error result) "Card capture failed.")))
+                          (generate-token)))))))
+              (inline-error/InlineError (e/watch !card-error))))
           (dom/button
             (dom/props {:class "assistant-msg-card assistant-msg-details"
                         :type "button"})

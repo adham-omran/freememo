@@ -8,7 +8,6 @@
    [freememo.tooltip :as tooltip]
    [clojure.string :as str]
    [freememo.logging :as log]
-   #?(:clj [freememo.toasts :as toasts])
    [freememo.anki-review :as review]
    [freememo.anki-note-deletion-client :as note-deletion]
    [freememo.occlusion-ordinals :as ord]
@@ -98,9 +97,10 @@
 #?(:clj
    (defmethod opt/run-command! :delete-card [user-id {:keys [payload]}]
      (let [result (cards/delete-card-row! user-id (:member-ids payload))]
-       (when-not (:success result)
-         (toasts/push! user-id {:level :error :message (or (:error result) "Could not delete card.")}))
-       (assoc result :ok? (:success result)))))
+       (if (:success result)
+         (assoc result :ok? true)
+         (assoc result :ok? false
+           :error (or (not-empty (str (:error result))) "Could not delete the card."))))))
 
 (e/defn DeleteCardButton [member-ids user-id]
   (e/client
