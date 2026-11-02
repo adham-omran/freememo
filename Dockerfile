@@ -59,7 +59,20 @@ COPY resources resources
 # a jar whose every asset 404s — silently. This fails the build instead.
 RUN clojure -X:build vendor/verify! && clojure -X:build vendor/check-refs!
 
-RUN clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
+# The shadow-cljs cache survives between builds in a BuildKit cache mount.
+# Without it every deploy compiled all ~470 namespaces cold. A warm cache took
+# the CLJS phase from about 100 s to about 7 s locally (plans/deploy-speed.md).
+# The mount is not part of any image layer.
+#
+# shadow-cljs keys each namespace on the sha1 of its own source and of every
+# source and jar it depends on, so a changed file or a new Electric SNAPSHOT jar
+# recompiles what depends on it. One gap: a macro in a .clj file is not in that
+# graph. If such a macro is ever used inside an e/defn, a change to it can leave
+# a stale client whose frames do not match the server. No .cljc uses one today.
+# To empty the cache, run on the build host:
+#   docker builder prune --filter type=exec.cachemount
+RUN --mount=type=cache,id=freememo-shadow-cljs,target=/app/.shadow-cljs,sharing=locked \
+    clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
 
 FROM eclipse-temurin:17-jre AS app
 WORKDIR /app
