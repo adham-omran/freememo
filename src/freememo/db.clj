@@ -3466,57 +3466,74 @@
 
   (sync-schema/install! ds))
 
+(defn- run-schema-step!
+  "Run one step of `setup-schema` and log its duration as ::schema-step.
+   Every boot pays for every step, and the steps logged nothing, so a slow
+   one could not be found (plans/deploy-speed.md §4.3).
+   Post: returns what the step returns."
+  ([step-var] (run-schema-step! (str (:name (meta step-var))) step-var))
+  ([step run]
+   (let [started (System/nanoTime)
+         result (run)]
+     (tel/log! {:level :info :id ::schema-step
+                :data {:step step :ms (quot (- (System/nanoTime) started) 1000000)}}
+       (str "Schema step " step))
+     result)))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
-  (setup-schema-core!)
-  (setup-schema-topics!)
-  (setup-schema-poem!)
-  (setup-schema-card-versions!)
-  (setup-schema-activity!)
-  (setup-schema-assistant!)
-  (setup-schema-annotations!)
-  (setup-schema-sources!)
-  (setup-schema-credits!)
-  (setup-schema-undo!)
-  (setup-schema-kg!)
-  (setup-schema-card-quiz!)
-  (setup-schema-video!)
-  (setup-schema-code!)
-  (setup-schema-neoreader!)
-  (setup-schema-account-transfer!)
-  (setup-schema-study-scheduler!)
-  (setup-schema-curriculum!)
-  (setup-schema-activity-monitor!)
-  (setup-schema-document-summaries!)
-  (setup-schema-reading-positions!)
-  (setup-schema-question-pins!)
-  (setup-schema-walkthroughs!)
-  (setup-schema-known-ideas!)
-  (setup-schema-pin-numbering!)
-  (setup-schema-document-question-maps!)
+  (run-schema-step! #'setup-schema-core!)
+  (run-schema-step! #'setup-schema-topics!)
+  (run-schema-step! #'setup-schema-poem!)
+  (run-schema-step! #'setup-schema-card-versions!)
+  (run-schema-step! #'setup-schema-activity!)
+  (run-schema-step! #'setup-schema-assistant!)
+  (run-schema-step! #'setup-schema-annotations!)
+  (run-schema-step! #'setup-schema-sources!)
+  (run-schema-step! #'setup-schema-credits!)
+  (run-schema-step! #'setup-schema-undo!)
+  (run-schema-step! #'setup-schema-kg!)
+  (run-schema-step! #'setup-schema-card-quiz!)
+  (run-schema-step! #'setup-schema-video!)
+  (run-schema-step! #'setup-schema-code!)
+  (run-schema-step! #'setup-schema-neoreader!)
+  (run-schema-step! #'setup-schema-account-transfer!)
+  (run-schema-step! #'setup-schema-study-scheduler!)
+  (run-schema-step! #'setup-schema-curriculum!)
+  (run-schema-step! #'setup-schema-activity-monitor!)
+  (run-schema-step! #'setup-schema-document-summaries!)
+  (run-schema-step! #'setup-schema-reading-positions!)
+  (run-schema-step! #'setup-schema-question-pins!)
+  (run-schema-step! #'setup-schema-walkthroughs!)
+  (run-schema-step! #'setup-schema-known-ideas!)
+  (run-schema-step! #'setup-schema-pin-numbering!)
+  (run-schema-step! #'setup-schema-document-question-maps!)
   ;; Last: it re-points tables that the steps above create.
-  (setup-schema-flashcard-uniqueness!)
+  (run-schema-step! #'setup-schema-flashcard-uniqueness!)
   ;; After every table exists: it converts ids and triggers all of them.
-  (setup-schema-sync!)
+  (run-schema-step! #'setup-schema-sync!)
   ;; After setup-schema-sync!, which adds credit_orders.kind; the index reads it.
-  (setup-schema-receipts!)
+  (run-schema-step! #'setup-schema-receipts!)
 
-  ((requiring-resolve 'freememo.comprehension/ensure-schema!))
+  ;; The resolve is inside the thunk, so a namespace load it causes is timed too.
+  (run-schema-step! "comprehension/ensure-schema!"
+    #((requiring-resolve 'freememo.comprehension/ensure-schema!)))
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
-  (run-grandfather-migration!)
+  (run-schema-step! #'run-grandfather-migration!)
 
   ;; AI levels: every existing user moves to Best, once per database.
-  (run-once! "2026-09-23-ai-levels-best" move-everyone-to-best-level!)
+  (run-schema-step! "run-once 2026-09-23-ai-levels-best"
+    #(run-once! "2026-09-23-ai-levels-best" move-everyone-to-best-level!))
 
   ;; Card-history precondition: inline base64 images out of card fields, so no
   ;; version row can ever duplicate an image payload. Idempotent; must run
   ;; before any save can version (plans/card-edit-history.md §3).
-  (normalize-inline-card-images!)
+  (run-schema-step! #'normalize-inline-card-images!)
 
   ;; Hourly purge of staged documents whose undo window has elapsed.
-  (start-purge-scheduler!)
+  (run-schema-step! #'start-purge-scheduler!)
 
   (tel/log! :info "Database ready"))
 

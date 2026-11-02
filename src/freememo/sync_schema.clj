@@ -155,6 +155,22 @@
 (defn- rows [conn sql-params]
   (jdbc/execute! conn sql-params {:builder-fn rs/as-unqualified-lower-maps}))
 
+;; ── Step timing ────────────────────────────────────────────────────
+
+(defn- elapsed-ms [started-nanos]
+  (quot (- (System/nanoTime) started-nanos) 1000000))
+
+(defn- run-sync-step!
+  "Run one step of `install!` and log its duration as ::sync-step. Every boot
+   runs `install!`, and boots grew 10 to 12 s slower when it arrived
+   (plans/deploy-speed.md §4.3). Post: returns what the step returns."
+  [step run]
+  (let [started (System/nanoTime)
+        result (run)]
+    (tel/log! {:level :info :id ::sync-step :data {:step step :ms (elapsed-ms started)}}
+      (str "Sync step " step))
+    result))
+
 (defn primary-key
   "The row identity of `table` as column names, in index order."
   [conn table]
@@ -221,7 +237,7 @@
   "1.1 — one ALTER TABLE per table, so each table is rewritten once.
    Post: no int4 key column and no int4[] id column remains."
   [conn]
-  (let [{:keys [scalars arrays]} (int4-key-columns conn)
+  (let [{:keys [scalars arrays]} (run-sync-step! "int4-key-columns" #(int4-key-columns conn))
         clauses (concat (for [[t c] scalars] [t (format "ALTER COLUMN %s TYPE bigint" c)])
                   (for [[t c] arrays]
                     [t (format "ALTER COLUMN %s TYPE bigint[] USING %s::bigint[]" c c)]))]
@@ -432,19 +448,39 @@
           :when (and default (str/starts-with? default "nextval("))]
     (jdbc/execute! conn [(format "ALTER TABLE %s ALTER COLUMN id SET DEFAULT freememo_next_id()" t)])))
 
+(defn- install-tables!
+  "1.3 and 1.5 on every synced table, logged as one ::sync-step that names the
+   slowest table. Pre: `fmt/synced-tables` is not empty."
+  [conn]
+  (let [started (System/nanoTime)
+        table-ms (mapv (fn [table]
+                         (let [table-started (System/nanoTime)]
+                           (install-table! conn table)
+                           [table (elapsed-ms table-started)]))
+                   fmt/synced-tables)
+        [slowest slowest-ms] (apply max-key second table-ms)]
+    (tel/log! {:level :info :id ::sync-step
+               :data {:step "install-tables" :ms (elapsed-ms started)
+                      :tables (count table-ms)
+                      :slowest-table (name slowest) :slowest-ms slowest-ms}}
+      "Sync step install-tables")))
+
 (defn install!
   "Everything in §1 that the schema owns. Idempotent: every step either checks
    the catalog first or uses CREATE OR REPLACE / IF NOT EXISTS.
    Pre:  every table in `fmt/synced-tables` exists.
    Post: the triggers stamp every synced write and grave every synced delete."
   [conn]
-  (convert-ids-to-bigint! conn)
-  (cap-sequences! conn)
-  (doseq [sql (peer-functions-sql)] (jdbc/execute! conn [sql]))
-  (jdbc/execute! conn [(owner-function-sql conn)])
-  (doseq [sql trigger-functions-sql] (jdbc/execute! conn [sql]))
-  (doseq [table fmt/synced-tables] (install-table! conn table))
-  (when (peer/desktop?) (point-ids-at-blocks! conn))
+  (run-sync-step! "convert-ids-to-bigint!" #(convert-ids-to-bigint! conn))
+  (run-sync-step! "cap-sequences!" #(cap-sequences! conn))
+  (run-sync-step! "peer-functions"
+    #(doseq [sql (peer-functions-sql)] (jdbc/execute! conn [sql])))
+  (run-sync-step! "owner-function" #(jdbc/execute! conn [(owner-function-sql conn)]))
+  (run-sync-step! "trigger-functions"
+    #(doseq [sql trigger-functions-sql] (jdbc/execute! conn [sql])))
+  (install-tables! conn)
+  (when (peer/desktop?)
+    (run-sync-step! "point-ids-at-blocks!" #(point-ids-at-blocks! conn)))
   (tel/log! {:level :info :id ::installed
              :data {:peer peer/role :tables (count fmt/synced-tables)}}
     "Row sync schema installed"))
