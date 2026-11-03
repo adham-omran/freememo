@@ -125,10 +125,10 @@
         ;; The extraction step's model: grouping reads commits as extraction
         ;; reads documents, and a step of its own would be a Settings row
         ;; for one feature.
-        {:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :extract)]
+        {:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :extract)]
     (grouping/group!
-      {:chat (fn [system user root-key root-type]
-               (llm/chat! api-key model-fields system user root-key root-type
+      {:chat (fn [system user reply]
+               (llm/chat! resolved system user reply
                  {:feature :walkthrough :user-id user-id}))
        :commits commits :hunks hunks :noise noise
        :check-cancelled! #(check-cancelled! user-id wid)

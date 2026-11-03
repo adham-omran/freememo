@@ -10,6 +10,8 @@
             [freememo.db :as db]
             [freememo.kg-llm :as llm]
             [freememo.llm-json :as llm-json]
+            [freememo.reply-schema :as reply-schema
+             :refer [strict-object array-of json-string json-boolean]]
             [freememo.ocr :as ocr]
             [freememo.ocr-models :as ocr-models]
             [freememo.openrouter :as openrouter]
@@ -130,6 +132,15 @@
                           cycle-id filename content-type bytes page-count] opts)]
                {:ok true :scan-id (:id row)})))))))
 
+(def transcript-reply
+  "The reply contract of comprehension-answer-ocr.md. validate-suggestions!
+   still rejects a question id that is not on the form."
+  (reply-schema/contract "answer_transcript" :transcript
+    (strict-object {:answers (array-of (strict-object {:question_id json-string
+                                                       :text json-string
+                                                       :uncertain json-boolean}))
+                    :uncertainties (array-of json-string)})))
+
 (defn validate-suggestions!
   "Reject invented question ids. Page numbers always come from the scanned page."
   [question-ids page-number transcript]
@@ -163,7 +174,10 @@
     (when-not (:ok gate) (throw (ex-info (:error gate) {})))
     (when-not capabilities
       (throw (ex-info "The selected OCR model has no structured answer-transcription capability." {})))
-    {:api-key api-key :entry entry
+    ;; :entry is the card-models entry of the model the request names: chat!
+    ;; reads its :supported-parameters, and resolve-model names it as the model
+    ;; to bill.
+    {:api-key api-key :entry capabilities
      :model-fields (openrouter/structured-chat-completion-fields capabilities {})}))
 
 (defn transcribe-scan!
@@ -192,7 +206,7 @@
            (when on-claimed (on-claimed))
            (try
              (let [{:keys [bytes content_type]} (scan-original user-id scan-id)
-                   {:keys [api-key entry model-fields]} (answer-ocr-model! user-id)
+                   {:keys [entry] :as resolved} (answer-ocr-model! user-id)
                    questions (mapv (fn [index q]
                                      {:number (inc index) :id (:id q) :prompt (:prompt q)})
                                (range) (get-in cycle [:form :questions]))
@@ -201,13 +215,13 @@
                                  (llm/interrupt-checkpoint!)
                                  (let [page-number (inc page-index)
                                        {:keys [parsed cost tokens]}
-                                       (llm/chat! api-key model-fields
+                                       (llm/chat! resolved
                                          (cards/load-prompt-template "comprehension-answer-ocr.md")
                                          [{:type "text" :text (llm-json/write-prompt-input
                                                                 {:questions questions :page_number page-number})}
                                           {:type "image_url"
                                            :image_url {:url (page-image bytes content_type page-index)}}]
-                                         :transcript :map {:feature :comprehension-ocr :user-id user-id})]
+                                         transcript-reply {:feature :comprehension-ocr :user-id user-id})]
                                    (credits/record-cost-charge! user-id :comprehension.answer-ocr (:id entry) cost tokens)
                                    {:answers (validate-suggestions! ids page-number parsed)
                                     :uncertainties (mapv (fn [text] {:page_number page-number :reason (str text)})

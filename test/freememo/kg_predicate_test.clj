@@ -50,7 +50,7 @@
      :extract-model-id "predicate-test"
      :triples triples}))
 
-(defn- deterministic-link! [_api-key _model-fields user-id labels]
+(defn- deterministic-link! [_resolved user-id labels]
   {:by-label (into {}
                (map (fn [[label id]] [(str/lower-case (str/trim label)) id]))
                (db/get-or-create-kg-entities! user-id labels))

@@ -9,11 +9,14 @@
    never reaches the model and goes to \"Noise\".
 
    The prompts, the checks and the final assembly are pure. `group!` runs the
-   two passes through a `chat` fn with `kg-llm/chat!`'s contract: it returns
-   the VALUE under the root key, a vector for `:concepts` and `:summaries` and
-   a map for `:assignments`. Tests stub the HTTP call under `kg-llm/chat!`,
-   never `chat!` itself, so the parser that enforces that contract runs."
+   two passes through a `chat` fn with `kg-llm/chat!`'s contract: it takes a
+   reply contract from `replies` and returns the VALUE under its root key, a
+   vector for each. `chat-object` reads the `:assignments` list back as a map.
+   Tests stub the HTTP call under `kg-llm/chat!`, never `chat!` itself, so the
+   parser that enforces that contract runs."
   (:require [clojure.string :as str]
+            [freememo.reply-schema :as reply-schema
+             :refer [strict-object array-of json-string]]
             [freememo.unified-diff :as diff]
             [freememo.walkthrough-range :as wr]))
 
@@ -78,7 +81,7 @@
        "- summary: two or three sentences on what changed and why.\n"
        "- commits: the commits that carry this concept. Every commit must appear "
        "in at least one concept.\n"
-       "- depends_on: concepts a reader must learn first.\n"
+       "- depends_on: concepts a reader must learn first, or an empty list.\n"
        "List the concepts in teaching order: a concept after the concepts it "
        "depends on. Name at most " max-concepts " concepts."))
 
@@ -157,7 +160,8 @@
 (def pass-2-system
   (str "You place each hunk of a diff in the concept it belongs to. A test, a "
        "helper or a doc edit belongs to the concept it serves, not to the nearest "
-       "code. Return JSON: {\"assignments\": {\"<hunk id>\": \"<concept label>\"}}. "
+       "code. Return JSON: {\"assignments\": [{\"hunk_id\": \"<hunk id>\", "
+       "\"label\": \"<concept label>\"}]}, one object per hunk id. "
        "Give every hunk id exactly one label from the list, or \"other\" when none "
        "fits."))
 
@@ -229,15 +233,34 @@
 
 ;; ── Running the passes ─────────────────────────────────────────────
 
-(def ^:private root-types
-  "The JSON type under each root key, as `kg-llm/chat!` checks it."
-  {:concepts :vector :summaries :vector :assignments :map})
+(def replies
+  "The reply contract of each pass, by root key. Pass 2 names hunk ids, which
+   the model cannot know in advance, so it answers with a list of
+   {hunk_id, label} entries and not a map keyed by id."
+  {:concepts (reply-schema/contract "walkthrough_concepts" :concepts
+               (array-of (strict-object {:label json-string :summary json-string
+                                         :commits (array-of json-string)
+                                         :depends_on (array-of json-string)})))
+   :summaries (reply-schema/contract "walkthrough_summaries" :summaries
+                (array-of (strict-object {:commit json-string :summary json-string})))
+   :assignments (reply-schema/contract "walkthrough_assignments" :assignments
+                  (array-of (strict-object {:hunk_id json-string :label json-string})))})
+
+(defn assignment-entries->map
+  "Read pass-2 [{:hunk_id :label}] as {hunk-id label}, the shape
+   read-assignments reads. A repeated hunk id keeps its last label. A map
+   passes through."
+  [assignments]
+  (if (vector? assignments)
+    (into {} (keep (fn [{:keys [hunk_id label]}] (when (string? hunk_id) [hunk_id label]))) assignments)
+    assignments))
 
 (defn- chat-object
   "Call `chat` for `root-key`. Post: its result, with `:parsed` the reply
    object {root-key value}, the shape every check here reads."
   [chat system user root-key]
-  (update (chat system user root-key (root-types root-key)) :parsed (fn [v] {root-key v})))
+  (update (chat system user (replies root-key)) :parsed
+    (fn [v] {root-key (if (= :assignments root-key) (assignment-entries->map v) v)})))
 
 (defn- chat-checked
   "Call `chat` and check its reply with `problem`; on a problem, call once
@@ -257,8 +280,9 @@
 (defn group!
   "Run both passes over a range.
 
-   `chat` is (fn [system user root-key root-type] → {:parsed :cost :tokens}),
-   `kg-llm/chat!` with its key and model bound; `:parsed` is the root value. `check-cancelled!` throws when
+   `chat` is (fn [system user reply] → {:parsed :cost :tokens}), `kg-llm/chat!`
+   with its model bound; `reply` is a contract from `replies`, and `:parsed` is
+   the root value. `check-cancelled!` throws when
    the reader abandoned the preparation; it runs before every call, so a
    cancel stops the spending at the next call. `on-pass` receives (pass cost
    tokens) once per finished pass, which is where the caller bills (§6.5.6).

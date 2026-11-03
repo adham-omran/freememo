@@ -44,6 +44,8 @@
    [freememo.activity-registry :as registry]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema
+    :refer [strict-object nullable array-of json-string json-integer]]
    [freememo.kg-dedup :as kg-dedup]
    [freememo.kg-page-digest :as digest]
    [freememo.kg-predicate :as predicate]
@@ -74,6 +76,33 @@
 ;; ---------------------------------------------------------------------------
 ;; LLM calls
 ;; ---------------------------------------------------------------------------
+
+(def triples-reply
+  "The reply contract of kg-extract.md. valid-triple? still decides which
+   triples are kept: the schema cannot say that exactly one of o and lit is set."
+  (reply-schema/contract "kg_triples" :triples
+    (array-of (strict-object {:s json-string :p json-string
+                              :o (nullable json-string) :lit (nullable json-string)}))))
+
+(def link-reply
+  "The reply contract of kg-link.md. The labels are the model's to name, so the
+   reply is a list of decisions, not a map keyed by label."
+  (reply-schema/contract "kg_link_decisions" :decisions
+    (array-of (strict-object {:label json-string :entity_id (nullable json-integer)}))))
+
+(defn- link-decisions->map
+  "Read [{:label :entity_id}] as {label decision}, where decision is the entity
+   id, or \"new\" when entity_id is absent. A repeated label keeps its last
+   decision. Decisions already in a map pass through, with keyword keys made
+   strings."
+  [decisions]
+  (if (vector? decisions)
+    (into {} (keep (fn [{:keys [label entity_id]}]
+                     (when (string? label) [label (if (some? entity_id) entity_id "new")])))
+      decisions)
+    (into {} (map (fn [[label decision]]
+                    [(if (keyword? label) (subs (str label) 1) (str label)) decision]))
+      decisions)))
 
 (defn- extraction-prompt
   "kg-extract.md + the user's approved vocabulary (empty on a fresh graph —
@@ -108,10 +137,10 @@
   "Pass 1 for one page. Post: {:triples [...] :cost usd :tokens [m …]};
    triples are shape-valid and tagged :page. Unusable model output is retried
    inside llm/chat!, whose :cost and :tokens cover both attempts."
-  [api-key model-fields prompt page-number page-text]
-  (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt
+  [resolved prompt page-number page-text]
+  (let [{:keys [parsed cost tokens]} (llm/chat! resolved prompt
                                        (llm-json/write-prompt-input {:page-text page-text})
-                                       :triples :vector
+                                       triples-reply
                                        {:feature :kg-extract})
         triples (if (sequential? parsed) parsed [])
         valid (filterv valid-triple? triples)]
@@ -182,10 +211,10 @@
          not the write succeeded — a lost write
          does not un-bill the call. Exactly one extraction row is written either
          way, so the page is never left unaccounted."
-  [api-key model-fields prompt ctx page-state]
+  [resolved prompt ctx page-state]
   (let [outcome (try
                   {:kind :extracted
-                   :result (extract-page-triples! api-key model-fields prompt
+                   :result (extract-page-triples! resolved prompt
                              (:page_number page-state) (:content_text page-state))}
                   (catch InterruptedException e (throw e))
                   (catch Exception e {:kind :failed :error e}))]
@@ -232,14 +261,14 @@
    Pre : every member of `page-states` needs extraction. Deciding that is
          `classify-page`'s job, not this function's.
    Post: a seq of extract-and-stage-page! results, order matching `page-states`."
-  [api-key model-fields prompt ctx page-states]
+  [resolved prompt ctx page-states]
   (llm/interrupt-checkpoint!)
   (let [limiter (Semaphore. extract-page-concurrency)
         futs (mapv (fn [state]
                      (future
                        (.acquire limiter)
                        (try
-                         (extract-and-stage-page! api-key model-fields prompt ctx state)
+                         (extract-and-stage-page! resolved prompt ctx state)
                          (finally (.release limiter)))))
                page-states)]
     (mapv (fn [f] (llm/interrupt-checkpoint!) (deref f)) futs)))
@@ -262,9 +291,9 @@
    Public because a question-map diagnosis links its root labels through this
    same shortlist and pick (plans/anchored-questions.md §6.4.2.1). `opts`
    `{:from-diagnosis? true}` marks the rows it creates."
-  ([api-key model-fields user-id labels]
-   (link-entities! api-key model-fields user-id labels {}))
-  ([api-key model-fields user-id labels opts]
+  ([resolved user-id labels]
+   (link-entities! resolved user-id labels {}))
+  ([resolved user-id labels opts]
    (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
          by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
          ;; One batched trigram query for every label instead of a round trip
@@ -279,19 +308,13 @@
          (if (empty? candidates)
            {:decisions {} :cost 0.0 :tokens []}
            (try
-             (let [{:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+             (let [{:keys [parsed cost tokens]} (llm/chat! resolved
                                                   (cards/load-prompt-template "kg-link.md")
                                                   (llm-json/write-prompt-input
                                                     {:candidates candidates})
-                                                  :decisions :map
+                                                  link-reply
                                                   {:feature :kg-link})]
-               {:decisions (into {}
-                             (map (fn [[label decision]]
-                                    [(if (keyword? label)
-                                       (subs (str label) 1)
-                                       (str label))
-                                     decision]))
-                             parsed)
+               {:decisions (link-decisions->map parsed)
                 :cost cost
                 :tokens tokens})
              (catch Exception e
@@ -397,11 +420,11 @@
   [user-id root-topic-id]
   (try
     ;; Extraction and entity-linking are independently configurable steps
-    ;; (:extract / :link). model-fields drives extraction; link-model-fields drives
+    ;; (:extract / :link). resolved drives extraction; link-resolved drives
     ;; linking. entry (the extraction model) is what facts record as
     ;; :source_model and what the summed distill cost bills under.
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :extract)
-          link-model-fields (:model-fields (llm/resolve-model+gate! user-id :link))
+    (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :extract)
+          link-resolved (llm/resolve-model+gate! user-id :link)
           all-states (or (seq (document-page-states root-topic-id))
                          (throw (ex-info "No page text. Extract text first." {})))
           by-outcome (group-by #(classify-page attempt-cap digest/digest-version %)
@@ -416,7 +439,7 @@
                :digest-version digest/digest-version
                :prompt-version (prompt-template-version template)
                :extract-model-id (:id entry)}
-          extractions (extract-and-stage-pages! api-key model-fields prompt ctx to-extract)
+          extractions (extract-and-stage-pages! resolved prompt ctx to-extract)
           _ (llm/interrupt-checkpoint!)
           ;; Everything unlinked for this document, including whatever an earlier
           ;; cancelled invocation left staged. This is the set one linking call
@@ -431,7 +454,7 @@
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)
           {:keys [by-label] link-cost :cost link-tokens :tokens}
           (if (seq entity-labels)
-            (link-entities! api-key link-model-fields user-id entity-labels)
+            (link-entities! link-resolved user-id entity-labels)
             {:by-label {} :cost 0.0 :tokens []})
           entity-id #(get by-label (str/lower-case (str/trim %)))
           predicate-id (memoize

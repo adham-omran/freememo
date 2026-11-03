@@ -38,5 +38,5 @@ Return no Markdown, code fences, or explanation outside the JSON object.
 {"grade":{"verdict":"partial","explanation":"You named the destination vessel but not the chamber it leaves from.","missed-fact-ids":[7],"matched-keywords":["aorta"]}}
 
 - `explanation` contains one to three sentences for the learner.
-- `missed-fact-ids` contains IDs for facts that the answer missed.
-- `matched-keywords` contains input keywords whose concepts the answer names.
+- `missed-fact-ids` contains IDs for facts that the answer missed, or is an empty array.
+- `matched-keywords` contains input keywords whose concepts the answer names, or is an empty array.

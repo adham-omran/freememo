@@ -16,6 +16,8 @@
    [freememo.activity-registry :as registry]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema
+    :refer [strict-object array-of json-string json-integer]]
    [freememo.user-state :as us]
    [freememo.cards :as cards]
    [taoensso.telemere :as tel]
@@ -29,6 +31,12 @@
   [{:keys [id subject_label predicate_label object_label object_literal]}]
   {:id id :s subject_label :p predicate_label
    :o (or object_label object_literal)})
+
+(def questions-reply
+  "The reply contract of kg-question-atomic.md and kg-question-synthesis.md.
+   validated-question still drops a question whose fact IDs were not offered."
+  (reply-schema/contract "kg_questions" :questions
+    (array-of (strict-object {:q json-string :a json-string :fact-ids (array-of json-integer)}))))
 
 (defn- validated-question
   "Return one normalized generated question, or nil for invalid domain fields.
@@ -133,7 +141,7 @@
           on the next run. A failed batch is skipped, never aborts the run."
   [user-id graph-topic-id]
   (try
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :atomic)
+    (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :atomic)
           clusters (db/fact-clusters-without-question user-id graph-topic-id)
           _ (when (empty? clusters)
               (throw (ex-info "Every fact already has a question." {})))
@@ -152,9 +160,9 @@
                                                      discriminators-per-member)
                                     payload (mapv #(cluster->prompt-row discriminators %) batch)
                                     {:keys [parsed cost tokens]}
-                                    (llm/chat! api-key model-fields prompt
+                                    (llm/chat! resolved prompt
                                       (llm-json/write-prompt-input {:clusters payload})
-                                      :questions :vector
+                                      questions-reply
                                       {:feature :kg-atomic :user-id user-id})
                                     {:keys [persisted covered]}
                                     (persist-questions! user-id "atomic" (:id entry)
@@ -221,13 +229,13 @@
     (let [facts (db/entity-fact-neighborhood user-id entity-id)]
       (if (< (count facts) 2)
         {:success false :error "Needs at least two facts touching this entity."}
-        (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
-              {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+        (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :synthesis)
+              {:keys [parsed cost tokens]} (llm/chat! resolved
                                              (cards/load-prompt-template "kg-question-synthesis.md")
                                              (llm-json/write-prompt-input
                                                {:entity entity-label
                                                 :facts (mapv fact->prompt-row facts)})
-                                             :questions :vector
+                                             questions-reply
                                              {:feature :kg-synthesis :user-id user-id})
               valid-ids (into #{} (map :id) facts)
               ;; Same validator as atomic; only the fact-count floor differs — a

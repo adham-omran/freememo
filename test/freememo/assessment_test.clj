@@ -5,7 +5,9 @@
             [freememo.assessment :as assessment]
             [freememo.cards :as cards]
             [freememo.credits :as credits]
-            [freememo.kg-llm :as llm]))
+            [freememo.kg-llm :as llm]
+            [freememo.openrouter :as openrouter]
+            [freememo.reply-schema :as reply-schema]))
 
 (def citation {:material_id 7 :topic_id 9 :quote "Plants use light to make sugar."})
 (def evidence {:materials [{:material-id 7 :evidence [{:topic-id 9 :text (:quote citation)}]}]
@@ -297,8 +299,9 @@
 ;; ── Model contract (plans/comprehension-facts-experiment.md §7.2) ────────────
 
 (defn- generate-capturing
-  "Run generate! on `reply` and return [result request]. The entry records
-   structured outputs, so the request should carry the form schema."
+  "Run generate! through the real kg-llm/chat!, with the provider answering
+   `reply`, and return [result request]. The entry records structured outputs,
+   so the request should carry the form schema."
   [reply]
   (let [request (atom nil)]
     (with-redefs [llm/resolve-model+gate! (fn [& _] {:api-key "key"
@@ -306,10 +309,12 @@
                                                              #{:response_format :structured_outputs}}
                                                      :model-fields {:response_format {:type "json_object"}}})
                   cards/load-prompt-template (constantly "prompt")
-                  llm/chat! (fn [_ model-fields _ user-content & _]
-                              (reset! request {:model-fields model-fields
-                                               :input (json/parse-string user-content)})
-                              {:parsed reply :cost 0.1})
+                  openrouter/chat-completion! (fn [_ body & _]
+                                                (reset! request {:model-fields (dissoc body :messages)
+                                                                 :input (json/parse-string (:content (second (:messages body))))})
+                                                {:choices [{:message {:content (json/generate-string {:form reply})}
+                                                            :finish_reason "stop"}]
+                                                 :usage {:cost 0.1}})
                   credits/record-cost-charge! (fn [& _] 1)]
       [(assessment/generate! 1 evidence {:target-minutes 15}) @request])))
 
@@ -326,27 +331,15 @@
         material (get-in input ["source" "materials" 0])]
     (is (= {:type "json_schema"
             :json_schema {:name "assessment_form" :strict true
-                          :schema assessment/form-response-schema}}
+                          :schema (reply-schema/wire-schema assessment/form-reply)}}
           (:response_format model-fields)))
     (is (= 7 (get material "material_id")))
     (is (= 9 (get-in material ["sections" 0 "topic_id"])))
     (testing "the source never uses the word the reply uses for citations"
       (is (not-any? #{"evidence" "material-id" "topic-id"} (json-keys (get input "source")))))))
 
-(deftest every-schema-object-is-one-strict-mode-accepts
-  (letfn [(objects [schema]
-            (cond
-              (map? schema) (concat (when (:properties schema) [schema])
-                                    (mapcat objects (vals schema)))
-              (sequential? schema) (mapcat objects schema)
-              :else []))]
-    (doseq [object (objects assessment/form-response-schema)]
-      (is (= (set (map name (keys (:properties object)))) (set (:required object))))
-      (is (false? (:additionalProperties object))))))
-
 (deftest a-question-cites-with-an-array-of-quote-objects
-  (let [question (get-in assessment/form-response-schema
-                   [:properties :form :properties :questions :items])
+  (let [question (get-in (:schema assessment/form-reply) [:properties :questions :items])
         citations (get-in question [:properties :evidence])]
     (is (= "array" (:type citations)))
     (is (= ["material_id" "topic_id" "quote"] (get-in citations [:items :required])))))
@@ -364,3 +357,15 @@
     (is (= 3 (count (:questions generated))))
     (is (= {:reasoning "Connect light and sugar."} (get-in generated [:questions 2 :rubric])))
     (is (not (contains? (get-in generated [:questions 1]) :accepted_answers)))))
+
+(deftest a-grade-reads-criteria-written-as-a-list
+  (let [exam (assessment/validate-form! form evidence {})]
+    (with-redefs [llm/resolve-model+gate! (fn [& _] {:api-key "key" :entry {:id "model"} :model-fields {}})
+                  cards/load-prompt-template (constantly "prompt")
+                  llm/chat! (fn [& _] {:parsed {:question_grades [{:question_id "essay"
+                                                                  :criteria [{:criterion "reasoning" :score 4}]
+                                                                  :explanation "Complete." :deductions []}]
+                                               :explanation "All targets met."} :cost 0.2})
+                  credits/record-cost-charge! (fn [& _] 1)]
+      (let [graded (assessment/grade! 1 exam {"blank" "light" "choice" "B" "essay" "Light makes sugar."})]
+        (is (= {:reasoning 4} (:criteria (some #(when (= "essay" (:question_id %)) %) (:criteria graded)))))))))
