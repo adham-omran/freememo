@@ -61,11 +61,13 @@
 	    "sameAs": ["https://github.com/adham-omran/freememo"]}]}
 	</script>
 
-	<!-- Open Sans, self-hosted (committed text; its woff2 files live in the
-	     gitignored vendor tree). A <link> rather than index.css's old @import:
-	     an @import chained a second request behind our own stylesheet. -->
-	<link rel="stylesheet" href="/freememo/open-sans.css">
-	<!-- Amiri, self-hosted. Eager beside Open Sans: a face swapped in after
+	<!-- Inter, Noto Sans Arabic and Fira Code, self-hosted (committed
+	     text; their woff2 files live in the gitignored vendor tree).
+	     index.css names them in its font-sans and font-mono tokens. -->
+	<link rel="stylesheet" href="/freememo/inter.css">
+	<link rel="stylesheet" href="/freememo/noto-sans-arabic.css">
+	<link rel="stylesheet" href="/freememo/fira-code.css">
+	<!-- Amiri, self-hosted. Eager beside Inter: a face swapped in after
 	     first paint reflows the whole poem, and a stylesheet deferred to a
 	     route boundary would flash the fallback on every reader mount. -->
 	<link rel="stylesheet" href="/freememo/amiri.css">

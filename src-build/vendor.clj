@@ -38,6 +38,9 @@
    :quill-resize-module "2.1.3", :konva "9.3.16", :graphology "0.26.0",
    :sigma "3.0.2", :wavesurfer.js "7.8.6", :lamejs "1.2.1", :katex "0.16.11",
    :highlightjs-zig "1.0.2", :amiri "5.3.0", :noto-naskh-arabic "2.021",
+   ;; @fontsource-variable/inter and …/noto-sans-arabic. Fontsource versions
+   ;; its packages, not the fonts, so these name the package release.
+   :inter "5.3.0", :noto-sans-arabic "5.3.0", :fira-code "5.3.0",
    ;; @floating-ui/core and @floating-ui/dom are released together and share a
    ;; version number, so one string covers both packages below.
    :floating-ui "1.8.0"})
@@ -96,9 +99,9 @@
      ;; falls through to the next family in the stack, which is what the
      ;; latin/latin-ext subsets would otherwise cost 8 more files to serve.
      ;;
-     ;; Unlike Open Sans, these urls are NOT release-hashed, so there is no
-     ;; @upstream-prefix dance: the version is in the path and the stylesheet
+     ;; The version is in the url path, so the stylesheet
      ;; (resources/public/freememo/amiri.css) is committed with local url()s.
+     ;; inter.css and noto-sans-arabic.css follow the same shape.
      [(str "amiri@" am "/files/amiri-arabic-400-normal.woff2")
       (str jsd "/@fontsource/amiri@" am "/files/amiri-arabic-400-normal.woff2")]
      [(str "amiri@" am "/files/amiri-arabic-700-normal.woff2")
@@ -118,30 +121,47 @@
      [(str "floating-ui@" fl "/floating-ui.core.umd.min.js")
       (str jsd "/@floating-ui/core@" fl "/dist/floating-ui.core.umd.min.js")]
      [(str "floating-ui@" fl "/floating-ui.dom.umd.min.js")
-      (str jsd "/@floating-ui/dom@" fl "/dist/floating-ui.dom.umd.min.js")]]))
+      (str jsd "/@floating-ui/dom@" fl "/dist/floating-ui.dom.umd.min.js")]
+     ;; Noto Sans Arabic, the Arabic face of the app UI (resources/public/freememo
+     ;; /noto-sans-arabic.css). Only the `arabic` subset: Inter comes first in
+     ;; --font-sans and owns every Latin glyph, so this file loads only for a
+     ;; page with Arabic text on it.
+     [(str "noto-sans-arabic@" (v :noto-sans-arabic) "/files/noto-sans-arabic-arabic-wght-normal.woff2")
+      (str jsd "/@fontsource-variable/noto-sans-arabic@" (v :noto-sans-arabic)
+        "/files/noto-sans-arabic-arabic-wght-normal.woff2")]
+     [(str "noto-sans-arabic@" (v :noto-sans-arabic) "/LICENSE")
+      (str jsd "/@fontsource-variable/noto-sans-arabic@" (v :noto-sans-arabic) "/LICENSE")]
+     [(str "inter@" (v :inter) "/LICENSE")
+      (str jsd "/@fontsource-variable/inter@" (v :inter) "/LICENSE")]]))
+
+(def ^:private inter-assets
+  "[local-path-under-vendor  url] pairs for Inter, the app's UI and reading face
+   (resources/public/freememo/inter.css).
+
+   The `opsz` build carries the weight AND the optical-size axis, so a heading
+   draws tighter than body text with no letter-spacing rule. Every subset at
+   both styles: unicode-range means a browser fetches only the subsets a page
+   uses, and the italic is what Quill's italic button shows."
+  (for [subset ["latin" "latin-ext" "cyrillic" "cyrillic-ext" "greek" "greek-ext" "vietnamese"]
+        style ["normal" "italic"]
+        :let [file (str "inter-" subset "-opsz-" style ".woff2")]]
+    [(str "inter@" (v :inter) "/files/" file)
+     (str jsd "/@fontsource-variable/inter@" (v :inter) "/files/" file)]))
+
+(def ^:private fira-code-assets
+  "[local-path-under-vendor  url] pairs for Fira Code, the app's monospace face
+   (resources/public/freememo/fira-code.css). One style, because Fira Code has
+   no italic. Every subset, for the same unicode-range reason as Inter."
+  (let [fc (v :fira-code)]
+    (concat
+      (for [subset ["latin" "latin-ext" "cyrillic" "cyrillic-ext" "greek" "greek-ext" "symbols2"]
+            :let [file (str "fira-code-" subset "-wght-normal.woff2")]]
+        [(str "fira-code@" fc "/files/" file)
+         (str jsd "/@fontsource-variable/fira-code@" fc "/files/" file)])
+      [[(str "fira-code@" fc "/LICENSE") (str jsd "/@fontsource-variable/fira-code@" fc "/LICENSE")]])))
 
 (def ^:private vendor-root "resources/public/freememo/vendor")
 (def ^:private lock-file "vendor-lock.sha256")
-
-;; Open Sans is the one asset whose upstream urls are release-hashed, so its
-;; stylesheet is COMMITTED as text at resources/public/freememo/open-sans.css —
-;; outside the gitignored vendor tree, because git cannot un-ignore a file inside
-;; an ignored directory.
-;;
-;; That file carries BOTH halves of the identity: its url()s are local
-;; (`vendor/open-sans/files/<hash>.woff2`, what the browser fetches) and its
-;; `@upstream-prefix` header records the fonts.gstatic.com directory those
-;; basenames came from (what fetch! downloads). A Google font release therefore
-;; cannot drift our urls — it would need a new prefix, which is a visible commit —
-;; and a byte change at a frozen url still fails the hash check.
-(def ^:private open-sans-css "resources/public/freememo/open-sans.css")
-(def ^:private open-sans-dir "open-sans/files/")
-(def ^:private google-css2-url
-  "https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap")
-;; css2 serves woff2 urls only to a modern UA; with a bare agent it returns ttf.
-(def ^:private modern-ua
-  (str "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"))
 
 ;; ---------------------------------------------------------------------------
 ;; Primitives
@@ -158,12 +178,11 @@
    Post: returns a byte-array on HTTP 200; throws ex-info {:type ::network} on
          any other status or on an IO failure — the caller distinguishes this
          from a hash mismatch."
-  (^bytes [url] (GET url "freememo-vendor-fetch"))
-  (^bytes [url user-agent]
+  ^bytes [url]
   (let [req (-> (HttpRequest/newBuilder (URI/create url))
               (.timeout (Duration/ofSeconds 120))
               ;; jsDelivr and cdnjs both 403 an empty user-agent from some hosts.
-              (.header "User-Agent" user-agent)
+              (.header "User-Agent" "freememo-vendor-fetch")
               (.GET) (.build))
         resp (try (.send @http req (HttpResponse$BodyHandlers/ofByteArray))
                   (catch Exception e
@@ -172,7 +191,7 @@
     (when-not (= 200 (.statusCode resp))
       (throw (ex-info (str "HTTP " (.statusCode resp) " fetching " url)
                {:type ::network :url url :status (.statusCode resp)})))
-    (.body resp))))
+    (.body resp)))
 
 (defn- sha256 ^String [^bytes bs]
   (let [d (.digest (MessageDigest/getInstance "SHA-256") bs)]
@@ -204,25 +223,6 @@
       "# Verify with:     clj -X:build vendor/verify!   (or sha256sum -c from the vendor root)\n"
       (str/join "\n" (for [[rel sha] (sort-by key sha-by-rel)] (str sha "  " rel)))
       "\n")))
-
-(defn- font-assets
-  "Post: [local-path url] for every woff2 the committed open-sans.css names.
-   Pre:  open-sans.css exists, carries an `@upstream-prefix <url>` header, and
-         its url()s are local `vendor/open-sans/files/<basename>` paths.
-         A violation is a bad commit of that file, not a fetch failure."
-  []
-  (let [css (slurp open-sans-css)
-        prefix (second (re-find #"@upstream-prefix\s+(\S+)" css))
-        bases (map second (re-seq (re-pattern (str "url\\(vendor/" open-sans-dir "([^)]*\\.woff2)\\)")) css))]
-    (when-not prefix
-      (throw (ex-info (str open-sans-css " has no @upstream-prefix header — regenerate with"
-                        " clj -X:build vendor/write-open-sans-css!")
-               {:type ::manifest})))
-    (when (empty? bases)
-      (throw (ex-info (str open-sans-css " names no local woff2 urls") {:type ::manifest})))
-    ;; Open Sans is a variable font: one file per subset, referenced once per
-    ;; weight. 50 url()s, 10 distinct files — dedupe or fetch each five times.
-    (distinct (for [b bases] [(str open-sans-dir b) (str prefix b)]))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tasks
@@ -264,13 +264,13 @@
 
 (defn- fetch-all!
   "Download every asset in two phases.
-   Pre:  network reachable; open-sans.css committed with its @upstream-prefix.
+   Pre:  network reachable.
    Post: the vendor tree is complete and {rel sha} covers every file written.
 
    Phase 2 exists because katex's font list lives inside a stylesheet phase 1
    fetches — there is no manifest of it upstream."
   []
-  (let [phase1 (fetch-pairs! (concat assets (font-assets)))
+  (let [phase1 (fetch-pairs! (concat assets inter-assets fira-code-assets))
         phase2 (fetch-pairs! (katex-font-assets))]
     (merge phase1 phase2)))
 
@@ -310,7 +310,7 @@
                             {:type ::manifest})))
         actual (fetch-all!)]
     (report-mismatches! actual expected
-      (into {} (concat assets (font-assets) (katex-font-assets))))
+      (into {} (concat assets inter-assets fira-code-assets (katex-font-assets))))
     (println (format "vendor: %d files verified against %s" (count actual) lock-file))))
 
 (defn write-lock!
@@ -334,50 +334,29 @@
     (report-mismatches! actual expected {})
     (println (format "vendor: %d on-disk files match %s" (count actual) lock-file))))
 
-(defn write-open-sans-css!
-  "Regenerate the committed resources/public/freememo/open-sans.css from Google's
-   css2 endpoint. Run ONLY when deliberately updating the font — its whole point
-   is to freeze both the basenames and the upstream directory in git.
-   Post: the file's url()s are local, its @upstream-prefix header names the
-         gstatic directory, and it references at least one woff2.
-   Throws when css2 returns urls from more than one directory, which would make
-   a single prefix wrong."
-  [_]
-  (let [css (String. (GET google-css2-url modern-ua) "UTF-8")
-        urls (map second (re-seq #"url\((https://fonts\.gstatic\.com/[^)]*\.woff2)\)" css))
-        dirs (distinct (map #(subs % 0 (inc (str/last-index-of % "/"))) urls))]
-    (when (empty? urls)
-      (throw (ex-info "css2 returned no woff2 urls (user-agent too old?)" {:type ::manifest})))
-    (when (< 1 (count dirs))
-      (throw (ex-info (str "css2 urls span " (count dirs) " directories; one @upstream-prefix cannot cover them")
-               {:type ::manifest :dirs dirs})))
-    (let [prefix (first dirs)
-          local (str/replace css
-                  #"url\(https://fonts\.gstatic\.com/[^)]*/([^/)]+\.woff2)\)"
-                  (str "url(vendor/" open-sans-dir "$1)"))]
-      (spit open-sans-css
-        (str "/* Open Sans, self-hosted. Generated by: clj -X:build vendor/write-open-sans-css!\n"
-          "   Do not edit by hand.\n\n"
-          "   url()s are local; the woff2 files live in the gitignored vendor tree and are\n"
-          "   downloaded by vendor/fetch! from the directory below. Freezing both halves here\n"
-          "   means a Google font release cannot silently change what we serve.\n\n"
-          "   @upstream-prefix " prefix "\n*/\n" local))
-      (println (format "wrote %s — %d woff2 files, prefix %s"
-                 open-sans-css (count urls) prefix)))))
+(def ^:private font-stylesheets
+  "The committed @font-face files. Their url()s are relative to the file, so
+   `vendor/…` names a path under vendor-root."
+  ["resources/public/freememo/amiri.css"
+   "resources/public/freememo/inter.css"
+   "resources/public/freememo/noto-sans-arabic.css"
+   "resources/public/freememo/fira-code.css"])
 
 (defn check-refs!
-  "Every /freememo/vendor/… path named by the HTML or by freememo.vendor-libs
-   must exist on disk.
+  "Every /freememo/vendor/… path named by the HTML, by freememo.vendor-libs or
+   by a committed font stylesheet must exist on disk.
    Post: silent success, or ex-info {:type ::dangling-ref} naming each missing
-         path. Guards the ~20 hand-written paths in those three files."
+         path. Guards the hand-written paths in those files."
   [_]
   (let [html (mapcat #(re-seq #"/freememo/vendor/[A-Za-z0-9@._/-]+" (slurp %))
                ["resources/public/freememo/index.prod.html"
                 "resources/public/freememo/index.dev.html"])
+        fonts (mapcat #(map second (re-seq #"url\(vendor/([A-Za-z0-9@._/-]+)\)" (slurp %)))
+                font-stylesheets)
         cljs (map #(str/replace % "\"" "")
                (re-seq #"\"[A-Za-z0-9._-]+@[0-9][A-Za-z0-9._/-]+\""
                  (slurp "src/freememo/vendor_libs.cljs")))
-        refs (->> (concat (map #(str/replace % "/freememo/vendor/" "") html) cljs)
+        refs (->> (concat (map #(str/replace % "/freememo/vendor/" "") html) cljs fonts)
                (filter #(re-find #"\.(js|css|svg|gif|woff2)$" %))
                distinct sort)
         missing (remove #(.exists (io/file vendor-root %)) refs)]

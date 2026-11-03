@@ -27,7 +27,7 @@ Preserve these design choices unless the user asks for a different direction:
 | Background | White on the left, ice blue `#eef4ff` on the right |
 | Accent | FreeMemo blue `#2563eb` |
 | Text | Ink `#12243b`, secondary slate `#52647c` |
-| Type | Self-hosted Open Sans, a large bold headline, quiet supporting copy |
+| Type | Self-hosted Inter, the app font, a large bold headline, quiet supporting copy |
 | Spacing | About 90 pixels at the left edge, generous whitespace, no crowded footer |
 | Screenshot | Full component, correct proportions, subtle shadow, visible primary action |
 
@@ -90,7 +90,7 @@ Install Chromium with `cd playwright && npx playwright install chromium` if need
 Use the normal permission flow when installation or browser launch requires it.
 For permission failures, use that flow before changing browser launch options.
 
-The font normally comes from the vendored Open Sans assets.
+The font normally comes from the vendored Inter assets (the latin subset of `inter.css`).
 If those assets are absent, run `clj -X:build vendor/fetch!` or pass `--font /absolute/path/font.woff2`.
 The renderer embeds the font, logo, and screenshot in a standalone HTML file.
 It also saves a lossless PNG and an unchanged copy of the input screenshot.

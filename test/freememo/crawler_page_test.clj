@@ -60,7 +60,8 @@
     ;; bundle also keeps Google's infrastructure from opening a WebSocket to us.
     (is (empty? (executable-scripts document)))
     (is (not (str/includes? document "rel=\"stylesheet\"")))
-    (is (not (str/includes? document "open-sans")))
+    (is (not (str/includes? document "inter.css")))
+    (is (not (str/includes? document "/freememo/vendor/")))
     (is (not (str/includes? document "/freememo/js/"))))
 
   (testing "one document, well formed enough to parse"

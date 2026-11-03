@@ -46,7 +46,6 @@ RUN clojure -A:build:prod -M -e ::ok # preload
 # the layer is keyed on the lockfile and the fetcher alone.
 COPY vendor-lock.sha256 vendor-lock.sha256
 COPY src-build src-build
-COPY resources/public/freememo/open-sans.css resources/public/freememo/open-sans.css
 RUN clojure -X:build vendor/fetch!
 
 COPY shadow-cljs.edn shadow-cljs.edn

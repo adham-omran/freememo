@@ -60,10 +60,9 @@ function campaignTokens(copy) {
 async function fontFile(explicit) {
   if (explicit) return explicit;
   const directory = join(repoRoot, 'resources/public/freememo');
-  const css = await readFile(join(directory, 'open-sans.css'), 'utf8');
-  const latin = css.split('/* latin */').at(-1);
-  const relative = latin.match(/url\(['"]?([^)'"\s]+\.woff2)/)?.[1];
-  if (!relative) throw new Error('Cannot find the local Open Sans font. Supply --font FILE.woff2.');
+  const css = await readFile(join(directory, 'inter.css'), 'utf8');
+  const relative = css.match(/url\(['"]?([^)'"\s]*inter-latin-opsz-normal\.woff2)/)?.[1];
+  if (!relative) throw new Error('Cannot find the local Inter font. Supply --font FILE.woff2.');
   return resolve(directory, relative);
 }
 
@@ -84,7 +83,7 @@ async function main() {
   const tokens = campaignTokens(copy);
   let font;
   try { font = await readFile(await fontFile(options.font)); }
-  catch (error) { throw new Error('Open Sans is unavailable. Run clj -X:build vendor/fetch! or supply --font FILE.woff2.', { cause: error }); }
+  catch (error) { throw new Error('Inter is unavailable. Run clj -X:build vendor/fetch! or supply --font FILE.woff2.', { cause: error }); }
   if (font.toString('ascii', 0, 4) !== 'wOF2') throw new Error('Supply a WOFF2 font file.');
   const screenshot = await readFile(options.screenshot);
   const [mime, extension] = screenshotType(screenshot);
@@ -109,7 +108,7 @@ async function main() {
     });
     const result = await page.evaluate(({ scale, width, height }) => {
       const failures = [];
-      if (!document.fonts.check('750 90px "FreeMemo Open Sans"')) failures.push('The embedded font did not load.');
+      if (!document.fonts.check('750 90px "FreeMemo Inter"')) failures.push('The embedded font did not load.');
       for (const element of document.querySelectorAll('[data-fit-line]')) {
         const range = document.createRange();
         range.selectNodeContents(element);
