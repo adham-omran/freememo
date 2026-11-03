@@ -20,6 +20,13 @@
 .comprehension-cycle-link { display: block; padding: 14px 0; border-bottom: 1px solid var(--color-border); }
 .comprehension-page details { padding: 12px 0; }
 .comprehension-page summary { cursor: pointer; }
-.comprehension-options { list-style: none; padding-left: 0; }
 .comprehension-page :focus-visible { outline: 2px solid var(--color-primary, #2563eb); outline-offset: 3px; }
 @media (max-width: 600px) { .comprehension-page { padding: 20px 14px; } .comprehension-panel { padding: 14px; } }
+.comprehension-choice { border: 0; padding: 0; margin: 8px 0 18px; min-width: 0; }
+.comprehension-choice legend { padding: 0; margin-bottom: 6px; }
+.comprehension-choice .radio-group-options { display: flex; flex-direction: column; gap: 2px; }
+.comprehension-choice label { display: flex; align-items: baseline; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.comprehension-choice label:hover { background: var(--color-bg-subtle); }
+.comprehension-choice input { flex: none; margin: 0; }
+.comprehension-choice[aria-invalid="true"] { outline: 1px solid var(--color-danger, #b42318); }
+.comprehension-omitted ul, .comprehension-dropped ul { padding-left: 20px; }

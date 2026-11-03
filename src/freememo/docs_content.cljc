@@ -24,11 +24,13 @@
             ["/comprehension" "Open Comprehension"]]}
    {:id "exam" :title "2. Review coverage before you answer"
     :paragraphs ["The exam can combine fill-in-the-blank, multiple-choice, short essay, and longer essay questions. It omits formats the material cannot support."
+                 "A target of 20 minutes or more gets at least one essay, unless the material holds only isolated terms and values. The Coverage panel names each format the exam left out, and why. It also lists each generated question that failed the checks."
                  "Review the assessed topics, reasoning demands, omitted formats, question counts, and available points. A short exam samples your understanding."
                  "A multiple-choice question can test reasoning. An essay can test recall. Judge the task by what it asks you to do."
                  "If the source cannot support an assessment, add or correct material first."]}
    {:id "paper" :title "3. Answer by hand or type"
     :paragraphs ["Write on ordinary paper. Number each answer with its question number. You can use several pages for one answer."
+                 "A multiple-choice question has four options, A to D. On screen, select one. On paper, write its letter."
                  "Use Print answer sheet if you want numbered questions and answer space. The sheet is optional."
                  "Keep your first answers separate from later improvements. The first attempt shows what you could do before further study."
                  "Select Upload handwritten answers to add a PDF, PNG, or JPEG. Typed answers use the same assessment and feedback path."]}

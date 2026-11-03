@@ -38,3 +38,43 @@
         (e/When waiting?
           (dom/props {:aria-busy true})
           [t {k picked}])))))
+
+(e/defn RadioGroup!
+  "A tracked group of native radio inputs, with the contract of forms/Input!.
+
+   Pre:  `v` is the authoritative option value, a string. nil or \"\" reads as
+         no choice. `options` is a seq of [value label] with unique string
+         values. `group` is a radio name that is unique on the page.
+   Post: returns an empty e/amb until the user picks an option. Then it returns
+         [t {k value}] while the token is held. The <fieldset> carries
+         aria-busy while the token is held, and aria-invalid after the token
+         fails.
+   Invariant: while a token is held, the user's pick stays checked whatever
+         `v` does. Once the token is spent, `v` is shown again, so the caller
+         owns updating `v`. The same rule as Select!."
+  [k v options group legend & {:as props}]
+  (e/client
+    v ; consume v, as Input! does
+    (dom/fieldset
+      (dom/props (or props {}))
+      (dom/legend (dom/text legend))
+      ;; "change" bubbles from each radio to the fieldset. The event object,
+      ;; never its value: two picks of one value must still be two tokens.
+      (let [event (dom/On "change" identity nil)
+            [t err] (e/Token event)
+            waiting? (some? t)
+            picked (when waiting? ((fn [] (-> event .-target .-value))))
+            shown (if waiting? picked (str (or v "")))]
+        ;; The loop has an element of its own, so the legend beside it never
+        ;; shares its child slots. See "An e/for Gets an Element of Its Own".
+        (dom/div
+          (dom/props {:class "radio-group-options"})
+          (e/for [[value label] (e/diff-by first options)]
+            (dom/label
+              (dom/input (dom/props {:type "radio" :name group :value value
+                                     :checked (= value shown)}))
+              (dom/span (dom/text label)))))
+        (when (forms/tx-error? err) (dom/props {:aria-invalid true}))
+        (e/When waiting?
+          (dom/props {:aria-busy true})
+          [t {k picked}])))))

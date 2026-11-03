@@ -1,5 +1,6 @@
 (ns freememo.assessment-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [freememo.assessment :as assessment]
             [freememo.cards :as cards]
             [freememo.credits :as credits]
@@ -47,7 +48,7 @@
                                  (assoc-in [:blueprint :estimated_minutes] 20)
                                  (assoc-in [:questions 0 :accepted_answers] [])))]
       (is (= ["choice" "essay"] (mapv :id (:questions validated))))
-      (is (= [{:question 1 :prompt "Plants use ____ to make sugar."
+      (is (= [{:question 1 :format "fill-in-the-blank" :prompt "Plants use ____ to make sugar."
                :reason "A fill-in-the-blank question has no accepted answers."}]
             (get-in validated [:blueprint :dropped_questions])))
       (is (= ["choice" "essay"] (get-in validated [:blueprint :assessed_outcomes 0 :question_ids])))
@@ -105,11 +106,17 @@
     (is (= "A quoted passage does not match the material word for word." (ex-message e)))
     (is (= 3 (:question (ex-data e))))))
 
+(defn- letter-of
+  "The letter the validated exam gave the option with this text."
+  [exam text]
+  (some #(when (= text (:text %)) (:id %)) (get-in exam [:questions 1 :options])))
+
 (deftest objective-grading-needs-no-model-and-weights-points
   (let [exam (-> (assessment/validate-form! form evidence {})
                 (update :questions #(subvec % 0 2)))]
     (with-redefs [llm/resolve-model+gate! (fn [& _] (throw (ex-info "Unexpected model call" {})))]
-      (is (= 100 (:raw-score (assessment/grade! 1 exam {"blank" " SUNLIGHT " "choice" "a"}))))
+      (is (= 100 (:raw-score (assessment/grade! 1 exam {"blank" " SUNLIGHT "
+                                                         "choice" (str/lower-case (letter-of exam "Light"))}))))
       (let [grade (assessment/grade! 1 exam {"blank" "water" "choice" "Light"})]
         (is (= 75 (:raw-score grade)))
         (is (zero? (:cost grade)))
@@ -141,7 +148,8 @@
                                                                   :explanation "Complete." :deductions []}]
                                                :explanation "All targets met."} :cost 0.2})
                   credits/record-cost-charge! (fn [& _] 3)]
-      (let [grade (assessment/grade! 1 exam {"blank" "light" "choice" "B" "essay" "Light supplies the energy to produce sugar."})]
+      (let [grade (assessment/grade! 1 exam {"blank" "light" "choice" (letter-of exam "Sugar")
+                                             "essay" "Light supplies the energy to produce sugar."})]
         (is (= 70 (:raw-score grade)))
         (is (= 3 (:charged-credits grade)))
         (is (= 1 (count (:gaps grade))))))))
@@ -232,11 +240,55 @@
         exam (assoc validated :questions [(get-in validated [:questions 1])])]
     (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" "x²"}))))
     (is (zero? (:raw-score (assessment/grade! 1 exam {"choice" "x2"})))))
+  ;; IDs that differ only in notation are distinct, so the answer key stays
+  ;; on "Square" when the IDs become letters.
   (let [validated (assessment/validate-form!
                     (-> form
                         (assoc-in [:questions 1 :options]
                           [{:id "x²" :text "Square"} {:id "x2" :text "Product"}])
                         (assoc-in [:questions 1 :correct_option_id] "x²")) evidence {})
-        exam (assoc validated :questions [(get-in validated [:questions 1])])]
-    (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" "x²"}))))
-    (is (zero? (:raw-score (assessment/grade! 1 exam {"choice" "x2"}))))))
+        question (get-in validated [:questions 1])
+        letter-of (fn [text] (some #(when (= text (:text %)) (:id %)) (:options question)))
+        exam (assoc validated :questions [question])]
+    (is (= 100 (:raw-score (assessment/grade! 1 exam {"choice" (letter-of "Square")}))))
+    (is (zero? (:raw-score (assessment/grade! 1 exam {"choice" (letter-of "Product")}))))))
+
+(def four-options
+  [{:id "opt-portable" :text "portable"} {:id "opt-composable" :text "composable"}
+   {:id "opt-performant" :text "performant"} {:id "opt-versatile" :text "versatile"}])
+
+(defn- lettered [options correct]
+  (-> (assessment/validate-form!
+        (-> form (assoc-in [:questions 1 :options] options)
+                 (assoc-in [:questions 1 :correct_option_id] correct)) evidence {})
+      (get-in [:questions 1])))
+
+(deftest multiple-choice-options-get-letter-ids
+  (let [question (lettered four-options "opt-portable")
+        correct (some #(when (= (:id %) (:correct_option_id question)) %) (:options question))]
+    (testing "the model's IDs become A to D, and the key follows the correct text"
+      (is (= ["A" "B" "C" "D"] (mapv :id (:options question))))
+      (is (= "portable" (:text correct)))
+      (is (= (set (map :text four-options)) (set (map :text (:options question))))))
+    (testing "the shuffle is the same on every check of the same question"
+      (is (= question (lettered four-options "opt-portable"))))
+    (testing "the correct option is not fixed to the position the model wrote"
+      (is (< 1 (count (set (for [n (range 12)]
+                             (let [prompt (str "Which design goal " n "?")
+                                   q (-> (assessment/validate-form!
+                                           (-> form (assoc-in [:questions 1 :options] four-options)
+                                                    (assoc-in [:questions 1 :correct_option_id] "opt-portable")
+                                                    (assoc-in [:questions 1 :prompt] prompt)) evidence {})
+                                         (get-in [:questions 1]))]
+                               (:correct_option_id q))))))))))
+
+(deftest a-marked-letter-grades-as-that-letter
+  (let [question (lettered four-options "opt-portable")
+        right (:correct_option_id question)
+        wrong (some #(when (not= right (:id %)) (:id %)) (:options question))
+        exam {:blueprint {:evidence_packets (:materials evidence)} :questions [question]}
+        score #(:raw-score (assessment/grade! 1 exam {"choice" %}))]
+    (doseq [answer [right (str/lower-case right) (str right ".") (str "(" right ")") (str right ")") "portable"]]
+      (is (= 100 (score answer)) answer))
+    (doseq [answer [wrong (str "(" wrong ")") "versatile"]]
+      (is (zero? (score answer)) answer))))

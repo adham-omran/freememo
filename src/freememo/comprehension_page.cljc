@@ -4,6 +4,7 @@
             [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
             [hyperfiddle.electric-forms5 :as forms]
+            [freememo.forms-ext :as forms-ext]
             [hyperfiddle.router5 :as r]
             [freememo.navigation :as nav]
             [freememo.typeahead :as typeahead]
@@ -134,12 +135,31 @@
       (dom/h3 (dom/text (str "Question " (inc index))))
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text (str (str/replace (:format question) "-" " ") ", " (:points question) " points")))
-      (dom/p (dom/text (:prompt question)))
-      (when (seq (:options question))
-        (dom/ol
-          (dom/props {:class "comprehension-options"})
-          (e/for [option (e/diff-by identity (:options question))]
-            (dom/li (dom/text (if (map? option) (str (:id option) ". " (:text option)) option)))))))))
+      (dom/p (dom/text (:prompt question))))))
+
+(defn option-choices
+  "The [value label] pairs a multiple-choice answer field shows.
+   Post: the value is the option ID the grader matches, and the label starts
+   with that ID, as the printed sheet does."
+  [question]
+  (mapv (fn [option]
+          (if (map? option)
+            [(str (:id option)) (str (:id option) ". " (:text option))]
+            [(str option) (str option)]))
+    (:options question)))
+
+(e/defn AnswerField [cycle-id index question v]
+  (e/client
+    (let [label (str "Answer " (inc index))]
+      (if (and (= "multiple-choice" (:format question)) (seq (:options question)))
+        (forms-ext/RadioGroup! (:id question) v (option-choices question)
+          (str "answer-" cycle-id "-" (:id question)) label
+          :class "comprehension-choice")
+        (if (= "fill-in-the-blank" (:format question))
+          (forms/Input! (:id question) v :label label :class "input" :maxlength 50000 :dir "auto")
+          (forms/Input! (:id question) v
+            :as :textarea :rows (if (= "long-essay" (:format question)) 10 4)
+            :label label :class "input" :maxlength 50000 :dir "auto"))))))
 
 (e/defn AnswerForm [user-id detail !revision !error navigate!]
   (e/client
@@ -154,10 +174,7 @@
                   (dom/section
                     (e/amb
                       (Question index question)
-                      (forms/Input! (:id question) (get fields (:id question))
-                        :as :textarea :rows (if (= "long-essay" (:format question)) 10 4)
-                        :label (str "Answer " (inc index)) :class "input"
-                        :maxlength 50000 :dir "auto"))))
+                      (AnswerField (:id detail) index question (get fields (:id question))))))
                 (dom/span
                   (dom/On "click" (fn [_] (reset! !intent :draft)) nil)
                   (forms/SubmitButton! :label "Save draft" :class "btn btn-secondary"))
@@ -167,7 +184,7 @@
             :Parse (e/fn [fields _] [(e/watch !intent) (:id detail) fields])
             :show-buttons false)]
       (dom/p (dom/props {:class "comprehension-muted"})
-        (dom/text "For multiple choice, enter the option ID or its full text. Leave an answer blank if you do not know."))
+        (dom/text "For multiple choice, select one option. On paper, write its letter. Leave a question unanswered if you do not know."))
       (CommandResult user-id commits !revision !error navigate! true))))
 
 (defn scan-assignments [fields questions]
@@ -284,6 +301,24 @@
   (str dropped " of " (+ dropped kept) " generated questions did not pass the checks and "
     (if (= 1 dropped) "was" "were") " removed."))
 
+(defn format-name [format] (str/replace (str format) "-" " "))
+
+(defn omission-line
+  "One omitted format as a sentence: the readable format name, then the reason."
+  [{:keys [format reason]}]
+  (str (str/capitalize (format-name format)) ": " reason))
+
+(e/defn OmittedFormats [omissions]
+  (e/client
+    ;; Always mounted, for the same reason as DroppedQuestions.
+    (dom/div
+      (dom/props {:class "comprehension-omitted"})
+      (when (seq omissions)
+        (dom/h4 (dom/text "Formats not used"))
+        (dom/ul
+          (e/for [omission (e/diff-by :format omissions)]
+            (dom/li (dom/text (omission-line omission)))))))))
+
 (e/defn DroppedQuestions [dropped kept]
   (e/client
     ;; Always mounted, so the conditional inside it never shifts the panel's
@@ -292,11 +327,14 @@
       (dom/props {:class "comprehension-dropped"})
       (when (seq dropped)
         (dom/details
+          (dom/props {:open true})
           (dom/summary (dom/text (dropped-summary (count dropped) kept)))
           (dom/ul
             (e/for [question (e/diff-by :question dropped)]
               (dom/li
-                (dom/p (dom/text (str "Question " (:question question) ": " (:reason question))))
+                (dom/p (dom/text (str "Question " (:question question)
+                                     (when (:format question) (str " (" (format-name (:format question)) ")"))
+                                     ": " (:reason question))))
                 (dom/p (dom/props {:class "comprehension-muted"}) (dom/text (:prompt question)))))))))))
 
 (e/defn CycleDetail [user-id detail !revision !error navigate!]
@@ -327,8 +365,7 @@
             (dom/p (dom/text (if (map? outcome)
                               (str (:statement outcome) ": " (:reason outcome))
                               (str outcome))))))
-        (e/for [omission (e/diff-by identity (get-in detail [:form :blueprint :omitted_formats]))]
-          (dom/p (dom/text (str (:format omission) ": " (:reason omission)))))
+        (OmittedFormats (get-in detail [:form :blueprint :omitted_formats]))
         (DroppedQuestions (get-in detail [:form :blueprint :dropped_questions])
           (count (get-in detail [:form :questions])))
         (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, "

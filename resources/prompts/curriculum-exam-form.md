@@ -7,11 +7,17 @@ Use a suitable subset of these formats:
   Answers preserve letter case by default. Set `case_sensitive: false` only when case cannot change the meaning.
   Chemical symbols, scientific units, identifiers, and formulas must preserve case.
   Include valid mathematical equivalents explicitly in accepted_answers. The application does not simplify answers.
-- `multiple-choice`: `options` (2 to 8 objects with unique string `id` and `text`) and one `correct_option_id`.
+- `multiple-choice`: exactly four `options`, objects with `id` "A", "B", "C", "D" and a `text`, and one `correct_option_id`.
+  The application shuffles the options and assigns the letters again, so do not refer to a letter in the prompt or in another option.
+  Write each option as an answer only. Do not use "all of the above" or "none of the above".
 - `short-essay`: a brief explanation, comparison, or application.
 - `long-essay`: an extended synthesis or evaluation.
 
 Choose counts, formats, and positive integer `points` to fit the target minutes and source coverage.
+When target_minutes is 20 or more, include at least one `short-essay` or `long-essay` question.
+A source that states how or why something works, compares two things, or gives a procedure supports a short essay that asks the learner to explain it.
+Leave out both essay formats only when target_minutes is under 20 or the source contains only isolated terms and values.
+Then state that reason in omitted_formats.
 The target is an estimate, not a time limit. Do not force every format into unsuitable material.
 Use from 1 to 40 distinct questions. Prefer a useful small exam over unsupported questions.
 
@@ -30,5 +36,5 @@ The blueprint must contain:
 - `estimated_minutes`: a positive estimate.
 Explain source or duration limits. Never imply full coverage when outcomes were omitted.
 For target_outcomes, emphasize those gaps while drawing on the supplied sources.
-Do not invent content or force essays where the material supports only recall.
+Do not invent content.
 If no valid assessment is possible, return form with insufficient: true and a nonblank reason.

@@ -59,6 +59,27 @@
            (assoc fields :material-id material_id :topic-id topic_id)))))
    citations))
 
+(def ^:private option-letters "ABCDEFGH")
+
+(defn- lettered-options
+  "Give a checked multiple-choice question the option IDs A, B, C and so on.
+   Pre: the option texts are unique, and :correct_option_id names one option.
+   Post: the options are in a shuffled order with consecutive letter IDs, and
+   :correct_option_id names the letter of the same option text.
+   Invariant: the order depends only on the prompt and the option texts, so
+   two checks of one question give the same letters. The model's own IDs are
+   gone, so an ID cannot hint at the answer, and the correct option is not
+   always in the position where the model wrote it."
+  [question]
+  (let [options (:options question)
+        order (java.util.ArrayList. ^java.util.Collection options)
+        _ (java.util.Collections/shuffle order
+            (java.util.Random. (hash [(:prompt question) (mapv :text options)])))
+        lettered (mapv (fn [letter option] (assoc option :id (str letter))) option-letters order)
+        correct-text (:text (some #(when (= (:id %) (:correct_option_id question)) %) options))]
+    (assoc question :options lettered
+      :correct_option_id (:id (some #(when (= (:text %) correct-text) %) lettered)))))
+
 (defn- normalize-question [index question valid-fact-ids]
   (let [format (or (:format question) "long-essay")
         points (or (:points question) 20)
@@ -85,10 +106,11 @@
                          (= (count options) (count (set (map #(normalize-objective-answer (:text %)) options))))
                          (some #(= (:id %) (:correct_option_id question)) options))))
       (fail! "A multiple-choice question has repeated options or no correct option." {:question index}))
-    (assoc question :id (str (or (:id question) (str "q" index))) :format format :points points
-      :rubric (or rubric {})
-      :fact_ids (vec (filter valid-fact-ids (:fact_ids question)))
-      :grading_guide (or (:grading_guide question) (str/join " " (vals rubric))))))
+    (cond-> (assoc question :id (str (or (:id question) (str "q" index))) :format format :points points
+              :rubric (or rubric {})
+              :fact_ids (vec (filter valid-fact-ids (:fact_ids question)))
+              :grading_guide (or (:grading_guide question) (str/join " " (vals rubric))))
+      (= format "multiple-choice") lettered-options)))
 
 (defn- validate-blueprint! [blueprint questions evidence]
   (let [used (set (map :format questions))
@@ -191,7 +213,8 @@
                             (when (or (contains? ids (:id normalized)) (contains? prompts prompt-key))
                               {:question index :reason "Two questions have the same ID or the same text."}))]
               (if problem
-                (update acc :dropped conj {:question index :prompt (str (:prompt question)) :reason (:reason problem)})
+                (update acc :dropped conj {:question index :format (str (or (:format question) "long-essay"))
+                                          :prompt (str (:prompt question)) :reason (:reason problem)})
                 (-> acc
                     (update :kept conj [index (assoc question :id (:id normalized))])
                     (update :ids conj (:id normalized))
@@ -208,7 +231,7 @@
         kept (mapv second (remove (set unlinked) (:kept checked)))
         dropped (->> (concat (:dropped checked)
                        (map (fn [[index question]]
-                              {:question index :prompt (str (:prompt question))
+                              {:question index :format (str (or (:format question) "long-essay")) :prompt (str (:prompt question))
                                :reason "A question is not linked to a learning outcome."}) unlinked))
                   (sort-by :question) vec)
         total (reduce + (map question-points (:questions form)))
@@ -391,8 +414,12 @@
         correct
         (and (not (unknown-answer? answer))
              (if (= "multiple-choice" (:format question))
-               (let [option-id (some #(when (= (str/lower-case (normalize-objective-answer (:id %))) (str/lower-case text)) (:id %))
-                                 (:options question))
+               (let [id-of (fn [candidate]
+                             (some #(when (= (str/lower-case (normalize-objective-answer (:id %))) (str/lower-case candidate)) (:id %))
+                               (:options question)))
+                     ;; A handwritten letter often comes back as "B." or "(B)".
+                     option-id (or (id-of text)
+                                   (some-> (re-matches #"\(?\s*(\p{L})\s*[.)]?" text) second id-of))
                      correct-option (some #(when (= (:id %) (:correct_option_id question)) %) (:options question))]
                  (if option-id
                    (= option-id (:correct_option_id question))
