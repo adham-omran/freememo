@@ -66,9 +66,15 @@ RUN clojure -X:build vendor/verify! && clojure -X:build vendor/check-refs!
 #
 # shadow-cljs keys each namespace on the sha1 of its own source and of every
 # source and jar it depends on, so a changed file or a new Electric SNAPSHOT jar
-# recompiles what depends on it. One gap: a macro in a .clj file is not in that
-# graph. If such a macro is ever used inside an e/defn, a change to it can leave
-# a stale client whose frames do not match the server. No .cljc uses one today.
+# recompiles what depends on it. It also compares the mtime of every CLJ file
+# that a namespace's macros reach. A checkout gives every file a new mtime, so
+# deploy-truenas.sh sets each mtime from the file's content before the build.
+# Without that step the cache is never used.
+#
+# The same mtime check covers a macro in a .clj file, which is outside the
+# cache key. With content-made mtimes, a change to such a macro recompiles
+# every namespace that uses it.
+#
 # To empty the cache, run on the build host:
 #   docker builder prune --filter type=exec.cachemount
 RUN --mount=type=cache,id=freememo-shadow-cljs,target=/app/.shadow-cljs,sharing=locked \
