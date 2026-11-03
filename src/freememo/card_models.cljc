@@ -140,31 +140,7 @@
     :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true
     :provider {:sort "throughput"
-               :max_price {:prompt 0.15 :completion 0.50}}}
-   ;; A 124B MoE model with 5.1B active parameters. It reads text only, so the
-   ;; OCR registry has no entry for it. The one vision variant,
-   ;; `inclusionai/ling-3.0-flash-vl`, exists only as a `:free` route.
-   ;;
-   ;; Two providers serve it, and only DeepInfra accepts response_format. The
-   ;; structured lanes send `require_parameters true`, so card generation and the
-   ;; KG steps always run on DeepInfra. There they pay 0.06 / 0.18 per million
-   ;; tokens and get a 131K context. The assistant lane sends no such filter, and
-   ;; OpenRouter routed it to Novita: 0.021 / 0.063, a 65% discount with no stated
-   ;; end. A DeepInfra outage fails the structured lanes. That is a capability
-   ;; gap, not a pin, so no :provider object can fix it. Both providers list the
-   ;; same undiscounted price, so there is no overpay to cap either.
-   ;;
-   ;; Neither endpoint lists reasoning_effort, but OpenRouter accepts it and still
-   ;; routes it under require_parameters. Measured 2026-09-11 on both providers:
-   ;; "none" returns HTTP 200 with 0 reasoning tokens, so the Settings None works.
-   ;; "low" and "high" did not differ, so any value other than "none" means on.
-   ;;
-   ;; Neither provider lists structured_outputs (2026-11-03), so this entry
-   ;; gets JSON mode and never a JSON schema.
-   {:id "ling-3.0-flash"
-    :label "Ling 3.0 Flash (inclusionAI)"
-    :openrouter-model "inclusionai/ling-3.0-flash"
-    :supported-parameters json-and-reasoning-parameters}])
+               :max_price {:prompt 0.15 :completion 0.50}}}])
 
 (def retired
   "Entries withdrawn from the picker, kept because an :id is a durable settings
@@ -217,7 +193,14 @@
     :superseded-by "gpt-6.1-sol"}
    {:id "deepseek-v4-flash"
     :label "V4 Flash (DeepSeek)"
-    :superseded-by "deepseek-v4.1-flash"}])
+    :superseded-by "deepseek-v4.1-flash"}
+   ;; Removed from the picker on 2026-11-03. Its structured lanes had a 131K
+   ;; context and no provider with structured outputs, and every other entry
+   ;; has about 1M tokens and a strict schema. GLM 5.3 Flash is the nearest
+   ;; current price (0.075 / 0.25 against 0.06 / 0.18 per million tokens).
+   {:id "ling-3.0-flash"
+    :label "Ling 3.0 Flash (inclusionAI)"
+    :superseded-by "glm-5.3-flash"}])
 
 (def ^:private supersessions
   (into {} (map (juxt :id :superseded-by)) retired))

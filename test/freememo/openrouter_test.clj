@@ -164,7 +164,14 @@
       (is (= {:sort "throughput" :max_price {:prompt 0.15 :completion 0.50} :require_parameters true}
             (:provider (fields-for "glm-5.3-flash")))))
     (testing "an entry with no structured-output provider keeps JSON mode"
-      (is (= {:type "json_object"} (:response_format (fields-for "ling-3.0-flash")))))))
+      ;; No registry entry lacks structured outputs since Ling retired, so the
+      ;; entry is built here.
+      (let [entry {:id "json-only" :openrouter-model "example/json-only"
+                   :supported-parameters #{:response_format :reasoning_effort}}]
+        (is (= {:type "json_object"}
+               (:response_format (openrouter/with-response-schema entry
+                                   (openrouter/structured-chat-completion-fields entry {})
+                                   "example" schema))))))))
 
 (deftest structured-chat-fields-require-json-compatible-routes
   (testing "an unpinned model gets JSON mode and parameter-compatible routing"
@@ -209,9 +216,7 @@
                      (card-models/resolve-model "gemini-3.8-flash")
                      {:reasoning_effort "low"})))))
   (testing "an entry that permits none keeps it"
-    ;; Ling 3.0 Flash measured 2026-09-11: "none" returns HTTP 200 with 0
-    ;; reasoning tokens on both of its providers, DeepInfra and Novita.
-    (doseq [id ["gpt-6.1-sol" "gpt-6-luna" "claude-sonnet-5" "ling-3.0-flash"]]
+    (doseq [id ["gpt-6.1-sol" "gpt-6-luna" "claude-sonnet-5"]]
       (is (= "none" (:reasoning_effort
                       (openrouter/chat-completion-fields
                         (card-models/resolve-model id)
