@@ -13,6 +13,17 @@ Do not invent an assignment when the answer number is unclear.
 State that uncertainty separately.
 Never treat the question prompt as the learner's answer.
 
+A page can be the multiple-choice answer sheet.
+It has one row per question number, and one circle per option letter.
+Each letter is printed faintly inside its circle. A printed letter is not a mark.
+The questions on that sheet have `bubble_letters` in the question list.
+For a row with one filled circle, the answer text is that circle's letter, for example "B".
+A circle with an X drawn through it is cancelled. Ignore it.
+Leave out a row with no filled circle.
+A row can have two or more filled circles, or a mark you cannot judge.
+For that row, write the letters you see, separated by commas, and set uncertain to true.
+Assign each row by its printed question number.
+
 Return JSON only:
 {"transcript":{"answers":[{"question_id":"stable id from question list","text":"literal visible writing","uncertain":false}],"uncertainties":["Describe any unreadable text or unclear assignment."]}}
 

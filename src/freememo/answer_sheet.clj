@@ -13,10 +13,21 @@
   [text]
   (boolean (and text (re-find #"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿֐-׿]" text))))
 
+(defn bubbled?
+  "True when a question gets a row on the bubble sheet: a multiple-choice question
+   whose every option has a one-letter id. A form from before the letters were
+   assigned keeps a written answer line instead, because a circle needs a label
+   that the grader maps back to an option."
+  [question]
+  (and (= "multiple-choice" (:format question))
+       (seq (:options question))
+       (every? #(and (map? %) (re-matches #"[A-Z]" (str (:id %)))) (:options question))))
+
 (defn sheet-data
   "What the sheet shows for one cycle detail.
    Post: only a title, the cycle id, and per question its number, format, points,
-   prompt, options and direction. No answer key, rubric or evidence leaves here."
+   prompt, options, direction and whether it is bubbled. No answer key, rubric or
+   evidence leaves here."
   [detail]
   {:title (str (or (:title detail) "Study cycle"))
    :cycle (:id detail)
@@ -28,6 +39,7 @@
                           :points (or (:points question) 0)
                           :prompt prompt
                           :rtl (rtl-text? prompt)
+                          :bubbled (boolean (bubbled? question))
                           :options (vec (for [option (:options question)]
                                           (if (map? option)
                                             {:id (str (:id option)) :text (str (:text option))}

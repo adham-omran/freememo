@@ -2,6 +2,7 @@
   "Answer-specific OCR. Original scans never replace learning material."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [freememo.answer-sheet :as answer-sheet]
             [freememo.cards :as cards]
             [freememo.commands :as commands]
             [freememo.card-models :as card-models]
@@ -154,6 +155,17 @@
             :page_numbers [page-number] :uncertain uncertain))
     (:answers transcript)))
 
+(defn ocr-question-list
+  "The question list the OCR prompt reads, in printed order.
+   Post: each entry has the printed :number, the stable :id and the :prompt.
+   A question with a row on the bubble page also has :bubble_letters, the
+   letters printed in its circles, so a filled circle reads as an option id."
+  [questions]
+  (mapv (fn [index q]
+          (cond-> {:number (inc index) :id (:id q) :prompt (:prompt q)}
+            (answer-sheet/bubbled? q) (assoc :bubble_letters (mapv :id (:options q)))))
+    (range) questions))
+
 (defn- page-image [bytes content-type page-index]
   (if (= "application/pdf" content-type)
     (:image-url (ocr/prepare-ocr-page bytes page-index 130 #{:chat}))
@@ -207,9 +219,7 @@
            (try
              (let [{:keys [bytes content_type]} (scan-original user-id scan-id)
                    {:keys [entry] :as resolved} (answer-ocr-model! user-id)
-                   questions (mapv (fn [index q]
-                                     {:number (inc index) :id (:id q) :prompt (:prompt q)})
-                               (range) (get-in cycle [:form :questions]))
+                   questions (ocr-question-list (get-in cycle [:form :questions]))
                    ids (set (map :id questions))
                    pages (mapv (fn [page-index]
                                  (llm/interrupt-checkpoint!)
