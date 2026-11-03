@@ -573,10 +573,10 @@
              :detail "Write numbered answers on ordinary paper, or type your answers. Print answer sheet provides an optional sheet with answer space. Keep later improvements separate from your first attempt."
              :commands #{}}
             {:label "Upload handwritten answers"
-             :detail "Select Upload handwritten answers. Choose a PDF, PNG, or JPEG. An answer can span several pages."
+             :detail "Select Upload handwritten answers. Choose a PDF, PNG, or JPEG. An answer can span several pages. Transcription starts when the upload ends, and it uses credits."
              :commands #{}}
             {:label "Review the transcript"
-             :detail "Select Review transcript. Compare each scan with its text and question assignments. Correct recognition errors and page assignments before grading."
+             :detail "When the transcript is ready, compare each scan with its text and question assignments. Correct recognition errors and page assignments, then select Accept corrected transcript. If a transcription fails, select Retry transcription."
              :commands #{}}
             {:label "Submit answers"
              :detail "Select Submit answers. Inspect each gap alongside your answer, the criterion, and the cited source. Review uncertain results before you accept them as gaps."

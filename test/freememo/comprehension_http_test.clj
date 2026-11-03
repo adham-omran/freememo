@@ -51,10 +51,12 @@
   (let [file (File/createTempFile "freememo-answer-http-" ".png")
         bytes (byte-array [1 9 3 7])
         calls (atom [])
+        started (atom [])
         multipart {:cycle_id "42" :file {:tempfile file :filename "answers.png" :content-type "image/png"}}]
     (try
       (with-open [out (io/output-stream file)] (.write out bytes))
-      (with-redefs [scan/stage-scan!
+      (with-redefs [scan/start-transcription! (fn [& arguments] (swap! started conj (vec arguments)))
+                    scan/stage-scan!
                     (fn [uid cid original content-type filename]
                       (swap! calls conj {:uid uid :cid cid :bytes (vec original)
                                          :content-type content-type :filename filename})
@@ -71,7 +73,9 @@
             (let [rejected (api/api-routes (assoc (request :post "/api/comprehension/scan" uid)
                                                 :params (assoc params "cycle_id" cid)))]
               (is (= 400 (:status rejected)))
-              (is (false? (:ok (decoded rejected))))))))
+              (is (false? (:ok (decoded rejected))))))
+          (testing "only the saved scan starts a transcription"
+            (is (= [[7 42 91]] @started)))))
       (finally (.delete file)))))
 
 (deftest invalid-or-oversized-multipart-upload-stops-before-storage

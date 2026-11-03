@@ -3,6 +3,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [freememo.cards :as cards]
+            [freememo.commands :as commands]
             [freememo.card-models :as card-models]
             [freememo.comprehension :as comprehension]
             [freememo.credits :as credits]
@@ -166,68 +167,94 @@
      :model-fields (openrouter/structured-chat-completion-fields capabilities {})}))
 
 (defn transcribe-scan!
-  "Suggest literal transcripts. Post: only explicit learner acceptance creates exam answers."
+  "Suggest literal transcripts. Post: only explicit learner acceptance creates exam answers.
+   on-claimed, when given, runs once this run owns the scan's `transcribing` status."
+  ([user-id cycle-id scan-id] (transcribe-scan! user-id cycle-id scan-id nil))
+  ([user-id cycle-id scan-id on-claimed]
+    (comprehension/with-work! user-id [:ocr scan-id]
+      #(let [cycle (decode-row (require-cycle! user-id cycle-id))
+             scan (or (scan-detail user-id scan-id)
+                      (throw (ex-info "This answer scan is not available." {})))]
+         (when-not (= cycle-id (:cycle_id scan))
+           (throw (ex-info "This scan belongs to a different study cycle." {})))
+         (when (= "accepted" (:status scan))
+           (throw (ex-info "This transcript is already accepted. Upload another scan for a later answer." {})))
+         (let [token (random-uuid)
+               claimed (jdbc/execute-one! db/ds
+                         ["UPDATE comprehension_scans SET status = 'transcribing', error = NULL,
+                            transcription_token = ?, transcription_started_at = now()
+                            WHERE id = ? AND (status IN ('uploaded','failed','review') OR
+                              (status = 'transcribing' AND (transcription_started_at IS NULL OR
+                                transcription_started_at < now() - interval '20 minutes'))) RETURNING id"
+                          token scan-id] opts)]
+           (when-not claimed
+             (throw (ex-info "This scan is already being transcribed." {})))
+           (when on-claimed (on-claimed))
+           (try
+             (let [{:keys [bytes content_type]} (scan-original user-id scan-id)
+                   {:keys [api-key entry model-fields]} (answer-ocr-model! user-id)
+                   questions (mapv (fn [index q]
+                                     {:number (inc index) :id (:id q) :prompt (:prompt q)})
+                               (range) (get-in cycle [:form :questions]))
+                   ids (set (map :id questions))
+                   pages (mapv (fn [page-index]
+                                 (llm/interrupt-checkpoint!)
+                                 (let [page-number (inc page-index)
+                                       {:keys [parsed cost tokens]}
+                                       (llm/chat! api-key model-fields
+                                         (cards/load-prompt-template "comprehension-answer-ocr.md")
+                                         [{:type "text" :text (llm-json/write-prompt-input
+                                                                {:questions questions :page_number page-number})}
+                                          {:type "image_url"
+                                           :image_url {:url (page-image bytes content_type page-index)}}]
+                                         :transcript :map {:feature :comprehension-ocr :user-id user-id})]
+                                   (credits/record-cost-charge! user-id :comprehension.answer-ocr (:id entry) cost tokens)
+                                   {:answers (validate-suggestions! ids page-number parsed)
+                                    :uncertainties (mapv (fn [text] {:page_number page-number :reason (str text)})
+                                                     (:uncertainties parsed))}))
+                           (range (:page_count scan)))
+                   suggestions (->> pages (mapcat :answers) (group-by :question_id)
+                                 (mapv (fn [[question-id segments]]
+                                         {:question_id question-id
+                                          :text (str/join "\n\n" (map :text segments))
+                                          :page_numbers (vec (distinct (mapcat :page_numbers segments)))
+                                          :uncertain (boolean (some :uncertain segments))})))
+                   uncertainties (vec (mapcat :uncertainties pages))]
+               (when-not (jdbc/execute-one! db/ds
+                           ["UPDATE comprehension_scans SET suggestions = ?, uncertainties = ?, status = 'review'
+                              WHERE id = ? AND status = 'transcribing' AND transcription_token = ? RETURNING id"
+                            (encoded suggestions) (encoded uncertainties) scan-id token] opts)
+                 (throw (ex-info "A newer transcription run owns this scan. Refresh to inspect its result." {})))
+               {:ok true :suggestions suggestions :uncertainties uncertainties})
+             (catch Exception e
+               (jdbc/execute-one! db/ds
+                 ["UPDATE comprehension_scans SET status = 'failed', error = ?
+                    WHERE id = ? AND transcription_token = ? AND status = 'transcribing'"
+                  (ex-message e) scan-id token])
+               (throw e))))))))
+
+(def claim-wait-ms
+  "How long an upload response waits for its transcription to claim the scan."
+  10000)
+
+(defn start-transcription!
+  "Transcribe a newly staged scan on a server thread, so OCR does not depend on the tab.
+   Pre: the learner owns the cycle, and stage-scan! saved scan-id in it.
+   Post: returns after the run claims the scan, ends, or claim-wait-ms passes.
+   A page that reads after the return sees `transcribing`, not `uploaded`.
+   When the run ends, `:comprehension-mutations` bumps so the page reads the result.
+   A failed run records its error on the scan row. It never throws into the caller."
   [user-id cycle-id scan-id]
-  (comprehension/with-work! user-id [:ocr scan-id]
-    #(let [cycle (decode-row (require-cycle! user-id cycle-id))
-           scan (or (scan-detail user-id scan-id)
-                    (throw (ex-info "This answer scan is not available." {})))]
-       (when-not (= cycle-id (:cycle_id scan))
-         (throw (ex-info "This scan belongs to a different study cycle." {})))
-       (when (= "accepted" (:status scan))
-         (throw (ex-info "This transcript is already accepted. Upload another scan for a later answer." {})))
-       (let [token (random-uuid)
-             claimed (jdbc/execute-one! db/ds
-                       ["UPDATE comprehension_scans SET status = 'transcribing', error = NULL,
-                          transcription_token = ?, transcription_started_at = now()
-                          WHERE id = ? AND (status IN ('uploaded','failed','review') OR
-                            (status = 'transcribing' AND (transcription_started_at IS NULL OR
-                              transcription_started_at < now() - interval '20 minutes'))) RETURNING id"
-                        token scan-id] opts)]
-         (when-not claimed
-           (throw (ex-info "This scan is already being transcribed." {})))
-         (try
-           (let [{:keys [bytes content_type]} (scan-original user-id scan-id)
-                 {:keys [api-key entry model-fields]} (answer-ocr-model! user-id)
-                 questions (mapv (fn [index q]
-                                   {:number (inc index) :id (:id q) :prompt (:prompt q)})
-                             (range) (get-in cycle [:form :questions]))
-                 ids (set (map :id questions))
-                 pages (mapv (fn [page-index]
-                               (llm/interrupt-checkpoint!)
-                               (let [page-number (inc page-index)
-                                     {:keys [parsed cost tokens]}
-                                     (llm/chat! api-key model-fields
-                                       (cards/load-prompt-template "comprehension-answer-ocr.md")
-                                       [{:type "text" :text (llm-json/write-prompt-input
-                                                              {:questions questions :page_number page-number})}
-                                        {:type "image_url"
-                                         :image_url {:url (page-image bytes content_type page-index)}}]
-                                       :transcript :map {:feature :comprehension-ocr :user-id user-id})]
-                                 (credits/record-cost-charge! user-id :comprehension.answer-ocr (:id entry) cost tokens)
-                                 {:answers (validate-suggestions! ids page-number parsed)
-                                  :uncertainties (mapv (fn [text] {:page_number page-number :reason (str text)})
-                                                   (:uncertainties parsed))}))
-                         (range (:page_count scan)))
-                 suggestions (->> pages (mapcat :answers) (group-by :question_id)
-                               (mapv (fn [[question-id segments]]
-                                       {:question_id question-id
-                                        :text (str/join "\n\n" (map :text segments))
-                                        :page_numbers (vec (distinct (mapcat :page_numbers segments)))
-                                        :uncertain (boolean (some :uncertain segments))})))
-                 uncertainties (vec (mapcat :uncertainties pages))]
-             (when-not (jdbc/execute-one! db/ds
-                         ["UPDATE comprehension_scans SET suggestions = ?, uncertainties = ?, status = 'review'
-                            WHERE id = ? AND status = 'transcribing' AND transcription_token = ? RETURNING id"
-                          (encoded suggestions) (encoded uncertainties) scan-id token] opts)
-               (throw (ex-info "A newer transcription run owns this scan. Refresh to inspect its result." {})))
-             {:ok true :suggestions suggestions :uncertainties uncertainties})
-           (catch Exception e
-             (jdbc/execute-one! db/ds
-               ["UPDATE comprehension_scans SET status = 'failed', error = ?
-                  WHERE id = ? AND transcription_token = ? AND status = 'transcribing'"
-                (ex-message e) scan-id token])
-             (throw e)))))))
+  (let [claimed (promise)]
+    (future
+      (try
+        (transcribe-scan! user-id cycle-id scan-id #(deliver claimed true))
+        (catch Throwable _ nil)
+        (finally
+          (deliver claimed false)
+          (commands/bump-channels! user-id #{:comprehension-mutations}))))
+    (deref claimed claim-wait-ms false)
+    nil))
 
 (defn normalize-assignments!
   "Accept only known questions and pages. Unclear text remains explicit evidence uncertainty."
