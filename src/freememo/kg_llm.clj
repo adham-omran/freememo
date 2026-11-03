@@ -9,6 +9,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema]
    [taoensso.telemere :as tel]))
 
 (defn root-cause [e]
@@ -87,47 +88,60 @@
    lives here, not at the call sites: all six shared this need and only two ever
    implemented it, keyed on a `:raw` value that was nil for the very failure it
    was meant to catch.
-   `root-key` and `root-type` declare the JSON response field to return.
+   `resolved` is the map resolve-model+gate! returns: {:api-key :entry :model-fields}.
+   `reply` is a reply-schema/contract. Its :root names the JSON response field
+   to return, and its :schema decides that field's type.
    Optional `observability` {:feature kw :user-id id} tags the transport and no-content
    observability signals (see freememo.openrouter/post!).
    Pre:  api-key configured; model-fields is the :model-fields of
-         resolve-model+gate!; root-key is a keyword; root-type is :map or :vector.
-   Post: {:parsed collection :cost usd :tokens [m …]} where :cost is summed
+         resolve-model+gate!; entry is the card-models entry of that model;
+         reply passes reply-schema/require-contract!. A reply that does not
+         throws ::reply-schema/invalid-contract before any HTTP call, so the
+         caller is at fault.
+   Post: the request carries the reply's JSON schema when entry lists
+         :structured_outputs, and JSON mode otherwise. :parsed holds no null
+         field. {:parsed collection :cost usd :tokens [m …]} where :cost is summed
          across attempts and :tokens holds one openrouter/usage-tokens map per
          attempt — callers bill both. Throws the final attempt's exception on failure
          (ex-data carries :type); a failed call bills nothing, and the spend it
          absorbed is logged here as ::unbilled-spend. Callers cannot report that
          cost — the exception carries no accumulator, and kg-questions' skipped
          batch truthfully reports :cost 0.0 for what it BILLED — so the platform
-         only sees absorbed spend if this frame records it."
-  ([api-key model-fields system-prompt user-content root-key root-type]
-   (chat! api-key model-fields system-prompt user-content root-key root-type nil))
-  ([api-key model-fields system-prompt user-content root-key root-type observability]
-   (loop [attempt 1
-          cost-acc 0.0
-          tokens-acc []]
-     (let [body (openrouter/chat-completion! api-key
-                  (assoc model-fields
-                    :messages [{:role "system" :content system-prompt}
-                               {:role "user" :content user-content}])
-                  observability)
-           cost-acc' (+ cost-acc (double (or (-> body :usage :cost) 0)))
-           tokens-acc' (conj tokens-acc (openrouter/usage-tokens (:usage body)))
-           result (try {:parsed (llm-json/parse-response-field
-                                  (openrouter/message-content body observability)
-                                  root-key root-type)}
-                    (catch clojure.lang.ExceptionInfo e
-                      (if (and (openrouter/retryable-cause? e) (< attempt max-attempts))
-                        ::retry
-                        (do (tel/log! {:level :warn :id ::unbilled-spend
-                                       :data (completion-failure-log-data
-                                               model-fields body observability
-                                               cost-acc' attempt e)}
-                              "KG completion failed; provider spend absorbed, not billed")
-                            (throw (lane-visible-failure e))))))]
-       (if (= ::retry result)
-         ;; A cancelled run must not spend the retry — blocking HTTP never
-         ;; notices the interrupt, so this loop checks like every other.
-         (do (interrupt-checkpoint!)
-             (recur (inc attempt) cost-acc' tokens-acc'))
-         (assoc result :cost cost-acc' :tokens tokens-acc'))))))
+         only sees absorbed spend if this frame records it.
+   Invariant: the schema replaces no check of the caller's."
+  ([resolved system-prompt user-content reply]
+   (chat! resolved system-prompt user-content reply nil))
+  ([{:keys [api-key entry model-fields]} system-prompt user-content reply observability]
+   (let [reply (reply-schema/require-contract! reply)
+         model-fields (reply-schema/request-fields entry model-fields reply)
+         root-key (:root reply)
+         root-type (reply-schema/root-type reply)]
+     (loop [attempt 1
+            cost-acc 0.0
+            tokens-acc []]
+       (let [body (openrouter/chat-completion! api-key
+                    (assoc model-fields
+                      :messages [{:role "system" :content system-prompt}
+                                 {:role "user" :content user-content}])
+                    observability)
+             cost-acc' (+ cost-acc (double (or (-> body :usage :cost) 0)))
+             tokens-acc' (conj tokens-acc (openrouter/usage-tokens (:usage body)))
+             result (try {:parsed (reply-schema/drop-null-fields
+                                    (llm-json/parse-response-field
+                                      (openrouter/message-content body observability)
+                                      root-key root-type))}
+                      (catch clojure.lang.ExceptionInfo e
+                        (if (and (openrouter/retryable-cause? e) (< attempt max-attempts))
+                          ::retry
+                          (do (tel/log! {:level :warn :id ::unbilled-spend
+                                         :data (completion-failure-log-data
+                                                 model-fields body observability
+                                                 cost-acc' attempt e)}
+                                "KG completion failed; provider spend absorbed, not billed")
+                              (throw (lane-visible-failure e))))))]
+         (if (= ::retry result)
+           ;; A cancelled run must not spend the retry — blocking HTTP never
+           ;; notices the interrupt, so this loop checks like every other.
+           (do (interrupt-checkpoint!)
+               (recur (inc attempt) cost-acc' tokens-acc'))
+           (assoc result :cost cost-acc' :tokens tokens-acc')))))))

@@ -16,6 +16,7 @@
    [freememo.kg-questions :as kg-questions]
    [freememo.llm-json :as llm-json]
    [freememo.openrouter :as openrouter]
+   [freememo.reply-schema :as reply-schema]
    [freememo.settings :as settings]))
 
 (defn- json-response [root-key root-value]
@@ -31,6 +32,7 @@
 (def ^:private generated-card-valid? @#'cards/generated-card-valid?)
 (def ^:private triple-valid? @#'kg-extract/valid-triple?)
 (def ^:private link-decision-valid? @#'kg-extract/link-decision-valid?)
+(def ^:private link-decisions->map @#'kg-extract/link-decisions->map)
 (def ^:private validated-question @#'kg-questions/validated-question)
 (def ^:private validate-grade! @#'kg-grade/validate-grade!)
 (def ^:private candidate-fact-for-id @#'cards-from-facts/candidate-fact-for-id)
@@ -45,8 +47,9 @@
   (and (vector? triples) (every? triple-valid? triples)))
 
 (defn- every-link-decision-valid? [decisions]
-  (and (map? decisions)
-    (every? #(link-decision-valid? #{42} %) (vals decisions))))
+  (and (vector? decisions)
+    (every? #(link-decision-valid? #{42} %)
+      (vals (link-decisions->map (reply-schema/drop-null-fields decisions))))))
 
 (defn- every-question-valid? [valid-ids minimum-facts questions]
   (and (vector? questions)
@@ -65,6 +68,7 @@
 
 (def ^:private lane-contracts
   [{:lane :basic
+    :reply (cards/card-replies "basic")
     :prompt "basic.md"
     :root-key :cards
     :root-type :vector
@@ -72,6 +76,7 @@
     :valid-domain? #(every-card-valid? "basic" %)
     :wrong-domain-value [{:q "What?"}]}
    {:lane :cloze
+    :reply (cards/card-replies "cloze")
     :prompt "cloze.md"
     :root-key :cards
     :root-type :vector
@@ -79,6 +84,7 @@
     :valid-domain? #(every-card-valid? "cloze" %)
     :wrong-domain-value [{:q "What?" :a "This."}]}
    {:lane :overlapping
+    :reply (cards/card-replies "overlapping")
     :prompt "overlapping.md"
     :root-key :cards
     :root-type :vector
@@ -86,6 +92,7 @@
     :valid-domain? #(every-card-valid? "overlapping" %)
     :wrong-domain-value [{:question "What are the steps?" :items "One"}]}
    {:lane :kg-extract
+    :reply kg-extract/triples-reply
     :prompt "kg-extract.md"
     :root-key :triples
     :root-type :vector
@@ -93,13 +100,15 @@
     :valid-domain? every-triple-valid?
     :wrong-domain-value [{:s "heart" :p "pumps" :o "blood" :lit "blood"}]}
    {:lane :kg-link
+    :reply kg-extract/link-reply
     :prompt "kg-link.md"
     :root-key :decisions
-    :root-type :map
-    :valid-value {:aorta 42 :atrium "new"}
+    :root-type :vector
+    :valid-value [{:label "aorta" :entity_id 42} {:label "atrium" :entity_id nil}]
     :valid-domain? every-link-decision-valid?
-    :wrong-domain-value {:aorta "maybe"}}
+    :wrong-domain-value [{:label "aorta" :entity_id 7}]}
    {:lane :kg-atomic
+    :reply kg-questions/questions-reply
     :prompt "kg-question-atomic.md"
     :root-key :questions
     :root-type :vector
@@ -107,6 +116,7 @@
     :valid-domain? #(every-question-valid? #{7} 1 %)
     :wrong-domain-value [{:q "Which chamber?" :a "The left ventricle." :fact-ids 7}]}
    {:lane :kg-synthesis
+    :reply kg-questions/questions-reply
     :prompt "kg-question-synthesis.md"
     :root-key :questions
     :root-type :vector
@@ -114,6 +124,7 @@
     :valid-domain? #(every-question-valid? #{3 7} 2 %)
     :wrong-domain-value [{:q "How?" :a "This way." :fact-ids [3]}]}
    {:lane :kg-grade
+    :reply kg-grade/question-grade-reply
     :prompt "kg-grade.md"
     :root-key :grade
     :root-type :map
@@ -122,6 +133,7 @@
     :valid-domain? grade-valid?
     :wrong-domain-value {:verdict "maybe" :explanation "Unclear."}}
    {:lane :card-grade
+    :reply kg-grade/card-grade-reply
     :prompt "card-grade.md"
     :root-key :grade
     :root-type :map
@@ -129,6 +141,7 @@
     :valid-domain? grade-valid?
     :wrong-domain-value {:verdict "correct"}}
    {:lane :fact-select
+    :reply cards-from-facts/fact-ids-reply
     :prompt "select-facts.md"
     :root-key :fact_ids
     :root-type :vector
@@ -152,6 +165,12 @@
       (is (true? (valid-domain? valid-value)))
       (is (false? (valid-domain? wrong-domain-value))))))
 
+(deftest every-lane-names-its-contract-root-and-type
+  (doseq [{:keys [lane reply root-key root-type]} lane-contracts]
+    (testing (name lane)
+      (is (= root-key (:root reply)))
+      (is (= root-type (reply-schema/root-type reply))))))
+
 (deftest every-lane-prompt-demands-json-only
   (doseq [{:keys [lane prompt]} lane-contracts]
     (testing (name lane)
@@ -162,7 +181,7 @@
         (is (not (str/includes? text "```")))))))
 
 (deftest every-kg-lane-retries-malformed-json-and-a-missing-root
-  (doseq [{:keys [lane root-key root-type valid-value]}
+  (doseq [{:keys [lane reply root-key valid-value]}
           (remove #(#{:basic :cloze :overlapping} (:lane %)) lane-contracts)
           [failure-name invalid-content]
           [["malformed JSON" "{:legacy true}"]
@@ -181,13 +200,13 @@
                       (fn [_ _ _]
                         (let [index (swap! attempts inc)]
                           (nth responses (dec index))))]
-          (is (= {:parsed valid-value
+          (is (= {:parsed (reply-schema/drop-null-fields valid-value)
                   :cost 0.003
                   :tokens [{:input-tokens 100 :output-tokens 5}
                            {:input-tokens 110 :output-tokens 30
                             :cached-tokens 64 :reasoning-tokens 12}]}
-                (kg-llm/chat! "key" {:model "model"} "prompt" "{}"
-                  root-key root-type)))
+                (kg-llm/chat! {:api-key "key" :entry {} :model-fields {:model "model"}}
+                  "prompt" "{}" reply)))
           (is (= 2 @attempts)))))))
 
 (deftest card-generation-retries-invalid-json-and-bills-all-attempts
@@ -236,7 +255,10 @@
                 :cached-tokens 256 :reasoning-tokens 8}]]
             @charged))
       (doseq [request-body @request-bodies]
-        (is (= {:type "json_object"} (:response_format request-body)))
+        (is (= {:type "json_schema"
+                :json_schema {:name "basic_cards" :strict true
+                              :schema (reply-schema/wire-schema (cards/card-replies "basic"))}}
+              (:response_format request-body)))
         (is (true? (get-in request-body [:provider :require_parameters])))
         (is (= "low" (:reasoning_effort request-body)))
         (is (not (contains? request-body :verbosity)))
@@ -330,8 +352,8 @@
                                     :finish_reason "stop"}]
                          :usage {:cost 0.001}})]
           (try
-            (kg-llm/chat! "key" {:model "model"} "prompt" "{}"
-              :triples :vector {:feature :kg-extract :user-id 7})
+            (kg-llm/chat! {:api-key "key" :entry {} :model-fields {:model "model"}}
+              "prompt" "{}" kg-extract/triples-reply {:feature :kg-extract :user-id 7})
             (catch clojure.lang.ExceptionInfo e e)))]
     (is (= :freememo.llm-json/unparseable (:type (ex-data failure))))
     (is (= "The model returned invalid structured JSON" (ex-message failure)))

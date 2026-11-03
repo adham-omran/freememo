@@ -64,8 +64,9 @@
                         (fn [k body & more]
                           (swap! !calls conj (:content (second (:messages body))))
                           (apply stub/chat-completion! k body more))]
-            (g/group! {:chat (fn [system user root-key root-type]
-                               (llm/chat! "key" {} system user root-key root-type))
+            (g/group! {:chat (fn [system user reply]
+                               (llm/chat! {:api-key "key" :entry {} :model-fields {}}
+                                 system user reply))
                        :commits commits :hunks hunks :noise #{}
                        :check-cancelled! (fn []) :set-phase! (fn [_])
                        :on-pass (fn [pass cost _] (swap! !bills conj [pass cost]))}))]

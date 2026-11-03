@@ -23,7 +23,6 @@
   #?(:clj (let [[action id argument extra] command]
             (case action
               :start (cycle/start-cycle! user-id id argument)
-              :extract (cycle/extract-facts! user-id id)
               :submit (cycle/submit-answers! user-id id argument)
               :draft (cycle/save-draft-answers! user-id id argument)
               :transcribe (scan/transcribe-scan! user-id id argument)
@@ -124,8 +123,6 @@
       (WorkProgress (e/server (work-step (e/watch (us/get-atom user-id :comprehension-work)) :generate)))
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text "The duration is an estimate. You can take longer without a penalty."))
-      (when-let [topic-id (e/watch !topic)]
-        (Action user-id [:extract topic-id] "Extract facts" !revision !error navigate!))
       (CommandResult user-id commits !revision !error navigate! true))))
 
 (e/defn Question [index question]

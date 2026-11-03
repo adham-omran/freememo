@@ -19,9 +19,10 @@
                  :commits (keep second [(re-find #"## Commit (\w+)\nfeat" user)])}]}
 
     (str/starts-with? system "You place each hunk")
-    {:assignments (into {} (map (fn [[_ id subject]]
-                                  [id (if (str/starts-with? subject "feat")
-                                        "split hold" "rename cycle to loop")]))
+    {:assignments (mapv (fn [[_ id subject]]
+                          {:hunk_id id
+                           :label (if (str/starts-with? subject "feat")
+                                    "split hold" "rename cycle to loop")})
                     (re-seq #"### (H\d+) · commit \w+ \"([^\"]*)\"" user))}
 
     :else (throw (ex-info "stub: no reply for this prompt" {:system (subs system 0 40)}))))

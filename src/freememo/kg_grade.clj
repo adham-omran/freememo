@@ -25,6 +25,8 @@
    [freememo.credits :as credits]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema
+    :refer [strict-object array-of enum-of json-string json-integer]]
    [freememo.cards :as cards]
    [freememo.settings :as settings]
    [freememo.text :as text]
@@ -36,6 +38,21 @@
   (when (or (string? v) (keyword? v))
     (#{"correct" "partial" "incorrect"}
       (str/lower-case (name v)))))
+
+(def ^:private verdict-schema (enum-of ["correct" "partial" "incorrect"]))
+
+(def question-grade-reply
+  "The reply contract of kg-grade.md."
+  (reply-schema/contract "kg_question_grade" :grade
+    (strict-object {:verdict verdict-schema
+                    :explanation json-string
+                    :missed-fact-ids (array-of json-integer)
+                    :matched-keywords (array-of json-string)})))
+
+(def card-grade-reply
+  "The reply contract of card-grade.md."
+  (reply-schema/contract "card_grade" :grade
+    (strict-object {:verdict verdict-schema :explanation json-string})))
 
 (defn- validate-grade!
   "Validate and normalize one parsed grade.
@@ -117,7 +134,7 @@
   [user-id question-id user-answer]
   (do
    (try
-     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
+     (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :grade)
            {:keys [facts keywords question reference-answer]}
            (or (db/get-kg-question-for-session user-id question-id)
                (throw (ex-info "Question not found" {})))
@@ -140,8 +157,8 @@
            prompt (cards/load-prompt-template "kg-grade.md")
            gctx {:feature :kg-grade :user-id user-id}
            ;; unusable output is retried inside llm/chat!; :cost covers both attempts
-           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt payload
-                                          :grade :map gctx)
+           {:keys [parsed cost tokens]} (llm/chat! resolved prompt payload
+                                          question-grade-reply gctx)
            grade (validate-grade! parsed)
            verdict (:verdict grade)
            linked-ids (into #{} (map :id) facts)
@@ -178,7 +195,7 @@
   [user-id card-id ord user-answer]
   (do
    (try
-     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
+     (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :grade)
            {:keys [prompt answer]} (or (db/get-card-item user-id card-id ord)
                                      (throw (ex-info "Card item not found" {})))
            payload (llm-json/write-prompt-input
@@ -187,8 +204,8 @@
                       :answer user-answer})
            tmpl (or (cards/load-prompt-template "card-grade.md")
                   (throw (ex-info "Failed to load card-grade prompt" {})))
-           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields tmpl payload
-                                          :grade :map
+           {:keys [parsed cost tokens]} (llm/chat! resolved tmpl payload
+                                          card-grade-reply
                                           {:feature :card-grade :user-id user-id})
            grade (validate-grade! parsed)
            verdict (:verdict grade)]

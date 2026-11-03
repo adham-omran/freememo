@@ -457,8 +457,8 @@
   (if (empty? labels)
     {}
     (try
-      (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :link)
-            {:keys [by-label cost tokens]} (kg-extract/link-entities! api-key model-fields
+      (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :link)
+            {:keys [by-label cost tokens]} (kg-extract/link-entities! resolved
                                              user-id labels {:from-diagnosis? true})]
         (when (and cost (pos? cost))
           (credits/record-cost-charge! user-id endpoint (:id entry) cost tokens))

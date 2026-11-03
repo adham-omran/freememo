@@ -4,7 +4,6 @@
             [clojure.string :as str]
             [freememo.assessment :as assessment]
             [freememo.db :as db]
-            [freememo.kg-extract :as kg-extract]
             [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
@@ -257,18 +256,6 @@
   (jdbc/execute! db/ds
     ["SELECT id, title FROM topics WHERE user_id = ? AND parent_id IS NULL
        AND staged_delete_id IS NULL ORDER BY lower(title), id" user-id] opts))
-
-(defn extract-facts!
-  "Reuse the existing fact extractor after checking source ownership."
-  [user-id topic-id]
-  (with-work! user-id [:extract topic-id]
-    #(do
-       (when-not (db/owns-topic? user-id topic-id)
-         (throw (ex-info "Choose material from your account." {})))
-       (let [response (kg-extract/distill-document! user-id topic-id)]
-         (if (:success response)
-           (assoc response :ok true)
-           {:ok false :error (:error response)})))))
 
 (defn list-cycles [user-id]
   (jdbc/execute! db/ds

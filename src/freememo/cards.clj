@@ -9,6 +9,8 @@
    [freememo.card-models :as card-models]
    [freememo.pre-prompt-mode :as ppm]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema
+    :refer [strict-object array-of json-string]]
    [freememo.math :as math]
    [freememo.overlapping :as overlap]
    [freememo.image-rehost :as image-rehost]
@@ -155,6 +157,18 @@
     pre-prompt-mode user-id topic-id))
 
 ;; Model response parsing
+(def card-replies
+  "The reply contract of each card type's prompt (basic.md, cloze.md,
+   overlapping.md). generated-card-valid? still checks every card: the schema
+   cannot say that a field is non-blank or that a list has 2 to 20 items."
+  {"basic" (reply-schema/contract "basic_cards" :cards
+             (array-of (strict-object {:q json-string :a json-string})))
+   "cloze" (reply-schema/contract "cloze_cards" :cards
+             (array-of (strict-object {:c json-string})))
+   "overlapping" (reply-schema/contract "overlapping_cards" :cards
+                   (array-of (strict-object {:question json-string
+                                             :items (array-of json-string)})))})
+
 (defn parse-card-response
   "Parse the model's JSON object and return its :cards vector.
    Pre:  raw-text is the non-blank message content.
@@ -276,9 +290,11 @@
         reasoning (settings/get-reasoning user-id)
         verbosity (settings/get-verbosity user-id)
         card-type (card-type-for-endpoint endpoint-tag)
-        model-fields (openrouter/structured-chat-completion-fields entry
-                       {:reasoning_effort reasoning
-                        :verbosity verbosity})
+        model-fields (reply-schema/request-fields entry
+                       (openrouter/structured-chat-completion-fields entry
+                         {:reasoning_effort reasoning
+                          :verbosity verbosity})
+                       (card-replies card-type))
         has-context? (not (empty? context))
         prompt (prompt-builder-fn card-count has-context? pre-prompt pre-prompt-mode user-id topic-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))

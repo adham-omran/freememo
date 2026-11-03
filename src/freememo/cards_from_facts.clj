@@ -11,6 +11,7 @@
    [freememo.db :as db]
    [freememo.kg-llm :as llm]
    [freememo.llm-json :as llm-json]
+   [freememo.reply-schema :as reply-schema]
    [taoensso.telemere :as tel]
    [clojure.string :as str]))
 
@@ -54,6 +55,12 @@
     (map #(str "- " (fact->statement %) "."))
     (str/join "\n")))
 
+(def fact-ids-reply
+  "The reply contract of select-facts.md. candidate-fact-for-id still drops an
+   id that was not offered."
+  (reply-schema/contract "selected_fact_ids" :fact_ids
+    (reply-schema/array-of reply-schema/json-integer)))
+
 (defn select-relevant-facts
   "LLM-select the facts `passage` supports out of `candidate-facts`
    (get-kg-facts display rows). Returns {:success true :facts rows :cost usd}
@@ -67,14 +74,14 @@
          ids are dropped — the model cannot invent a fact)."
   [user-id root-topic-id passage candidate-facts]
   (try
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :fact-select)
+    (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :fact-select)
           prompt (cards/load-prompt-template "select-facts.md")
           _ (when-not prompt (throw (ex-info "Failed to load select-facts prompt" {})))
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields prompt
+          {:keys [parsed cost tokens]} (llm/chat! resolved prompt
                                          (llm-json/write-prompt-input
                                            {:passage passage
                                             :facts (mapv fact->select-row candidate-facts)})
-                                         :fact_ids :vector
+                                         fact-ids-reply
                                          {:feature :fact-select :user-id user-id})
           by-id (into {} (map (juxt :id identity)) candidate-facts)
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))

@@ -15,13 +15,13 @@ Rules:
 - Prefer a predicate from the existing vocabulary when one fits.
 - If none fits, make a short lowercase verb phrase.
 - Examples include "drains into" and "was signed in".
-- The object is either an entity (`o`) or a literal value (`lit`). Never use both.
+- The object is either an entity (`o`) or a literal value (`lit`). Never use both. Set the one you do not use to null.
 - Skip page furniture: headers, footers, figure captions, references.
 
 Return one JSON object. Use double quotes for all keys and strings.
 Return no Markdown, code fences, or explanation.
 
-{"triples":[{"s":"left ventricle","p":"pumps blood into","o":"aorta"},{"s":"cardiac cycle","p":"has duration","lit":"0.8 seconds"}]}
+{"triples":[{"s":"left ventricle","p":"pumps blood into","o":"aorta","lit":null},{"s":"cardiac cycle","p":"has duration","o":null,"lit":"0.8 seconds"}]}
 
 If the page contains no extractable facts, return `{"triples":[]}`.
 

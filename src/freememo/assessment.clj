@@ -4,7 +4,9 @@
             [freememo.cards :as cards]
             [freememo.credits :as credits]
             [freememo.kg-llm :as llm]
-            [freememo.llm-json :as llm-json])
+            [freememo.llm-json :as llm-json]
+            [freememo.reply-schema :as reply-schema
+             :refer [strict-object nullable array-of enum-of json-string json-integer json-boolean]])
   (:import [java.text Normalizer Normalizer$Form]))
 
 (def formats #{"fill-in-the-blank" "multiple-choice" "short-essay" "long-essay"})
@@ -361,13 +363,149 @@
                    "This assessment does not establish coverage of excluded facts.")})
       form)))
 
+;; ── Model contract ───────────────────────────────────────────────────────────
+;;
+;; The schema states the shape the checks above read, so a provider that
+;; enforces it cannot return a citation as one object or under `text`. Those
+;; two shapes refused most forms in plans/comprehension-facts-experiment.md §7.
+;; The checks still run on every reply: the schema cannot check a quote against
+;; the source, and a model without structured outputs gets no schema at all.
+
+(def ^:private citation-schema
+  "What validate-citations! reads from one citation."
+  (strict-object {:material_id json-integer :topic_id json-integer :quote json-string}))
+
+(def ^:private format-schema (enum-of (sort formats)))
+
+(def ^:private question-schema
+  "What normalize-question and grading read from one question."
+  (strict-object
+    {:id json-string
+     :format format-schema
+     :points json-integer
+     :prompt json-string
+     :outcomes (array-of json-string)
+     :evidence (array-of citation-schema)
+     :fact_ids (nullable (array-of json-integer))
+     :accepted_answers (nullable (array-of json-string))
+     :case_sensitive (nullable json-boolean)
+     :options (nullable (array-of (strict-object {:id json-string :text json-string})))
+     :correct_option_id (nullable json-string)
+     :grading_guide (nullable json-string)
+     ;; A list, not a map of five optional criteria: Anthropic refused that map
+     ;; as a grammar too large (2026-11-03). reply->form reads it back as a map.
+     :rubric (nullable (array-of (strict-object {:criterion (enum-of (map name criterion-keys))
+                                                 :expectation json-string})))}))
+
+(def ^:private blueprint-schema
+  "What validate-blueprint! and the cycle pages read from the blueprint."
+  (strict-object
+    {:assessed_outcomes (array-of (strict-object {:id json-string :statement json-string
+                                                  :question_ids (array-of json-string)
+                                                  :evidence (array-of citation-schema)}))
+     :unassessed_outcomes (array-of (strict-object {:id (nullable json-string)
+                                                    :statement json-string :reason json-string}))
+     :omitted_formats (array-of (strict-object {:format format-schema :reason json-string}))
+     :estimated_minutes json-integer}))
+
+(def form-reply
+  "The reply contract of curriculum-exam-form.md."
+  (reply-schema/contract "assessment_form" :form
+    (strict-object {:insufficient (nullable json-boolean)
+                    :reason (nullable json-string)
+                    :blueprint blueprint-schema
+                    :questions (array-of question-schema)})))
+
+(defn- rubric-entries->map
+  "Read a rubric written as [{:criterion :expectation}] as the criterion map the
+   checks and grading read. A repeated criterion keeps its last expectation.
+   A rubric that is already a map passes through."
+  [rubric]
+  (if (vector? rubric)
+    (into {} (map (fn [{:keys [criterion expectation]}] [(keyword (str criterion)) expectation])) rubric)
+    rubric))
+
+(defn reply->form
+  "Read a curriculum-exam-form.md reply as the form validate-form! checks.
+   Pre:  reply is the parsed `form` object that kg-llm/chat! returns, from a
+         schema-constrained call or from JSON mode. It holds no null field.
+   Post: every question's rubric is a criterion map.
+   Invariant: no question, outcome or citation is added or removed. The checks
+         alone decide what is kept."
+  [reply]
+  (cond-> reply
+    (vector? (:questions reply))
+    (update :questions (partial mapv #(cond-> % (contains? % :rubric) (update :rubric rubric-entries->map))))))
+
+(def grade-reply
+  "The reply contract of curriculum-exam-grade.md."
+  (reply-schema/contract "assessment_grade" :grade
+    (strict-object
+      {:question_grades
+       (array-of
+         (strict-object
+           {:question_id json-string
+            ;; A list for the reason the form's rubric is one: a map of five
+            ;; optional criteria is the shape Anthropic refused.
+            :criteria (array-of (strict-object {:criterion (enum-of (map name criterion-keys))
+                                                :score json-integer}))
+            :explanation json-string
+            :deductions (array-of
+                          (strict-object
+                            {:criterion (enum-of (map name criterion-keys))
+                             :category (enum-of (sort gap-categories))
+                             :reason json-string
+                             :evidence (array-of citation-schema)
+                             :fact_ids (array-of json-integer)}))}))
+       :explanation json-string})))
+
+(defn- criterion-scores->map
+  "Read criteria written as [{:criterion :score}] as the score map
+   validate-free-grade! reads. A repeated criterion keeps its last score.
+   Criteria that are already a map pass through."
+  [criteria]
+  (if (vector? criteria)
+    (into {} (map (fn [{:keys [criterion score]}] [(keyword (str criterion)) score])) criteria)
+    criteria))
+
+(defn reply->grade
+  "Read a curriculum-exam-grade.md reply as the grade grade! checks.
+   Post: every question grade's criteria is a score map.
+   Invariant: no question grade or deduction is added or removed."
+  [reply]
+  (cond-> reply
+    (vector? (:question_grades reply))
+    (update :question_grades (partial mapv #(cond-> % (contains? % :criteria) (update :criteria criterion-scores->map))))))
+
+(defn prompt-source
+  "The source as curriculum-exam-form.md reads it.
+   Pre:  evidence is the result of bounded-evidence.
+   Post: {:materials [{:material_id :title :sections [{:topic_id …}]}] :facts
+         :source_limits}. The ids carry the names a citation uses, and the word
+         evidence names nothing here: in the reply it means citations only.
+   Invariant: the frozen evidence in the blueprint keeps the application's
+         own shape. Only the prompt sees this one."
+  [evidence]
+  {:materials (mapv (fn [material]
+                      (cond-> {:material_id (:material-id material)
+                               :sections (mapv (fn [section]
+                                                 (-> section (dissoc :topic-id)
+                                                     (assoc :topic_id (:topic-id section))))
+                                           (:evidence material))}
+                        (:title material) (assoc :title (:title material))))
+                (:materials evidence))
+   :facts (:facts evidence)
+   :source_limits (:source_limits evidence)})
+
 (defn generate!
   "Generate one mixed assessment and charge its completed model call.
    Pre: the caller owns all evidence. Optional `:on-step` receives :writing before
    the model call and :checking before validation.
    Post: returns a validated frozen form. A refused form throws ::invalid-assessment
-   with the attempt's `:charged-credits` in its data.
-   Invariant: validation failure cannot suppress a completed call charge."
+   with the attempt's `:charged-credits` in its data. The call asks for
+   form-reply's schema when the model's entry supports structured outputs.
+   Invariant: validation failure cannot suppress a completed call charge, and
+   every reply is validated, whether or not a schema constrained it."
   [user-id evidence options]
   (let [minutes (or (:target-minutes options) 30)
         evidence (bounded-evidence evidence)
@@ -376,17 +514,17 @@
       (fail! "Choose an estimated duration from 5 to 180 minutes." {:field :target-minutes}))
     (when-not (some nonblank? (mapcat #(map :text (:evidence %)) (:materials evidence)))
       (throw (ex-info "Add source text before generating an assessment." {:type ::insufficient-evidence})))
-    (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
+    (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :synthesis)
           _ (step! :writing)
-          {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+          {:keys [parsed cost tokens]} (llm/chat! resolved
                                         (cards/load-prompt-template "curriculum-exam-form.md")
                                         (llm-json/write-prompt-input {:target_minutes minutes :target_outcomes (:target-outcomes options)
-                                                                      :evidence evidence})
-                                        :form :map {:feature :assessment-form :user-id user-id})
+                                                                      :source (prompt-source evidence)})
+                                        form-reply {:feature :assessment-form :user-id user-id})
           charge (credits/record-cost-charge! user-id (or (:generation-feature options) :comprehension.exam-form)
                    (:id entry) cost tokens)
           _ (step! :checking)
-          form (try (validate-form! (include-source-limits parsed evidence) evidence options)
+          form (try (validate-form! (include-source-limits (reply->form parsed) evidence) evidence options)
                  (catch clojure.lang.ExceptionInfo e
                    (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits charge) e))))]
       (assoc form :cost cost :charged-credits charge))))
@@ -492,15 +630,15 @@
         free (filterv #(not (contains? #{"multiple-choice" "fill-in-the-blank"} (:format %))) questions)
         materials (evidence-materials (get-in assessment [:blueprint :evidence_packets]))
         result (when (seq free)
-                 (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :grade)
-                       {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
+                 (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :grade)
+                       {:keys [parsed cost tokens]} (llm/chat! resolved
                                                      (cards/load-prompt-template "curriculum-exam-grade.md")
                                                      (llm-json/write-prompt-input {:questions free :blueprint (:blueprint assessment)
                                                                                    :answers (select-keys answers (map :id free))})
-                                                     :grade :map {:feature :assessment-grade :user-id user-id})
+                                                     grade-reply {:feature :assessment-grade :user-id user-id})
                        charge (credits/record-cost-charge! user-id (or (:grading-feature assessment) :comprehension.exam-grade)
                                 (:id entry) cost tokens)]
-                   {:parsed parsed :cost cost :charged-credits charge}))
+                   {:parsed (reply->grade parsed) :cost cost :charged-credits charge}))
         grades (get-in result [:parsed :question_grades])]
     (when (and (seq free) (or (not= (count free) (count grades))
                               (not (nonblank? (get-in result [:parsed :explanation])))))
