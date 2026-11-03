@@ -5,6 +5,8 @@
             [hyperfiddle.electric-dom3 :as dom]
             [hyperfiddle.electric-forms5 :as forms]
             [freememo.forms-ext :as forms-ext]
+            [freememo.exam-grid :as grid]
+            [freememo.exam-minutes :as exam-minutes]
             [hyperfiddle.router5 :as r]
             [freememo.navigation :as nav]
             [freememo.typeahead :as typeahead]
@@ -34,6 +36,9 @@
               :reassess (cycle/reassess! user-id id 15)
               {:ok false :error "Unknown cycle action."}))
      :cljs nil))
+
+(defn estimated-cost* [user-id topic-id]
+  #?(:clj (or (cycle/estimated-cost user-id topic-id) {:none true}) :cljs nil))
 
 (defn selected-scan [input-id selection]
   #?(:cljs (when (seq selection)
@@ -98,10 +103,13 @@
 (e/defn StartCycle [user-id materials !revision !error navigate!]
   (e/client
     (let [!topic (atom (some-> materials first :id))
-          initial {:minutes "30"}
+          topic (e/watch !topic)
+          ;; The slider is not a Forms5 field, so Parse reads its atom (A1).
+          !minutes (atom 30)
+          estimate (peek (e/as-vec (e/server (when topic (e/Offload #(estimated-cost* user-id topic))))))
           commits
-          (forms/Form! initial
-            (e/fn Fields [{:keys [minutes]}]
+          (forms/Form! {}
+            (e/fn Fields [_]
               (e/amb
                 (dom/label
                   (dom/text "Learning material")
@@ -109,20 +117,20 @@
                     (mapv (fn [{:keys [id title]}] {:id id :label title}) materials)
                     "Search learning material…" nil false)
                   (e/amb))
-                (forms/Input! :minutes minutes :type "number" :min 5 :max 180
-                  :label "Target duration in minutes" :class "input" :required true)
+                (exam-minutes/MinutesSlider :mixed !minutes estimate)
                 (forms/SubmitButton! :label "Start cycle" :class "btn btn-primary"
-                  :disabled (nil? (e/watch !topic)))))
-            :Parse (e/fn [fields _]
+                  :disabled (nil? topic))))
+            :Parse (e/fn [_ _]
                      (let [topic-id (e/watch !topic)
-                           minutes (some-> (:minutes fields) str parse-long)]
-                       (if (and topic-id minutes (<= 5 minutes 180))
+                           minutes (e/watch !minutes)]
+                       (if (and topic-id (grid/minutes-in-range? minutes))
                          [:start topic-id minutes]
-                         (ex-info "Choose material and a duration from 5 to 180 minutes." {}))))
+                         (ex-info (str "Choose material and a length from " grid/min-minutes
+                                    " to " grid/max-minutes " minutes.") {}))))
             :show-buttons false)]
       (WorkProgress (e/server (work-step (e/watch (us/get-atom user-id :comprehension-work)) :generate)))
       (dom/p (dom/props {:class "comprehension-muted"})
-        (dom/text "The duration is an estimate. You can take longer without a penalty."))
+        (dom/text "The length is an estimate. You can take longer without a penalty."))
       (CommandResult user-id commits !revision !error navigate! true))))
 
 (e/defn Question [index question]
@@ -132,7 +140,13 @@
       (dom/h3 (dom/text (str "Question " (inc index))))
       (dom/p (dom/props {:class "comprehension-muted"})
         (dom/text (str (str/replace (:format question) "-" " ") ", " (:points question) " points")))
-      (dom/p (dom/text (:prompt question))))))
+      (dom/p (dom/text (:prompt question)))
+      ;; Always mounted, so a flag never shifts the question's other children.
+      (dom/div
+        (dom/props {:class "comprehension-question-flags"})
+        (e/for [flag (e/diff-by :kind (:flags question))]
+          (dom/p (dom/props {:class "comprehension-warning" :role "note"})
+            (dom/text (:message flag))))))))
 
 (defn option-choices
   "The [value label] pairs a multiple-choice answer field shows.
@@ -301,7 +315,7 @@
                                 [:reassess (:id gap)]))))))
 
 (defn dropped-summary [dropped kept]
-  (str dropped " of " (+ dropped kept) " generated questions did not pass the checks and "
+  (str dropped " of " (+ dropped kept) " planned questions did not pass the checks and "
     (if (= 1 dropped) "was" "were") " removed."))
 
 (defn format-name [format] (str/replace (str format) "-" " "))
@@ -322,6 +336,19 @@
           (e/for [omission (e/diff-by :format omissions)]
             (dom/li (dom/text (omission-line omission)))))))))
 
+(e/defn PlanWarnings [warnings]
+  (e/client
+    ;; Always mounted, for the same reason as DroppedQuestions.
+    (dom/div
+      (dom/props {:class "comprehension-plan-warnings"})
+      (when (seq warnings)
+        (dom/details
+          (dom/summary (dom/text (str "The exam plan needed " (count warnings)
+                                   (if (= 1 (count warnings)) " correction" " corrections"))))
+          (dom/ul
+            (e/for [warning (e/diff-by identity warnings)]
+              (dom/li (dom/text warning)))))))))
+
 (e/defn DroppedQuestions [dropped kept]
   (e/client
     ;; Always mounted, so the conditional inside it never shifts the panel's
@@ -335,7 +362,7 @@
           (dom/ul
             (e/for [question (e/diff-by :question dropped)]
               (dom/li
-                (dom/p (dom/text (str "Question " (:question question)
+                (dom/p (dom/text (str "Planned question " (:question question)
                                      (when (:format question) (str " (" (format-name (:format question)) ")"))
                                      ": " (:reason question))))
                 (dom/p (dom/props {:class "comprehension-muted"}) (dom/text (:prompt question)))))))))))
@@ -371,6 +398,7 @@
         (OmittedFormats (get-in detail [:form :blueprint :omitted_formats]))
         (DroppedQuestions (get-in detail [:form :blueprint :dropped_questions])
           (count (get-in detail [:form :questions])))
+        (PlanWarnings (get-in detail [:form :blueprint :plan_warnings]))
         (dom/p (dom/text (str (count (get-in detail [:form :questions])) " questions, "
                            (or (get-in detail [:form :blueprint :estimated_minutes]) (:target_minutes detail))
                            " estimated minutes")))

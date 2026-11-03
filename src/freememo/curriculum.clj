@@ -1445,6 +1445,8 @@
               :assessed-outcomes (vec (:assessed_outcomes (:blueprint form)))
               :unassessed-outcomes (vec (:unassessed_outcomes (:blueprint form)))
               :omitted-formats (vec (:omitted_formats (:blueprint form)))
+              :dropped-questions (vec (:dropped_questions (:blueprint form)))
+              :plan-warnings (vec (:plan_warnings (:blueprint form)))
               :estimated-minutes (or (:estimated_minutes (:blueprint form)) 30)
               :evidence-packet-count (count (:evidence_packets (:blueprint form)))
               :generation-cost (charge->long (:generation_cost_credits form))

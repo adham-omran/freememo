@@ -39,7 +39,11 @@
    endpoint and cannot be disabled\", so openrouter/chat-completion-fields drops
    the field for these entries. Every other unsupported effort value is clamped
    by OpenRouter instead of refused (measured), so this flag covers the whole
-   failure and no per-value table is needed."
+   failure and no per-value table is needed.
+   :usd-per-mtok is OpenRouter's list price in USD per million input and output
+   tokens, read from /api/v1/models on 2026-11-03. It feeds only the cost
+   estimate shown before an exam is generated (assessment/estimated-cost). The
+   ledger charges usage.cost, which a provider route can make lower or higher."
   [;; GPT-6.1 Sol replaced GPT-6 Sol on 2026-10-26. On OpenRouter that day both
    ;; cost $2 / $10 per million tokens, and 6.1 cached input at $0.10 against
    ;; $0.20. minimaxir.com/2026/10/cheap-llms calls GPT-6 Sol "a dud" and 6.1
@@ -48,6 +52,7 @@
    {:id "gpt-6.1-sol"
     :label "GPT-6.1 Sol (OpenAI)"
     :openrouter-model "openai/gpt-6.1-sol"
+    :usd-per-mtok {:input 2.0 :output 10.0}
     :supported-parameters schema-json-and-reasoning-parameters}
    ;; GPT-6 Luna, added 2026-09-23 at $0.10 / $0.50, half of GPT-5.6 Luna. The
    ;; GPT-5.x entries in `retired` redirect to the GPT-6 line by product
@@ -57,6 +62,7 @@
    {:id "gpt-6-luna"
     :label "GPT-6 Luna (OpenAI)"
     :openrouter-model "openai/gpt-6-luna"
+    :usd-per-mtok {:input 0.1 :output 0.5}
     :supported-parameters schema-json-and-reasoning-parameters}
    ;; $0.75 / $3.75 per million tokens. Gemini 3.6 Flash and Gemini 3 Flash
    ;; Preview were retired from the picker on 2026-09-23 and redirect here (see
@@ -71,16 +77,19 @@
    {:id "gemini-3.8-flash"
     :label "Gemini 3.8 Flash (Google)"
     :openrouter-model "google/gemini-3.8-flash"
+    :usd-per-mtok {:input 0.825 :output 4.125}
     :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "gemini-3.5-flash-lite"
     :label "Gemini 3.5 Flash-Lite (Google)"
     :openrouter-model "google/gemini-3.5-flash-lite"
+    :usd-per-mtok {:input 0.3 :output 2.5}
     :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "claude-sonnet-5"
     :label "Claude Sonnet 5 (Anthropic)"
     :openrouter-model "anthropic/claude-sonnet-5"
+    :usd-per-mtok {:input 2.0 :output 10.0}
     :supported-parameters schema-json-reasoning-and-verbosity-parameters}
    ;; A dated snapshot, not an alias. OpenRouter publishes no `-latest` slug for
    ;; this model, and the one written here earlier was rejected with
@@ -98,6 +107,7 @@
    {:id "deepseek-v4.1-flash"
     :label "V4.1 Flash (DeepSeek)"
     :openrouter-model "deepseek/deepseek-v4.1-flash-1017"
+    :usd-per-mtok {:input 0.15 :output 0.6}
     :supported-parameters schema-json-and-reasoning-parameters}
    ;; Routed fastest-first under a price ceiling, NOT pinned to Z.ai. The
    ;; ceiling says what the pin it replaces was standing in for — never overpay
@@ -137,6 +147,7 @@
    {:id "glm-5.3-flash"
     :label "GLM 5.3 Flash (Z.ai)"
     :openrouter-model "z-ai/glm-5.3-flash"
+    :usd-per-mtok {:input 0.0313 :output 0.0846}
     :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true
     :provider {:sort "throughput"

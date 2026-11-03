@@ -10113,3 +10113,23 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     color: var(--color-success-dark);
     background: var(--color-success-tint);
 }
+
+/* The exam length slider (freememo.exam-minutes), on both exam generators. */
+.exam-minutes { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.exam-minutes__control { display: flex; align-items: center; gap: 8px; }
+.exam-minutes__label { font-weight: 600; }
+.exam-minutes__range { flex: 1; min-width: 160px; accent-color: var(--color-primary, #2563eb); }
+.exam-minutes__summary { color: inherit; }
+.exam-minutes__cost { color: var(--color-text-secondary); }
+
+.curriculum-generate-panel {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px;
+  border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-subtle);
+  max-width: 420px; text-align: left;
+}
+.curriculum-generate-panel__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.curriculum-question-flag {
+  margin: 6px 0; padding: 6px 8px; border-radius: 4px; font-size: 13px;
+  background: var(--color-warning-bg); color: var(--color-warning-dark);
+}
+.curriculum-generation-notes { font-size: 13px; }

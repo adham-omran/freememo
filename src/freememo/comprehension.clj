@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [freememo.assessment :as assessment]
             [freememo.db :as db]
+            [freememo.exam-grid :as grid]
             [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
@@ -210,6 +211,7 @@
 (def ^:private generation-steps
   "The stages of making a form, in order. The page shows the position as X/Y."
   [[:reading "Reading the material"]
+   [:planning "Planning the exam over the whole source"]
    [:writing "Writing the questions"]
    [:checking "Checking the questions against the source"]
    [:saving "Saving the cycle"]])
@@ -227,21 +229,20 @@
           work)))))
 
 (defn- generated-form!
-  "Generate a form and report its stages. A question that fails its checks is
-   dropped and listed in the blueprint, so a paid call still yields a cycle.
-   A refused form, which has no question left, becomes a message that says
-   nothing was saved, what the attempt cost, and which button tries again."
+  "Generate a form and report its stages. The generator keeps every question
+   it can serve and flags the doubtful ones, so a paid call yields a cycle. Only
+   a form with no question left is refused. That message says nothing was
+   saved, what the attempt cost, and which button tries again."
   [user-id member evidence options retry-label]
   (try
     (assessment/generate! user-id evidence
-      (assoc options :drop-invalid? true :on-step #(report-step! user-id member %)))
+      (assoc options :grid :mixed :on-step #(report-step! user-id member %)))
     (catch clojure.lang.ExceptionInfo e
-      (let [{:keys [type question charged-credits]} (ex-data e)]
+      (let [{:keys [type charged-credits]} (ex-data e)]
         (if (= type ::assessment/invalid-assessment)
           (throw (ex-info
-                   (str "The model wrote questions that did not pass the checks, so nothing was saved. "
-                     "Reason: " (str/replace (ex-message e) #"\.$" "")
-                     (when question (str " (question " question ")")) ". "
+                   (str "The model wrote no question that could be served, so nothing was saved. "
+                     "Reason: " (str/replace (ex-message e) #"\.$" "") ". "
                      (when (pos? (or charged-credits 0))
                        (str "This attempt used " charged-credits " credits. "))
                      "Select " retry-label " to make a new set.")
@@ -331,9 +332,20 @@
      :facts facts}))
 
 (defn- minutes! [minutes]
-  (when-not (and (integer? minutes) (<= 5 minutes 180))
-    (throw (ex-info "Choose an estimated duration from 5 through 180 minutes." {})))
+  (when-not (grid/minutes-in-range? minutes)
+    (throw (ex-info (str "Choose an estimated duration from " grid/min-minutes " through "
+                      grid/max-minutes " minutes.") {})))
   minutes)
+
+(defn estimated-cost
+  "The price sheet of an exam over this source (assessment/estimated-cost).
+   Post: the sheet, or nil when the source has no text or the
+   model has no price."
+  [user-id topic-id]
+  (try
+    (let [{:keys [materials]} (source-snapshot user-id topic-id)]
+      (assessment/estimated-cost user-id {:materials materials}))
+    (catch clojure.lang.ExceptionInfo _ nil)))
 
 (defn- insert-cycle! [user-id topic-id title minutes materials facts form parent-gap-id]
   (:id (jdbc/execute-one! db/ds

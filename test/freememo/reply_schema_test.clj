@@ -19,7 +19,8 @@
 (def contracts
   "Every reply contract in src, by the call site that sends it (§3 of the plan).
    A new structured call adds its contract here."
-  {"assessment form" assessment/form-reply
+  {"assessment blueprint" assessment/blueprint-reply
+   "assessment questions" assessment/questions-reply
    "assessment grade" assessment/grade-reply
    "kg-extract triples" kg-extract/triples-reply
    "kg-extract link" kg-extract/link-reply
@@ -38,7 +39,7 @@
 (deftest every-contract-is-one-strict-mode-accepts
   ;; The plan's 12 call sites: the card loop has one contract per card type,
   ;; and kg-grade's two calls have one each.
-  (is (= 15 (count contracts)))
+  (is (= 16 (count contracts)))
   (doseq [[site reply] contracts]
     (testing site
       (is (= [] (rs/strict-problems (:schema reply))))

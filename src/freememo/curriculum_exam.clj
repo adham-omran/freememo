@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [freememo.curriculum :as curriculum]
    [freememo.db :as db]
+   [freememo.exam-grid :as grid]
    [freememo.kg-llm :as llm]
    [freememo.user-state :as us]
    [missionary.core :as m]
@@ -77,7 +78,7 @@
    Invariant: output validation cannot suppress a returned model cost. A cancel
    after the model call prevents form persistence. This function owns charging
    and form persistence."
-  [user-id subject form-kind threshold]
+  [user-id subject form-kind threshold minutes]
   (try
     (let [operation-started-at (Instant/now)
           work-key (form-generation-work-key subject)
@@ -87,7 +88,7 @@
           weaknesses (when retry? (latest-weaknesses user-id (:block-id subject)))
           {:keys [blueprint questions charged-credits]}
           (assessment/generate! user-id {:materials materials}
-            {:target-minutes 30 :target-outcomes weaknesses
+            {:target-minutes minutes :grid :essay :target-outcomes weaknesses
              :generation-feature :curriculum.exam-form})
           charge charged-credits]
       ;; OpenRouter ignores thread interruption during its socket read. This
@@ -110,11 +111,23 @@
       (when-not (llm/insufficient-credits? error)
         (tel/error! {:id ::generate-form :data {:user-id user-id :subject subject}} error))
       {:success false
-       :error (ex-message (llm/root-cause error))
+       :error (str (ex-message (llm/root-cause error))
+                (when-let [charge (:charged-credits (ex-data error))]
+                  (str " This attempt used " charge " credits, and nothing was saved.")))
+       :charged-credits (:charged-credits (ex-data error))
        :error-type (cond
                      (llm/insufficient-credits? error) :insufficient-credits
                      (contains? #{::insufficient-evidence ::assessment/insufficient-evidence} (:type (ex-data error))) :insufficient-evidence
                      :else :generation-failed)})))
+
+(defn estimated-cost
+  "The price sheet of an exam over this source (assessment/estimated-cost).
+   Post: the sheet, or {:none true} when the source has no text or the
+   model has no price."
+  [user-id subject]
+  (or (try (assessment/estimated-cost user-id (curriculum/subject-evidence db/ds user-id subject))
+           (catch clojure.lang.ExceptionInfo _ nil))
+      {:none true}))
 
 (defonce ^:private form-generation-executor (Executors/newFixedThreadPool 2))
 
@@ -200,14 +213,18 @@
 (defn start-form-generation!
   "Start one server-owned exam form generation task.
 
-   Pre: the user owns subject. The threshold is from 1 to 100.
+   Pre: the user owns subject. The threshold is from 1 to 100. minutes is
+   from 5 to 90.
    Post: returns after task submission. The model result arrives independently.
    Invariant: at most one task is published for each user and exam subject."
-  [user-id subject form-kind threshold]
+  [user-id subject form-kind threshold minutes]
   (try
     (when-not (and (integer? threshold) (<= 1 threshold 100))
       (throw (ex-info "The exam threshold must be from 1 to 100."
                {:type ::invalid-threshold :threshold threshold})))
+    (when-not (grid/minutes-in-range? minutes)
+      (throw (ex-info (str "Choose an exam length from " grid/min-minutes " to " grid/max-minutes " minutes.")
+               {:type ::invalid-minutes :minutes minutes})))
     (let [work-key (form-generation-work-key subject)
           generations (us/get-atom user-id :exam-form-generations)
           [before _after] (swap-vals! generations conj work-key)]
@@ -231,7 +248,7 @@
             (let [cancel
                   ((m/timeout
                      (m/via form-generation-executor
-                       (generate-form! user-id subject form-kind threshold))
+                       (generate-form! user-id subject form-kind threshold minutes))
                      form-generation-timeout-ms
                      {:success false
                       :timed-out? true
@@ -351,6 +368,9 @@
         (tel/error! {:id ::grade-sitting
                      :data {:user-id user-id :sitting-id sitting-id}} error))
       {:success false
-       :error (ex-message (llm/root-cause error))
+       :error (str (ex-message (llm/root-cause error))
+                (when-let [charge (:charged-credits (ex-data error))]
+                  (str " This attempt used " charge " credits, and nothing was saved.")))
+       :charged-credits (:charged-credits (ex-data error))
        :error-type (if (llm/insufficient-credits? error)
                      :insufficient-credits :grading-failed)})))

@@ -98,23 +98,26 @@
         (pr-str (map first detached-streams))))))
 
 (deftest exam-generation-control-shows-its-lifecycle
-  (let [trigger (definition exam-source-forms 'GenerateExamTrigger)
-        control (definition exam-source-forms 'GenerateExamButton)
-        trigger-nodes (tree-seq coll? seq trigger)
-        control-nodes (tree-seq coll? seq control)]
+  (let [control (definition exam-source-forms 'GenerateExamButton)
+        panel (definition exam-source-forms 'GeneratePanel)
+        control-nodes (tree-seq coll? seq control)
+        panel-nodes (tree-seq coll? seq panel)
+        buttons (fn [nodes] (filter #(and (seq? %) (= 'dom/button (first %))) nodes))]
     (testing "a model request cannot look like an ignored click"
-      (is (some #(and (map? %)
-                   (contains? % :disabled)
-                   (contains? % :aria-busy))
-            trigger-nodes)
-        "the control must expose its pending state")
-      (is (some #{"Generating exam…"} trigger-nodes)
-        "the control must replace its idle label while the request runs"))
-    (testing "a failed request is announced outside the trigger"
-      (is (some #(and (map? %) (= "alert" (:role %))) control-nodes)
-        "the control must render a visible error alert")
-      (is (not-any? #(and (map? %) (= "alert" (:role %))) trigger-nodes)
-        "the error must not become part of the button's accessible name"))))
+      (is (some #(and (map? %) (contains? % :disabled) (contains? % :aria-busy)) control-nodes)
+        "the opener must expose its pending state")
+      (is (some #{"Generating exam…"} control-nodes)
+        "the opener must replace its idle label while the request runs")
+      (is (some #(and (map? %) (contains? % :disabled) (contains? % :aria-busy)) panel-nodes)
+        "the Start button must expose its pending state"))
+    (testing "the panel asks for the exam length first"
+      (is (some #{'exam-minutes/MinutesSlider} panel-nodes)))
+    (testing "a failed request is announced outside the Start button"
+      (is (some #(and (map? %) (= "alert" (:role %))) panel-nodes)
+        "the panel must render a visible error alert")
+      (is (not-any? #(and (map? %) (= "alert" (:role %)))
+            (mapcat #(tree-seq coll? seq %) (buttons panel-nodes)))
+        "the error must not become part of a button's accessible name"))))
 
 (defn- e-fn? [x]
   (and (seq? x) (= 'e/fn (first x))))

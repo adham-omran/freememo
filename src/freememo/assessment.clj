@@ -1,12 +1,16 @@
 (ns freememo.assessment
   "Source-bound mixed assessments and diagnostic grading."
   (:require [clojure.string :as str]
+            [freememo.card-models :as card-models]
             [freememo.cards :as cards]
+            [freememo.config :as config]
             [freememo.credits :as credits]
+            [freememo.exam-grid :as grid]
             [freememo.kg-llm :as llm]
             [freememo.llm-json :as llm-json]
             [freememo.reply-schema :as reply-schema
-             :refer [strict-object nullable array-of enum-of json-string json-integer json-boolean]])
+             :refer [strict-object nullable array-of enum-of json-string json-integer json-boolean]]
+            [freememo.settings :as settings])
   (:import [java.text Normalizer Normalizer$Form]))
 
 (def formats #{"fill-in-the-blank" "multiple-choice" "short-essay" "long-essay"})
@@ -312,8 +316,18 @@
                    (and (str/includes? text (normalize subject))
                         (str/includes? text (normalize object))))) sections))))
 
+;; ── Source snapshot ──────────────────────────────────────────────────────────
+
+(def max-source-characters
+  "The most source text one exam reads. At 3 characters per token (set low so
+   that scripts other than Latin fit) that is about 400K tokens, which leaves
+   room in a 1M-token window for the prompt and the reply. Every registry model
+   has about 1M tokens. See plans/blueprint-first-exams.md §2."
+  1200000)
+
 (defn bounded-evidence
-  "Freeze at most 5000 characters per section and 120000 characters overall.
+  "Freeze at most max-source-characters of source text, in section order.
+   A section is cut only where the total runs out.
    Pre: source evidence contains strings. Post: limits describe every omitted character.
    Invariant: the caller's original material packets remain unchanged."
   [evidence]
@@ -324,20 +338,20 @@
                   (reduce
                     (fn [[sections remaining omitted] section]
                       (let [text (str (:text section))
-                            length (min 5000 remaining (count text))
+                            length (min remaining (count text))
                             excluded (- (count text) length)]
                         [(conj sections (cond-> (assoc section :text (subs text 0 length))
                                           (pos? excluded) (assoc :text_omitted true)))
                          (- remaining length) (+ omitted excluded)]))
                     [[] remaining omitted] (:evidence material))]
               [(conj materials (assoc material :evidence sections)) remaining omitted]))
-          [[] 120000 0] (:materials evidence))
+          [[] max-source-characters 0] (:materials evidence))
         facts (->> (:facts evidence) (filter #(fact-in-excerpts? materials %)) (take 500)
                 (mapv #(select-keys % [:id :graph_topic_id :page_number :subject_label
                                       :predicate_label :object_label :object_literal])))]
     (assoc evidence :materials materials :facts facts
-      :source_limits {:max_section_characters 5000 :max_total_characters 120000
-                      :included_characters (- 120000 remaining) :omitted_characters omitted
+      :source_limits {:max_total_characters max-source-characters
+                      :included_characters (- max-source-characters remaining) :omitted_characters omitted
                       :max_facts 500 :included_facts (count facts)
                       :omitted_facts (- (count (:facts evidence)) (count facts))})))
 
@@ -349,8 +363,8 @@
                  {:id "source-snapshot-limit"
                   :statement "Source text outside the assessment snapshot."
                   :reason (str (:omitted_characters limits)
-                            " source characters were omitted. Each section includes at most 5000 characters. "
-                            "The assessment includes at most 120000 source characters in total. "
+                            " source characters were omitted. The assessment includes at most "
+                            max-source-characters " source characters in total. "
                             "This assessment does not establish coverage of the omitted text.")})
                form)]
     (if (pos? (:omitted_facts limits))
@@ -363,58 +377,59 @@
                    "This assessment does not establish coverage of excluded facts.")})
       form)))
 
-;; ── Model contract ───────────────────────────────────────────────────────────
+;; ── Model contracts ──────────────────────────────────────────────────────────
 ;;
-;; The schema states the shape the checks above read, so a provider that
-;; enforces it cannot return a citation as one object or under `text`. Those
-;; two shapes refused most forms in plans/comprehension-facts-experiment.md §7.
-;; The checks still run on every reply: the schema cannot check a quote against
-;; the source, and a model without structured outputs gets no schema at all.
+;; Two calls make an exam: assessment-blueprint.md plans themes, outcomes and
+;; the grid's slots, and assessment-questions.md writes one question per slot.
+;; The schemas state the shapes the code below reads. The checks still run on
+;; every reply: a schema cannot check a quote against the source.
 
 (def ^:private citation-schema
   "What validate-citations! reads from one citation."
   (strict-object {:material_id json-integer :topic_id json-integer :quote json-string}))
 
-(def ^:private format-schema (enum-of (sort formats)))
+(def ^:private exam-format-schema (enum-of (sort (keys grid/format-minutes))))
+(def ^:private level-schema (enum-of grid/levels))
 
-(def ^:private question-schema
-  "What normalize-question and grading read from one question."
-  (strict-object
-    {:id json-string
-     :format format-schema
-     :points json-integer
-     :prompt json-string
-     :outcomes (array-of json-string)
-     :evidence (array-of citation-schema)
-     :fact_ids (nullable (array-of json-integer))
-     :accepted_answers (nullable (array-of json-string))
-     :case_sensitive (nullable json-boolean)
-     :options (nullable (array-of (strict-object {:id json-string :text json-string})))
-     :correct_option_id (nullable json-string)
-     :grading_guide (nullable json-string)
-     ;; A list, not a map of five optional criteria: Anthropic refused that map
-     ;; as a grammar too large (2026-11-03). reply->form reads it back as a map.
-     :rubric (nullable (array-of (strict-object {:criterion (enum-of (map name criterion-keys))
-                                                 :expectation json-string})))}))
+(def blueprint-reply
+  "The reply contract of assessment-blueprint.md."
+  (reply-schema/contract "assessment_blueprint" :blueprint
+    (strict-object
+      {:insufficient (nullable json-boolean)
+       :reason (nullable json-string)
+       :themes (array-of (strict-object {:id json-string :title json-string
+                                         :topic_ids (array-of json-integer)
+                                         :weight json-integer}))
+       :outcomes (array-of (strict-object {:id json-string :statement json-string
+                                           :level level-schema
+                                           :theme_ids (array-of json-string)}))
+       :slots (array-of (strict-object {:id json-string :format exam-format-schema
+                                        ;; A string, not a nullable enum: Anthropic refuses
+                                        ;; an enum whose type admits null (2026-11-03). The
+                                        ;; grid owns the role, so the code never reads it.
+                                        :role (nullable json-string)
+                                        :level level-schema :outcome_id json-string}))
+       :unassessed_outcomes (array-of (strict-object {:id (nullable json-string)
+                                                      :statement json-string :reason json-string
+                                                      :theme_id (nullable json-string)}))})))
 
-(def ^:private blueprint-schema
-  "What validate-blueprint! and the cycle pages read from the blueprint."
-  (strict-object
-    {:assessed_outcomes (array-of (strict-object {:id json-string :statement json-string
-                                                  :question_ids (array-of json-string)
-                                                  :evidence (array-of citation-schema)}))
-     :unassessed_outcomes (array-of (strict-object {:id (nullable json-string)
-                                                    :statement json-string :reason json-string}))
-     :omitted_formats (array-of (strict-object {:format format-schema :reason json-string}))
-     :estimated_minutes json-integer}))
-
-(def form-reply
-  "The reply contract of curriculum-exam-form.md."
-  (reply-schema/contract "assessment_form" :form
-    (strict-object {:insufficient (nullable json-boolean)
-                    :reason (nullable json-string)
-                    :blueprint blueprint-schema
-                    :questions (array-of question-schema)})))
+(def questions-reply
+  "The reply contract of assessment-questions.md."
+  (reply-schema/contract "assessment_questions" :questions
+    (array-of
+      (strict-object
+        {:slot_id json-string
+         :format exam-format-schema
+         :prompt json-string
+         :evidence (array-of citation-schema)
+         :fact_ids (nullable (array-of json-integer))
+         :options (nullable (array-of (strict-object {:id json-string :text json-string})))
+         :correct_option_id (nullable json-string)
+         :grading_guide (nullable json-string)
+         ;; A list, not a map of five optional criteria: Anthropic refused that map
+         ;; as a grammar too large (2026-11-03). rubric-entries->map reads it back.
+         :rubric (nullable (array-of (strict-object {:criterion (enum-of (map name criterion-keys))
+                                                     :expectation json-string})))}))))
 
 (defn- rubric-entries->map
   "Read a rubric written as [{:criterion :expectation}] as the criterion map the
@@ -424,18 +439,6 @@
   (if (vector? rubric)
     (into {} (map (fn [{:keys [criterion expectation]}] [(keyword (str criterion)) expectation])) rubric)
     rubric))
-
-(defn reply->form
-  "Read a curriculum-exam-form.md reply as the form validate-form! checks.
-   Pre:  reply is the parsed `form` object that kg-llm/chat! returns, from a
-         schema-constrained call or from JSON mode. It holds no null field.
-   Post: every question's rubric is a criterion map.
-   Invariant: no question, outcome or citation is added or removed. The checks
-         alone decide what is kept."
-  [reply]
-  (cond-> reply
-    (vector? (:questions reply))
-    (update :questions (partial mapv #(cond-> % (contains? % :rubric) (update :rubric rubric-entries->map))))))
 
 (def grade-reply
   "The reply contract of curriculum-exam-grade.md."
@@ -478,7 +481,7 @@
     (update :question_grades (partial mapv #(cond-> % (contains? % :criteria) (update :criteria criterion-scores->map))))))
 
 (defn prompt-source
-  "The source as curriculum-exam-form.md reads it.
+  "The source as the exam prompts read it.
    Pre:  evidence is the result of bounded-evidence.
    Post: {:materials [{:material_id :title :sections [{:topic_id …}]}] :facts
          :source_limits}. The ids carry the names a citation uses, and the word
@@ -497,37 +500,406 @@
    :facts (:facts evidence)
    :source_limits (:source_limits evidence)})
 
+;; ── The plan: call 1's reply held to the grid ───────────────────────────────
+;;
+;; The grid is the source of truth for slots, formats and points. A blueprint
+;; that strays from it is corrected and the correction is recorded in
+;; :plan_warnings, never refused: call 1 is already paid for, and a refusal
+;; would leave the learner with nothing for it.
+
+(def theme-count-range [3 15])
+
+(defn- valid-level [level allowed fallback]
+  (if (contains? allowed level) level fallback))
+
+(defn plan-from-blueprint
+  "Hold a blueprint reply to its grid.
+   Pre:  grid-slots come from exam-grid/slots for kind; section-ids are the
+         topic ids of the frozen source; blueprint is the parsed reply.
+   Post: {:themes :outcomes :slots :unassessed_outcomes :plan_warnings}.
+         :slots is grid-slots in order, each with a valid :level and an
+         :outcome_id that names a kept outcome. Recall slots are multiple-choice
+         and hold at most max-recall-share of the points. Every theme has a slot
+         or an unassessed entry.
+   Throws ::insufficient-evidence only when the model says the source cannot
+   support an exam."
+  [kind grid-slots section-ids blueprint]
+  (when (:insufficient blueprint)
+    (throw (ex-info (str (or (:reason blueprint) "The source cannot support this assessment.")
+                      " Add material or choose a broader source.") {:type ::insufficient-evidence})))
+  (let [warnings (atom [])
+        warn! #(swap! warnings conj %)
+        themes (->> (:themes blueprint)
+                    (filter #(and (nonblank? (:id %)) (nonblank? (:title %))))
+                    (reduce (fn [acc t] (if (some #(= (:id t) (:id %)) acc) acc (conj acc t))) [])
+                    (mapv #(update % :topic_ids (fn [ids] (vec (filter section-ids ids))))))
+        theme-ids (set (map :id themes))
+        [lo hi] theme-count-range
+        _ (when-not (<= lo (count themes) hi)
+            (warn! (str "The plan outlined " (count themes) " themes, outside the range of " lo " to " hi ".")))
+        outcomes (->> (:outcomes blueprint)
+                      (filter #(and (nonblank? (:id %)) (nonblank? (:statement %))))
+                      (reduce (fn [acc o] (if (some #(= (:id o) (:id %)) acc) acc (conj acc o))) [])
+                      (mapv #(-> %
+                                 (update :level valid-level (set grid/levels) "understand")
+                                 (update :theme_ids (fn [ids] (vec (filter theme-ids ids)))))))
+        outcomes (if (seq outcomes)
+                   outcomes
+                   (do (warn! "The plan stated no usable outcome, so one covers the whole source.")
+                       [{:id "whole-source" :statement "Explain the main ideas of the source."
+                         :level "understand" :theme_ids (mapv :id themes)}]))
+        outcome-ids (mapv :id outcomes)
+        by-id (into {} (map (juxt :id identity)) (:slots blueprint))
+        slots (vec (map-indexed
+                     (fn [i grid-slot]
+                       (let [chosen (get by-id (:id grid-slot))
+                             essay? (not= "multiple-choice" (:format grid-slot))
+                             outcome-id (if (some #{(:outcome_id chosen)} outcome-ids)
+                                          (:outcome_id chosen)
+                                          (do (warn! (str "Slot " (:id grid-slot) " named no outcome of the plan, so it was given one."))
+                                              (nth outcome-ids (mod i (count outcome-ids)))))
+                             level (cond
+                                     (:level grid-slot) (:level grid-slot)
+                                     essay? (valid-level (:level chosen) grid/essay-levels "apply")
+                                     :else (valid-level (:level chosen) (set grid/levels) "understand"))]
+                         (when (and (nil? (:level grid-slot)) (not= level (:level chosen)))
+                           (warn! (str "Slot " (:id grid-slot) " had no valid level, so it is " level ".")))
+                         (assoc grid-slot :level level :outcome_id outcome-id)))
+                     grid-slots))
+        allowed (long (Math/floor (* grid/max-recall-share (grid/slot-points slots))))
+        [slots _recall-points]
+        (reduce (fn [[acc points] slot]
+                  (if (= grid/recall-level (:level slot))
+                    (if (<= (+ points (:points slot)) allowed)
+                      [(conj acc slot) (+ points (:points slot))]
+                      (do (warn! (str "Slot " (:id slot) " made recall pass a fifth of the points, so it asks for understanding."))
+                          [(conj acc (assoc slot :level "understand")) points]))
+                    [(conj acc slot) points]))
+                [[] 0] slots)
+        reached (set (mapcat (fn [slot] (:theme_ids (some #(when (= (:id %) (:outcome_id slot)) %) outcomes))) slots))
+        unassessed (vec (filter #(and (nonblank? (:statement %)) (nonblank? (:reason %)))
+                          (:unassessed_outcomes blueprint)))
+        explained (set (keep :theme_id unassessed))
+        unassessed (into unassessed
+                     (for [theme themes :when (not (or (reached (:id theme)) (explained (:id theme))))]
+                       {:id (str "theme-" (:id theme)) :statement (:title theme) :theme_id (:id theme)
+                        :reason "The exam plan gave this theme no question."}))]
+    {:themes themes :outcomes outcomes :slots slots :unassessed_outcomes unassessed
+     :grid_kind (name kind) :plan_warnings @warnings}))
+
+;; ── Quotes ───────────────────────────────────────────────────────────────────
+;;
+;; Every saved quote is an exact substring of its section. A quote the model
+;; did not copy exactly is replaced by the most similar passage of the source.
+;; At similarity theta or more that is a repair. Below it the question is kept
+;; and flagged, so the learner still gets the question that was paid for and
+;; is told to check it. See plans/blueprint-first-exams.md §7.
+
+(def quote-repair-threshold
+  "The word-level similarity at which a replaced quote counts as the same
+   passage. Measured in plans/blueprint-first-exams.md §11."
+  0.85)
+
+(defn- word-key [word] (str/lower-case (str/replace word #"[^\p{L}\p{N}]" "")))
+
+(defn- word-spans
+  "Post: [[start end key] …] for every run of non-space characters in text."
+  [^String text]
+  (let [m (re-matcher #"\S+" text)]
+    (loop [acc (transient [])]
+      (if (.find m)
+        (recur (conj! acc [(.start m) (.end m) (word-key (.group m))]))
+        (persistent! acc)))))
+
+(defn- lcs-length [xs ys]
+  (let [ys (vec ys)
+        n (count ys)]
+    (loop [xs (seq xs) prev (vec (repeat (inc n) 0))]
+      (if-not xs
+        (peek prev)
+        (let [x (first xs)
+              row (reduce (fn [row j]
+                            (conj row (if (= x (ys (dec j)))
+                                        (inc (prev (dec j)))
+                                        (max (prev j) (peek row)))))
+                    [0] (range 1 (inc n)))]
+          (recur (next xs) row))))))
+
+(defn word-similarity
+  "2 × common words in order / total words, from 0 to 1."
+  [xs ys]
+  (let [total (+ (count xs) (count ys))]
+    (if (zero? total) 0.0 (/ (* 2.0 (lcs-length xs ys)) total))))
+
+(defn- best-window
+  "The passage of normalized section text most similar to quote-keys.
+   Post: {:quote :similarity} with :quote a substring of text, or nil when the
+   section shares no word with the quote."
+  [text spans quote-keys]
+  (let [n (count quote-keys)
+        size (min n (count spans))
+        wanted (set quote-keys)]
+    (when (and (pos? n) (pos? size))
+      (let [hits (mapv #(if (wanted (nth % 2)) 1 0) spans)
+            first-sum (reduce + (subvec hits 0 size))
+            sums (reductions (fn [acc i] (+ acc (- (hits (+ i size -1)) (hits (dec i)))))
+                   first-sum (range 1 (inc (- (count spans) size))))
+            starts (->> (map-indexed vector sums) (filter #(pos? (second %)))
+                        (sort-by (comp - second)) (take 5) (map first))]
+        (->> (for [start starts
+                   from (range (max 0 (- start 2)) (min (count spans) (+ start 3)))
+                   len (range (max 1 (- size 2)) (+ size 3))
+                   :let [to (min (count spans) (+ from len))]
+                   :when (< from to)]
+               {:quote (subs text (first (spans from)) (second (spans (dec to))))
+                :similarity (word-similarity quote-keys (map #(nth % 2) (subvec spans from to)))})
+             (reduce (fn [best c] (if (or (nil? best) (> (:similarity c) (:similarity best))) c best)) nil))))))
+
+(defn- section-index
+  "Post: {[material-id topic-id] {:text normalized-text :spans word-spans}}."
+  [materials]
+  (into {} (for [{:keys [material-id evidence]} materials
+                 {:keys [topic-id text]} evidence
+                 :let [norm (normalize-text text)]]
+             [[material-id topic-id] {:text norm :spans (word-spans norm)}])))
+
+(defn repair-citation
+  "Make a citation's quote an exact substring of the source.
+   Pre:  index comes from section-index over the frozen materials.
+   Post: {:status :exact|:repaired|:replaced|:none :citation c}. A :repaired
+         or :replaced citation quotes the most similar passage, of its own
+         section first and of any section when that one scores below the
+         threshold, and keeps the model's text as :original_quote. :none means
+         no section shares a word with the quote.
+   Invariant: a returned quote is always a substring of its section."
+  [index {:keys [material_id topic_id quote] :as citation}]
+  (let [declared (get index [material_id topic_id])
+        normalized (normalize-text quote)]
+    (if (and declared (nonblank? normalized) (str/includes? (:text declared) normalized))
+      {:status :exact :citation citation}
+      (let [quote-keys (mapv #(nth % 2) (word-spans normalized))
+            score (fn [[[mid tid] {:keys [text spans]}]]
+                    (some-> (best-window text spans quote-keys) (assoc :material_id mid :topic_id tid)))
+            own (when declared (score [[material_id topic_id] declared]))
+            best (if (and own (>= (:similarity own) quote-repair-threshold))
+                   own
+                   (reduce (fn [best c] (if (or (nil? best) (> (:similarity c) (:similarity best))) c best))
+                     own (keep score index)))]
+        (if (nil? best)
+          {:status :none :citation citation}
+          {:status (if (>= (:similarity best) quote-repair-threshold) :repaired :replaced)
+           :citation {:material_id (:material_id best) :topic_id (:topic_id best) :quote (:quote best)
+                      :original_quote (subs (str quote) 0 (min 500 (count (str quote))))
+                      :similarity (/ (Math/round (* 100.0 (:similarity best))) 100.0)}})))))
+
+(def ^:private replaced-quote-flag
+  {:kind "quote-replaced"
+   :message (str "The model's quote does not match the source, so the closest passage replaced it. "
+                 "Check this question against the source before you trust it.")})
+
+(defn- repair-question-evidence
+  "Post: [evidence flags]. Evidence holds only quotes found in the source."
+  [index evidence]
+  (let [results (mapv #(repair-citation index %) evidence)
+        kept (into [] (comp (remove #(= :none (:status %))) (map :citation)) results)]
+    [kept (if (some #(= :replaced (:status %)) results) [replaced-quote-flag] [])]))
+
+;; ── The form: call 2's reply over the plan ──────────────────────────────────
+
+(defn- grid-omissions
+  "One reason for each format that the grid does not use."
+  [kind slots]
+  (let [used (set (map :format slots))]
+    (vec (for [f (sort (remove used formats))]
+           {:format f
+            :reason (cond
+                      (= f "fill-in-the-blank") "New exams do not use fill-in-the-blank questions."
+                      (and (= kind :essay) (= f "multiple-choice")) "Curriculum exams ask essay questions only."
+                      :else "The target minutes leave no time for this format.")}))))
+
+(defn- slot-number [slot-id] (or (some-> (re-find #"\d+" (str slot-id)) parse-long) 0))
+
+(defn questions-for-plan
+  "One candidate question per planned slot, from call 2's reply.
+   Pre:  plan comes from plan-from-blueprint; reply is the parsed questions vector.
+   Post: [questions dropped]. Each question carries its slot's id, format,
+         points, level and role, its outcome, and quotes found in the source.
+         A slot with no usable answer is in dropped, with its slot number."
+  [plan reply materials]
+  (let [index (section-index materials)
+        slot-ids (set (map :id (:slots plan)))
+        written (reduce (fn [acc q]
+                          (let [id (str (:slot_id q))]
+                            (if (and (slot-ids id) (not (contains? acc id))) (assoc acc id q) acc)))
+                  {} (if (vector? reply) reply []))]
+    (reduce
+      (fn [[questions dropped] slot]
+        (let [q (get written (:id slot))
+              [evidence flags] (when q (repair-question-evidence index (vec (:evidence q))))
+              drop-entry (fn [reason] {:question (slot-number (:id slot)) :slot_id (:id slot)
+                                       :format (:format slot) :prompt (str (:prompt q)) :reason reason})]
+          (cond
+            (nil? q) [questions (conj dropped (drop-entry "The model wrote no question for this slot."))]
+            (empty? evidence) [questions (conj dropped (drop-entry "None of its quotes shares a word with the source."))]
+            :else
+            [(conj questions
+               (cond-> (-> (select-keys q [:prompt :fact_ids :options :correct_option_id :grading_guide])
+                           (assoc :id (:id slot) :format (:format slot) :points (:points slot)
+                                  :level (:level slot) :role (:role slot)
+                                  :outcomes [(:outcome_id slot)] :evidence evidence :flags flags))
+                 (some? (:rubric q)) (assoc :rubric (rubric-entries->map (:rubric q)))))
+             dropped])))
+      [[] []] (:slots plan))))
+
+(defn- outcome-blueprint
+  "The saved blueprint's outcome lists, from the plan and the written questions.
+   Post: [assessed unassessed]. An assessed outcome lists its questions and
+   their quotes. An outcome with no question moves to unassessed."
+  [plan questions]
+  (reduce
+    (fn [[assessed unassessed] outcome]
+      (let [mine (filter #(= [(:id outcome)] (:outcomes %)) questions)]
+        (if (seq mine)
+          [(conj assessed (assoc (select-keys outcome [:id :statement :level :theme_ids])
+                            :question_ids (mapv :id mine)
+                            :evidence (vec (distinct (map #(select-keys % [:material_id :topic_id :quote])
+                                                       (mapcat :evidence mine))))))
+           unassessed]
+          [assessed (conj unassessed {:id (:id outcome) :statement (:statement outcome)
+                                      :reason "No question was written for this outcome."})])))
+    [[] (:unassessed_outcomes plan)] (:outcomes plan)))
+
+(defn assemble-form
+  "The form to save from a plan and call 2's reply.
+   Pre:  plan from plan-from-blueprint; evidence from bounded-evidence.
+   Post: a form validate-form! accepted, holding every question that can be
+         served. A question whose structure fails its checks is listed in
+         :dropped_questions; a replaced quote only flags its question.
+         :estimated_minutes is the minute cost of the kept questions.
+   Throws ::invalid-assessment only when no question survives."
+  [kind minutes plan reply evidence target-outcomes]
+  (let [[questions pre-dropped] (questions-for-plan plan reply (:materials evidence))
+        _ (when (empty? questions)
+            (let [{:keys [slot_id reason]} (first pre-dropped)]
+              (fail! (str "No question passed the checks."
+                       (when reason (str " Slot " slot_id ": " reason)))
+                {:question (slot-number slot_id)})))
+        [assessed unassessed] (outcome-blueprint plan questions)
+        form (include-source-limits
+               {:blueprint (merge (select-keys plan [:themes :slots :grid_kind :plan_warnings])
+                             {:assessed_outcomes assessed :unassessed_outcomes unassessed
+                              :omitted_formats (grid-omissions kind (:slots plan))})
+                :questions questions}
+               evidence)
+        validated (validate-form! form evidence {:drop-invalid? true :target-minutes minutes})
+        position->slot (into {} (map-indexed (fn [i q] [(inc i) (:id q)]) questions))
+        dropped (->> (get-in validated [:blueprint :dropped_questions])
+                     (map #(let [slot-id (position->slot (:question %))]
+                             (assoc % :slot_id slot-id :question (slot-number slot-id))))
+                     (concat pre-dropped)
+                     (sort-by :question) vec)]
+    (cond-> (-> validated
+                (assoc-in [:blueprint :dropped_questions] dropped)
+                (assoc-in [:blueprint :estimated_minutes]
+                  (long (Math/ceil (grid/slot-minutes (:questions validated))))))
+      (seq target-outcomes) (assoc-in [:blueprint :target_outcomes] (vec target-outcomes)))))
+
+;; ── Generation ──────────────────────────────────────────────────────────────
+
+(defn- prompt-input [m] (llm-json/write-prompt-input m))
+
+(defn- charge-total [charges] (when (seq charges) (reduce + charges)))
+
 (defn generate!
-  "Generate one mixed assessment and charge its completed model call.
-   Pre: the caller owns all evidence. Optional `:on-step` receives :writing before
-   the model call and :checking before validation.
-   Post: returns a validated frozen form. A refused form throws ::invalid-assessment
-   with the attempt's `:charged-credits` in its data. The call asks for
-   form-reply's schema when the model's entry supports structured outputs.
-   Invariant: validation failure cannot suppress a completed call charge, and
-   every reply is validated, whether or not a schema constrained it."
+  "Generate one exam in two charged calls: a blueprint over the whole source,
+   then one question per slot of the grid.
+   Pre:  the caller owns all evidence. options: :target-minutes (5 to 90,
+         default 30), :grid (:mixed or :essay, default :mixed),
+         :target-outcomes, :generation-feature, and :on-step, which receives
+         :planning, :writing and :checking.
+   Post: a validated frozen form with :cost and :charged-credits. A paid call
+         never ends in nothing while a question can be served: a stray plan is
+         corrected and a bad quote is replaced and flagged.
+   Throws: ::insufficient-evidence when the model says the source cannot
+         support an exam, ::invalid-assessment when no question survives. Each
+         throw after a paid call carries :charged-credits.
+   Invariant: validation failure cannot suppress a completed call charge."
   [user-id evidence options]
   (let [minutes (or (:target-minutes options) 30)
-        evidence (bounded-evidence evidence)
+        kind (or (:grid options) :mixed)
         step! (or (:on-step options) (fn [_]))]
-    (when-not (and (integer? minutes) (<= 5 minutes 180))
-      (fail! "Choose an estimated duration from 5 to 180 minutes." {:field :target-minutes}))
-    (when-not (some nonblank? (mapcat #(map :text (:evidence %)) (:materials evidence)))
-      (throw (ex-info "Add source text before generating an assessment." {:type ::insufficient-evidence})))
-    (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :synthesis)
-          _ (step! :writing)
-          {:keys [parsed cost tokens]} (llm/chat! resolved
-                                        (cards/load-prompt-template "curriculum-exam-form.md")
-                                        (llm-json/write-prompt-input {:target_minutes minutes :target_outcomes (:target-outcomes options)
-                                                                      :source (prompt-source evidence)})
-                                        form-reply {:feature :assessment-form :user-id user-id})
-          charge (credits/record-cost-charge! user-id (or (:generation-feature options) :comprehension.exam-form)
-                   (:id entry) cost tokens)
-          _ (step! :checking)
-          form (try (validate-form! (include-source-limits (reply->form parsed) evidence) evidence options)
-                 (catch clojure.lang.ExceptionInfo e
-                   (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits charge) e))))]
-      (assoc form :cost cost :charged-credits charge))))
+    (when-not (grid/minutes-in-range? minutes)
+      (fail! (str "Choose an estimated duration from " grid/min-minutes " to " grid/max-minutes " minutes.")
+        {:field :target-minutes}))
+    (when-not (grid/grid-kinds kind)
+      (throw (ex-info "Unknown exam grid." {:grid kind})))
+    (let [evidence (bounded-evidence evidence)]
+      (when-not (some nonblank? (mapcat #(map :text (:evidence %)) (:materials evidence)))
+        (throw (ex-info "Add source text before generating an assessment." {:type ::insufficient-evidence})))
+      (let [{:keys [entry] :as resolved} (llm/resolve-model+gate! user-id :synthesis)
+            feature (or (:generation-feature options) :comprehension.exam-form)
+            grid-slots (grid/slots kind minutes)
+            section-ids (set (mapcat #(map :topic-id (:evidence %)) (:materials evidence)))
+            source (prompt-source evidence)
+            charges (atom []) costs (atom 0.0)
+            call! (fn [template input reply llm-feature]
+                    (let [{:keys [parsed cost tokens]} (llm/chat! resolved (cards/load-prompt-template template)
+                                                         (prompt-input input) reply
+                                                         {:feature llm-feature :user-id user-id})]
+                      (when-let [c (credits/record-cost-charge! user-id feature (:id entry) cost tokens)]
+                        (swap! charges conj c))
+                      (swap! costs + (double (or cost 0)))
+                      parsed))]
+        (try
+          (step! :planning)
+          (let [plan (plan-from-blueprint kind grid-slots section-ids
+                       (call! "assessment-blueprint.md"
+                         {:target_minutes minutes :target_outcomes (:target-outcomes options)
+                          :grid {:kind (name kind) :slots (mapv #(select-keys % [:id :format :role :level]) grid-slots)}
+                          :source source}
+                         blueprint-reply :assessment-blueprint))
+                outcome-of (into {} (map (juxt :id :statement)) (:outcomes plan))
+                _ (step! :writing)
+                reply (call! "assessment-questions.md"
+                        {:target_minutes minutes :source source
+                         :themes (:themes plan) :outcomes (:outcomes plan)
+                         :slots (mapv #(assoc (select-keys % [:id :format :level :role :outcome_id])
+                                         :outcome (outcome-of (:outcome_id %)))
+                                  (:slots plan))}
+                        questions-reply :assessment-questions)
+                _ (step! :checking)
+                form (assemble-form kind minutes plan reply evidence (:target-outcomes options))]
+            (assoc form :cost @costs :charged-credits (charge-total @charges)))
+          (catch Exception e
+            (if (seq @charges)
+              (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits (charge-total @charges)) e))
+              (throw e))))))))
+
+(defn estimated-cost
+  "The price sheet for an exam over evidence, before any call: what the
+   input costs, and what one output token costs. exam-grid/estimate turns it
+   into a cost for a length, so the slider can move without a server call.
+   Pre:  evidence holds :materials.
+   Post: {:model :input-usd :usd-per-output-token :credits-per-usd}, or nil
+         when the model has no price. :credits-per-usd is nil when credits are
+         off or unconfigured. Both calls read the whole source
+         (plans/blueprint-first-exams.md §9)."
+  [user-id evidence]
+  (let [model-id (settings/get-kg-model user-id :synthesis)
+        {:keys [input output]} (:usd-per-mtok (card-models/resolve-model model-id))]
+    (when (and input output)
+      (let [source-chars (min max-source-characters
+                           (reduce + (map #(count (str (:text %))) (mapcat :evidence (:materials evidence)))))
+            prompt-chars (+ (count (cards/load-prompt-template "assessment-blueprint.md"))
+                            (count (cards/load-prompt-template "assessment-questions.md")))
+            input-tokens (+ (* 2 (/ source-chars 3.0)) (/ prompt-chars 3.0))
+            credits-per-usd (when (config/credits-enabled?)
+                              (try (credits/charge-iqd-from-usd user-id 1000.0)
+                                   (catch Exception _ nil)))]
+        {:model model-id
+         :input-usd (* input-tokens (/ input 1e6))
+         :usd-per-output-token (/ output 1e6)
+         :credits-per-usd (some-> credits-per-usd (/ 1000.0))}))))
 
 (defn normalized-score
   "Return an integer percentage from earned and possible points."

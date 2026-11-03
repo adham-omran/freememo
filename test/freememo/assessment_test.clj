@@ -158,15 +158,20 @@
         (is (= 1 (count (:gaps grade))))))))
 
 (deftest bounded-source-snapshot-preserves-originals-and-discloses-exclusions
-  (let [source (apply str (repeat 6000 "x"))
-        original {:materials [{:material-id 7 :evidence (mapv (fn [i] {:topic-id i :text source}) (range 30))}]}
-        bounded (assessment/bounded-evidence original)]
-    (is (= 6000 (count (get-in original [:materials 0 :evidence 0 :text]))))
-    (is (= 5000 (count (get-in bounded [:materials 0 :evidence 0 :text]))))
-    (is (= 0 (count (get-in bounded [:materials 0 :evidence 29 :text]))))
-    (is (= 120000 (get-in bounded [:source_limits :included_characters])))
-    (is (= 60000 (get-in bounded [:source_limits :omitted_characters])))
-    (is (get-in bounded [:materials 0 :evidence 29 :text_omitted]))))
+  (testing "a long section is read whole: no section cap"
+    (let [long-text (apply str (repeat 88407 "x"))
+          bounded (assessment/bounded-evidence {:materials [{:material-id 7 :evidence [{:topic-id 1 :text long-text}]}]})]
+      (is (= 88407 (count (get-in bounded [:materials 0 :evidence 0 :text]))))
+      (is (zero? (get-in bounded [:source_limits :omitted_characters])))))
+  (testing "the total budget cuts in section order"
+    (let [source (apply str (repeat 500000 "x"))
+          original {:materials [{:material-id 7 :evidence (mapv (fn [i] {:topic-id i :text source}) (range 3))}]}
+          bounded (assessment/bounded-evidence original)]
+      (is (= 500000 (count (get-in original [:materials 0 :evidence 2 :text]))))
+      (is (= 200000 (count (get-in bounded [:materials 0 :evidence 2 :text]))))
+      (is (= assessment/max-source-characters (get-in bounded [:source_limits :included_characters])))
+      (is (= 300000 (get-in bounded [:source_limits :omitted_characters])))
+      (is (get-in bounded [:materials 0 :evidence 2 :text_omitted])))))
 
 (deftest facts-must-fit-the-included-excerpts-and-count-limit
   (let [fact {:id 1 :graph_topic_id 7 :subject_label "Plants" :predicate_label "use" :object_literal "light"}
@@ -194,21 +199,6 @@
         (assessment/validate-free-grade! (last questions)
           {:criteria {:reasoning 4 :factual_accuracy 4} :explanation "Complete." :deductions []}
           (:materials evidence) "Light makes sugar."))))
-
-(deftest generated-coverage-discloses-truncated-source-and-excluded-facts
-  (let [source (assoc-in evidence [:materials 0 :evidence 0 :text]
-                 (str (:quote citation) (apply str (repeat 6000 "x"))))]
-    (with-redefs [llm/resolve-model+gate! (fn [& _] {:api-key "key" :entry {:id "model"} :model-fields {}})
-                  cards/load-prompt-template (constantly "prompt")
-                  llm/chat! (fn [& _] {:parsed form :cost 0.1})
-                  credits/record-cost-charge! (fn [& _] 1)]
-      (let [generated (assessment/generate! 1 source {:target-minutes 15})
-            blueprint (:blueprint generated)]
-        (is (= 5000 (count (get-in blueprint [:evidence_packets 0 :evidence 0 :text]))))
-        (is (pos? (get-in blueprint [:source_limits :omitted_characters])))
-        (is (= 1 (get-in blueprint [:source_limits :omitted_facts])))
-        (is (some #(= "source-snapshot-limit" (:id %)) (:unassessed_outcomes blueprint)))
-        (is (some #(= "fact-snapshot-limit" (:id %)) (:unassessed_outcomes blueprint)))))))
 
 (deftest scientific-case-and-option-id-meaning-survive-grading
   (let [exam {:blueprint {:evidence_packets (:materials evidence)}
@@ -295,68 +285,6 @@
       (is (= 100 (score answer)) answer))
     (doseq [answer [wrong (str "(" wrong ")") "versatile"]]
       (is (zero? (score answer)) answer))))
-
-;; ── Model contract (plans/comprehension-facts-experiment.md §7.2) ────────────
-
-(defn- generate-capturing
-  "Run generate! through the real kg-llm/chat!, with the provider answering
-   `reply`, and return [result request]. The entry records structured outputs,
-   so the request should carry the form schema."
-  [reply]
-  (let [request (atom nil)]
-    (with-redefs [llm/resolve-model+gate! (fn [& _] {:api-key "key"
-                                                     :entry {:id "model" :supported-parameters
-                                                             #{:response_format :structured_outputs}}
-                                                     :model-fields {:response_format {:type "json_object"}}})
-                  cards/load-prompt-template (constantly "prompt")
-                  openrouter/chat-completion! (fn [_ body & _]
-                                                (reset! request {:model-fields (dissoc body :messages)
-                                                                 :input (json/parse-string (:content (second (:messages body))))})
-                                                {:choices [{:message {:content (json/generate-string {:form reply})}
-                                                            :finish_reason "stop"}]
-                                                 :usage {:cost 0.1}})
-                  credits/record-cost-charge! (fn [& _] 1)]
-      [(assessment/generate! 1 evidence {:target-minutes 15}) @request])))
-
-(defn- json-keys
-  "Every object key at every depth of a parsed JSON value."
-  [value]
-  (cond
-    (map? value) (concat (keys value) (mapcat json-keys (vals value)))
-    (sequential? value) (mapcat json-keys value)
-    :else []))
-
-(deftest generation-asks-for-the-form-schema-and-names-the-source-as-a-citation-does
-  (let [[_ {:keys [model-fields input]}] (generate-capturing form)
-        material (get-in input ["source" "materials" 0])]
-    (is (= {:type "json_schema"
-            :json_schema {:name "assessment_form" :strict true
-                          :schema (reply-schema/wire-schema assessment/form-reply)}}
-          (:response_format model-fields)))
-    (is (= 7 (get material "material_id")))
-    (is (= 9 (get-in material ["sections" 0 "topic_id"])))
-    (testing "the source never uses the word the reply uses for citations"
-      (is (not-any? #{"evidence" "material-id" "topic-id"} (json-keys (get input "source")))))))
-
-(deftest a-question-cites-with-an-array-of-quote-objects
-  (let [question (get-in (:schema assessment/form-reply) [:properties :questions :items])
-        citations (get-in question [:properties :evidence])]
-    (is (= "array" (:type citations)))
-    (is (= ["material_id" "topic_id" "quote"] (get-in citations [:items :required])))))
-
-(deftest a-strict-reply-reads-null-as-absent-and-a-rubric-list-as-a-map
-  (let [nulls {:fact_ids nil :accepted_answers nil :case_sensitive nil :options nil
-               :correct_option_id nil :grading_guide nil :rubric nil}
-        strict-reply (-> form
-                         (assoc :insufficient nil :reason nil)
-                         (update :questions (partial mapv #(merge nulls %)))
-                         (assoc-in [:questions 2 :rubric]
-                           [{:criterion "reasoning" :expectation "Connect light and sugar."}])
-                         (assoc-in [:blueprint :unassessed_outcomes 0 :id] nil))
-        [generated] (generate-capturing strict-reply)]
-    (is (= 3 (count (:questions generated))))
-    (is (= {:reasoning "Connect light and sugar."} (get-in generated [:questions 2 :rubric])))
-    (is (not (contains? (get-in generated [:questions 1]) :accepted_answers)))))
 
 (deftest a-grade-reads-criteria-written-as-a-list
   (let [exam (assessment/validate-form! form evidence {})]

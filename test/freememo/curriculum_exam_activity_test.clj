@@ -7,6 +7,7 @@
    [freememo.credits :as credits]
    [freememo.curriculum :as curriculum]
    [freememo.curriculum-exam :as exam]
+   [freememo.exam-grid :as grid]
    [freememo.kg-llm :as llm]
    [freememo.user-state :as us])
   (:import
@@ -32,11 +33,11 @@
       (is start-var "start-form-generation! must start a detached server task")
       (when start-var
         (with-redefs [exam/generate-form!
-                      (fn [_user-id _subject _form-kind _threshold]
+                      (fn [_user-id _subject _form-kind _threshold _minutes]
                         @release
                         {:success true :form-id 99})]
           (let [started-at (System/nanoTime)
-                response (start-var user-id subject "standard" 70)
+                response (start-var user-id subject "standard" 70 30)
                 elapsed-ms (/ (- (System/nanoTime) started-at) 1000000.0)]
             (is (:success response))
             (is (< elapsed-ms 250.0) "the start request must not await the model")
@@ -59,10 +60,10 @@
         work-key "material/43"
         release (promise)]
     (with-redefs [exam/generate-form!
-                  (fn [_user-id _subject _form-kind _threshold]
+                  (fn [_user-id _subject _form-kind _threshold _minutes]
                     @release
                     {:success true :form-id 100})]
-      (is (:success (exam/start-form-generation! user-id subject "standard" 70)))
+      (is (:success (exam/start-form-generation! user-id subject "standard" 70 30)))
       (let [cancel (registry/owner-cancel-fn
                      :exam-form-generation user-id work-key)]
         (is (fn? cancel))
@@ -125,15 +126,34 @@
     :evidence [{:material_id 43 :topic_id 44 :quote quote}]
     :rubric exam-rubric}))
 
+(defn- two-call-chat
+  "A kg-llm/chat! stub for the two-call generator. The plan follows the essay
+   grid at 30 minutes, and each slot gets one essay that quotes quote."
+  ([quote] (two-call-chat quote {}))
+  ([quote extra]
+   (fn [_ _ _ contract _]
+     (merge
+       (if (= "assessment_blueprint" (:name contract))
+         {:parsed {:themes [{:id "t1" :title "Evidence" :topic_ids [44] :weight 100}]
+                   :outcomes [{:id "o1" :statement "Explain the evidence." :level "understand" :theme_ids ["t1"]}]
+                   :slots (mapv #(assoc (select-keys % [:id :format :role :level]) :outcome_id "o1")
+                            (grid/slots :essay 30))
+                   :unassessed_outcomes []}}
+         {:parsed (mapv (fn [{:keys [id format]}]
+                          {:slot_id id :format format :prompt (str "Question " id)
+                           :grading_guide "Use the cited evidence."
+                           :evidence [{:material_id 43 :topic_id 44 :quote quote}]
+                           :rubric [{:criterion "reasoning" :expectation "The claim follows from the evidence."}]})
+                    (grid/slots :essay 30))})
+       {:cost 0.01}
+       extra))))
+
 (deftest citation-validation-accepts-formatting-only-differences
   (let [user-id 987654324
         subject {:material-id 43}
         saves (atom 0)
         source "Frozen\u00a0evidence\nsays \u201cspaced \u2014 text\u201d\u2026"
-        quote "Frozen evidence says \"spaced - text\"..."
-        generated-form
-        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
-         :questions (mapv #(exam-question % quote) (range 5))}]
+        quote "Frozen evidence says \"spaced - text\"..."]
     (with-redefs [curriculum/subject-evidence
                   (fn [_connectable _user-id _subject]
                     {:materials [{:material-id 43
@@ -148,14 +168,13 @@
                   llm/resolve-model+gate!
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
-                  llm/chat!
-                  (fn [& _args] {:parsed generated-form :cost 0.01})
+                  llm/chat! (two-call-chat quote)
                   cards/load-prompt-template (fn [_name] "prompt")
                   curriculum/save-draft-form!
                   (fn [& _args] (swap! saves inc) 102)
                   curriculum/record-form-generation-charge! (fn [& _args] nil)
                   credits/record-cost-charge! (fn [& _args] 1)]
-      (let [result (exam/generate-form! user-id subject "standard" 70)]
+      (let [result (exam/generate-form! user-id subject "standard" 70 30)]
         (is (:success result))
         (is (= 1 @saves))))))
 
@@ -178,38 +197,55 @@
             (validate materials
               [(assoc-in question [:evidence 0 :topic_id] 45)]))))))
 
-(deftest failed-form-validation-records-the-completed-model-cost
+(deftest an-invented-quote-saves-a-flagged-draft
   (let [user-id 987654325
         subject {:material-id 43}
-        charges (atom [])
-        saves (atom 0)
-        generated-form
-        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
-         :questions (mapv #(exam-question % "invented evidence") (range 5))}]
+        saved (atom nil)]
     (with-redefs [curriculum/subject-evidence
                   (fn [_connectable _user-id _subject]
-                    {:materials [{:material-id 43
-                                  :topic-id 44
-                                  :digest "digest"
+                    {:materials [{:material-id 43 :topic-id 44 :digest "digest"
                                   :evidence [{:topic-id 44 :text "frozen evidence"}]}]
                      :source-versions ["digest"]})
                   llm/resolve-model+gate!
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
-                  llm/chat!
-                  (fn [& _args] {:parsed generated-form :cost 0.25
-                                 :tokens [{:input-tokens 900 :output-tokens 40}]})
+                  llm/chat! (two-call-chat "invented evidence")
                   cards/load-prompt-template (fn [_name] "prompt")
-                  curriculum/save-draft-form!
-                  (fn [& _args] (swap! saves inc) 103)
-                  credits/record-cost-charge!
-                  (fn [& args] (swap! charges conj args) 12)]
-      (let [result (exam/generate-form! user-id subject "standard" 70)]
+                  curriculum/save-draft-form! (fn [_ _ attrs] (reset! saved attrs) 103)
+                  curriculum/record-form-generation-charge! (fn [& _args] nil)
+                  credits/record-cost-charge! (fn [& _args] 12)]
+      (let [result (exam/generate-form! user-id subject "standard" 70 30)]
+        (is (:success result) "a paid call never ends in nothing")
+        (is (= 24 (:charged-credits result)))
+        (is (= (count (grid/slots :essay 30)) (count (:questions @saved))))
+        (is (every? #(= ["quote-replaced"] (map :kind (:flags %))) (:questions @saved)))))))
+
+(deftest failed-form-generation-records-the-completed-model-costs
+  (let [user-id 987654327
+        subject {:material-id 43}
+        charges (atom [])
+        saves (atom 0)]
+    (with-redefs [curriculum/subject-evidence
+                  (fn [_connectable _user-id _subject]
+                    {:materials [{:material-id 43 :topic-id 44 :digest "digest"
+                                  :evidence [{:topic-id 44 :text "frozen evidence"}]}]
+                     :source-versions ["digest"]})
+                  llm/resolve-model+gate!
+                  (fn [_user-id _step]
+                    {:api-key "test" :entry {:id "test-model"} :model-fields {}})
+                  llm/chat! (fn [_ _ _ contract _]
+                              (if (= "assessment_blueprint" (:name contract))
+                                ((two-call-chat "frozen evidence") nil nil nil contract nil)
+                                {:parsed [] :cost 0.25 :tokens [{:input-tokens 900 :output-tokens 40}]}))
+                  cards/load-prompt-template (fn [_name] "prompt")
+                  curriculum/save-draft-form! (fn [& _args] (swap! saves inc) 103)
+                  credits/record-cost-charge! (fn [& args] (swap! charges conj args) 12)]
+      (let [result (exam/generate-form! user-id subject "standard" 70 30)]
         (is (false? (:success result)))
         (is (zero? @saves))
-        (is (= [[user-id :curriculum.exam-form "test-model" 0.25
-                 [{:input-tokens 900 :output-tokens 40}]]]
-              @charges))))))
+        (is (= 2 (count @charges)) "both completed calls are charged")
+        (is (= [user-id :curriculum.exam-form "test-model" 0.25 [{:input-tokens 900 :output-tokens 40}]]
+              (second @charges)))))))
 
 (deftest failed-grade-validation-records-the-completed-model-cost
   (let [user-id 987654326
@@ -238,10 +274,7 @@
         subject {:material-id 43}
         work-key "material/43"
         saves (atom 0)
-        charges (atom 0)
-        generated-form
-        {:blueprint {:assessed_outcomes ["Outcome"] :unassessed_outcomes []}
-         :questions (mapv exam-question (range 5))}]
+        charges (atom 0)]
     (swap! (us/get-atom user-id :exam-form-generation-cancelled) conj work-key)
     (with-redefs [curriculum/subject-evidence
                   (fn [_connectable _user-id _subject]
@@ -257,14 +290,13 @@
                   llm/resolve-model+gate!
                   (fn [_user-id _step]
                     {:api-key "test" :entry {:id "test-model"} :model-fields {}})
-                  llm/chat!
-                  (fn [& _args] {:parsed generated-form :cost 0.01})
+                  llm/chat! (two-call-chat "frozen evidence")
                   cards/load-prompt-template (fn [_name] "prompt")
                   curriculum/save-draft-form!
                   (fn [& _args] (swap! saves inc) 101)
                   credits/record-cost-charge!
                   (fn [& _args] (swap! charges inc) 1)]
-      (let [result (exam/generate-form! user-id subject "standard" 70)]
+      (let [result (exam/generate-form! user-id subject "standard" 70 30)]
         (is (:cancelled? result))
         (is (zero? @saves) "a cancelled OpenRouter result must not save a form")
-        (is (= 1 @charges) "the completed OpenRouter call still costs credits")))))
+        (is (= 2 @charges) "the two completed OpenRouter calls still cost credits")))))

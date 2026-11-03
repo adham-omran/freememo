@@ -21,6 +21,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.a11y :as a11y]
+   [freememo.exam-minutes :as exam-minutes]
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
    [freememo.page-title :refer [PageTitle]]
@@ -54,10 +55,13 @@
                      direction prompts))
      :cljs nil))
 
-(defn generate-form* [user-id subject form-kind threshold]
+(defn generate-form* [user-id subject form-kind threshold minutes]
   #?(:clj (curriculum-exam/start-form-generation! user-id subject form-kind
-            (or threshold curriculum/default-threshold))
+            (or threshold curriculum/default-threshold) minutes)
      :cljs nil))
+
+(defn estimated-cost* [user-id subject]
+  #?(:clj (curriculum-exam/estimated-cost user-id subject) :cljs nil))
 
 (defn form-generation-work-key* [subject]
   #?(:clj (curriculum-exam/form-generation-work-key subject) :cljs nil))
@@ -230,40 +234,71 @@
         (dom/text (str label " " charge " credits"))))
     (e/amb)))
 
-(e/defn GenerateExamTrigger [label class-name generation-active?]
+(def default-exam-minutes 30)
+
+(e/defn GeneratePanel
+  "The minutes slider, the estimate and the Start button of one generation.
+   Pre: !open? is the panel's own atom. Post: a started generation closes the
+   panel; a refused start keeps it open with the error beside the button."
+  [user-id subject form-kind threshold generation-active? !open?]
   (e/client
-    (dom/button
-      (let [[token error] (e/Token (dom/On "click" identity nil))]
-        (dom/props {:type "button"
-                    :class class-name
-                    :disabled (or generation-active? (some? token))
-                    :aria-busy (or generation-active? (some? token))
-                    :aria-invalid (some? error)})
-        (tooltip/Tooltip! credit-notice)
-        (dom/text (if (or generation-active? token) "Generating exam…" label))
-        [token error]))))
+    (let [!minutes (atom default-exam-minutes)
+          estimate (peek (e/as-vec (e/server (e/Offload #(estimated-cost* user-id subject)))))]
+      (dom/div
+        (dom/props {:class "curriculum-generate-panel"})
+        (exam-minutes/MinutesSlider :essay !minutes estimate)
+        (dom/div
+          (dom/props {:class "curriculum-generate-panel__actions"})
+          (let [[token error [minutes]]
+                (dom/button
+                  ;; The event's time stamp makes each click a new value, so a
+                  ;; second click at the same length still starts a token.
+                  (let [click (dom/On "click" (fn [event] [@!minutes (.-timeStamp event)]) nil)
+                        [token error] (e/Token click)]
+                    (dom/props {:type "button" :class "btn btn-primary btn-sm"
+                                :disabled (or generation-active? (some? token))
+                                :aria-busy (some? token)
+                                :aria-invalid (some? error)})
+                    (tooltip/Tooltip! credit-notice)
+                    (dom/text "Start")
+                    [token error click]))]
+            (when token
+              (let [response (e/server (e/Offload
+                                        #(generate-form* user-id subject form-kind
+                                           threshold minutes)))]
+                (if (e/server (:success response))
+                  (do (e/on-unmount #(reset! !open? false)) (token))
+                  (token (e/server (:error response))))))
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-sm"})
+              (dom/On "click" (fn [_] (reset! !open? false)) nil)
+              (dom/text "Cancel"))
+            (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
+              (dom/text (or error "")))))))
+    (e/amb)))
 
 (e/defn GenerateExamButton
-  "Start one exam form generation. threshold nil takes the server default."
+  "Start one exam form generation. threshold nil takes the server default.
+   The button opens a panel where the learner sets the exam length first."
   [user-id subject form-kind threshold label class-name]
   (e/client
     (let [generations (e/server
                         (e/watch (us/get-atom user-id :exam-form-generations)))
           work-key (e/server (form-generation-work-key* subject))
-          generation-active? (e/server (contains? generations work-key))]
+          generation-active? (e/server (contains? generations work-key))
+          !open? (atom false)
+          open? (e/watch !open?)]
       (dom/div
         (dom/props {:class "curriculum-generate-control"})
-        (let [[token error]
-              (GenerateExamTrigger label class-name generation-active?)]
-          (when token
-            (let [response (e/server (e/Offload
-                                      #(generate-form* user-id subject form-kind
-                                         threshold)))]
-              (if (e/server (:success response)) (token)
-                (token (e/server (:error response))))))
-          (when error
-            (dom/span (dom/props {:class "curriculum-inline-error" :role "alert"})
-              (dom/text error)))))
+        (dom/button
+          (dom/props {:type "button" :class class-name
+                      :disabled generation-active?
+                      :aria-busy generation-active?
+                      :aria-expanded open?})
+          (dom/On "click" (fn [_] (swap! !open? not)) nil)
+          (dom/text (if generation-active? "Generating exam…" label)))
+        (when open?
+          (GeneratePanel user-id subject form-kind threshold generation-active? !open?)))
       (e/amb))))
 
 ;; ── Blueprint ──────────────────────────────────────────────────────────────
@@ -330,6 +365,22 @@
         (dom/p (dom/text (str "Estimated time: " (:estimated-minutes form) " minutes. No enforced time limit.")))
         (e/for [omission (e/diff-by :format (:omitted-formats form))]
           (dom/p (dom/text (str "Omitted " (:format omission) ": " (:reason omission)))))
+        ;; Always mounted, so a list that appears never shifts its siblings.
+        (dom/div
+          (dom/props {:class "curriculum-generation-notes"})
+          (when (seq (:dropped-questions form))
+            (dom/details
+              (dom/summary (dom/text (str (count (:dropped-questions form))
+                                       " planned questions did not pass the checks and were removed.")))
+              (dom/ul
+                (e/for [dropped (e/diff-by :question (:dropped-questions form))]
+                  (dom/li (dom/text (str "Planned question " (:question dropped) ": " (:reason dropped))))))))
+          (when (seq (:plan-warnings form))
+            (dom/details
+              (dom/summary (dom/text (str "The exam plan needed " (count (:plan-warnings form)) " corrections.")))
+              (dom/ul
+                (e/for [warning (e/diff-by identity (:plan-warnings form))]
+                  (dom/li (dom/text warning)))))))
         (dom/div (dom/props {:class "curriculum-outcome-grid"})
           (OutcomeList "Assessed outcomes" (:assessed-outcomes form))
           (OutcomeList "Unassessed outcomes" (:unassessed-outcomes form)))
@@ -362,6 +413,11 @@
         (dom/span (dom/text (str (str/capitalize (str/replace (or (:format question) "long-essay") "-" " "))
                                " / " (or (:points question) 20) " points"))))
       (dom/h3 (dom/text (:prompt question)))
+      (dom/div
+        (dom/props {:class "curriculum-question-flags"})
+        (e/for [flag (e/diff-by :kind (:flags question))]
+          (dom/p (dom/props {:class "curriculum-question-flag" :role "note"})
+            (dom/text (:message flag)))))
       (e/for [option (e/diff-by :id (:options question))]
         (dom/p (dom/text (str (:id option) ". " (:text option)))))
       (dom/details
