@@ -35,7 +35,7 @@
                  "Keep your first answers separate from later improvements. The first attempt shows what you could do before further study."
                  "Select Upload handwritten answers to add a PDF, PNG, or JPEG. Typed answers use the same assessment and feedback path."]}
    {:id "transcript" :title "4. Check what the system read"
-    :paragraphs ["Select Review transcript. Compare the original pages with the extracted text and the assigned question numbers."
+    :paragraphs ["Transcription starts when the upload ends, and it uses credits. When the transcript is ready, compare the original pages with the extracted text and the assigned question numbers."
                  "Correct transcription errors before you submit. Check symbols, negation, crossed-out text, equations, and answers that continue on another page."
                  "A transcription correction restores what you wrote. An improved answer adds knowledge after the attempt. These changes have different meanings."
                  "If the scan remains unclear, the result needs review. Unclear handwriting is not evidence that you misunderstood the material."]}

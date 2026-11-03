@@ -13,7 +13,7 @@
             #?(:clj [freememo.comprehension-ocr :as scan])
             #?(:clj [freememo.user-state :as us])))
 
-(defn read-page* [user-id cycle-id _revision]
+(defn read-page* [user-id cycle-id _revision _mutations]
   #?(:clj {:materials (cycle/list-materials user-id)
            :cycles (cycle/list-cycles user-id)
            :detail (when cycle-id (cycle/cycle-detail user-id cycle-id))}
@@ -208,11 +208,17 @@
       (when (contains? #{"uploaded" "failed" "review"} (:status scan))
         (Action user-id [:remove-scan (:id detail) (:id scan)] "Remove scan" !revision !error navigate!))
       (when (= "transcribing" (:status scan))
+        (dom/p (dom/props {:role "status"})
+          (dom/text "Transcribing your answers. The transcript shows here when it is ready.")))
+      (when (= "transcribing" (:status scan))
         (dom/p (dom/props {:class "comprehension-muted"})
           (dom/text "If transcription does not finish, retry 20 minutes after it started. An active transcription cannot start twice.")))
+      (when (= "failed" (:status scan))
+        (dom/p (dom/props {:class "comprehension-warning"})
+          (dom/text (str "Transcription failed: " (or (:error scan) "no reason was recorded.")))))
       (if (contains? #{"uploaded" "failed" "transcribing"} (:status scan))
         (Action user-id [:transcribe (:id detail) (:id scan)]
-          (if (= "transcribing" (:status scan)) "Retry transcription" "Review transcript")
+          (if (= "uploaded" (:status scan)) "Transcribe answers" "Retry transcription")
           !revision !error navigate!)
         (when (contains? #{"review" "accepted"} (:status scan))
           (let [questions (get-in detail [:form :questions])
@@ -375,6 +381,8 @@
           (dom/text "Print answer sheet")))
       (dom/h3 (dom/text "Handwritten answers"))
       (dom/p (dom/text "Use ordinary paper. Number your answers, then upload a PDF or a photo. Maximum: 20 MB and 20 pages."))
+      (dom/p (dom/props {:class "comprehension-muted"})
+        (dom/text "Transcription starts after the upload and uses credits. Nothing goes into your answers until you accept the transcript."))
       (UploadAnswers (:id detail) !revision !error)
       (e/for [scan (e/diff-by :id (:scans detail))]
         (ScanReview user-id detail scan !revision !error navigate!))
@@ -406,7 +414,11 @@
           !revision (atom 0)
           !error (atom nil)
           revision (e/watch !revision)
-          page (e/server (e/Offload #(read-page* user-id cycle-id revision)))]
+          ;; A transcription that starts after an upload ends on a server
+          ;; thread, so no client action bumps !revision when it ends.
+          page (e/server
+                 (let [mutations (e/watch (us/get-atom user-id :comprehension-mutations))]
+                   (e/Offload #(read-page* user-id cycle-id revision mutations))))]
       (dom/link (dom/props {:rel "stylesheet" :href "/freememo/comprehension.css"}))
       (dom/div
         (dom/props {:class "comprehension-page"})

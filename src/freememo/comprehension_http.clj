@@ -13,7 +13,8 @@
 
 (defn upload-handler
   "Pre: authenticated multipart request with a cycle ID and one scan.
-   Post: saves an owned original scan without grading it.
+   Post: saves an owned original scan without grading it, then starts its
+   transcription. A saved scan's response waits until the run claims it.
    Invariant: invalid uploads never alter source material."
   [request]
   (if-let [uid (get-in request [:session :user-id])]
@@ -29,6 +30,7 @@
           (let [result (scan/stage-scan! uid cycle-id
                          (java.nio.file.Files/readAllBytes (.toPath ^java.io.File tempfile))
                          content-type filename)]
+            (when (:ok result) (scan/start-transcription! uid cycle-id (:scan-id result)))
             (reply (if (:ok result) 200 400) result))
           (catch Exception _ (reply 400 {:ok false :error "The scan could not be saved. Check the file and try again."})))))
     (reply 401 {:ok false :error "Sign in to upload answers."})))
