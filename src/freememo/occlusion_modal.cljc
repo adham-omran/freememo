@@ -201,7 +201,7 @@
 
 (e/defn OcclusionToolButton
   "One toolbar button. The effects are local to the browser (Konva state), so
-   there is no token — see the selection-side-effect pattern in CLAUDE.md."
+   there is no token — see the selection-side-effect pattern in docs/electric-patterns.md."
   [label active? on-click]
   (e/client
     (dom/button
@@ -276,7 +276,7 @@
   "Tool switch plus mask-group actions, mirroring the editor's own shortcuts.
    Watches !tool and !selection HERE, not in the parent: the parent's body hosts
    the Konva init side effect, and a signal there would put that call in a body
-   Electric may re-evaluate (CLAUDE.md, JS library init). !tool is the single
+   Electric may re-evaluate (docs/electric-patterns.md, JS library init). !tool is the single
    source of truth for the tool — the editor writes it back on a keyboard
    switch — and !selection is written the same way, from select-nodes!.
    !label-size is watched one level down, inside OcclusionLabelSizeInput, for the
@@ -469,7 +469,7 @@
           :initial-rects :initial-geometry :user-id :close!}
    !primary-btn / !history-open? are positional, NOT ctx keys — an atom inside
    a map passed to an e/defn is serialized as data and arrives unusable
-   (CLAUDE.md 'Never Put Atoms in Maps Passed to e/defn')."
+   (docs/electric-patterns.md 'Never Put Atoms in Maps Passed to e/defn')."
   [ctx !primary-btn !history-open?]
   (e/client
     (let [{:keys [edit? group request !request !handle !fields

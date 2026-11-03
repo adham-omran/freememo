@@ -315,7 +315,7 @@
       ;; meta group with display:none from collapse tier 2, and a top-layer
       ;; element inside a display:none ancestor is not rendered — so ⌘⇧B
       ;; opened a card nobody could see. Electric adds and removes <body>'s
-      ;; children by identity, so a second child here is safe (CLAUDE.md,
+      ;; children by identity, so a second child here is safe (.claude/rules/deployment-hook.md,
       ;; deployment hook section).
       (binding [dom/node js/document.body]
         (dom/div
@@ -335,7 +335,7 @@
                   (dom/text (or (:title content) url)))
                 (dom/div (dom/props {:class "bib-peek-title"})
                   (dom/text (or (:title content) "Untitled source"))))
-              ;; The loop has an element of its own, always mounted (CLAUDE.md,
+              ;; The loop has an element of its own, always mounted (docs/electric-patterns.md,
               ;; "An e/for Gets an Element of Its Own").
               (dom/div
                 (dom/props {:class "bib-peek-lines"})

@@ -37,7 +37,7 @@
 
 ;; ── Server wrappers ────────────────────────────────────────────────
 ;; Each takes `_refresh` so it re-queries on :desktop-mutations, and each is
-;; defined on both peers because reactive bodies name it (CLAUDE.md).
+;; defined on both peers because reactive bodies name it (docs/electric-patterns.md).
 
 (defn desktop?* [_refresh]
   #?(:clj (peer/desktop?) :cljs false))

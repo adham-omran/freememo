@@ -6,7 +6,7 @@
    own to open. A handler sets a request atom here instead, and Main's
    `TargetModals` renders the modal. Mounting at Main also settles placement:
    the modal is a sibling of every page and of the card modals' `pointer-events:
-   none` overlay, never inside one (CLAUDE.md, \"A Stacked Modal Must Not Nest
+   none` overlay, never inside one (.claude/rules/modals-keyboard.md, \"A Stacked Modal Must Not Nest
    Inside a pointer-events: none Overlay\"), and later in DOM order, so it
    paints over a card modal at the same z-index."
   (:require [hyperfiddle.electric3 :as e]

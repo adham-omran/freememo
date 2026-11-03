@@ -78,7 +78,7 @@
   (e/amb))
 
 (e/defn ForgeKindSelect
-  "A1-fallback select (CLAUDE.md, Forms5 → Select dropdowns)."
+  "A1-fallback select (docs/electric-patterns.md, Forms5 → Select dropdowns)."
   [!forge]
   (let [forge (e/watch !forge)]
     (dom/select

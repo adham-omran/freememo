@@ -1,6 +1,6 @@
 (ns freememo.assistant-panel-overlays
   "Two sibling groups of the assistant panel, in their own `e/defn`s so the
-   panel's method stays under the 64KB bytecode limit (CLAUDE.md, \"Diagnosing
+   panel's method stays under the 64KB bytecode limit (docs/electric-patterns.md, \"Diagnosing
    'Method code too large!'\"). The panel keeps every `(e/server …)` form
    binding: values arrive here as positional arguments, which does not
    transfer them, and atoms arrive positionally, never inside a map."

@@ -3,7 +3,7 @@
    (plans/custom-context-menu.md §4).
 
    The menu itself is freememo.context-menu, a .cljs namespace. An e/defn body
-   cannot name a CLJS-only var (CLAUDE.md, \"Server-Only Functions in .cljc
+   cannot name a CLJS-only var (docs/electric-patterns.md, \"Server-Only Functions in .cljc
    Files\", which holds in the other direction too), so every call goes through
    a plain defn here whose body is reader-conditional.
 

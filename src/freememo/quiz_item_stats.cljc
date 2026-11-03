@@ -221,7 +221,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Panel sections — separate e/defns so no one method approaches the :prod
-;; 64KB bytecode cap (CLAUDE.md).
+;; 64KB bytecode cap (docs/electric-patterns.md).
 ;; ---------------------------------------------------------------------------
 
 (e/defn StatRow [label value]
@@ -296,7 +296,7 @@
 
    `stats` is read in CLIENT scope, so the whole payload crosses at once rather
    than field-by-field through (e/server (:k stats)) — the LibraryCardsView shape
-   (CLAUDE.md). That is deliberate here, and it saves nothing to change: :reviews
+   (docs/electric-patterns.md). That is deliberate here, and it saves nothing to change: :reviews
    is the payload, and curve-points reads every row of it on the client because
    freememo.fsrs is .cljc and the curve is drawn from the epochs. What crosses is
    one item's history, opened by an explicit click, not a windowed table's rows."
@@ -309,7 +309,7 @@
           (dom/text "That item is no longer available."))
         (dom/div
           ;; A card's prompt is stored HTML carrying \(TeX\), so it goes through
-          ;; math/set-html!; a question's is plain text (CLAUDE.md).
+          ;; math/set-html!; a question's is plain text (.claude/rules/math.md).
           (if (= :card (:item-kind stats))
             (dom/div (dom/props {:dir "auto" :class "bidi-per-block item-stats-prompt fm-rich"})
               (math/set-html! dom/node (str (:prompt stats))))
@@ -357,7 +357,7 @@
    whether a card is one quiz item or five.
    Pre:  mounted as a SIBLING of any surrounding modal's overlay, never inside one —
          pointer-events: none inherits, and a nested backdrop is mouse-dead while
-         Escape closes both (CLAUDE.md)."
+         Escape closes both (.claude/rules/modals-keyboard.md)."
   [user-id !stats]
   (e/client
     (let [stats (e/watch !stats)

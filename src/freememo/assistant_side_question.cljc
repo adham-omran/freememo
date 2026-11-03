@@ -119,7 +119,7 @@
           (dom/text (:passage side)))
         (dom/div
           (dom/props {:class "assistant-side-question__thread"})
-          ;; The loop in its own element, mounted always (CLAUDE.md, "An e/for
+          ;; The loop in its own element, mounted always (docs/electric-patterns.md, "An e/for
           ;; Gets an Element of Its Own").
           (dom/div
             (dom/props {:class "assistant-panel__rows"})

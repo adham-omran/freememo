@@ -26,7 +26,10 @@ logs/
 /repl.sh
 /data/
 /backup-1774968994.sql
-/.claude/
+# Claude Code instructions are shared. Worktrees and local settings are not.
+/.claude/*
+!/.claude/rules/
+!/.claude/skills/
 # Blue-green deploy runtime state.
 /caddy/upstream.caddy
 /.deploy.lock

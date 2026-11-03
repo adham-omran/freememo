@@ -121,7 +121,7 @@
    name order: a sixth card kind added without an entry there would otherwise
    digest by another kind's fields and silently mis-classify, whereas reading
    everything can only report a change that is not one — noisy, never lossy.
-   `CLAUDE.md` records the same failure shape for topic kinds missing from the
+   `docs/feature-obligations.md` records the same failure shape for topic kinds missing from the
    badge switches.
 
    A field the note does not carry digests as \"\", which is what makes a foreign

@@ -217,7 +217,7 @@
 
    Two save services, because the two controls report edits differently. The
    checkbox is a Forms5 field and emits edit maps; `TagInput` is a documented
-   Forms5 exception (CLAUDE.md) and reports through `on-edit`, which lands the new
+   Forms5 exception (docs/electric-patterns.md) and reports through `on-edit`, which lands the new
    vector in `!pending`.
 
    Unticking the checkbox does NOT clear the tags. The stored list survives so
@@ -265,7 +265,7 @@
           (case (e/server (save-anki-tags-for-topic!* user-id root-id ut tags))
             (t))))
       ;; TagInput save service. `e/on-unmount` clears `!pending` INSIDE the token
-      ;; branch, per CLAUDE.md: a local mutation that unmounts the containing
+      ;; branch, per docs/electric-patterns.md: a local mutation that unmounts the containing
       ;; frame must fire on unmount, not as a sibling of the server call.
       (when (some? pending)
         (let [[t _] (e/Token pending)]
@@ -382,7 +382,7 @@
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:font-size "15px"}})
             ;; Its own props map: `busy?` is a server read, absent for its round
-            ;; trip, and an absent map nulls every prop in it (CLAUDE.md).
+            ;; trip, and an absent map nulls every prop in it (docs/electric-patterns.md).
             (dom/props {:disabled (or (not can-run?) busy?)})
             (dom/text (if busy? "Sync running…" "Sync"))
             (reset! !push-btn dom/node)

@@ -1442,7 +1442,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
     (when (e/watch !confirm-bulk-delete)
       (BulkDeleteConfirmModal user-id !confirm-bulk-delete !selected !action-result))
     ;; A sibling of the other two, never nested in one: pointer-events:none
-    ;; inherits and a nested modal shares its ancestor's Escape (CLAUDE.md).
+    ;; inherits and a nested modal shares its ancestor's Escape (.claude/rules/modals-keyboard.md).
     (stats/QuizItemStatsModal user-id !stats)))
 
 ;; Fixed header + virtual-scrolled body pair.

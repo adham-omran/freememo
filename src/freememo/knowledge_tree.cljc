@@ -247,7 +247,7 @@
 ;; ---------------------------------------------------------------------------
 ;; DocumentRow — extracted from DocumentTreeView so Electric's macroexpander
 ;; doesn't blow the stack on the giant inlined row. Atoms passed positionally
-;; per CLAUDE.md "Never Put Atoms in Maps Passed to e/defn".
+;; per docs/electric-patterns.md "Never Put Atoms in Maps Passed to e/defn".
 ;; ---------------------------------------------------------------------------
 
 (e/defn DocumentRow [user-id navigate! row-dto i row-height

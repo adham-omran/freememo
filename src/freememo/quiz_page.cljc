@@ -651,7 +651,7 @@
                       ;; Read the clock in CLIENT scope and pass the number. Naming
                       ;; `started-at` inside the server-sited closure would make it a
                       ;; value Electric has to transfer, which is the unserializable
-                      ;; crash with an empty server log (CLAUDE.md).
+                      ;; crash with an empty server log (docs/electric-patterns.md).
                       (let [ms (timing/elapsed-ms started-at)
                             res (e/server
                                   (e/Offload #(review-answer!* user-id qid answer ms)))]

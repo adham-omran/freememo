@@ -12,7 +12,7 @@
    `freememo.crawler-page` is plain Clojure on the server boot path, and
    `freememo.legal-page` pulls in Electric. A require here would drag Electric's
    compiler into the server's boot, which `dev/load-app-namespaces!` exists to
-   keep off the main thread (see CLAUDE.md, dev JVM stack). Pure data needs
+   keep off the main thread (see .claude/rules/dev-jvm.md, dev JVM stack). Pure data needs
    nothing, so this costs nothing.
 
    ## `documents` owns the path set

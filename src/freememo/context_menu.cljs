@@ -24,7 +24,7 @@
    same command.
 
    Plain JS DOM, not Electric: every opener is a DOM listener, and the menu
-   outlives no frame (CLAUDE.md, \"JS Library Init Side Effects in e/defn\")."
+   outlives no frame (docs/electric-patterns.md, \"JS Library Init Side Effects in e/defn\")."
   (:require [clojure.string :as str]
             [freememo.command-bus :as bus]
             [freememo.command-targets :as targets]

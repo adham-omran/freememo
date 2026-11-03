@@ -123,7 +123,7 @@
       ;; Resolve once the deck list (AnkiConnect) and prefs (server) are present;
       ;; apply the resolved selection, then release the readiness gate. The
       ;; `case` forces apply-prefs! to evaluate — as a bare non-last statement
-      ;; its discarded return value is work-skipped by Electric (CLAUDE.md).
+      ;; its discarded return value is work-skipped by Electric (docs/electric-patterns.md).
       (when (and (not ready?) (seq decks))
         (case (apply-prefs! prefs conn form decks nil)
           (reset! !ready? true)))

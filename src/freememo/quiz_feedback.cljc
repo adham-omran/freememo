@@ -198,7 +198,7 @@
                                 :max-width "600px" :width "90%"
                                 :max-height "70vh" :overflow-y "auto"
                                 :box-shadow "0 8px 32px rgba(0,0,0,0.25)"}})
-            ;; tabindex="-1" + rAF focus, the pattern CLAUDE.md's modal-focus table
+            ;; tabindex="-1" + rAF focus, the pattern .claude/rules/modals-keyboard.md's modal-focus table
             ;; prescribes for a non-Forms5 node: :autofocus never fires on a
             ;; dynamically inserted element.
             (e/snapshot (modal-shell/focus-on-mount! dom/node))

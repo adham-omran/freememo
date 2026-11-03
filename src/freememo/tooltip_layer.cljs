@@ -21,7 +21,7 @@
      browser. `elementFromPoint` sees it either way.
 
    Plain JS DOM, not Electric: the bubble outlives every frame, and an
-   Electric body re-runs unpredictably (CLAUDE.md, \"JS Library Init Side
+   Electric body re-runs unpredictably (docs/electric-patterns.md, \"JS Library Init Side
    Effects in e/defn\")."
   (:require [goog.object :as gobj]
             [freememo.vendor-libs :as vendor]))

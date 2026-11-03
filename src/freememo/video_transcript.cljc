@@ -25,7 +25,7 @@
    ;; Scroll-window from the app-local copy, not the jar's: only it honours
    ;; `:reset-key`, and the transcript must NOT snap to the top when a
    ;; re-transcription changes the segment count under a reading user
-   ;; (CLAUDE.md, virtual-scroll rules). `Tape` is unchanged upstream, so it
+   ;; (.claude/rules/virtual-scroll.md, virtual-scroll rules). `Tape` is unchanged upstream, so it
    ;; still comes from the jar — same split as library_cards.
    [hyperfiddle.electric-scroll0 :refer [Tape]]
    [freememo.scroll :refer [Scroll-window]]
@@ -298,7 +298,7 @@
           seg-count (e/server (count segs))
           ;; The ONE thing the client needs the whole timeline for. Projected
           ;; server-side so only the ints cross: `(mapv :start_ms …)` on the
-          ;; client would drag every full row over with it (CLAUDE.md's
+          ;; client would drag every full row over with it (docs/electric-patterns.md's
           ;; 372 KB → 13 KB case). ~2000 ints for a three-hour lecture.
           starts (e/server (mapv :start_ms segs))
           ;; Readings from another topic's player are ignored rather than

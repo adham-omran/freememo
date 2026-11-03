@@ -6,7 +6,7 @@
    Every server wrapper uses a body-level `#?(:clj … :cljs nil)`. They are named
    inside `(e/server (…))` in reactive bodies, and `e/server` does NOT strip the
    symbol from CLJS compilation — a whole-form `#?(:clj (defn …))` would leave
-   the var missing on the CLJS peer (CLAUDE.md, server-only functions)."
+   the var missing on the CLJS peer (docs/electric-patterns.md, server-only functions)."
   (:require
    [hyperfiddle.electric3 :as e]
    [missionary.core :as m]
@@ -31,7 +31,7 @@
   "Continuous flow of a tick counter: 0 at once, then +1 every `interval-ms`.
 
    The initial 0 is load-bearing. `e/input` throws `Uninitialized flow.` at mount
-   for a flow with no value yet, and the first tick is a sleep away (CLAUDE.md,
+   for a flow with no value yet, and the first tick is a sleep away (docs/electric-patterns.md,
    `e/input` needs a value at mount)."
   [interval-ms]
   (->> (m/ap (loop [n 1]
@@ -115,7 +115,7 @@
 
    The tick comes from the CLIENT on purpose. A server-side clock would prove
    only that the server frame is mounted, and a server frame can outlive its
-   browser — teardown stalls while an `e/Offload` drains (CLAUDE.md). A beat
+   browser — teardown stalls while an `e/Offload` drains (.claude/skills/prod-logs/SKILL.md). A beat
    that has to cross from the browser proves the browser is still there."
   [user-id run-id]
   (e/client

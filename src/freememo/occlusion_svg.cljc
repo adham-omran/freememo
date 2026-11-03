@@ -74,7 +74,7 @@
 ;; one home keeps the two from drifting. And this namespace is a .cljc with no
 ;; reader conditional, so BOTH peers see plain literals — a CLJS-only def read
 ;; from a reactive body would leave the peers disagreeing on frame shape (see
-;; CLAUDE.md on transcribe_language.cljc).
+;; docs/electric-patterns.md on transcribe_language.cljc).
 (def min-label-size
   "Smallest font size a label may hold, in natural px. Below this the halo
    swallows the glyph."

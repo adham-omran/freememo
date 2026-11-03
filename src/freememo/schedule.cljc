@@ -12,7 +12,7 @@
    writes the derived state back. Every entry point is a plain `defn` with a
    body-level reader conditional, because each is named inside an `(e/server …)`
    form in a reactive body and Electric compiles that call site on BOTH peers
-   (see CLAUDE.md, 'Server-Only Functions in .cljc Files').
+   (see docs/electric-patterns.md, 'Server-Only Functions in .cljc Files').
 
    Callers MUST wrap these in `e/Offload` (§4.8, §8.4). `ingest-acquisition!`
    replays a document's whole revlog and `forecast` walks a branch tree per
@@ -583,7 +583,7 @@
 
    A plain `def`, no reader conditional: a CLJ-only `def` read from client
    scope compiles with zero warnings, emits nothing on the CLJS peer, and kills
-   the WebSocket at mount when the two disagree on frame shape (CLAUDE.md,
+   the WebSocket at mount when the two disagree on frame shape (docs/electric-patterns.md,
    `transcribe_language.cljc`)."
   {:ok "forecast ready"
    :no-config "Anki not read yet"

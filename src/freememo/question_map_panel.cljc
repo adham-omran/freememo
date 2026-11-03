@@ -254,7 +254,7 @@
         (dom/props {:class "question-map-host"})
         (ViewTabs roots view)
         (MapView user-id spec card !draft sending?))
-      ;; LAST, wrapping nothing (CLAUDE.md, "A `case` Remounts Its Branch").
+      ;; LAST, wrapping nothing (docs/electric-patterns.md, "A `case` Remounts Its Branch").
       (when (and (empty? roots) (= :map view))
         (pin-state/show-view! :chat)))))
 

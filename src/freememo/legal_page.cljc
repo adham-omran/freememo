@@ -49,7 +49,7 @@
    one classifier, shared with `freememo.crawler-page/part-html`, so the two
    renderers cannot disagree about what a part is.
    `cond`, not `case`: Electric compiles `case` as its effect-sequencing
-   primitive, and this is ordinary branching (see CLAUDE.md)."
+   primitive, and this is ordinary branching (see docs/electric-patterns.md)."
   [part]
   (e/client
     (let [kind (legal/part-kind part)]

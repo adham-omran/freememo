@@ -97,7 +97,7 @@
           ;; per-document e/for-by remount caused. The PDF.js viewer inside it
           ;; is NOT kept: each (doc, version) builds a new one through
           ;; init-viewer!, never set-document! (see the keyed-fit comment below
-          ;; and CLAUDE.md, "Every Document Change Builds a New PDF.js Viewer").
+          ;; and .claude/rules/pdf-viewer.md, "Every Document Change Builds a New PDF.js Viewer").
           (dom/div
             (dom/props {:class "pdf-viewer-container"
                         :style {:position "absolute"

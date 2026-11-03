@@ -6,7 +6,7 @@
    target, lag or lead in pages, today's plan, the derived daily review load,
    the feasibility warning and its four levers, and the per-page verdict table.
 
-   Split from `freememo.schedule-page` for the reason CLAUDE.md gives under
+   Split from `freememo.schedule-page` for the reason docs/electric-patterns.md gives under
    'Diagnosing Method code too large!': an Electric `e/defn` is one JVM method
    and the whole tab in one namespace would report its overflow against the
    file's FIRST `e/defn`, naming nothing useful."
@@ -526,7 +526,7 @@
 (e/defn PlanTable [forecast covering-days-only?]
   (e/client
     ;; A server-FORM binding: a 730-row plan would otherwise cross the wire
-    ;; whole at an e/defn call boundary (CLAUDE.md, 'e/defn Returns Materialize
+    ;; whole at an e/defn call boundary (docs/electric-patterns.md, 'e/defn Returns Materialize
     ;; at the Call Site').
     ;;
     ;; The filter drops days with no COVERING, not days with no work. Almost
@@ -543,7 +543,7 @@
           rc (e/server (count rows))]
       ;; The scroll box sits INSIDE a bordered card rather than being the card.
       ;; A browser draws a scrollbar between the padding box and the border box,
-      ;; so padding on the scroller itself cannot move its bar inward (CLAUDE.md,
+      ;; so padding on the scroller itself cannot move its bar inward (.claude/rules/quill-editor.md,
       ;; 'Center a Text Column by Padding the Scroller'). Only a wrapper can, and
       ;; the inset is what stops this bar from ending up flush against the
       ;; pane's own — two bars at one edge read as a single control that half
@@ -640,7 +640,7 @@
     ;; change, and the filter carries over: arriving at a fresh schedule showed
     ;; it already narrowed to its reading days, with nothing in this view
     ;; saying why. A local atom had the same lifetime and the same bug — the
-    ;; state was never the problem, the frame's identity was (CLAUDE.md,
+    ;; state was never the problem, the frame's identity was (docs/electric-patterns.md,
     ;; `video_pane.cljc` keying an unkeyed frame transition).
     (e/for-by identity [_k [(e/server (get-in forecast [:schedule :study_schedules/id]))]]
       (PlanControls forecast))))
@@ -673,7 +673,7 @@
 (e/defn PagesTable [forecast filter-reason]
   (e/client
     ;; A server-form binding, NOT an e/defn call: the whole verdict vector
-    ;; would otherwise cross the wire at the call boundary (CLAUDE.md,
+    ;; would otherwise cross the wire at the call boundary (docs/electric-patterns.md,
     ;; 'e/defn Returns Materialize at the Call Site').
     (let [rows (e/server
                  (let [vs (:verdicts forecast)]
@@ -710,7 +710,7 @@
                   (when v (PageRow v i))))))
           ;; The table stays mounted at count 0: tearing it down races the
           ;; cancelled query's teardown and can crash the socket with
-          ;; :diff-corruption (CLAUDE.md, 'Never unmount a virtual-scroll table').
+          ;; :diff-corruption (.claude/rules/virtual-scroll.md, 'Never unmount a virtual-scroll table').
           (when (zero? rc)
             (dom/div
               (dom/props {:style {:position "absolute" :inset "0" :display "flex"
@@ -756,7 +756,7 @@
           (dom/option (dom/props {:value "uncarded-done"}) (dom/text "Done, no cards"))
           (dom/option (dom/props {:value "untouched"}) (dom/text "Not started"))
           ;; A local select driving a local atom needs no token: the effect
-          ;; never leaves the browser (CLAUDE.md, 'Selection that invokes a
+          ;; never leaves the browser (docs/electric-patterns.md, 'Selection that invokes a
           ;; side effect').
           (dom/On "change" (fn [e] (reset! !filter (-> e .-target .-value))) nil)))
       (PagesTable forecast filter-reason))))
@@ -768,7 +768,7 @@
 
 ;; Pre:  `label` names the view, `active?` is whether it is the one showing, and
 ;;       `pick!` is a PLAIN fn — the switch never leaves the browser, so it needs
-;;       no token (CLAUDE.md, 'Selection that invokes a side effect').
+;;       no token (docs/electric-patterns.md, 'Selection that invokes a side effect').
 ;; Post: one segment of the plan/pages switch, carrying `aria-pressed` so the
 ;;       state a screen reader gets is the state the colour shows.
 (e/defn TableTab [label count-text active? pick!]
