@@ -153,6 +153,19 @@
       (is (not (contains? fields :response_format)))
       (is (not (get-in fields [:provider :require_parameters]))))))
 
+(deftest a-response-schema-reaches-only-an-entry-with-structured-outputs
+  (let [schema {:type "object" :properties {} :required [] :additionalProperties false}
+        fields-for #(let [entry (card-models/resolve-model %)]
+                      (openrouter/with-response-schema entry
+                        (openrouter/structured-chat-completion-fields entry {}) "example" schema))]
+    (testing "an entry that records structured outputs gets a strict schema and keeps its routing"
+      (is (= {:type "json_schema" :json_schema {:name "example" :strict true :schema schema}}
+            (:response_format (fields-for "gemini-3.8-flash"))))
+      (is (= {:sort "throughput" :max_price {:prompt 0.15 :completion 0.50} :require_parameters true}
+            (:provider (fields-for "glm-5.3-flash")))))
+    (testing "an entry with no structured-output provider keeps JSON mode"
+      (is (= {:type "json_object"} (:response_format (fields-for "ling-3.0-flash")))))))
+
 (deftest structured-chat-fields-require-json-compatible-routes
   (testing "an unpinned model gets JSON mode and parameter-compatible routing"
     (is (= {:model "openai/gpt-6.1-sol"

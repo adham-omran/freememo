@@ -4,7 +4,8 @@
             [freememo.cards :as cards]
             [freememo.credits :as credits]
             [freememo.kg-llm :as llm]
-            [freememo.llm-json :as llm-json])
+            [freememo.llm-json :as llm-json]
+            [freememo.openrouter :as openrouter])
   (:import [java.text Normalizer Normalizer$Form]))
 
 (def formats #{"fill-in-the-blank" "multiple-choice" "short-essay" "long-essay"})
@@ -361,13 +362,137 @@
                    "This assessment does not establish coverage of excluded facts.")})
       form)))
 
+;; ── Model contract ───────────────────────────────────────────────────────────
+;;
+;; The schema states the shape the checks above read, so a provider that
+;; enforces it cannot return a citation as one object or under `text`. Those
+;; two shapes refused most forms in plans/comprehension-facts-experiment.md §7.
+;; The checks still run on every reply: the schema cannot check a quote against
+;; the source, and a model without structured outputs gets no schema at all.
+
+(defn- strict-object
+  "A JSON Schema object that strict mode accepts: every property required, no
+   other property. An optional field is written as (nullable …)."
+  [properties]
+  {:type "object" :properties properties
+   :required (mapv name (keys properties)) :additionalProperties false})
+
+(defn- nullable
+  "Allow null by a type list. All eight registry models accepted this form on
+   2026-11-03."
+  [schema]
+  (assoc schema :type [(:type schema) "null"]))
+(defn- array-of [items] {:type "array" :items items})
+(def ^:private json-string {:type "string"})
+(def ^:private json-integer {:type "integer"})
+
+(def ^:private citation-schema
+  "What validate-citations! reads from one citation."
+  (strict-object {:material_id json-integer :topic_id json-integer :quote json-string}))
+
+(def ^:private format-schema {:type "string" :enum (vec (sort formats))})
+
+(def ^:private question-schema
+  "What normalize-question and grading read from one question."
+  (strict-object
+    {:id json-string
+     :format format-schema
+     :points json-integer
+     :prompt json-string
+     :outcomes (array-of json-string)
+     :evidence (array-of citation-schema)
+     :fact_ids (nullable (array-of json-integer))
+     :accepted_answers (nullable (array-of json-string))
+     :case_sensitive (nullable {:type "boolean"})
+     :options (nullable (array-of (strict-object {:id json-string :text json-string})))
+     :correct_option_id (nullable json-string)
+     :grading_guide (nullable json-string)
+     ;; A list, not a map of five optional criteria: Anthropic refused that map
+     ;; as a grammar too large (2026-11-03). reply->form reads it back as a map.
+     :rubric (nullable (array-of (strict-object {:criterion {:type "string" :enum (mapv name criterion-keys)}
+                                                 :expectation json-string})))}))
+
+(def ^:private blueprint-schema
+  "What validate-blueprint! and the cycle pages read from the blueprint."
+  (strict-object
+    {:assessed_outcomes (array-of (strict-object {:id json-string :statement json-string
+                                                  :question_ids (array-of json-string)
+                                                  :evidence (array-of citation-schema)}))
+     :unassessed_outcomes (array-of (strict-object {:id (nullable json-string)
+                                                    :statement json-string :reason json-string}))
+     :omitted_formats (array-of (strict-object {:format format-schema :reason json-string}))
+     :estimated_minutes json-integer}))
+
+(def form-response-schema
+  "The reply of curriculum-exam-form.md, as a JSON Schema for structured outputs."
+  (strict-object
+    {:form (strict-object {:insufficient (nullable {:type "boolean"})
+                           :reason (nullable json-string)
+                           :blueprint blueprint-schema
+                           :questions (array-of question-schema)})}))
+
+(defn- drop-null-fields
+  "Read a JSON null in a model reply as an absent field.
+   Post: the value with every map entry whose value is nil removed, at every
+   depth. Invariant: vectors keep their length and order."
+  [value]
+  (cond
+    (map? value) (into {} (keep (fn [[k v]] (when (some? v) [k (drop-null-fields v)]))) value)
+    (vector? value) (mapv drop-null-fields value)
+    :else value))
+
+(defn- rubric-entries->map
+  "Read a rubric written as [{:criterion :expectation}] as the criterion map the
+   checks and grading read. A repeated criterion keeps its last expectation.
+   A rubric that is already a map passes through."
+  [rubric]
+  (if (vector? rubric)
+    (into {} (map (fn [{:keys [criterion expectation]}] [(keyword (str criterion)) expectation])) rubric)
+    rubric))
+
+(defn reply->form
+  "Read a curriculum-exam-form.md reply as the form validate-form! checks.
+   Pre:  reply is the parsed `form` object, from a schema-constrained call or
+         from JSON mode.
+   Post: every null field is absent, and every question's rubric is a criterion
+         map.
+   Invariant: no question, outcome or citation is added or removed. The checks
+         alone decide what is kept."
+  [reply]
+  (let [form (drop-null-fields reply)]
+    (cond-> form
+      (vector? (:questions form))
+      (update :questions (partial mapv #(cond-> % (contains? % :rubric) (update :rubric rubric-entries->map)))))))
+
+(defn prompt-source
+  "The source as curriculum-exam-form.md reads it.
+   Pre:  evidence is the result of bounded-evidence.
+   Post: {:materials [{:material_id :title :sections [{:topic_id …}]}] :facts
+         :source_limits}. The ids carry the names a citation uses, and the word
+         evidence names nothing here: in the reply it means citations only.
+   Invariant: the frozen evidence in the blueprint keeps the application's
+         own shape. Only the prompt sees this one."
+  [evidence]
+  {:materials (mapv (fn [material]
+                      (cond-> {:material_id (:material-id material)
+                               :sections (mapv (fn [section]
+                                                 (-> section (dissoc :topic-id)
+                                                     (assoc :topic_id (:topic-id section))))
+                                           (:evidence material))}
+                        (:title material) (assoc :title (:title material))))
+                (:materials evidence))
+   :facts (:facts evidence)
+   :source_limits (:source_limits evidence)})
+
 (defn generate!
   "Generate one mixed assessment and charge its completed model call.
    Pre: the caller owns all evidence. Optional `:on-step` receives :writing before
    the model call and :checking before validation.
    Post: returns a validated frozen form. A refused form throws ::invalid-assessment
-   with the attempt's `:charged-credits` in its data.
-   Invariant: validation failure cannot suppress a completed call charge."
+   with the attempt's `:charged-credits` in its data. The call asks for
+   form-response-schema when the model's entry supports structured outputs.
+   Invariant: validation failure cannot suppress a completed call charge, and
+   every reply is validated, whether or not a schema constrained it."
   [user-id evidence options]
   (let [minutes (or (:target-minutes options) 30)
         evidence (bounded-evidence evidence)
@@ -377,16 +502,18 @@
     (when-not (some nonblank? (mapcat #(map :text (:evidence %)) (:materials evidence)))
       (throw (ex-info "Add source text before generating an assessment." {:type ::insufficient-evidence})))
     (let [{:keys [api-key entry model-fields]} (llm/resolve-model+gate! user-id :synthesis)
+          model-fields (openrouter/with-response-schema entry model-fields
+                         "assessment_form" form-response-schema)
           _ (step! :writing)
           {:keys [parsed cost tokens]} (llm/chat! api-key model-fields
                                         (cards/load-prompt-template "curriculum-exam-form.md")
                                         (llm-json/write-prompt-input {:target_minutes minutes :target_outcomes (:target-outcomes options)
-                                                                      :evidence evidence})
+                                                                      :source (prompt-source evidence)})
                                         :form :map {:feature :assessment-form :user-id user-id})
           charge (credits/record-cost-charge! user-id (or (:generation-feature options) :comprehension.exam-form)
                    (:id entry) cost tokens)
           _ (step! :checking)
-          form (try (validate-form! (include-source-limits parsed evidence) evidence options)
+          form (try (validate-form! (include-source-limits (reply->form parsed) evidence) evidence options)
                  (catch clojure.lang.ExceptionInfo e
                    (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits charge) e))))]
       (assoc form :cost cost :charged-credits charge))))

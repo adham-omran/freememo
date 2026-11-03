@@ -240,6 +240,26 @@
     (assoc :response_format {:type "json_object"})
     (update :provider #(assoc (or % {}) :require_parameters true))))
 
+(defn with-response-schema
+  "Ask the provider to enforce `schema` on the reply, where the entry can.
+   Pre:  model-fields come from structured-chat-completion-fields for entry.
+         schema is a JSON Schema that strict mode accepts: every property is
+         required and every object sets additionalProperties false. schema-name
+         matches [A-Za-z0-9_-]+.
+   Post: when entry's :supported-parameters holds :structured_outputs,
+         response_format is a strict json_schema. Otherwise model-fields is
+         unchanged, so the reply stays in JSON mode and only the caller's own
+         checks hold it to the schema.
+   Invariant: provider routing, require_parameters included, is unchanged.
+         With require_parameters, OpenRouter routes only to a provider that
+         accepts the schema."
+  [entry model-fields schema-name schema]
+  (if (contains? (:supported-parameters entry) :structured_outputs)
+    (assoc model-fields :response_format
+      {:type "json_schema"
+       :json_schema {:name schema-name :strict true :schema schema}})
+    model-fields))
+
 (defn chat-completion!
   "POST /chat/completions with request map `body` (:model, :messages, …).
    Optional `ctx` {:feature kw :user-id id} tags the observability signal.

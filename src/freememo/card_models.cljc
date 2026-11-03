@@ -10,12 +10,19 @@
    independent (design decision D1-B).")
 
 (def ^:private json-and-reasoning-parameters
-  "OpenRouter parameters this application sends to most structured models.
-   This set is the application-relevant subset of the model metadata."
+  "OpenRouter parameters this application sends to a structured model that has
+   no structured-output provider. This set is the application-relevant subset
+   of the model metadata."
   #{:reasoning_effort :response_format})
 
-(def ^:private json-reasoning-and-verbosity-parameters
-  (conj json-and-reasoning-parameters :verbosity))
+(def ^:private schema-json-and-reasoning-parameters
+  "As above, plus `structured_outputs`: a provider can enforce a JSON schema
+   (`openrouter/with-response-schema`). Recorded on 2026-11-03 from each
+   entry's OpenRouter endpoints, inside its :provider limits."
+  (conj json-and-reasoning-parameters :structured_outputs))
+
+(def ^:private schema-json-reasoning-and-verbosity-parameters
+  (conj schema-json-and-reasoning-parameters :verbosity))
 
 (def registry
   "Ordered for display. :id is the durable settings value — never rename it,
@@ -25,7 +32,7 @@
    provider. Absent means OpenRouter picks the provider.
    :supported-parameters is the application-relevant subset of OpenRouter's
    model-level parameter metadata, recorded on 2026-09-01. Structured lanes
-   require :response_format. Request builders omit unsupported optional fields.
+   require :response_format. :structured_outputs was recorded on 2026-11-03. Request builders omit unsupported optional fields.
    :reasoning-mandatory? marks a model whose provider REFUSES to have reasoning
    turned off — OpenRouter's `reasoning.mandatory`, recorded 2026-09-08. Sending
    it reasoning_effort \"none\" returns HTTP 400 \"Reasoning is mandatory for this
@@ -41,7 +48,7 @@
    {:id "gpt-6.1-sol"
     :label "GPT-6.1 Sol (OpenAI)"
     :openrouter-model "openai/gpt-6.1-sol"
-    :supported-parameters json-and-reasoning-parameters}
+    :supported-parameters schema-json-and-reasoning-parameters}
    ;; GPT-6 Luna, added 2026-09-23 at $0.10 / $0.50, half of GPT-5.6 Luna. The
    ;; GPT-5.x entries in `retired` redirect to the GPT-6 line by product
    ;; decision (2026-09-23), not because the vendor names GPT-6 their
@@ -50,7 +57,7 @@
    {:id "gpt-6-luna"
     :label "GPT-6 Luna (OpenAI)"
     :openrouter-model "openai/gpt-6-luna"
-    :supported-parameters json-and-reasoning-parameters}
+    :supported-parameters schema-json-and-reasoning-parameters}
    ;; $0.75 / $3.75 per million tokens. Gemini 3.6 Flash and Gemini 3 Flash
    ;; Preview were retired from the picker on 2026-09-23 and redirect here (see
    ;; `retired`).
@@ -64,17 +71,17 @@
    {:id "gemini-3.8-flash"
     :label "Gemini 3.8 Flash (Google)"
     :openrouter-model "google/gemini-3.8-flash"
-    :supported-parameters json-and-reasoning-parameters
+    :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "gemini-3.5-flash-lite"
     :label "Gemini 3.5 Flash-Lite (Google)"
     :openrouter-model "google/gemini-3.5-flash-lite"
-    :supported-parameters json-and-reasoning-parameters
+    :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true}
    {:id "claude-sonnet-5"
     :label "Claude Sonnet 5 (Anthropic)"
     :openrouter-model "anthropic/claude-sonnet-5"
-    :supported-parameters json-reasoning-and-verbosity-parameters}
+    :supported-parameters schema-json-reasoning-and-verbosity-parameters}
    ;; A dated snapshot, not an alias. OpenRouter publishes no `-latest` slug for
    ;; this model, and the one written here earlier was rejected with
    ;; "deepseek/deepseek-v4-flash-latest is not a valid model ID" — an HTTP 400
@@ -91,7 +98,7 @@
    {:id "deepseek-v4.1-flash"
     :label "V4.1 Flash (DeepSeek)"
     :openrouter-model "deepseek/deepseek-v4.1-flash-1017"
-    :supported-parameters json-and-reasoning-parameters}
+    :supported-parameters schema-json-and-reasoning-parameters}
    ;; Routed fastest-first under a price ceiling, NOT pinned to Z.ai. The
    ;; ceiling says what the pin it replaces was standing in for — never overpay
    ;; for this model — without naming a provider, which is how the pin went
@@ -130,7 +137,7 @@
    {:id "glm-5.3-flash"
     :label "GLM 5.3 Flash (Z.ai)"
     :openrouter-model "z-ai/glm-5.3-flash"
-    :supported-parameters json-and-reasoning-parameters
+    :supported-parameters schema-json-and-reasoning-parameters
     :reasoning-mandatory? true
     :provider {:sort "throughput"
                :max_price {:prompt 0.15 :completion 0.50}}}
@@ -151,6 +158,9 @@
    ;; routes it under require_parameters. Measured 2026-09-11 on both providers:
    ;; "none" returns HTTP 200 with 0 reasoning tokens, so the Settings None works.
    ;; "low" and "high" did not differ, so any value other than "none" means on.
+   ;;
+   ;; Neither provider lists structured_outputs (2026-11-03), so this entry
+   ;; gets JSON mode and never a JSON schema.
    {:id "ling-3.0-flash"
     :label "Ling 3.0 Flash (inclusionAI)"
     :openrouter-model "inclusionai/ling-3.0-flash"
