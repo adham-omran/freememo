@@ -14,7 +14,7 @@
    #?(:cljs [freememo.gdoc-import :as gdoc-import])
    #?(:clj [freememo.user-state :as us])))
 
-;; A top-level platform split, never a #? in the e/defn body (CLAUDE.md).
+;; A top-level platform split, never a #? in the e/defn body (docs/electric-patterns.md).
 #?(:cljs
    (defn- start-import!
      "Post: the pick and import run, and `!status` follows them. A finished

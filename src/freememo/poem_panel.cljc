@@ -84,7 +84,7 @@
 (defn get-poem-package*
   "The whole stored package for `topic-id`, or nil. Body-level reader
    conditional because the bare symbol is named inside `(e/server (e/Offload …))`
-   in a reactive body, which CLJS compiles too (CLAUDE.md, server-only fns)."
+   in a reactive body, which CLJS compiles too (docs/electric-patterns.md, server-only fns)."
   [_refresh topic-id]
   #?(:clj (when topic-id (db/get-poem-package topic-id))
      :cljs nil))
@@ -235,7 +235,7 @@
   "One card button. A click dispatches `:add-card`, which is a :queue command —
    the invocation lands in this tab's client queue and the pump runs the save,
    and bumps :card-mutations. That is a local effect, so it needs no
-   token here (CLAUDE.md, \"Selection that invokes a side effect\").
+   token here (docs/electric-patterns.md, \"Selection that invokes a side effect\").
 
    `entry` is a `card-entry` map. The button is never rendered from a pending
    read: the caller gates the whole body on a non-nil view, so this props map

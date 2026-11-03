@@ -3,7 +3,7 @@
 
    The dot reached 170 sites with no rule asking for it. Each new string copied
    the one beside it, and a docstring even named it \"the same idiom\". So the
-   rule lives here as well as in CLAUDE.md: prose loses to copying, and only a
+   rule lives here as well as in docs/feature-obligations.md: prose loses to copying, and only a
    failing test stops the next copy. Comments and docstrings count, because they
    are what gets copied.
 
@@ -42,7 +42,7 @@
 (deftest src-carries-no-middle-dot
   (let [offending (mapcat dot-lines (remove allowed (source-files)))]
     (is (empty? offending)
-      (str "Use words, parentheses, a colon or commas instead (CLAUDE.md, "
+      (str "Use words, parentheses, a colon or commas instead (docs/feature-obligations.md, "
            "\"Separators in user-visible text\"):\n"
            (str/join "\n" offending)))))
 

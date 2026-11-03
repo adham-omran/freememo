@@ -382,7 +382,7 @@
    ;; A desktop apply writes no grave: the delete came from the server. A
    ;; pending local row it deletes goes to the conflict report instead (D8).
    ;; An applied delete also frees a large object, which the app's own delete
-   ;; paths do by hand (CLAUDE.md, \"Large objects need an explicit unlink\").
+   ;; paths do by hand (.claude/rules/database.md, \"Large objects need an explicit unlink\").
    "CREATE OR REPLACE FUNCTION freememo_sync_grave() RETURNS trigger
     LANGUAGE plpgsql AS $$
     DECLARE k jsonb := freememo_sync_row_key(OLD, TG_ARGV);

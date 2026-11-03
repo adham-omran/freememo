@@ -5,7 +5,7 @@
    and the panel stays under the 64KB bytecode limit — the same reason
    toolbar_generate_dropdown / toolbar_sync_dropdown live in their own files. The
    parent keeps every `(e/server …)` form binding, because moving one into an
-   `e/defn` would materialize its whole value at the call site (see CLAUDE.md,
+   `e/defn` would materialize its whole value at the call site (see docs/electric-patterns.md,
    \"e/defn Returns Materialize at the Call Site\"). Server-sited values arrive
    here as positional arguments, which does not force a transfer.
 

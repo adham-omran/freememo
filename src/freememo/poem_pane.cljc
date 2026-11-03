@@ -33,7 +33,7 @@
 ;; Reader conditionals at the TOP LEVEL, never inside the e/defn body: Electric
 ;; compiles a different signal count for CLJ and CLJS when a #? sits in a
 ;; reactive body, which raises ArrayIndexOutOfBoundsException at mount. The CLJ
-;; arm exists only so the symbol resolves on that peer (CLAUDE.md), and
+;; arm exists only so the symbol resolves on that peer (docs/electric-patterns.md), and
 ;; `assistant_evidence/clicked-citation` has the same pair for the same reason.
 
 #?(:cljs
@@ -143,7 +143,7 @@
   "The verse list. `rows` is a SERVER-sited differential collection, diffed on
    the server so one row crosses per verse and a re-read moves only the rows
    that changed — a nested (e/server …) inside the e/for would be a second
-   transfer, a frame behind the count (CLAUDE.md)."
+   transfer, a frame behind the count (docs/electric-patterns.md)."
   [rows selection topic-id]
   (e/client
     (let [sel-verse (when (= topic-id (:topic-id selection)) (:verse selection))

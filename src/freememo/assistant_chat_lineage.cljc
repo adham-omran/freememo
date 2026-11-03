@@ -35,7 +35,7 @@
             (dom/div
               (dom/props {:class "assistant-lineage__row"})
               ;; Each loop has an element of its own, so its rows are never
-              ;; counted together with their siblings (CLAUDE.md, "An e/for
+              ;; counted together with their siblings (docs/electric-patterns.md, "An e/for
               ;; Gets an Element of Its Own"). `display: contents` keeps them
               ;; in the row's flex layout.
               (dom/span

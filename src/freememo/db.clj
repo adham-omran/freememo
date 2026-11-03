@@ -11016,7 +11016,7 @@
    Read into a SERVER-FORM binding by the transcript pane, never into an e/defn
    return: the caller reads `(e/server (nth segs i nil))` per visible row, so a
    three-hour transcript stays server-side and only the scroll window crosses
-   the wire (CLAUDE.md, 'e/defn Returns Materialize at the Call Site')."
+   the wire (docs/electric-patterns.md, 'e/defn Returns Materialize at the Call Site')."
   [topic-id]
   (jdbc/execute! ds
     ["SELECT id, ord, start_ms, end_ms, text FROM video_transcripts
@@ -14825,7 +14825,7 @@
          The failure branch carries no numbers on purpose. Returning zeros would
          report a 400-day streak as 0 and be indistinguishable from a true zero,
          which is the defect get-learning-queue's empty-collection catch produced
-         (CLAUDE.md). A caller MUST test :error before reading a count — a
+         (.claude/rules/database.md). A caller MUST test :error before reading a count — a
          (:current s 0) default would put the lie straight back."
   [user-id]
   (try

@@ -20,7 +20,7 @@
 
    Plain defns over a `defonce` cache, never `e/defn`: Electric re-evaluates
    reactive bodies unpredictably, so injection guards must live outside the
-   reactive graph (CLAUDE.md, 'JS Library Init Side Effects in e/defn').
+   reactive graph (docs/electric-patterns.md, 'JS Library Init Side Effects in e/defn').
 
    The vendor tree is NOT in git — `clj -X:build vendor/fetch!` downloads it and
    hash-verifies it against the committed vendor-lock.sha256 (src-build/vendor.clj

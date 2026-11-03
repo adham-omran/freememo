@@ -127,7 +127,7 @@
    written in this codebase for these chords.
 
    No reader conditional: this is shared vocabulary read from client scope, so
-   both peers must see plain literals (CLAUDE.md, `transcribe_language.cljc`)."
+   both peers must see plain literals (docs/electric-patterns.md, `transcribe_language.cljc`)."
   {:inc "meta+shift+c"
    :eq  "meta+shift+alt+c"})
 
@@ -178,7 +178,7 @@
 
    Editor-local by design: the action is meaningless without a focused cloze
    field, so these chords carry no `freememo.commands` entry, no palette row and
-   no `:bind`. That is this feature's answer to CLAUDE.md's \"a new feature owes
+   no `:bind`. That is this feature's answer to docs/feature-obligations.md's \"a new feature owes
    the command palette a decision\".
 
    Pre  : `ed` is a Quill instance whose keyboard module is constructed; the
@@ -1384,7 +1384,7 @@
   ;; The content generation this editor was last returned to a page for.
   ;;
   ;; A plain atom read by a plain fn, NOT a guard inside an e/defn body:
-  ;; Electric re-evaluates reactive bodies unpredictably, and CLAUDE.md's
+  ;; Electric re-evaluates reactive bodies unpredictably, and docs/electric-patterns.md's
   ;; `init-viewer!` rule is that a generation guard belongs in normally
   ;; compiled code. Same shape as `!init-gen`.
   ;;

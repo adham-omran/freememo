@@ -4,7 +4,7 @@
    A `.cljc` with no requires and no reader conditional, so the export dialog
    (client) and `freememo.card-export` (server) name the same presets. A
    CLJ-only def read from client scope compiles with no warning and crashes the
-   WebSocket at mount (CLAUDE.md, \"Server-Only Functions in .cljc Files\").")
+   WebSocket at mount (docs/electric-patterns.md, \"Server-Only Functions in .cljc Files\").")
 
 (def presets
   "Preset id → what it writes. The id is the `preset` URL parameter.

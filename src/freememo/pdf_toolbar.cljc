@@ -346,7 +346,7 @@
 
    `:class` sits in its own `dom/props`, apart from the props derived from
    `page-done?`: that value waits on a server read, and an absent props map
-   nulls every prop in it (CLAUDE.md)."
+   nulls every prop in it (docs/electric-patterns.md)."
   []
   (e/client
     (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id page-number dctx/page-number]

@@ -158,7 +158,7 @@
   (e/amb))
 
 (e/defn ForgeSelect
-  "A1-fallback select (CLAUDE.md, Forms5 → Select dropdowns).
+  "A1-fallback select (docs/electric-patterns.md, Forms5 → Select dropdowns).
    Post: choosing a forge also replaces a host the user did not type — a blank
          one, or another forge's public host."
   [!forge !host]
@@ -347,7 +347,7 @@
                 (when row
                   (DirectoryRow i row decisions !decisions old-dirs)))))
           ;; A sibling overlay, never a branch that unmounts the table
-          ;; (CLAUDE.md, "Never unmount a virtual-scroll table").
+          ;; (.claude/rules/virtual-scroll.md, "Never unmount a virtual-scroll table").
           (when (zero? row-count)
             (dom/div (dom/props {:class "tape-table-empty"})
               (dom/text "No directories match."))))))))
@@ -472,7 +472,7 @@
           (dom/props {:class "forge-import__actions"})
           ;; The button's props stay static. A `:disabled` derived from
           ;; `node-count` would be absent for each round trip and null every prop
-          ;; on the node (CLAUDE.md, "An Absent Props Map Nulls Every Prop"), so
+          ;; on the node (docs/electric-patterns.md, "An Absent Props Map Nulls Every Prop"), so
           ;; an empty or oversized selection is refused inside the token instead.
           (e/for [[t _] (forms/Button! [::import] :class "btn btn-primary" :label "Import")]
             (let [selection (e/snapshot {:dirs decisions :extensions extensions})

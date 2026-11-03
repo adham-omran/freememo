@@ -15,7 +15,7 @@
 
    Call `start-ms` through `e/snapshot` at the top of a turn's `let`, never as a
    body expression — Electric re-runs body expressions unpredictably, and a restart
-   mid-turn would silently under-report (CLAUDE.md, JS Library Init Side Effects).
+   mid-turn would silently under-report (docs/electric-patterns.md, JS Library Init Side Effects).
 
    The value crosses to an untrusted-peer boundary, so nothing here bounds it.
    `db/clamp-duration-ms` is the single bound, applied at the one write site.")

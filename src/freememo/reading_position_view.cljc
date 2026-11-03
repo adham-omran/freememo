@@ -9,7 +9,7 @@
    The wrappers below exist so a reactive body names a var that resolves on
    BOTH peers. `freememo.reading-position` is a `.cljs` file, so its vars exist
    on the client only, and a bare call to one from an e/defn body would leave
-   the CLJ peer without the symbol (CLAUDE.md, server-only functions)."
+   the CLJ peer without the symbol (docs/electric-patterns.md, server-only functions)."
   (:require
    [hyperfiddle.electric3 :as e]
    [freememo.doc-context :as dctx]

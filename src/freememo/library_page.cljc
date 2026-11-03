@@ -22,7 +22,7 @@
         ;; editor-bearing route with nothing else to start the load, so without it
         ;; the whole 275 KB fetch sits inside the mount's katex-wait-ms race.
         ;; A sibling form, not a form inside the `if` branch: a non-final form
-        ;; there would be an unused expression Electric may drop (CLAUDE.md,
+        ;; there would be an unused expression Electric may drop (docs/electric-patterns.md,
         ;; 'Every Expression in a `let` Body Must Be Used'). Toggling sub-routes
         ;; re-runs it for free — `ensure!` memoizes per group.
         (when cards-view? (e/snapshot (math/prefetch-katex!)))

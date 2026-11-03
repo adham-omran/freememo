@@ -56,7 +56,7 @@
           on-page-change! dctx/on-page-change!]
 
       ;; OUT. `e/drain` runs this for its effect and returns the empty amb, so
-      ;; the write is not a let-body value Electric may skip — CLAUDE.md's
+      ;; the write is not a let-body value Electric may skip — docs/electric-patterns.md's
       ;; "Every Expression in a `let` Body Must Be Used". A `reset!` is
       ;; idempotent, so a reactive re-evaluation costs nothing.
       (e/drain

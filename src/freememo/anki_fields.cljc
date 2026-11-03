@@ -45,7 +45,7 @@
    Callers must run this BEFORE `html-cleaner/clean-html`. `fm-header` is not in
    `quill-class-allow-list`, so the sanitizer removes the class that identifies
    the paragraph and leaves the header text behind as content, unrecoverably.
-   `CLAUDE.md` records the same ordering trap for
+   `.claude/rules/anki.md` records the same ordering trap for
    `sphinx-import/strip-headerlinks!`."
   [text]
   (if (str/blank? text)

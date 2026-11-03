@@ -98,7 +98,7 @@
 ;; init can still be in flight when another init OR a teardown happens; only the
 ;; newest generation may build. Both init-editor! and destroy-editor! bump it,
 ;; which is what makes teardown cancel a pending build. Lives in a plain defn
-;; per CLAUDE.md's "JS Library Init Side Effects" rule — a counter incremented
+;; per docs/electric-patterns.md's "JS Library Init Side Effects" rule — a counter incremented
 ;; inside an e/defn body would not increment reliably.
 (defonce ^:private !init-gen (atom 0))
 

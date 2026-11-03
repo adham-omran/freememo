@@ -9,7 +9,7 @@
 
    The element node is published into `dctx/!video-el` so the transcript pane
    can seek without a round-trip through the reactive graph — a browser-local
-   effect needs no token (CLAUDE.md, 'Selection that invokes a side effect').
+   effect needs no token (docs/electric-patterns.md, 'Selection that invokes a side effect').
    The clock's readings go the other way through `dctx/!video-playhead`, which
    is what lets the transcript highlight the segment being spoken."
   (:require

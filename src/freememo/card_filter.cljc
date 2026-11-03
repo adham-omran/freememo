@@ -20,7 +20,7 @@
 
 (def kind-options
   "[value label] for the kind select. \"\" is no kind filter. The five values
-   are every card kind (CLAUDE.md, Database)."
+   are every card kind (.claude/rules/database.md, Database)."
   [["" "All kinds"]
    ["basic" "Basic"]
    ["cloze" "Cloze"]
