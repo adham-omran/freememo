@@ -9,6 +9,21 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20261104-privacy-correction
+
+### For users
+
+- **A correction to the FreeMemo privacy policy.** The privacy policy said that
+  FreeMemo removes deleted data for good. That was wrong. FreeMemo makes a
+  backup every night, and a backup keeps a copy of deleted data for up to 6
+  months. Nobody reads a backup except to restore the service after a failure.
+
+  The policy now says this. It also names two companies that it did not name
+  before: Amazon Web Services, which stores the offsite backups, and Cloudflare,
+  which carries every connection.
+
+  Read the policy: https://freememo.net/privacy
+
 ## v20261026-7667a74
 
 ### For users

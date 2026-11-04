@@ -97,7 +97,7 @@
 (def privacy-updated
   "The date the privacy text last changed. Edit it whenever `privacy-sections`
    changes, so a reader can tell a revision from a redeploy."
-  "17 August 2026")
+  "4 November 2026")
 
 (def privacy-sections
   "The privacy policy, in the order a reader meets it.
@@ -127,20 +127,24 @@
            {:p "FreeMemo never sells your data."}]}
 
    {:heading "Who else receives it"
-    :body [{:p "Three companies receive some of your data, and each receives only what its job needs."}
+    :body [{:p "Five companies receive some of your data, and each receives only what its job needs."}
            {:ul ["OpenRouter. FreeMemo sends page text, card text and your quiz answers to OpenRouter, which passes them to the AI model that reads a page, writes a card, transcribes audio, or grades an answer. This happens only when you start one of those steps."
                  "Google. If you sign in with Google, Google handles that sign-in. If you connect Google Drive, Google serves the files you pick."
-                 "Wayl. Wayl takes your payment. You enter your card details on Wayl's own page, and they never reach FreeMemo."]}
+                 "Wayl. Wayl takes your payment. You enter your card details on Wayl's own page, and they never reach FreeMemo."
+                 "Amazon Web Services. AWS stores FreeMemo's offsite backups in Frankfurt, Germany. A backup holds a copy of all the data above."
+                 "Cloudflare. Every connection to FreeMemo passes through Cloudflare's network on its way to the server."]}
            {:p "No other company receives your data."}]}
 
    {:heading "Where your data goes"
     :body [{:p "FreeMemo runs its servers outside the European Economic Area, and the three companies above are outside it as well."}
-           {:p "FreeMemo relies on the European Commission's Standard Contractual Clauses for those transfers."}]}
+           {:p "FreeMemo relies on the European Commission's Standard Contractual Clauses for those transfers."}
+           {:p "FreeMemo's offsite backups are in Frankfurt, inside the European Economic Area."}]}
 
    {:heading "How long FreeMemo keeps it"
     :body [{:p "FreeMemo keeps your material for as long as your account exists. It has no automatic expiry, because a reading queue that deleted itself would be useless."}
-           {:p "When you delete a document, FreeMemo holds it for 12 hours so that you can undo the deletion, then removes it for good."}
-           {:p "When you ask to close your account, FreeMemo deletes everything you own. Nothing survives that step."}]}
+           {:p "When you delete a document, FreeMemo holds it for 12 hours so that you can undo the deletion. Then FreeMemo removes it from the live service."}
+           {:p "When you ask to close your account, FreeMemo deletes everything you own from the live service."}
+           {:p "FreeMemo backs up its database every night. A backup keeps a copy of deleted data for up to 6 months, and then the copy is gone. Nobody reads a backup except to restore the service after a failure."}]}
 
    {:heading "Your rights"
     :body [{:p "You can ask FreeMemo to do any of the following."}
