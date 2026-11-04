@@ -58,6 +58,15 @@
   ;; Down 10..19 and 22..31: minutes 20 and 21 are up, so these are two runs of 10.
   (is (= [] (detect (concat (run 10 19) (run 22 31))))))
 
+(deftest a-failed-sample-names-the-minute-that-ended-at-its-time
+  ;; Samples at 17:15:00 .. 17:33:00 (the minutes 17:14 .. 17:32) failed.
+  (let [at-s (fn [hh mm] (.getEpochSecond (Instant/parse (format "2026-11-03T%02d:%02d:00Z" hh mm))))
+        values (for [m (range 0 60)] ; samples at 17:00 .. 17:59
+                 [(+ (at-s 17 0) (* 60 m)) (if (<= 15 m 33) "0" "1")])
+        up (availability/up-minute-starts values)]
+    (is (= [{:start (at-s 17 14) :minutes 19}]
+           (availability/detect-outages up (at-s 16 59) (at-s 17 58))))))
+
 (deftest a-minute-with-no-sample-counts-as-down
   (is (= [{:start t0 :minutes 15}]
          (availability/detect-outages #{} t0 (+ t0 (* 60 14))))))
@@ -68,12 +77,13 @@
 
 (defn- range-body
   "A query_range answer: every minute of the queried range is up except the
-   minutes from offset `from` to offset `to` (minutes after 2026-10-01T00:00Z)
+   minutes from offset `from` to offset `to` (minutes after 2026-10-01T00:00Z;
+   a minute's sample is labelled with the END of the minute)
    of each pair in `down-runs`."
   [down-runs]
   (fn [_ opts]
     (let [{:strs [start end]} (:query-params opts)
-          down (set (mapcat (fn [[from to]] (range (+ oct-start (* 60 from)) (+ oct-start (* 60 (inc to))) 60))
+          down (set (mapcat (fn [[from to]] (range (+ oct-start (* 60 (inc from))) (+ oct-start (* 60 (+ 2 to))) 60))
                             down-runs))]
       {:status 200
        :body (json/generate-string

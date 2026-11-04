@@ -193,7 +193,7 @@
 
 (defn detect-outages
   "Pure. `up-seconds` is the set of epoch seconds of the minutes with a
-   successful probe. Looks at every minute from `start-sec` to `end-sec`
+   successful probe, named by the second at which the minute starts. Looks at every minute from `start-sec` to `end-sec`
    (both inclusive, minute-aligned). Returns the outages of 15 minutes or more,
    oldest first, as {:start epoch-seconds :minutes n}."
   [up-seconds start-sec end-sec]
@@ -211,9 +211,17 @@
 
 (def ^:private range-chunk-minutes 10000) ; Prometheus allows 11000 points
 
+(defn up-minute-starts
+  "Pure. From range-query `values` ([epoch-seconds \"1\"|\"0\"] pairs), the set
+   of epoch seconds at which an up minute STARTS. A sample at time T covers the
+   window (T-1m, T], so the minute it describes starts at T-60. This is the one
+   place where sample times become minute starts."
+  [values]
+  (into #{} (keep (fn [[t v]] (when (= "1" v) (- (long t) 60)))) values))
+
 (defn- up-minutes
-  "The set of epoch seconds in [start-sec, end-sec] with a successful probe, or
-   nil when Prometheus fails for any part of the range."
+  "The set of minute starts (epoch seconds) in [start-sec, end-sec] with a
+   successful probe, or nil when Prometheus fails for any part of the range."
   [start-sec end-sec]
   (loop [from start-sec, acc #{}]
     (if (> from end-sec)
@@ -221,7 +229,7 @@
       (let [to (min end-sec (+ from (* 60 (dec range-chunk-minutes))))
             resp (try (http/get (str (prometheus-url) "/api/v1/query_range")
                                 {:query-params {"query" (str "max_over_time(probe_success{instance=\"" probe-instance "\"}[1m]) > bool 0")
-                                                "start" from "end" to "step" 60}
+                                                "start" (+ from 60) "end" (+ to 60) "step" 60}
                                  :throw-exceptions false
                                  :socket-timeout 15000
                                  :connection-timeout 3000})
@@ -229,21 +237,19 @@
             body (when (= 200 (:status resp)) (json/parse-string (:body resp) true))]
         (when (= "success" (:status body))
           (recur (+ to 60)
-                 (into acc (for [[t v] (-> body :data :result first :values)
-                                 :when (= "1" v)]
-                             (long t)))))))))
+                 (into acc (up-minute-starts (-> body :data :result first :values)))))))))
 
 (defn month-outages
   "Outages of 15 minutes or more of the month (UTC) up to `now`, as
    {:started-at Instant :year :month :minutes}, or nil when Prometheus fails.
-   The last 2 minutes are left out, since their samples may not exist yet. An
-   outage that crosses a month edge is cut at the edge."
+   Minutes are named by their start. The last 2 minutes are left out, since
+   their samples may not exist yet. An outage that crosses a month edge is cut
+   at the edge."
   [year month ^Instant now]
   (let [ym (YearMonth/of (int year) (int month))
-        start (.getEpochSecond (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC)))
+        from (.getEpochSecond (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC)))
         month-end (.getEpochSecond (.toInstant (.atStartOfDay (.atDay (.plusMonths ym 1) 1) ZoneOffset/UTC)))
-        from (+ start 60)
-        to (min month-end (* 60 (quot (- (.getEpochSecond now) 120) 60)))]
+        to (min (- month-end 60) (* 60 (quot (- (.getEpochSecond now) 180) 60)))]
     (when (<= from to)
       (when-let [up (up-minutes from to)]
         (mapv (fn [{:keys [start minutes]}]
