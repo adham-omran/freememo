@@ -51,7 +51,7 @@
       (fn [_]
         (let [r (availability/current-month (at "2026-11-02T00:00:00Z"))]
           (is (= 15 (- (:minutes r) (:minutes-up r))))
-          (is (= "98.96%" (availability/format-percent (:percent r))))))))
+          (is (= "98.95%" (availability/format-percent (:percent r))))))))
   (testing "a gap with no samples counts as down"
     ;; The query counts only minutes that have a successful sample, so a
     ;; 60-minute gap lowers the count by 60.

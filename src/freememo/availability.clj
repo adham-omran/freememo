@@ -11,7 +11,8 @@
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
             [freememo.config :as config]
-            [freememo.db :as db])
+            [freememo.db :as db]
+            [taoensso.telemere :as tel])
   (:import [java.time Duration Instant YearMonth ZoneOffset]))
 
 (def uptime-target
@@ -39,6 +40,13 @@
   [percent]
   (format "%.2f%%" (double percent)))
 
+(defn percent-of
+  "Percent of `minutes` that `up` is, cut down (not rounded) to two decimals.
+   The figure never reads 99.00 when the exact share is below 99.0, so it agrees
+   with `month-result`. Integer arithmetic."
+  [up minutes]
+  (/ (quot (* 10000 (long up)) (long minutes)) 100.0))
+
 (defn- probe-query [minutes]
   (str "sum_over_time((max_over_time(probe_success{instance=\"" probe-instance "\"}[1m]) > bool 0)[" minutes "m:1m])"))
 
@@ -49,7 +57,7 @@
   (when (= "success" (:status body))
     (some-> body :data :result first :value second parse-double)))
 
-(defn availability
+(defn period-availability
   "Pure calculation. `up` is the count from Prometheus, `minutes` the minutes of
    the period. Up is clamped to the period. Returns a map, or nil when either
    input is missing."
@@ -58,33 +66,59 @@
     (let [up (long (Math/min (double (Math/round (double up))) (double minutes)))]
       {:minutes minutes
        :minutes-up up
-       :percent (* 100.0 (/ (double up) minutes))})))
+       :percent (percent-of up minutes)})))
 
 (defn- query-prometheus
-  "Ask Prometheus at instant `at`. Returns the parsed body, or nil on any failure."
-  [promql ^Instant at]
+  "GET `path` on Prometheus with `params`. Returns the parsed body, or nil on any
+   failure. An exception is logged."
+  [path params timeout-ms]
   (try
-    (let [resp (http/get (str (prometheus-url) "/api/v1/query")
-                         {:query-params {"query" promql "time" (.getEpochSecond at)}
+    (let [resp (http/get (str (prometheus-url) path)
+                         {:query-params params
                           :throw-exceptions false
-                          :socket-timeout 5000
+                          :socket-timeout timeout-ms
                           :connection-timeout 3000})]
       (when (= 200 (:status resp))
         (json/parse-string (:body resp) true)))
-    (catch Exception _ nil)))
+    (catch Exception e
+      (tel/error! {:id ::prometheus-query-failed :data {:path path :params params}} e)
+      nil)))
+
+(def first-month
+  "No month before this one shows: Prometheus has no complete month before it."
+  (YearMonth/of 2026 9))
+
+(defn- month-of ^YearMonth [^Instant instant]
+  (YearMonth/from (.atOffset instant ZoneOffset/UTC)))
+
+(defn- month-start
+  "The first instant of `ym`, in UTC."
+  ^Instant [^YearMonth ym]
+  (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC)))
+
+(defn- months-from-first
+  "Every month from `first-month` up to `cur`: before it when `inclusive?` is
+   false, with it when true."
+  [^YearMonth cur inclusive?]
+  (take-while #(if inclusive?
+                 (not (.isAfter ^YearMonth % cur))
+                 (.isBefore ^YearMonth % cur))
+              (iterate #(.plusMonths ^YearMonth % 1) first-month)))
 
 (defn current-month
   "Availability of the month that contains `now`, divided by the minutes so far.
    Returns {:year :month :minutes :minutes-up :percent}, or nil when Prometheus
    does not answer or has no sample."
   [^Instant now]
-  (let [ym (YearMonth/from (.atOffset now ZoneOffset/UTC))
-        start (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC))
+  (let [ym (month-of now)
+        start (month-start ym)
         minutes (long (Math/ceil (/ (.toSeconds (Duration/between start now)) 60.0)))]
-    (when (pos? minutes)
-      (when-let [result (some-> (query-prometheus (probe-query minutes) now)
+    (when (and (pos? minutes) (not (.isBefore ym first-month)))
+      (when-let [result (some-> (query-prometheus "/api/v1/query"
+                                                  {"query" (probe-query minutes) "time" (.getEpochSecond now)}
+                                                  5000)
                                 minutes-up
-                                (availability minutes))]
+                                (period-availability minutes))]
         (assoc result :year (.getYear ym) :month (.getMonthValue ym))))))
 
 ;; ── Cache ──────────────────────────────────────────────────────────────
@@ -110,16 +144,12 @@
 ;; Prometheus keeps 90 days, so a closed month is stored when it ends and the
 ;; page reads the stored row. The row keeps the target that applied.
 
-(def first-month
-  "No month before this one shows: Prometheus has no complete month before it."
-  [2026 9])
-
 (def ^:private retention-days
   "A month is closed from Prometheus only while its first minute is this recent.
    Prometheus keeps 90 days, and an older month would give a partial count."
   89)
 
-(defn result
+(defn month-result
   "`:met` or `:missed` for a stored month, against the target stored with it.
    Integer arithmetic: the target in tenths of a percent, so exactly 99.0% is met."
   [{:keys [minutes-up minutes target]}]
@@ -130,48 +160,50 @@
   [year month up target]
   (when up
     (let [minutes (minutes-in-month year month)]
-      {:year year :month month :minutes-up (:minutes-up (availability up minutes))
+      {:year year :month month :minutes-up (:minutes-up (period-availability up minutes))
        :minutes minutes :target target})))
 
 (defn visible-months
   "From stored `rows` (newest first), the closed months that the page shows at
    `now`: the three months before the current one, none before `first-month`."
   [rows ^Instant now]
-  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))]
+  (let [cur (month-of now)]
     (filterv (fn [{:keys [year month]}]
                (let [ym (YearMonth/of (int year) (int month))]
                  (and (.isBefore ym cur)
                       (not (.isBefore ym (.minusMonths cur 3)))
-                      (not (.isBefore ym (YearMonth/of (int (first first-month)) (int (second first-month))))))))
+                      (not (.isBefore ym first-month)))))
              rows)))
 
 (defn stored-months
   "Every stored closed month, newest first. Empty when the database fails."
   []
   (try (db/availability-months)
-       (catch Exception _ [])))
+       (catch Exception e
+         (tel/error! {:id ::stored-months-failed} e)
+         [])))
 
 (defn- closed-month-up
   "Minutes up of a past month, asked of Prometheus at the first instant of the next month."
   [year month]
-  (let [ym (YearMonth/of (int year) (int month))
-        end (.toInstant (.atStartOfDay (.atDay (.plusMonths ym 1) 1) ZoneOffset/UTC))]
-    (some-> (query-prometheus (probe-query (minutes-in-month year month)) end) minutes-up)))
+  (let [end (month-start (.plusMonths (YearMonth/of (int year) (int month)) 1))]
+    (some-> (query-prometheus "/api/v1/query"
+                              {"query" (probe-query (minutes-in-month year month)) "time" (.getEpochSecond end)}
+                              5000)
+            minutes-up)))
 
 (defn close-months!
   "Store each month that has ended, is not stored, and that Prometheus still
    holds. A month with no answer stays unstored and the next run tries again.
    The stored row is never changed. Returns the months stored in this run."
   [^Instant now]
-  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))
+  (let [cur (month-of now)
         stored (into #{} (map (juxt :year :month)) (stored-months))
         floor (.minus now (Duration/ofDays retention-days))]
     (vec
-     (for [ym (take-while #(.isBefore ^YearMonth % cur)
-                          (iterate #(.plusMonths ^YearMonth % 1)
-                                   (YearMonth/of (int (first first-month)) (int (second first-month)))))
-           :let [y (.getYear ^YearMonth ym) m (.getMonthValue ^YearMonth ym)
-                 start (.toInstant (.atStartOfDay (.atDay ^YearMonth ym 1) ZoneOffset/UTC))]
+     (for [ym (months-from-first cur false)
+           :let [y (.getYear ym) m (.getMonthValue ym)
+                 start (month-start ym)]
            :when (and (not (stored [y m])) (not (.isBefore start floor)))
            :let [row (closed-row y m (closed-month-up y m) uptime-target)]
            :when (and row (db/store-availability-month! row))]
@@ -185,11 +217,8 @@
 (def outage-minimum-minutes 15)
 
 (def outage-cause-labels
-  "Stored cause to the label that the page shows."
-  {"server-internet-provider" "Server internet provider"
-   "network-tunnel" "Network tunnel"
-   "freememo-server" "FreeMemo server"
-   "not-yet-known" "Not yet known"})
+  "Stored cause to the label that the page shows. The causes are in `db`."
+  db/outage-cause-labels)
 
 (defn detect-outages
   "Pure. `up-seconds` is the set of epoch seconds of the minutes with a
@@ -227,14 +256,10 @@
     (if (> from end-sec)
       acc
       (let [to (min end-sec (+ from (* 60 (dec range-chunk-minutes))))
-            resp (try (http/get (str (prometheus-url) "/api/v1/query_range")
-                                {:query-params {"query" (str "max_over_time(probe_success{instance=\"" probe-instance "\"}[1m]) > bool 0")
-                                                "start" (+ from 60) "end" (+ to 60) "step" 60}
-                                 :throw-exceptions false
-                                 :socket-timeout 15000
-                                 :connection-timeout 3000})
-                      (catch Exception _ nil))
-            body (when (= 200 (:status resp)) (json/parse-string (:body resp) true))]
+            body (query-prometheus "/api/v1/query_range"
+                                   {"query" (str "max_over_time(probe_success{instance=\"" probe-instance "\"}[1m]) > bool 0")
+                                    "start" (+ from 60) "end" (+ to 60) "step" 60}
+                                   15000)]
         (when (= "success" (:status body))
           (recur (+ to 60)
                  (into acc (up-minute-starts (-> body :data :result first :values)))))))))
@@ -247,8 +272,8 @@
    at the edge."
   [year month ^Instant now]
   (let [ym (YearMonth/of (int year) (int month))
-        from (.getEpochSecond (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC)))
-        month-end (.getEpochSecond (.toInstant (.atStartOfDay (.atDay (.plusMonths ym 1) 1) ZoneOffset/UTC)))
+        from (.getEpochSecond (month-start ym))
+        month-end (.getEpochSecond (month-start (.plusMonths ym 1)))
         to (min (- month-end 60) (* 60 (quot (- (.getEpochSecond now) 180) 60)))]
     (when (<= from to)
       (when-let [up (up-minutes from to)]
@@ -262,24 +287,23 @@
    without an answer stays as it is and the next run tries again. A stored
    cause is never changed. Returns the number of outages inserted or lengthened."
   [^Instant now]
-  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))
-        floor (.minus now (Duration/ofDays retention-days))]
-    (count
-     (for [ym (take-while #(not (.isAfter ^YearMonth % cur))
-                          (iterate #(.plusMonths ^YearMonth % 1)
-                                   (YearMonth/of (int (first first-month)) (int (second first-month)))))
-           :let [y (.getYear ^YearMonth ym) m (.getMonthValue ^YearMonth ym)
-                 start (.toInstant (.atStartOfDay (.atDay ^YearMonth ym 1) ZoneOffset/UTC))]
-           :when (not (.isBefore start floor))
-           outage (month-outages y m now)
-           :when (db/store-availability-outage! outage)]
-       outage))))
+  (let [floor (.minus now (Duration/ofDays retention-days))]
+    (reduce (fn [n ym]
+              (if (.isBefore (month-start ym) floor)
+                n
+                (reduce (fn [n outage] (if (db/store-availability-outage! outage) (inc n) n))
+                        n
+                        (month-outages (.getYear ym) (.getMonthValue ym) now))))
+            0
+            (months-from-first (month-of now) true))))
 
 (defn stored-outages
   "Every stored outage, newest first. Empty when the database fails."
   []
   (try (db/availability-outages)
-       (catch Exception _ [])))
+       (catch Exception e
+         (tel/error! {:id ::stored-outages-failed} e)
+         [])))
 
 (defn set-outage-cause!
   "Operator function. Set the cause of the outage that started at `started-at`
@@ -292,11 +316,9 @@
    (if (string? started-at) (Instant/parse started-at) started-at)
    (if (keyword? cause) (name cause) cause)))
 
-(defn close-months-sweep!
-  "Hourly sweep job: close the months that have ended, then store the outages."
-  []
-  (let [now (Instant/now)]
-    (close-months! now)
-    (store-outages! now)))
+(defn- close-months-job! [] (close-months! (Instant/now)))
+(defn- store-outages-job! [] (store-outages! (Instant/now)))
 
-(db/register-sweep-job! ::close-months #'close-months-sweep!)
+;; Two jobs, so that a failure in one does not skip the other.
+(db/register-sweep-job! ::close-months #'close-months-job!)
+(db/register-sweep-job! ::store-outages #'store-outages-job!)

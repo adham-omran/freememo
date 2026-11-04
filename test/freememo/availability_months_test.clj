@@ -28,18 +28,18 @@
 
 (deftest exactly-the-target-is-met-and-one-more-down-minute-is-missed
   ;; 30 days = 43200 minutes. 99.0% allows 432 down minutes.
-  (is (= :met (availability/result {:minutes-up (- 43200 432) :minutes 43200 :target 99.0})))
-  (is (= :missed (availability/result {:minutes-up (- 43200 433) :minutes 43200 :target 99.0})))
+  (is (= :met (availability/month-result {:minutes-up (- 43200 432) :minutes 43200 :target 99.0})))
+  (is (= :missed (availability/month-result {:minutes-up (- 43200 433) :minutes 43200 :target 99.0})))
   ;; 31 days = 44640 minutes. 99.0% allows 446.4, so 446 down is met, 447 missed.
-  (is (= :met (availability/result {:minutes-up (- 44640 446) :minutes 44640 :target 99.0})))
-  (is (= :missed (availability/result {:minutes-up (- 44640 447) :minutes 44640 :target 99.0}))))
+  (is (= :met (availability/month-result {:minutes-up (- 44640 446) :minutes 44640 :target 99.0})))
+  (is (= :missed (availability/month-result {:minutes-up (- 44640 447) :minutes 44640 :target 99.0}))))
 
 (deftest a-closed-month-keeps-its-own-stored-target
   (let [row {:year 2026 :month 9 :minutes-up 42777 :minutes 43200 :target 99.0}]
-    (is (= :met (availability/result row)))
+    (is (= :met (availability/month-result row)))
     ;; The same minutes against a stricter target would be missed, so the
     ;; decision reads the target from the row and not from configuration.
-    (is (= :missed (availability/result (assoc row :target 99.5))))))
+    (is (= :missed (availability/month-result (assoc row :target 99.5))))))
 
 (deftest month-close-result-is-the-row-to-store
   (is (= {:year 2026 :month 9 :minutes-up 42777 :minutes 43200 :target 99.0}
@@ -139,3 +139,21 @@
               ["September 2026" "99.02%" "99.0%" "Met"]]
              (rows-of d)))
       (is (str/includes? text "The figures for the current month are not available now. Try again later.")))))
+
+(deftest the-shown-percent-never-reads-99-00-for-a-missed-month
+  (let [html (fn [up] (page/page-html nil [{:year 2026 :month 9 :minutes-up up :minutes 43200 :target 99.0}]))
+        row-of (fn [up] (re-find #"<tr><td>September 2026</td>.*?</tr>" (html up)))]
+    (testing "one minute under 99.0% shows 98.99% and Missed"
+      (let [row (row-of 42767)]
+        (is (str/includes? row "98.99%"))
+        (is (str/includes? row "Missed"))
+        (is (not (str/includes? row "99.00%")))))
+    (testing "exactly 99.0% shows 99.00% and Met"
+      (let [row (row-of 42768)]
+        (is (str/includes? row "99.00%"))
+        (is (str/includes? row "Met"))))))
+
+(deftest percent-of-rounds-down-to-two-decimals
+  (is (= 98.99 (availability/percent-of 42767 43200)))
+  (is (= 99.0 (availability/percent-of 42768 43200)))
+  (is (= 100.0 (availability/percent-of 43200 43200))))

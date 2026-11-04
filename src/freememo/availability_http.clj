@@ -27,8 +27,8 @@
        "<td>" (esc (str target "%")) "</td><td>" result "</td></tr>"))
 
 (defn- closed-row-html [{:keys [minutes-up minutes target] :as row}]
-  (row-html (month-label row) (* 100.0 (/ (double minutes-up) minutes)) target
-            (if (= :met (availability/result row)) "Met" "Missed")))
+  (row-html (month-label row) (availability/percent-of minutes-up minutes) target
+            (if (= :met (availability/month-result row)) "Met" "Missed")))
 
 (defn- table [current closed]
   (str "<table class=\"availability-table\"><thead><tr>"
@@ -94,21 +94,21 @@
    outages. Each shown month lists its outages."
   ([current closed] (page-html current closed []))
   ([current closed outages]
-  (str "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-       "<title>Availability</title>"
-       "<meta name=\"description\" content=\"" (esc lead) "\">"
-       "<link rel=\"canonical\" href=\"https://freememo.net/availability\">"
-       "<link rel=\"icon\" href=\"/freememo/favicon-192.png\">"
-       "<link rel=\"stylesheet\" href=\"/freememo/docs.css\">" style "</head><body>"
-       "<header class=\"docs-header\"><a class=\"docs-brand\" href=\"/\">FreeMemo</a></header>"
-       "<main id=\"content\" class=\"docs-main\"><h1>Availability</h1>"
-       "<p class=\"availability-lead\">" (esc lead) "</p>"
-       (when (or current (seq closed)) (table current closed))
-       (when (or current (seq closed)) (outage-sections current closed outages))
-       (when-not current
-         (str "<p class=\"availability-note\" role=\"status\">" (esc not-available) "</p>"))
-       "</main></body></html>")))
+    (str "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+         "<title>Availability</title>"
+         "<meta name=\"description\" content=\"" (esc lead) "\">"
+         "<link rel=\"canonical\" href=\"https://freememo.net/availability\">"
+         "<link rel=\"icon\" href=\"/freememo/favicon-192.png\">"
+         "<link rel=\"stylesheet\" href=\"/freememo/docs.css\">" style "</head><body>"
+         "<header class=\"docs-header\"><a class=\"docs-brand\" href=\"/\">FreeMemo</a></header>"
+         "<main id=\"content\" class=\"docs-main\"><h1>Availability</h1>"
+         "<p class=\"availability-lead\">" (esc lead) "</p>"
+         (when (or current (seq closed)) (table current closed))
+         (when (or current (seq closed)) (outage-sections current closed outages))
+         (when-not current
+           (str "<p class=\"availability-note\" role=\"status\">" (esc not-available) "</p>"))
+         "</main></body></html>")))
 
 (defn response
   "Return the availability page for GET and HEAD /availability, 405 for another
