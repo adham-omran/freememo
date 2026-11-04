@@ -16,6 +16,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [freememo.api :as api]
+            [freememo.availability :as availability]
             [freememo.crawler-page :as crawler-page]
             [freememo.landing-copy :as lc]
             [freememo.legal-copy :as legal]
@@ -125,6 +127,22 @@
     (is (str/includes? doc "href=\"/probe-target\""))
     (is (str/includes? doc ">probe page</a>"))
     (is (str/includes? (visible-text doc) "Read the probe page for details."))))
+
+(deftest the-uptime-target-links-to-its-measurement
+  ;; The words come from plans/paying-customer-commitments.md, "Final text".
+  ;; The target and its page go live together: the item links the page.
+  (let [text (visible-text document)]
+    (doseq [s ["Availability you can check"
+               "FreeMemo aims for 99.0% availability in each calendar month, measured from the public internet. The availability page shows the result for each month, including any month we miss. This is a target, not a guarantee, and a missed month gives no refund."
+               "What happens if FreeMemo goes down?"
+               "FreeMemo aims for 99.0% availability in each calendar month. The availability page shows the result for the current month and the three months before it. Outages of 15 minutes or more are listed there with their cause."]]
+      (is (str/includes? text s) s))
+    (is (= 2 (count (re-seq #"<a href=\"/availability\">availability page</a>" document)))
+      "the item and the FAQ answer each link the page")
+    (is (str/includes? document "<a href=\"/availability\">Availability</a>")
+      "the footer links the page")
+    (is (not (str/includes? document "/availability\" target"))
+      "an internal link opens in the same tab")))
 
 (def ^:private maturity-words
   "Words that describe FreeMemo as unfinished. FreeMemo has paying customers,
@@ -446,6 +464,19 @@
 
   (testing "the crawler document is cacheable, unlike the no-store shell"
     (is (str/includes? (get-in (get-as "/" bot) [:headers "Cache-Control"]) "max-age"))))
+
+(deftest a-crawler-at-the-availability-path-gets-the-page
+  ;; `wrap-api-routes` runs before the shell in `prod`, so the API route owns this
+  ;; path. A crawler must get that page, not the 404 the shell gives other paths.
+  (let [handler (fn [req] (or (api/api-routes req) (handler req)))]
+    (with-redefs [availability/cached-current-month (constantly nil)
+                  availability/stored-months (constantly [])
+                  availability/stored-outages (constantly [])]
+      (let [r (handler {:uri "/availability" :request-method :get
+                        :headers {"user-agent" "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}})]
+        (is (= 200 (:status r)))
+        (is (str/includes? (get-in r [:headers "Content-Type"]) "text/html"))
+        (is (str/includes? (:body r) "99.0%"))))))
 
 (deftest machine-read-paths-never-receive-markup
   (testing "404 text/plain, whoever asks"

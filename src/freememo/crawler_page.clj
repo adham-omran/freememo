@@ -324,7 +324,9 @@
               " "
               (link "mailto:contact@adham-omran.com" "Contact")
               " "
-              (link legal/privacy-path "Privacy")))
+              (link legal/privacy-path "Privacy")
+              " "
+              (link "/availability" "Availability")))
        "</body></html>"))
 
 ;; ── Legal documents ──

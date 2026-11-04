@@ -214,7 +214,7 @@
       (dom/text run)
       (e/for-by :t [frag run]
         (if (:href frag)
-          (dom/a (dom/props {:href (:href frag) :target "_blank" :rel "noopener"})
+          (dom/a (dom/props (lc/link-props (:href frag)))
             (dom/text (:t frag)))
           (dom/text (:t frag)))))))
 
@@ -272,6 +272,7 @@
                            :target "_blank" :rel "noopener"})
           (dom/text "Source"))
         (dom/a (dom/props {:href legal/privacy-path}) (dom/text "Privacy"))
+        (dom/a (dom/props {:href "/availability"}) (dom/text "Availability"))
         (when (show-google? auth-mode)
           (dom/a (dom/props {:href "/auth/google"}) (dom/text "Sign in")))))))
 
