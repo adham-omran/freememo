@@ -1,4 +1,6 @@
-FROM clojure:temurin-17-tools-deps-1.12.0.1501 AS build
+# JDK 25 since 2026-11-04 (plans/jdk-25-upgrade.md). The JDK floats within 25.
+# The Clojure CLI stays pinned, as it was on 17.
+FROM clojure:temurin-25-tools-deps-1.12.6.1673 AS build
 WORKDIR /app
 
 # The build's heap, CHOSEN rather than inherited. Nothing set one before, so the
@@ -79,7 +81,7 @@ RUN clojure -X:build vendor/verify! && clojure -X:build vendor/check-refs!
 RUN --mount=type=cache,id=freememo-shadow-cljs,target=/app/.shadow-cljs,sharing=locked \
     clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
 
-FROM eclipse-temurin:17-jre AS app
+FROM eclipse-temurin:25-jre AS app
 WORKDIR /app
 # ImageMagick + libheif provide HEIC/HEIF decode for Live Document photo
 # uploads — the JVM's ImageIO has no HEIC codec, so /api/heic-preview shells
