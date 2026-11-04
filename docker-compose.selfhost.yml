@@ -63,6 +63,9 @@ services:
       # Server
       PORT: "8080"
       PROD: "1"
+      # Compact object headers (JDK 25, JEP 519) shrink each object header
+      # from 12 to 8 bytes. Remove the line to turn it off.
+      JAVA_TOOL_OPTIONS: "-XX:+UseCompactObjectHeaders"
       # Database — host is the postgres service name; password matches it.
       DB_HOST: postgres
       DB_PORT: "5432"
