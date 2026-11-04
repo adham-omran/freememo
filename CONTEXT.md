@@ -91,3 +91,34 @@ _Avoid_: Mixed-form retry, copied exam
 **Timed Quiz**:
 The existing timed assessment over short knowledge-graph questions.
 _Avoid_: Exam
+
+## Service Commitments
+
+**Availability**:
+The share of minutes in a window in which a customer can reach FreeMemo from
+the public internet. Failures between the customer and the server count.
+_Avoid_: Uptime (alone), internal uptime
+
+**Uptime Target**:
+The published Availability that FreeMemo aims to meet. Missing it gives no
+compensation.
+_Avoid_: SLA, uptime guarantee, uptime promise
+
+**SLA**:
+A commitment that compensates the customer when Availability falls below a
+stated level. FreeMemo does not offer one.
+_Avoid_: Uptime Target
+
+**Backup**:
+A copy of every account's data that the operator keeps to restore the service
+after a loss.
+_Avoid_: Export, Account Archive, snapshot
+
+**Account Archive**:
+A copy of one account's data that the customer makes and keeps.
+_Avoid_: Backup, export file
+
+**Paying Customer**:
+An account with at least one completed purchase, of credits or of a desktop
+license, in the last 12 months. Granted credits do not count.
+_Avoid_: Paid user, subscriber, customer (alone)
