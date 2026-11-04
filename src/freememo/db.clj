@@ -3560,9 +3560,17 @@
                             FROM availability_months ORDER BY year DESC, month DESC"]
                        {:builder-fn rs/as-unqualified-maps})))
 
+(def outage-cause-labels
+  "The four causes an outage can have, as stored, each with the label that the
+   page shows."
+  {"server-internet-provider" "Server internet provider"
+   "network-tunnel" "Network tunnel"
+   "freememo-server" "FreeMemo server"
+   "not-yet-known" "Not yet known"})
+
 (def outage-causes
-  "The four causes an outage can have, as stored. The page shows their labels."
-  #{"server-internet-provider" "network-tunnel" "freememo-server" "not-yet-known"})
+  "The stored causes."
+  (set (keys outage-cause-labels)))
 
 (defn- setup-schema-availability-outages!
   "One row per outage of 15 minutes or more, keyed by its start (UTC). It
