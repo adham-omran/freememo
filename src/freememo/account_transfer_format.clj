@@ -213,7 +213,10 @@
    :desktop_licenses "billing of the source deployment"
    :availability_months "operator data: the closed months of the public
                          availability page. They describe the service, not an
-                         account"})
+                         account"
+   :availability_outages "operator data: the outages of the public availability
+                          page, with a cause that the operator sets. They
+                          describe the service, not an account"})
 
 ;; ── Sync classes ───────────────────────────────────────────────────
 
@@ -262,7 +265,8 @@
    :account_imports 7 :account_import_ids 7 :anki_note_tombstones 7
    :activities 7 :sync_graves 7 :sync_conflicts 7 :sync_state 7 :id_blocks 7
    :local_id_blocks 7 :desktop_tokens 7 :desktop_auth_codes 7
-   :desktop_accounts 7 :desktop_licenses 7 :availability_months 7})
+   :desktop_accounts 7 :desktop_licenses 7 :availability_months 7
+   :availability_outages 7})
 
 (def synced-tables
   "The tables row sync sends, in `entity-tables` order, which an apply must

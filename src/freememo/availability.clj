@@ -5,7 +5,8 @@
    reached FreeMemo. A minute with no successful sample counts as down, so the
    count comes from `sum_over_time` over a one-minute subquery, never from
    `avg_over_time` (which skips gaps). The current month divides by the minutes
-   so far. Months are in UTC. Terms: CONTEXT.md, \"Service Commitments\".
+   so far. Months are in UTC. An outage is a run of down minutes of 15 minutes or
+   more; the sweep stores each one with its month. Terms: CONTEXT.md, \"Service Commitments\".
    Plan: plans/paying-customer-commitments.md, Step 2."
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
@@ -176,9 +177,126 @@
            :when (and row (db/store-availability-month! row))]
        [y m]))))
 
-(defn close-months-sweep!
-  "Hourly sweep job: close the months that have ended."
+;; ── Outages ────────────────────────────────────────────────────────────
+;; An outage is a run of down minutes. Two down minutes at most 2 minutes apart
+;; are one outage, as in the outage report of scripts/prod_logs.py. A minute with
+;; no sample counts as down.
+
+(def outage-minimum-minutes 15)
+
+(def outage-cause-labels
+  "Stored cause to the label that the page shows."
+  {"server-internet-provider" "Server internet provider"
+   "network-tunnel" "Network tunnel"
+   "freememo-server" "FreeMemo server"
+   "not-yet-known" "Not yet known"})
+
+(defn detect-outages
+  "Pure. `up-seconds` is the set of epoch seconds of the minutes with a
+   successful probe, named by the second at which the minute starts. Looks at every minute from `start-sec` to `end-sec`
+   (both inclusive, minute-aligned). Returns the outages of 15 minutes or more,
+   oldest first, as {:start epoch-seconds :minutes n}."
+  [up-seconds start-sec end-sec]
+  (let [down (remove up-seconds (range start-sec (inc end-sec) 60))
+        runs (reduce (fn [runs t]
+                       (let [[s e] (peek runs)]
+                         (if (and e (<= (- t e) 120))
+                           (conj (pop runs) [s t])
+                           (conj runs [t t]))))
+                     [] down)]
+    (into []
+          (comp (map (fn [[s e]] {:start s :minutes (inc (quot (- e s) 60))}))
+                (filter #(>= (:minutes %) outage-minimum-minutes)))
+          runs)))
+
+(def ^:private range-chunk-minutes 10000) ; Prometheus allows 11000 points
+
+(defn up-minute-starts
+  "Pure. From range-query `values` ([epoch-seconds \"1\"|\"0\"] pairs), the set
+   of epoch seconds at which an up minute STARTS. A sample at time T covers the
+   window (T-1m, T], so the minute it describes starts at T-60. This is the one
+   place where sample times become minute starts."
+  [values]
+  (into #{} (keep (fn [[t v]] (when (= "1" v) (- (long t) 60)))) values))
+
+(defn- up-minutes
+  "The set of minute starts (epoch seconds) in [start-sec, end-sec] with a
+   successful probe, or nil when Prometheus fails for any part of the range."
+  [start-sec end-sec]
+  (loop [from start-sec, acc #{}]
+    (if (> from end-sec)
+      acc
+      (let [to (min end-sec (+ from (* 60 (dec range-chunk-minutes))))
+            resp (try (http/get (str (prometheus-url) "/api/v1/query_range")
+                                {:query-params {"query" (str "max_over_time(probe_success{instance=\"" probe-instance "\"}[1m]) > bool 0")
+                                                "start" (+ from 60) "end" (+ to 60) "step" 60}
+                                 :throw-exceptions false
+                                 :socket-timeout 15000
+                                 :connection-timeout 3000})
+                      (catch Exception _ nil))
+            body (when (= 200 (:status resp)) (json/parse-string (:body resp) true))]
+        (when (= "success" (:status body))
+          (recur (+ to 60)
+                 (into acc (up-minute-starts (-> body :data :result first :values)))))))))
+
+(defn month-outages
+  "Outages of 15 minutes or more of the month (UTC) up to `now`, as
+   {:started-at Instant :year :month :minutes}, or nil when Prometheus fails.
+   Minutes are named by their start. The last 2 minutes are left out, since
+   their samples may not exist yet. An outage that crosses a month edge is cut
+   at the edge."
+  [year month ^Instant now]
+  (let [ym (YearMonth/of (int year) (int month))
+        from (.getEpochSecond (.toInstant (.atStartOfDay (.atDay ym 1) ZoneOffset/UTC)))
+        month-end (.getEpochSecond (.toInstant (.atStartOfDay (.atDay (.plusMonths ym 1) 1) ZoneOffset/UTC)))
+        to (min (- month-end 60) (* 60 (quot (- (.getEpochSecond now) 180) 60)))]
+    (when (<= from to)
+      (when-let [up (up-minutes from to)]
+        (mapv (fn [{:keys [start minutes]}]
+                {:started-at (Instant/ofEpochSecond start) :year year :month month :minutes minutes})
+              (detect-outages up from to))))))
+
+(defn store-outages!
+  "Store the outages of every month from `first-month` to the month of `now`
+   that Prometheus still holds in full, closed months included. A month
+   without an answer stays as it is and the next run tries again. A stored
+   cause is never changed. Returns the number of outages inserted or lengthened."
+  [^Instant now]
+  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))
+        floor (.minus now (Duration/ofDays retention-days))]
+    (count
+     (for [ym (take-while #(not (.isAfter ^YearMonth % cur))
+                          (iterate #(.plusMonths ^YearMonth % 1)
+                                   (YearMonth/of (int (first first-month)) (int (second first-month)))))
+           :let [y (.getYear ^YearMonth ym) m (.getMonthValue ^YearMonth ym)
+                 start (.toInstant (.atStartOfDay (.atDay ^YearMonth ym 1) ZoneOffset/UTC))]
+           :when (not (.isBefore start floor))
+           outage (month-outages y m now)
+           :when (db/store-availability-outage! outage)]
+       outage))))
+
+(defn stored-outages
+  "Every stored outage, newest first. Empty when the database fails."
   []
-  (close-months! (Instant/now)))
+  (try (db/availability-outages)
+       (catch Exception _ [])))
+
+(defn set-outage-cause!
+  "Operator function. Set the cause of the outage that started at `started-at`
+   (an Instant, or an ISO string such as \"2026-10-28T03:12:00Z\"). `cause` is
+   one of :server-internet-provider, :network-tunnel, :freememo-server,
+   :not-yet-known. Returns true when an outage changed, false when none starts
+   at that time. Any other cause throws and changes nothing."
+  [started-at cause]
+  (db/set-availability-outage-cause!
+   (if (string? started-at) (Instant/parse started-at) started-at)
+   (if (keyword? cause) (name cause) cause)))
+
+(defn close-months-sweep!
+  "Hourly sweep job: close the months that have ended, then store the outages."
+  []
+  (let [now (Instant/now)]
+    (close-months! now)
+    (store-outages! now)))
 
 (db/register-sweep-job! ::close-months #'close-months-sweep!)

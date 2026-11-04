@@ -3560,6 +3560,61 @@
                             FROM availability_months ORDER BY year DESC, month DESC"]
                        {:builder-fn rs/as-unqualified-maps})))
 
+(def outage-causes
+  "The four causes an outage can have, as stored. The page shows their labels."
+  #{"server-internet-provider" "network-tunnel" "freememo-server" "not-yet-known"})
+
+(defn- setup-schema-availability-outages!
+  "One row per outage of 15 minutes or more, keyed by its start (UTC). It
+   carries its month and a cause that the operator sets by hand. Operator data,
+   so account transfer excludes it. Prometheus keeps 90 days, so the row is the
+   only record (plans/paying-customer-commitments.md, Step 2)."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS availability_outages (
+      started_at TIMESTAMPTZ PRIMARY KEY,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+      minutes INTEGER NOT NULL CHECK (minutes >= 15),
+      cause TEXT NOT NULL DEFAULT 'not-yet-known'
+        CHECK (cause IN ('server-internet-provider', 'network-tunnel',
+                         'freememo-server', 'not-yet-known')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"]))
+
+(defn store-availability-outage!
+  "Store an outage with its month. A known start keeps its cause and its
+   longest length: an outage that was still running grows, and a stored
+   length never shrinks. Returns true when a row was inserted or lengthened."
+  [{:keys [started-at year month minutes]}]
+  (pos? (:next.jdbc/update-count
+         (jdbc/execute-one! ds
+           ["INSERT INTO availability_outages (started_at, year, month, minutes)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (started_at) DO UPDATE SET minutes = EXCLUDED.minutes
+             WHERE availability_outages.minutes < EXCLUDED.minutes"
+            (java.sql.Timestamp/from started-at) (int year) (int month) (int minutes)]))))
+
+(defn availability-outages
+  "Every stored outage, newest first, as {:started-at :year :month :minutes :cause}."
+  []
+  (mapv (fn [r] {:started-at (.toInstant ^java.sql.Timestamp (:started_at r))
+                 :year (:year r) :month (:month r) :minutes (:minutes r) :cause (:cause r)})
+        (jdbc/execute! ds ["SELECT started_at, year, month, minutes, cause
+                            FROM availability_outages ORDER BY started_at DESC"]
+                       {:builder-fn rs/as-unqualified-maps})))
+
+(defn set-availability-outage-cause!
+  "Set the cause of the outage that started at `started-at`. Returns true when
+   a row changed. Throws for a cause outside `outage-causes`."
+  [started-at cause]
+  (when-not (contains? outage-causes cause)
+    (throw (ex-info "Unknown outage cause" {:cause cause :allowed outage-causes})))
+  (pos? (:next.jdbc/update-count
+         (jdbc/execute-one! ds
+           ["UPDATE availability_outages SET cause = ? WHERE started_at = ?"
+            cause (java.sql.Timestamp/from started-at)]))))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -3588,6 +3643,7 @@
   (run-schema-step! #'setup-schema-walkthroughs!)
   (run-schema-step! #'setup-schema-known-ideas!)
   (run-schema-step! #'setup-schema-availability!)
+  (run-schema-step! #'setup-schema-availability-outages!)
   (run-schema-step! #'setup-schema-pin-numbering!)
   (run-schema-step! #'setup-schema-document-question-maps!)
   ;; Last: it re-points tables that the steps above create.
