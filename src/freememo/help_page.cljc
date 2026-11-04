@@ -7,6 +7,7 @@
    one matching rule."
   (:require
    [freememo.command-bus :as bus]
+   [freememo.contact-support :refer [ContactSupport]]
    [freememo.help-content :as help]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
@@ -71,7 +72,7 @@
             (dom/text " — ")
             (dom/text (help/resolve-chords detail))))))))
 
-(e/defn HelpPage []
+(e/defn HelpPage [user-id]
   (e/client
     (let [[sub] r/route
           slug (some-> sub str)
@@ -106,6 +107,7 @@
                                 :text-decoration "underline" :cursor "pointer"}})
             (dom/text "Show the getting-started checklist")
             (dom/On "click" (fn [e] (.preventDefault e) (bus/dispatch! :show-getting-started)) nil)))
+        (ContactSupport user-id)
         (dom/input
           (dom/props {:id search-input-id :type "search" :class "input help-search"
                       :placeholder "Search Help" :aria-label "Search Help"})
