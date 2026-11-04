@@ -42,6 +42,7 @@
    [freememo.desktop-auth :as desktop-auth]
    [freememo.sync-server :as sync-server]
    [freememo.comprehension-http :as comprehension-http]
+   [freememo.availability-http :as availability-http]
    [freememo.docs-http :as docs-http]
    [freememo.archive-http :as archive-http]
    [freememo.epub-http :as epub-http]
@@ -1403,7 +1404,9 @@
    `:body` ∈ {:upload, :small, nil}; `wrap-route-body-size` resolves it to a
    byte ceiling, `api-routes` resolves `:handler`. Adding an upload route here
    body-caps it automatically — the middleware carries no separate route list."
-  [{:method :get :pattern #"/docs(?:/.*)?" :handler #'docs-http/response}
+  [{:method :get :path "/availability" :handler #'availability-http/response}
+   {:method :head :path "/availability" :handler #'availability-http/response}
+   {:method :get :pattern #"/docs(?:/.*)?" :handler #'docs-http/response}
    {:method :head :pattern #"/docs(?:/.*)?" :handler #'docs-http/response}
    {:method :post :path "/api/comprehension/scan" :handler #'comprehension-http/upload-handler :body :upload}
    {:method :get :pattern #"/api/comprehension/original/[0-9]+" :handler #'comprehension-http/original-handler}
