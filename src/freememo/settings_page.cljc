@@ -17,6 +17,7 @@
    [freememo.settings-group :as group]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
+   [freememo.contact-support :refer [ContactSupport]]
    [freememo.modal-shell :as modal]
    [freememo.settings-tab :as settings-tab]
    [freememo.desktop-section :as desktop-section]
@@ -532,6 +533,8 @@
             (dom/text "Logout"))))
 
       (EmailUpdatesField user-id)
+
+      (ContactSupport user-id)
 
       ;; Account export — the bytes the account holds (§5.7.1).
       (AccountTransferSection user-id)

@@ -5332,6 +5332,35 @@
 ;; Google OAuth user queries (unchanged)
 ;; ---------------------------------------------------------------------------
 
+(defn paying-customer?
+  "True when the account has a `complete` credit_orders row, of kind credits or
+   desktop_license, paid in the last 12 months. Granted credits are
+   credit_transactions rows, not orders, so they never count
+   (plans/paying-customer-commitments.md, Q16)."
+  [user-id]
+  (:paying
+   (jdbc/execute-one! ds
+     ["SELECT EXISTS (SELECT 1 FROM credit_orders
+                      WHERE user_id = ? AND status = 'complete'
+                        AND kind IN ('credits', 'desktop_license')
+                        AND COALESCE(completed_at, created_at) >= now() - interval '12 months')
+              AS paying"
+      user-id]
+     {:builder-fn rs/as-unqualified-maps})))
+
+(defn support-contact
+  "What the Contact support link needs: {:paying? boolean :account string}.
+   :account is the email, or the username when the account has no email.
+   The client gets this map and no order rows."
+  [user-id]
+  (let [u (jdbc/execute-one! ds
+            ["SELECT username, email FROM users WHERE id = ?" user-id]
+            {:builder-fn rs/as-unqualified-maps})]
+    {:paying? (boolean (paying-customer? user-id))
+     :account (if (and (string? (:email u)) (not (str/blank? (:email u))))
+                (:email u)
+                (:username u))}))
+
 (defn get-user-by-id [user-id]
   (jdbc/execute-one! ds
     (sql/format {:select [:id :username :google_id]
