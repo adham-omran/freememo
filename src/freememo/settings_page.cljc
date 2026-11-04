@@ -41,7 +41,7 @@
    {:id "settings-keyboard" :label "Keyboard Shortcuts"}])
 
 ;; Stable atom shared across reactive cycles. Atoms created inside e/defn let
-;; bodies are recreated on every cycle (CLAUDE.md anti-pattern) — the scroll
+;; bodies are recreated on every cycle (docs/electric-patterns.md anti-pattern) — the scroll
 ;; handler would write to a stale atom while SettingsNav watches a fresh one.
 ;; It lives in freememo.settings-tab so a page outside Settings can pick a tab
 ;; without requiring this namespace. Seeded here, once, with the first tab.

@@ -71,7 +71,7 @@
 ;; an ES6 class, ClojureScript emits ES5-style constructors, and an ES5
 ;; constructor cannot call an ES6 one — `(.call BlockEmbed this …)` throws
 ;; "Class constructor cannot be invoked without 'new'", the same failure
-;; CLAUDE.md records for `new` in a call position. Reflect.construct builds the
+;; .claude/rules/vendor-libs.md records for `new` in a call position. Reflect.construct builds the
 ;; instance through BlockEmbed while keeping Divider as the new.target, so the
 ;; result gets Divider's prototype. The two setPrototypeOf calls give Divider
 ;; BlockEmbed's instance methods and its statics, which is how Parchment finds
@@ -122,7 +122,7 @@
 ;; `create` builds the element instead of calling super. Parchment's own
 ;; `create` is `document.createElement(this.tagName)` plus an optional
 ;; className this blot does not set, and an ES5 constructor calling into an ES6
-;; class is the `new`-in-call-position hazard CLAUDE.md records.
+;; class is the `new`-in-call-position hazard .claude/rules/vendor-libs.md records.
 ;;
 ;; `aset` for every static, never `set!` — see the divider comment above.
 ;; `bundle-check/verify!` asserts that all four reached the `:advanced` bundle.

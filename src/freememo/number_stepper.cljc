@@ -117,7 +117,7 @@
               [t _] (e/Token nv)]
           (when t (spend t (Save nv)))))
 
-      ;; N — editable, frame-isolated per CLAUDE.md inline-number pattern.
+      ;; N — editable, frame-isolated per docs/electric-patterns.md inline-number pattern.
       ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
       ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
       ;; don't clobber the user's draft mid-edit), committed once on "change"

@@ -17,12 +17,12 @@
    the batches it finished — and the report is where the run learns that the
    user cancelled, so it stops at a batch boundary with nothing unrecorded.
 
-   Split into small `e/defn`s for the JVM 64KB method cap (CLAUDE.md), the same
+   Split into small `e/defn`s for the JVM 64KB method cap (docs/electric-patterns.md), the same
    way `quick-sync` is. The groups are reactively independent, so mount order
    does not matter.
 
    Phase transitions out of a token frame go in `e/on-unmount` inside the frame
-   `(t)` unmounts (CLAUDE.md, token lifecycle). Nothing here talks to AnkiConnect
+   `(t)` unmounts (docs/electric-patterns.md, token lifecycle). Nothing here talks to AnkiConnect
    or to Missionary: each phase calls a plain driver in `anki-reconcile-client`."
   (:require
    [hyperfiddle.electric3 :as e]
@@ -248,7 +248,7 @@
                       ;; server. Read only inside the unmount closure, `verdict`
                       ;; gated nothing: `(t)` spent the token at once, the frame
                       ;; unmounted before the closure could be built, and the
-                      ;; phase stayed `:planning` for good (CLAUDE.md, token
+                      ;; phase stayed `:planning` for good (docs/electric-patterns.md, token
                       ;; lifecycle).
                       (case (reset! (:!plan recon) p)
                         (if (not= :continue verdict)
@@ -416,7 +416,7 @@
 (defn fresh-state
   "The atom map one run needs. Created per host component, never shared: these
    feed `e/Token` inputs, and a map rebuilt by a parent re-render would re-fire
-   every token in it (CLAUDE.md, state maps)."
+   every token in it (docs/electric-patterns.md, state maps)."
   []
   {:!phase (atom nil)
    :!run-id (atom nil)

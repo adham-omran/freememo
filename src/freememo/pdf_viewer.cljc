@@ -238,7 +238,7 @@
    branch mounts. No viewer exists then, so every document goes through
    init-viewer!. On a live viewer, PDF.js 3.11's setDocument throws in
    AnnotationEditorUIManager.destroy, because this viewer has no alt-text
-   manager. See CLAUDE.md, \"Every Document Change Builds a New PDF.js Viewer\"."
+   manager. See .claude/rules/pdf-viewer.md, \"Every Document Change Builds a New PDF.js Viewer\"."
   [pdf-url fit on-ready]
   #?(:clj nil
      :cljs

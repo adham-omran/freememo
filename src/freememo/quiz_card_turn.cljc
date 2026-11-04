@@ -18,7 +18,7 @@
    never does.
 
    Lives in its own namespace because ReviewFlow's method is already large and
-   `:prod` bytecode limits bite per method (CLAUDE.md)."
+   `:prod` bytecode limits bite per method (docs/electric-patterns.md)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -102,7 +102,7 @@
 ;;
 ;; Top-level platform-split defn, never an inline #?(:cljs) in an e/defn body: a
 ;; handler must capture the same bindings on both peers or the frame slot counts
-;; diverge and the server crashes on mount (CLAUDE.md, modal-shell precedent).
+;; diverge and the server crashes on mount (docs/electric-patterns.md, modal-shell precedent).
 #?(:cljs
    (defn rating-key-press! [e]
      (when-not (or (.-metaKey e) (.-ctrlKey e) (.-altKey e) (.-shiftKey e))
@@ -212,7 +212,7 @@
               (do (reset! !grading? true)
                 (reset! !grade-error nil)
                 ;; Client scope: pass the number, never the mark inside the
-                ;; server-sited closure (CLAUDE.md, unserializable capture).
+                ;; server-sited closure (docs/electric-patterns.md, unserializable capture).
                 (let [ms (timing/elapsed-ms started-at)
                       res (e/server
                             (e/Offload #(grade-card-answer!* user-id card-id ord answer ms)))]
@@ -233,7 +233,7 @@
    `advance!` mutates the queue, which unmounts this very component, so it runs from
    `e/on-unmount` registered INSIDE the resolved branch — calling it as a sibling of
    `(t)` would tear the frame down mid-flight and the token would never be spent
-   (CLAUDE.md, Token Lifecycle). A failed rating advances nothing: the item keeps its
+   (docs/electric-patterns.md, Token Lifecycle). A failed rating advances nothing: the item keeps its
    place and its due date.
 
    `item-ref` is [:card flashcard-id ord] or [:question id]; `user-answer` is the typed

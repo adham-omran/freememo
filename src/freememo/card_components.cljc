@@ -61,7 +61,7 @@
    Kept as the name every card display site already calls; the behaviour lives in
    `freememo.math/set-html!` so non-card sites (search snippets, OCR previews) can
    share it without depending on this ns. That fn holds the reader conditional
-   that keeps CLJ/CLJS signal counts identical inside reactive bodies (CLAUDE.md
+   that keeps CLJ/CLJS signal counts identical inside reactive bodies (docs/electric-patterns.md
    frame-mismatch rule); this wrapper needs none."
   [node html]
   (math/set-html! node html))
@@ -270,7 +270,7 @@
    The table diffs these views, keyed by :row-key, so a row's shape and its
    content cross in one frame. Reading each field through its own nested
    (e/server …) left every row empty for a round trip after it mounted
-   (CLAUDE.md, \"A Nested (e/server …) Inside e/for Is a Second Transfer\")."
+   (docs/electric-patterns.md, \"A Nested (e/server …) Inside e/for Is a Second Transfer\")."
   [row]
   {:row-key (:row-key row)
    :id (:flashcards/id row)

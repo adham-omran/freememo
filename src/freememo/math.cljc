@@ -524,7 +524,7 @@
    start the timer, which exists only to bound an editor's wait.
 
    pre : called from a plain fn or through `e/snapshot`, never on every
-         re-evaluation of a reactive body (CLAUDE.md, 'JS Library Init Side
+         re-evaluation of a reactive body (docs/electric-patterns.md, 'JS Library Init Side
          Effects in e/defn').
    post: the `:katex` load is in flight or already settled; returns nil, and a
          failure is logged by `ensure!` rather than thrown. Repeat calls are free

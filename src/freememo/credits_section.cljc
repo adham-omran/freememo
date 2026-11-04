@@ -22,7 +22,7 @@
    #?(:clj [freememo.storage-meter :as meter])
    #?(:clj [freememo.user-state :as us])))
 
-;; Defined on both platforms (per CLAUDE.md) so referencing them in e/defn
+;; Defined on both platforms (per docs/electric-patterns.md) so referencing them in e/defn
 ;; bodies never causes a CLJ/CLJS frame-signal mismatch.
 #?(:cljs (defn navigate-external! [url] (when url (set! (.. js/window -location -href) url)))
    :clj (defn navigate-external! [_url] nil))

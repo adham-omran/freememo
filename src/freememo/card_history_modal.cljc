@@ -13,7 +13,7 @@
 
    Own namespace, not card_modals: that file already carries many e/defns and
    the 64KB method limit is :prod-only, so growth there fails a build every dev
-   check passes (CLAUDE.md 'Method code too large!')."
+   check passes (docs/electric-patterns.md 'Method code too large!')."
   (:require
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
@@ -151,7 +151,7 @@
   (e/client
     (when (e/watch !open?)
       ;; Server-sited form binding, NOT an e/defn return — an e/defn call would
-      ;; materialize the whole log at the call boundary (CLAUDE.md).
+      ;; materialize the whole log at the call boundary (docs/electric-patterns.md).
       (let [versions (e/server
                        (let [rev (e/watch (us/get-atom user-id :card-mutations))]
                          ;; e/Offload, not a bare call: two DB round-trips plus

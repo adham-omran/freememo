@@ -102,7 +102,7 @@
 ;;       NOT publish, because PdfMarkDone owns :done on a PDF. The :overflow
 ;;       copy never publishes — one publisher per surface.
 ;; Inv : `:class` sits in its own dom/props, apart from the state-derived
-;;       props (CLAUDE.md, "An Absent Props Map Nulls Every Prop").
+;;       props (docs/electric-patterns.md, "An Absent Props Map Nulls Every Prop").
 ;;       Its own e/defn: DocumentMetaGroup is near the 64KB method cap.
 (e/defn DocumentDoneToggle
   []

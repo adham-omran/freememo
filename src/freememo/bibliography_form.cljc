@@ -318,7 +318,7 @@
 ;;       Form!'s e/amb. Remove/add buttons mutate the atom directly.
 ;; Invariant: position-based keys shift on add/remove. Mid-edit removal of
 ;;            row k discards row k's dirty state (Input! unmounts before
-;;            commit). Tracked per CLAUDE.md "Forms5 patterns".
+;;            commit). Tracked per docs/electric-patterns.md "Forms5 patterns".
 (e/defn AuthorRows [!authors]
   (let [authors (e/watch !authors)]
     (e/for [[i author] (e/diff-by first (map-indexed vector authors))]

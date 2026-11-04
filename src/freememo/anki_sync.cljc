@@ -69,7 +69,7 @@
                     :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}
                     :data-tour "anki-sync"})
         ;; A props map of its own: `busy?` is a server read, absent for its
-        ;; round trip, and an absent map nulls every prop in it (CLAUDE.md).
+        ;; round trip, and an absent map nulls every prop in it (docs/electric-patterns.md).
         (dom/props {:disabled busy?})
         (tooltip/Tooltip! (if busy?
                             "A sync is running. See Activity."

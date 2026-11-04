@@ -5,7 +5,7 @@
    `YT.Player` REPLACES its target element with an iframe. So the target is a
    child `div` this namespace appends to `host`, and `host` is an
    Electric-owned element with no Electric children. Electric never indexes
-   into a leaf, so the foreign iframe inside it is safe (CLAUDE.md, the
+   into a leaf, so the foreign iframe inside it is safe (.claude/rules/deployment-hook.md, the
    deployment-hook section on foreign nodes).
 
    The player never autoplays. It cues the video at the resume position, so it

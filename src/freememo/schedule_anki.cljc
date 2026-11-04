@@ -46,7 +46,7 @@
    ONE definition. The keys were written out separately in the header chip, its
    icon, and the stale banner, so adding a status compiled clean and fell
    silently to a default in whichever site was forgotten — the same failure
-   CLAUDE.md records for topic kinds needing an entry in all four badge
+   docs/feature-obligations.md records for topic kinds needing an entry in all four badge
    switches. `schedule_fsrs_test` asserts every render site covers this map.
 
    `:chip` is the header's short label. `:banner` is §8.1/§8.2's explanation,
@@ -415,7 +415,7 @@
   "Reactive-body-safe entry to `run-acquire!`.
 
    A bare call to the cljs-only var above would not resolve on the JVM peer,
-   and Electric compiles an `e/defn` body on BOTH (CLAUDE.md, 'Server-Only
+   and Electric compiles an `e/defn` body on BOTH (docs/electric-patterns.md, 'Server-Only
    Functions in .cljc Files'). The body-level reader conditional is what keeps
    the symbol resolvable on CLJ while the work stays on CLJS.
 

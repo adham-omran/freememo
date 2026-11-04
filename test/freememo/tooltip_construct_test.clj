@@ -2,7 +2,7 @@
   "Pins the rule that every hover tooltip goes through `freememo.tooltip`.
 
    The app once set a tooltip three ways: `Tooltip!`, an inline
-   `:data-tooltip`, and a native `title`. CLAUDE.md asked for the first one,
+   `:data-tooltip`, and a native `title`. docs/feature-obligations.md asked for the first one,
    and the other two still grew to about 80 sites, because each new element
    copied the one beside it. Only a failing test stops the next copy.
 

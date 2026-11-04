@@ -483,7 +483,7 @@
         (dom/button
           ;; Static props apart from the one that follows a server read: a
           ;; props map that goes absent for a round trip nulls every prop in
-          ;; it (CLAUDE.md, "An Absent Props Map Nulls Every Prop").
+          ;; it (docs/electric-patterns.md, "An Absent Props Map Nulls Every Prop").
           (dom/props {:class "btn btn-sm btn-primary" :type "button"
                       :aria-label "Ask the tutor about every open pin"})
           (dom/props {:style {:display (if (pos? open) "inline-flex" "none")}})

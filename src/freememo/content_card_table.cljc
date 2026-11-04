@@ -314,9 +314,9 @@
           ;; the header each time the test re-emitted — every filter change
           ;; does — and the remount unmounted CardFilterBar, whose unmount
           ;; clears the filters: one keystroke filtered for a frame and then
-          ;; undid itself (CLAUDE.md, "A `case` Remounts Its Branch").
+          ;; undid itself (docs/electric-patterns.md, "A `case` Remounts Its Branch").
           ;; `hidden` is in its own props map: it derives from a server read,
-          ;; and an absent map nulls every prop in it (CLAUDE.md).
+          ;; and an absent map nulls every prop in it (docs/electric-patterns.md).
           (dom/div
             (dom/props {:class "card-table-header"})
             (dom/props {:hidden (not (or filtering? (pos? row-count)))})
@@ -331,7 +331,7 @@
               ;; changed it. Last form: an effect gates no frame.
               (motion/flash-own-change! dom/node (e/server (:topic-id cards-result)) unsynced-count))
             ;; Its own element: a keyed loop never shares a parent's child
-            ;; slots (CLAUDE.md, "An e/for Gets an Element of Its Own").
+            ;; slots (docs/electric-patterns.md, "An e/for Gets an Element of Its Own").
             (dom/div
               (dom/props {:class "card-filter-bar"})
               (e/for-by identity [_topic [topic-id]]

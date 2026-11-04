@@ -338,7 +338,7 @@
             (fb/EntityCardPopover user-id !entity-card entity-card))))
       ;; Sibling of the panel div and the LAST form of the body: a modal nested
       ;; inside another overlay inherits pointer-events:none and shares its Escape
-      ;; (CLAUDE.md). Load-bearing TODAY, not prospectively — QuestionEditorModal
+      ;; (.claude/rules/modals-keyboard.md). Load-bearing TODAY, not prospectively — QuestionEditorModal
       ;; and EntityCardPopover are both overlays and both mount inside the cond
       ;; branch above, so nesting this there would make it mouse-dead, and being
       ;; last is what paints it over them.

@@ -121,7 +121,7 @@
 ;; each name appears at a call site Electric compiles twice, and a reader
 ;; conditional in an `e/defn` body makes the two peers disagree on frame shape.
 ;; A body-level conditional inside a plain `defn` keeps the call sites
-;; identical. See CLAUDE.md, "Server-Only Functions in .cljc Files".
+;; identical. See docs/electric-patterns.md, "Server-Only Functions in .cljc Files".
 
 (defn page-root
   "Return the exam page container, so a DOM read is scoped to this page."

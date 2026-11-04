@@ -10,8 +10,8 @@
 
    This namespace has NO requires, so both peers can read it. The Settings UI
    renders these literals on the client. A CLJ-only def read from client scope
-   crashes the WebSocket instead of raising an error (CLAUDE.md, \"The same rule
-   governs a plain `def` of data\").
+   crashes the WebSocket instead of raising an error (docs/electric-patterns.md,
+   \"Server-Only Functions in .cljc Files\").
 
    The setting keys below repeat constants from `freememo.settings`, because this
    namespace cannot require it. `ai_tiers_test` asserts that the two agree.")

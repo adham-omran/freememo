@@ -89,7 +89,7 @@
           acq (e/watch !acq)]
 
       ;; §8.4 — the fetch fires ONCE per mount, inside a keyed frame. A bare
-      ;; call in this body would restart on every re-evaluation (CLAUDE.md,
+      ;; call in this body would restart on every re-evaluation (docs/electric-patterns.md,
       ;; 'JS Library Init Side Effects in e/defn'); the key makes a change of
       ;; user or of card set an honest unmount and mount instead.
       (e/for-by identity [_k [[user-id note-ids push-deck]]]
@@ -240,7 +240,7 @@
               ;;
               ;; Close only on success, and only from inside the branch that
               ;; mounts on success — so a failure keeps the form open with its
-              ;; message (CLAUDE.md, Token Lifecycle). The `case` sequences the
+              ;; message (docs/electric-patterns.md, Token Lifecycle). The `case` sequences the
               ;; navigation call ahead of the spend; `do` is concurrent, so a
               ;; sibling `(token)` could unmount this frame before `navigate!`
               ;; ran at all. It gates on the CALL, not on the route having
@@ -328,7 +328,7 @@
           (when (some? res)
             (if (e/server (:ok res))
               ;; Close from inside the SUCCESS branch, so a failure keeps the
-              ;; form open with its message (CLAUDE.md, Token Lifecycle).
+              ;; form open with its message (docs/electric-patterns.md, Token Lifecycle).
               (do (e/on-unmount #(reset! !open? false))
                 (token))
               (token (e/server (:error res))))))))))
@@ -586,7 +586,7 @@
           ;; A server-FORM binding, not an e/defn call. The forecast carries a
           ;; verdict per page and a load per day; materializing it at a call
           ;; boundary would ship the whole thing to the client, where only
-          ;; scalars and the scrolled window are read (CLAUDE.md, 'e/defn
+          ;; scalars and the scrolled window are read (docs/electric-patterns.md, 'e/defn
           ;; Returns Materialize at the Call Site').
           forecast (e/server (e/Offload #(sched/forecast refresh user-id schedule-id)))
           archived? (e/server (some? (get-in forecast [:schedule :study_schedules/archived_at])))

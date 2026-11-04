@@ -133,7 +133,7 @@
 
 ;; ^js hints only exist on the CLJS reader branch — a whole-form reader
 ;; conditional, not a body-level one, or the CLJ compiler tries to resolve `js`
-;; as a class (CLAUDE.md, "WRONG — CLJ compiler chokes on ^js in parameter list").
+;; as a class (docs/electric-patterns.md, "WRONG — CLJ compiler chokes on ^js in parameter list").
 #?(:cljs
    (defn file-list->vec
      "js FileList → a CLJS vector, so the reactive body holds a value rather than
@@ -286,7 +286,7 @@
    A top-level `defn`, not a closure inside `VideoImportModal`. Two reasons, and
    the first is a hard constraint: a reader conditional inside a `let` binding of
    an `e/defn` body compiles to different signal counts on the two peers and
-   kills the websocket (CLAUDE.md). The second is scope — probing files is not
+   kills the websocket (docs/electric-patterns.md). The second is scope — probing files is not
    the modal's business, only calling it is."
   [!durations files]
   #?(:cljs (doseq [f files]

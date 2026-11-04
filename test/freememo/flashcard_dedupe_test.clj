@@ -10,7 +10,7 @@
 
    The tests SKIP (not fail) when no database is reachable, matching
    `anki-settings-snapshot-test`. Run one against a scratch database with
-   DB_PORT, as the CLAUDE.md Tests section shows."
+   DB_PORT, as the test/CLAUDE.md Tests section shows."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]

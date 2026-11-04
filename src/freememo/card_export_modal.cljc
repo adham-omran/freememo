@@ -5,7 +5,7 @@
    and Library > Cards opens it with the filter opts on screen. The dialog
    counts what the file will hold, then starts a browser download from
    `/api/cards/export`. Nothing is saved, so the dialog has no server commit
-   and no token. Its controls only set client atoms, the CLAUDE.md pattern for
+   and no token. Its controls only set client atoms, the docs/electric-patterns.md pattern for
    a selection whose effect stays in the browser.
 
    The request atoms live here, not in `freememo.target-modals`, so Library
@@ -138,7 +138,7 @@
                   :else {:scope :filter :opts (:opts request)})
           images? (and images-on? (presets/images-allowed? preset-id))
           ;; A client e/as-vec reads the Offload as nil until it answers, so
-          ;; nothing below unmounts while a new count runs (CLAUDE.md, "An
+          ;; nothing below unmounts while a new count runs (docs/electric-patterns.md, "An
           ;; Empty e/Offload Empties Everything Downstream").
           summary (peek (e/as-vec
                           (e/server (e/Offload #(export-summary* user-id scope preset-id images?)))))
@@ -173,7 +173,7 @@
           (dom/div
             (dom/props {:class "card-export__summary" :aria-live "polite"})
             ;; One loop, always mounted, never a branch beside another child
-            ;; (CLAUDE.md, "An e/for Gets an Element of Its Own").
+            ;; (docs/electric-patterns.md, "An e/for Gets an Element of Its Own").
             (e/for [line (e/diff-by identity (if summary
                                                (summary-lines summary)
                                                ["Counting cards…"]))]

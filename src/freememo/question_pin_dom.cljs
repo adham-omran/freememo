@@ -33,7 +33,7 @@
 
    `install!` is the only entry point. It returns a handle; every other fn
    takes that handle. A plain defn, never an Electric body, owns the state
-   (CLAUDE.md, \"JS Library Init Side Effects in e/defn\")."
+   (docs/electric-patterns.md, \"JS Library Init Side Effects in e/defn\")."
   (:require [clojure.string :as str]
             [freememo.line-bands :as line-bands]
             [freememo.page-merge :as page-merge]
@@ -516,7 +516,7 @@
     (.setAttribute ask "aria-label" "Ask about the selected passage")
     (set! (.. ask -style -display) "none")
     ;; The mousedown default would move focus and collapse the selection before
-    ;; the click reads it (§6.2.2, CLAUDE.md "Modal Focus Management").
+    ;; the click reads it (§6.2.2, .claude/rules/modals-keyboard.md "Modal Focus Management").
     (.addEventListener ask "mousedown" (fn [e] (.preventDefault e)))
     (.addEventListener ask "click" (fn [_] (ask-current! handle)))
     (.appendChild layer badges)

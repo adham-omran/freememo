@@ -46,7 +46,7 @@
         ;; changes. Remounting here caused the :diff-corruption WS crash on
         ;; learn-session advance. The PDF.js viewer inside it is not kept: each
         ;; document builds a new one through viewer/init-viewer!. See
-        ;; CLAUDE.md, "Every Document Change Builds a New PDF.js Viewer".
+        ;; .claude/rules/pdf-viewer.md, "Every Document Change Builds a New PDF.js Viewer".
         (reset! !current-page
           (binding [dctx/document-id pdf-root-id
                     dctx/on-navigate! (fn [p]

@@ -65,7 +65,7 @@
 
 (defn kind-badge
   "[label badge-class] for a ledger kind. A class, not an inline colour: the
-   badge mounts in every window row, and a class is one prop (CLAUDE.md,
+   badge mounts in every window row, and a class is one prop (.claude/rules/virtual-scroll.md,
    \"Cell styling belongs in CSS\")."
   [kind]
   (case kind

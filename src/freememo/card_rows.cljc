@@ -23,7 +23,7 @@
    'occlusion_group', 'score_group'): the same three-way split, one layer down.
 
    Pure and platform-free — no requires, so both peers see plain literals
-   (CLAUDE.md, transcribe_language precedent).")
+   (docs/electric-patterns.md, transcribe_language precedent).")
 
 (defn row-key
   "Identity of the display row that `row` belongs to.
