@@ -35,6 +35,7 @@
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.activity-reporter :as activity-reporter])
+   #?(:clj [freememo.memory-sampler :as memory-sampler])
    #?(:clj [freememo.receipt :as receipt])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.desktop :as desktop])
@@ -192,6 +193,10 @@
               :manifest-path "public/freememo/js/manifest.edn"})]
        (log/info (pr-str config))
        (assert (string? (:hyperfiddle/electric-user-version config)))
+
+       ;; Memory evidence for a kernel kill. First, so that boot is on record.
+       ;; See plans/jvm-cgroup-oom-kills.md.
+       (memory-sampler/start!)
 
        ;; Initialize database
        (db/setup-schema)

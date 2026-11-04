@@ -21,6 +21,7 @@
    ;; electric), so this require does NOT put a reactive compile on the main
    ;; thread — see load-app-namespaces! below.
    #?(:clj [freememo.activity-reporter :as activity-reporter])
+   #?(:clj [freememo.memory-sampler :as memory-sampler])
    ;; Electric-free too: db, config, typst and postal.
    #?(:clj [freememo.receipt :as receipt])
 
@@ -171,6 +172,9 @@
      (load-app-namespaces!)
      (def electric-boot (requiring-resolve 'freememo.main/electric-boot))
      (def metadata-navigator-start! (requiring-resolve 'dev-metadata/start!))
+
+     ;; Memory evidence for a kernel kill. See plans/jvm-cgroup-oom-kills.md.
+     (memory-sampler/start!)
 
      ;; Initialize database
      (db/setup-schema)
