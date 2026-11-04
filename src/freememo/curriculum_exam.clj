@@ -122,8 +122,8 @@
 
 (defn estimated-cost
   "The price sheet of an exam over this source (assessment/estimated-cost).
-   Post: the sheet, or {:none true} when the source has no text or the
-   model has no price."
+   Post: the sheet ({:none true …} when the model has no price), or
+   {:none true} when the source has no text."
   [user-id subject]
   (or (try (assessment/estimated-cost user-id (curriculum/subject-evidence db/ds user-id subject))
            (catch clojure.lang.ExceptionInfo _ nil))

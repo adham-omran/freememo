@@ -10121,6 +10121,8 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .exam-minutes__range { flex: 1; min-width: 160px; accent-color: var(--color-primary, #2563eb); }
 .exam-minutes__summary { color: inherit; }
 .exam-minutes__cost { color: var(--color-text-secondary); }
+.exam-minutes__omission { color: var(--color-warning-dark); }
+.exam-minutes__omission:empty { display: none; }
 
 .curriculum-generate-panel {
   display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px;

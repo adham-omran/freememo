@@ -173,6 +173,21 @@
       (is (= 300000 (get-in bounded [:source_limits :omitted_characters])))
       (is (get-in bounded [:materials 0 :evidence 2 :text_omitted])))))
 
+(deftest the-overflow-shown-before-generation-is-the-one-recorded-after-it
+  (testing "a source that fits leaves nothing out"
+    (is (= {:source-characters 88407 :omitted-characters 0}
+           (assessment/source-overflow
+             {:materials [{:material-id 7 :evidence [{:topic-id 1 :text (apply str (repeat 88407 "x"))}]}]}))))
+  (testing "a long source: the figure before agrees with bounded-evidence"
+    (let [source (apply str (repeat 500000 "x"))
+          evidence {:materials [{:material-id 7 :evidence (mapv (fn [i] {:topic-id i :text source}) (range 2))}
+                                {:material-id 8 :evidence [{:topic-id 9 :text source}]}]}
+          before (assessment/source-overflow evidence)]
+      (is (= 1500000 (:source-characters before)))
+      (is (= 300000 (:omitted-characters before)))
+      (is (= (:omitted-characters before)
+             (get-in (assessment/bounded-evidence evidence) [:source_limits :omitted_characters]))))))
+
 (deftest facts-must-fit-the-included-excerpts-and-count-limit
   (let [fact {:id 1 :graph_topic_id 7 :subject_label "Plants" :predicate_label "use" :object_literal "light"}
         original (assoc evidence :facts (conj (mapv #(assoc fact :id %) (range 1 602))
