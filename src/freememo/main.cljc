@@ -444,7 +444,7 @@
                         (r/pop (ComprehensionPage user-id navigate!)))
                       (when (= active-tab :help)
                         (r/pop ; consume 'help; HelpPage reads the slug segment
-                          (HelpPage)))
+                          (HelpPage user-id)))
                       (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                       (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                       (when (= active-tab :learn) (LearnPage user-id navigate! nil))
