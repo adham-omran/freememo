@@ -330,6 +330,26 @@
     (testing "the contact address a request must go to is on the page"
       (is (str/includes? text (str/lower-case legal/contact-email))))))
 
+(deftest the-privacy-policy-tells-the-truth-about-backups
+  ;; plans/paying-customer-commitments.md, "Privacy policy". A Backup keeps
+  ;; deleted data for up to 6 months, and AWS and Cloudflare receive data.
+  (let [text (visible-text (crawler-page/legal-document legal/privacy-path))]
+    (testing "the approved sentences are on the page"
+      (doseq [s ["Then FreeMemo removes it from the live service."
+                 "When you ask to close your account, FreeMemo deletes everything you own from the live service."
+                 "FreeMemo backs up its database every night. A backup keeps a copy of deleted data for up to 6 months, and then the copy is gone. Nobody reads a backup except to restore the service after a failure."
+                 "Five companies receive some of your data"
+                 "Amazon Web Services. AWS stores FreeMemo's offsite backups in Frankfurt, Germany. A backup holds a copy of all the data above."
+                 "Cloudflare. Every connection to FreeMemo passes through Cloudflare's network on its way to the server."
+                 "FreeMemo's offsite backups are in Frankfurt, inside the European Economic Area."]]
+        (is (str/includes? text s) s)))
+    (testing "the false claims are gone"
+      (doseq [s ["for good" "Nothing survives that step" "Three companies"]]
+        (is (not (str/includes? text s)) s)))
+    (testing "the updated date is the release date"
+      (is (= "4 November 2026" legal/privacy-updated))
+      (is (str/includes? text "4 November 2026")))))
+
 ;; ---------------------------------------------------------------------------
 ;; Who gets the document. A fixed allowlist, never an inverted browser list: an
 ;; inverted list hands the static page to any browser it fails to recognize.
