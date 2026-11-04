@@ -3523,6 +3523,43 @@
        (str "Schema step " step))
      result)))
 
+(defn- setup-schema-availability!
+  "One row per closed calendar month (UTC): the minutes up, the minutes in the
+   month and the Uptime Target that applied. Operator data, so account transfer
+   excludes it. Prometheus keeps 90 days, so the row is the only record
+   (plans/paying-customer-commitments.md, Step 2)."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS availability_months (
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+      minutes_up INTEGER NOT NULL CHECK (minutes_up >= 0),
+      minutes INTEGER NOT NULL CHECK (minutes > 0),
+      target NUMERIC(5,2) NOT NULL,
+      closed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (year, month)
+    )"]))
+
+(defn store-availability-month!
+  "Store a closed month once. A second call for the same month changes nothing.
+   Returns true when this call inserted the row."
+  [{:keys [year month minutes-up minutes target]}]
+  (pos? (:next.jdbc/update-count
+         (jdbc/execute-one! ds
+           ["INSERT INTO availability_months (year, month, minutes_up, minutes, target)
+             VALUES (?, ?, ?, ?, ?) ON CONFLICT (year, month) DO NOTHING"
+            (int year) (int month) (int minutes-up) (int minutes) (bigdec target)]))))
+
+(defn availability-months
+  "Every stored closed month, newest first, as {:year :month :minutes-up
+   :minutes :target}."
+  []
+  (mapv (fn [r] {:year (:year r) :month (:month r) :minutes-up (:minutes_up r)
+                 :minutes (:minutes r) :target (double (:target r))})
+        (jdbc/execute! ds ["SELECT year, month, minutes_up, minutes, target
+                            FROM availability_months ORDER BY year DESC, month DESC"]
+                       {:builder-fn rs/as-unqualified-maps})))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -3550,6 +3587,7 @@
   (run-schema-step! #'setup-schema-question-pins!)
   (run-schema-step! #'setup-schema-walkthroughs!)
   (run-schema-step! #'setup-schema-known-ideas!)
+  (run-schema-step! #'setup-schema-availability!)
   (run-schema-step! #'setup-schema-pin-numbering!)
   (run-schema-step! #'setup-schema-document-question-maps!)
   ;; Last: it re-points tables that the steps above create.

@@ -106,7 +106,7 @@
 (deftest page-shows-the-current-month-when-prometheus-answers
   (stub-prometheus (prom-answer 1000000)
     (fn [_]
-      (let [response (page/response {:uri "/availability" :request-method :get})
+      (let [response (with-redefs [availability/stored-months (fn [] [])] (page/response {:uri "/availability" :request-method :get}))
             d (doc response)
             text (.text d)]
         (is (= 200 (:status response)))
@@ -127,7 +127,7 @@
     (availability/clear-cache!)
     (stub-prometheus response
       (fn [_]
-        (let [d (doc (page/response {:uri "/availability" :request-method :get}))
+        (let [d (doc (with-redefs [availability/stored-months (fn [] [])] (page/response {:uri "/availability" :request-method :get})))
               text (.text d)]
           (is (str/includes? text "The figures for the current month are not available now. Try again later."))
           (is (empty? (.select d "td")))

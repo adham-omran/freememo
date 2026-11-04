@@ -9,7 +9,8 @@
    Plan: plans/paying-customer-commitments.md, Step 2."
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
-            [freememo.config :as config])
+            [freememo.config :as config]
+            [freememo.db :as db])
   (:import [java.time Duration Instant YearMonth ZoneOffset]))
 
 (def uptime-target
@@ -103,3 +104,81 @@
       (let [value (current-month (Instant/now))]
         (reset! cache {:at t :ttl (if value cache-ttl-ms failure-ttl-ms) :value value})
         value))))
+
+;; ── Closed months ──────────────────────────────────────────────────────
+;; Prometheus keeps 90 days, so a closed month is stored when it ends and the
+;; page reads the stored row. The row keeps the target that applied.
+
+(def first-month
+  "No month before this one shows: Prometheus has no complete month before it."
+  [2026 9])
+
+(def ^:private retention-days
+  "A month is closed from Prometheus only while its first minute is this recent.
+   Prometheus keeps 90 days, and an older month would give a partial count."
+  89)
+
+(defn result
+  "`:met` or `:missed` for a stored month, against the target stored with it.
+   Integer arithmetic: the target in tenths of a percent, so exactly 99.0% is met."
+  [{:keys [minutes-up minutes target]}]
+  (if (>= (* 1000 minutes-up) (* minutes (Math/round (* 10.0 target)))) :met :missed))
+
+(defn closed-row
+  "The row to store for a closed month, or nil when `up` is missing."
+  [year month up target]
+  (when up
+    (let [minutes (minutes-in-month year month)]
+      {:year year :month month :minutes-up (:minutes-up (availability up minutes))
+       :minutes minutes :target target})))
+
+(defn visible-months
+  "From stored `rows` (newest first), the closed months that the page shows at
+   `now`: the three months before the current one, none before `first-month`."
+  [rows ^Instant now]
+  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))]
+    (filterv (fn [{:keys [year month]}]
+               (let [ym (YearMonth/of (int year) (int month))]
+                 (and (.isBefore ym cur)
+                      (not (.isBefore ym (.minusMonths cur 3)))
+                      (not (.isBefore ym (YearMonth/of (int (first first-month)) (int (second first-month))))))))
+             rows)))
+
+(defn stored-months
+  "Every stored closed month, newest first. Empty when the database fails."
+  []
+  (try (db/availability-months)
+       (catch Exception _ [])))
+
+(defn- closed-month-up
+  "Minutes up of a past month, asked of Prometheus at the first instant of the next month."
+  [year month]
+  (let [ym (YearMonth/of (int year) (int month))
+        end (.toInstant (.atStartOfDay (.atDay (.plusMonths ym 1) 1) ZoneOffset/UTC))]
+    (some-> (query-prometheus (probe-query (minutes-in-month year month)) end) minutes-up)))
+
+(defn close-months!
+  "Store each month that has ended, is not stored, and that Prometheus still
+   holds. A month with no answer stays unstored and the next run tries again.
+   The stored row is never changed. Returns the months stored in this run."
+  [^Instant now]
+  (let [cur (YearMonth/from (.atOffset now ZoneOffset/UTC))
+        stored (into #{} (map (juxt :year :month)) (stored-months))
+        floor (.minus now (Duration/ofDays retention-days))]
+    (vec
+     (for [ym (take-while #(.isBefore ^YearMonth % cur)
+                          (iterate #(.plusMonths ^YearMonth % 1)
+                                   (YearMonth/of (int (first first-month)) (int (second first-month)))))
+           :let [y (.getYear ^YearMonth ym) m (.getMonthValue ^YearMonth ym)
+                 start (.toInstant (.atStartOfDay (.atDay ^YearMonth ym 1) ZoneOffset/UTC))]
+           :when (and (not (stored [y m])) (not (.isBefore start floor)))
+           :let [row (closed-row y m (closed-month-up y m) uptime-target)]
+           :when (and row (db/store-availability-month! row))]
+       [y m]))))
+
+(defn close-months-sweep!
+  "Hourly sweep job: close the months that have ended."
+  []
+  (close-months! (Instant/now)))
+
+(db/register-sweep-job! ::close-months #'close-months-sweep!)
