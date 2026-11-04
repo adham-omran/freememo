@@ -39,6 +39,45 @@
        (apply str (map closed-row-html closed))
        "</tbody></table>"))
 
+;; ── Outages ──────────────────────────────────────────────────────────
+
+(def ^:private no-outage "No outage of 15 minutes or more in this month.")
+
+(defn- length-text [minutes]
+  (let [h (quot minutes 60) m (rem minutes 60)
+        unit (fn [n word] (str n " " word (when (not= 1 n) "s")))]
+    (cond (zero? h) (unit m "minute")
+          (zero? m) (unit h "hour")
+          :else (str (unit h "hour") " " (unit m "minute")))))
+
+(def ^:private start-format
+  (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))
+
+(defn- outage-row-html [{:keys [started-at minutes cause]}]
+  (str "<tr><td>" (esc (.format start-format (.atOffset ^java.time.Instant started-at java.time.ZoneOffset/UTC))) "</td>"
+       "<td>" (esc (length-text minutes)) "</td>"
+       "<td>" (esc (get availability/outage-cause-labels cause "Not yet known")) "</td></tr>"))
+
+(defn- outage-section-html [label outages]
+  (str "<section class=\"availability-outages\"><h2>" (esc label) "</h2>"
+       "<h3>Outages of 15 minutes or more</h3>"
+       (if (seq outages)
+         (str "<table class=\"availability-table\"><thead><tr>"
+              "<th scope=\"col\">Start (UTC)</th><th scope=\"col\">Length</th>"
+              "<th scope=\"col\">Cause</th></tr></thead><tbody>"
+              (apply str (map outage-row-html outages))
+              "</tbody></table>")
+         (str "<p>" (esc no-outage) "</p>"))
+       "</section>"))
+
+(defn- outage-sections [current closed outages]
+  (let [by-month (group-by (juxt :year :month) outages)
+        sections (concat (when current [current]) closed)]
+    (apply str
+           (for [row sections]
+             (outage-section-html (month-label row)
+                                  (sort-by :started-at (by-month [(:year row) (:month row)])))))))
+
 (def ^:private style
   (str "<style>"
        ".availability-table { width: 100%; max-width: 760px; border-collapse: collapse; margin-top: 28px; }"
@@ -51,8 +90,10 @@
 
 (defn page-html
   "Render the page for `current`, a map from `availability/current-month` or nil,
-   and `closed`, the stored months to show, newest first."
-  [current closed]
+   `closed`, the stored months to show (newest first), and `outages`, the stored
+   outages. Each shown month lists its outages."
+  ([current closed] (page-html current closed []))
+  ([current closed outages]
   (str "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
        "<title>Availability</title>"
@@ -64,9 +105,10 @@
        "<main id=\"content\" class=\"docs-main\"><h1>Availability</h1>"
        "<p class=\"availability-lead\">" (esc lead) "</p>"
        (when (or current (seq closed)) (table current closed))
+       (when (or current (seq closed)) (outage-sections current closed outages))
        (when-not current
          (str "<p class=\"availability-note\" role=\"status\">" (esc not-available) "</p>"))
-       "</main></body></html>"))
+       "</main></body></html>")))
 
 (defn response
   "Return the availability page for GET and HEAD /availability, 405 for another
@@ -82,5 +124,6 @@
                (= :head request-method) ""
                allowed? (page-html (availability/cached-current-month)
                           (availability/visible-months (availability/stored-months)
-                                                       (or now (java.time.Instant/now))))
+                                                       (or now (java.time.Instant/now)))
+                          (availability/stored-outages))
                :else "Method not allowed")})))
