@@ -339,8 +339,8 @@
 
 (defn estimated-cost
   "The price sheet of an exam over this source (assessment/estimated-cost).
-   Post: the sheet, or nil when the source has no text or the
-   model has no price."
+   Post: the sheet ({:none true …} when the model has no price), or nil
+   when the source has no text."
   [user-id topic-id]
   (try
     (let [{:keys [materials]} (source-snapshot user-id topic-id)]

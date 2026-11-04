@@ -362,9 +362,9 @@
                (update-in form [:blueprint :unassessed_outcomes] (fnil conj [])
                  {:id "source-snapshot-limit"
                   :statement "Source text outside the assessment snapshot."
-                  :reason (str (:omitted_characters limits)
+                  :reason (str (credits/group-digits (:omitted_characters limits))
                             " source characters were omitted. The assessment includes at most "
-                            max-source-characters " source characters in total. "
+                            (credits/group-digits max-source-characters) " source characters in total. "
                             "This assessment does not establish coverage of the omitted text.")})
                form)]
     (if (pos? (:omitted_facts limits))
@@ -875,31 +875,48 @@
               (throw (ex-info (ex-message e) (assoc (ex-data e) :charged-credits (charge-total @charges)) e))
               (throw e))))))))
 
+(defn source-overflow
+  "How much of evidence's source text an exam would leave out, before any call.
+   Counts what bounded-evidence counts, so the figure shown before generation
+   is the figure the form records after it.
+   Pre:  evidence holds :materials.
+   Post: {:source-characters :omitted-characters}; omitted is 0 when the
+         source fits in max-source-characters."
+  [evidence]
+  (let [total (reduce + (map #(count (str (:text %))) (mapcat :evidence (:materials evidence))))]
+    {:source-characters total
+     :omitted-characters (max 0 (- total max-source-characters))}))
+
 (defn estimated-cost
   "The price sheet for an exam over evidence, before any call: what the
-   input costs, and what one output token costs. exam-grid/estimate turns it
-   into a cost for a length, so the slider can move without a server call.
+   input costs, what one output token costs, and how much source text the
+   exam would leave out. exam-grid/estimate turns it into a cost for a
+   length, so the slider can move without a server call.
    Pre:  evidence holds :materials.
-   Post: {:model :input-usd :usd-per-output-token :credits-per-usd}, or nil
-         when the model has no price. :credits-per-usd is nil when credits are
-         off or unconfigured. Both calls read the whole source
-         (plans/blueprint-first-exams.md §9)."
+   Post: {:model :input-usd :usd-per-output-token :credits-per-usd
+          :source-characters :omitted-characters}, or {:none true
+          :source-characters :omitted-characters} when the model has no
+          price, so the omission warning shows either way. :credits-per-usd
+          is nil when credits are off or unconfigured. Both calls read the
+          whole source (plans/blueprint-first-exams.md §9)."
   [user-id evidence]
-  (let [model-id (settings/get-kg-model user-id :synthesis)
+  (let [overflow (source-overflow evidence)
+        model-id (settings/get-kg-model user-id :synthesis)
         {:keys [input output]} (:usd-per-mtok (card-models/resolve-model model-id))]
-    (when (and input output)
-      (let [source-chars (min max-source-characters
-                           (reduce + (map #(count (str (:text %))) (mapcat :evidence (:materials evidence)))))
-            prompt-chars (+ (count (cards/load-prompt-template "assessment-blueprint.md"))
-                            (count (cards/load-prompt-template "assessment-questions.md")))
-            input-tokens (+ (* 2 (/ source-chars 3.0)) (/ prompt-chars 3.0))
-            credits-per-usd (when (config/credits-enabled?)
-                              (try (credits/charge-iqd-from-usd user-id 1000.0)
-                                   (catch Exception _ nil)))]
-        {:model model-id
-         :input-usd (* input-tokens (/ input 1e6))
-         :usd-per-output-token (/ output 1e6)
-         :credits-per-usd (some-> credits-per-usd (/ 1000.0))}))))
+    (merge overflow
+      (if (and input output)
+        (let [source-chars (min max-source-characters (:source-characters overflow))
+              prompt-chars (+ (count (cards/load-prompt-template "assessment-blueprint.md"))
+                              (count (cards/load-prompt-template "assessment-questions.md")))
+              input-tokens (+ (* 2 (/ source-chars 3.0)) (/ prompt-chars 3.0))
+              credits-per-usd (when (config/credits-enabled?)
+                                (try (credits/charge-iqd-from-usd user-id 1000.0)
+                                     (catch Exception _ nil)))]
+          {:model model-id
+           :input-usd (* input-tokens (/ input 1e6))
+           :usd-per-output-token (/ output 1e6)
+           :credits-per-usd (some-> credits-per-usd (/ 1000.0))})
+        {:none true}))))
 
 (defn normalized-score
   "Return an integer percentage from earned and possible points."
