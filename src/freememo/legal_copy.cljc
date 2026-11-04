@@ -136,7 +136,7 @@
            {:p "No other company receives your data."}]}
 
    {:heading "Where your data goes"
-    :body [{:p "FreeMemo runs its servers outside the European Economic Area, and the three companies above are outside it as well."}
+    :body [{:p "FreeMemo runs its servers outside the European Economic Area. OpenRouter, Google, Wayl and Cloudflare are outside it as well."}
            {:p "FreeMemo relies on the European Commission's Standard Contractual Clauses for those transfers."}
            {:p "FreeMemo's offsite backups are in Frankfurt, inside the European Economic Area."}]}
 
