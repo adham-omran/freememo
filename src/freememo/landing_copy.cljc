@@ -55,7 +55,11 @@
    :commitments/items [["Support from the developer"
                         "Your email goes to the developer, not to a queue. You get a reply within 3 working days, or within 1 working day if you made a purchase in the last 12 months. Working days are Saturday to Wednesday."]
                        ["Pay for what you use"
-                        "There is no subscription. Hosted AI and stored files spend credits. We announce a price change at least 7 days before it starts, in the changelog and in the update email. Credits you already bought keep their balance."]]})
+                        "There is no subscription. Hosted AI and stored files spend credits. We announce a price change at least 7 days before it starts, in the changelog and in the update email. Credits you already bought keep their balance."]
+                       ["Availability you can check"
+                        [{:t "FreeMemo aims for 99.0% availability in each calendar month, measured from the public internet. The "}
+                         {:t "availability page" :href "/availability"}
+                         {:t " shows the result for each month, including any month we miss. This is a target, not a guarantee, and a missed month gives no refund."}]]]})
 
 (def loops
   "Three parts of the study workflow. Each entry is
@@ -100,6 +104,16 @@
    ["Built to be driven"
     "Use the Cmd/Ctrl-K palette and shortcuts to scan, extract, generate, and push. Action history can undo supported edits and deletions. Topic deletion has a 12-hour undo window; entity merges cannot be undone."]])
 
+(defn link-props
+  "The anchor props of a link part. A path on this site, such as `/availability`,
+   opens in the same tab. Any other href, including a `//host` one, opens in a
+   new tab. The map always holds the same three keys, and no value is nil,
+   because Electric renders a nil prop as the text null."
+  [href]
+  (if (and (= \/ (first href)) (not= \/ (second href)))
+    {:href href :target "_self" :rel "noopener"}
+    {:href href :target "_blank" :rel "noopener"}))
+
 (def faq-items
   "Questions and answers, each [question answer].
 
@@ -116,6 +130,10 @@
     "Quiz questions stay in FreeMemo. Quiz also reviews basic and cloze cards on a FreeMemo schedule. You can optionally sync cards to Anki, where Anki schedules them separately. A review in one app does not mean a review in the other."]
    ["What can I import?"
     "Documents include PDFs, EPUBs, HTML, Markdown, web articles, Wikipedia, Google Docs, and built Sphinx sites. You can also paste text, photograph pages, transcribe audio or video playlists, and pair sheet music with a recording. Other paths include Zotero PDFs, SuperMemo exports, poem packages, FreeMemo account archives, and Clojure repositories from GitHub, GitLab, Forgejo, or a .zip file."]
+   ["What happens if FreeMemo goes down?"
+    [{:t "FreeMemo aims for 99.0% availability in each calendar month. The "}
+     {:t "availability page" :href "/availability"}
+     {:t " shows the result for the current month and the three months before it. Outages of 15 minutes or more are listed there with their cause."}]]
    ["Can I run it offline or self-host?"
     [{:t "Self-host, yes — the "}
      {:t "codebase" :href "https://github.com/adham-omran/freememo"}
