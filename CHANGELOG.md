@@ -9,7 +9,7 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## v20261104-privacy-correction
+## v20261104-94686ab
 
 ### For users
 
