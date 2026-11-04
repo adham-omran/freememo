@@ -35,8 +35,3 @@
     (is (= "Account: a&b+c d@x.test\n\n\n" (query-param href "body")))
     (is (not (str/includes? (second (str/split href #"\?" 2)) "+"))
         "a plus sign is %2B or the client reads it as a space")))
-
-(deftest the-account-is-the-email-or-else-the-username
-  (is (= "ann@example.test" (cs/account-label {:email "ann@example.test" :username "ann"})))
-  (is (= "ann" (cs/account-label {:email nil :username "ann"})))
-  (is (= "ann" (cs/account-label {:email "  " :username "ann"}))))

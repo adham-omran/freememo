@@ -13,14 +13,6 @@
 
 (def support-address "contact@adham-omran.com")
 
-(defn account-label
-  "The account as the mail body names it: the email, or the username when the
-   account has no email. `user` is a map with :email and :username."
-  [{:keys [email username]}]
-  (if (and (string? email) (not (str/blank? email)))
-    email
-    username))
-
 (defn reply-line
   "The line under the link. `paying?` is the Paying Customer boolean."
   [paying?]
@@ -34,7 +26,7 @@
      :cljs (js/encodeURIComponent s)))
 
 (defn mailto-href
-  "The mailto: URL. `account` is the label from `account-label`."
+  "The mailto: URL. `account` is the label from `freememo.db/support-contact`."
   [paying? account]
   (str "mailto:" support-address
        "?subject=" (encode (if paying? "[Paid] FreeMemo support" "FreeMemo support"))

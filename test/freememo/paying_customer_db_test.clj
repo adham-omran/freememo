@@ -68,9 +68,12 @@
   (if-not (db-up?)
     (println "SKIP: no database")
     (let [with-email (new-user! "ann@example.test")
-          no-email (new-user! nil)]
+          no-email (new-user! nil)
+          blank-email (new-user! "  ")]
       (order! with-email "credits" "complete" "now()")
       (is (= {:paying? true :account "ann@example.test"} (db/support-contact with-email)))
       (let [c (db/support-contact no-email)]
         (is (false? (:paying? c)))
-        (is (re-find #"^paying-" (:account c)) "the username stands in for a missing email")))))
+        (is (re-find #"^paying-" (:account c)) "the username stands in for a missing email"))
+      (is (re-find #"^paying-" (:account (db/support-contact blank-email)))
+          "the username stands in for a blank email"))))
