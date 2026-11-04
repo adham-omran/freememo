@@ -141,7 +141,7 @@
 
 (def ^:private description
   "Duplicated from index.prod.html, per the T3 decision. Mirror any change."
-  "Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, free during early access.")
+  "Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, no subscription.")
 
 (def ^:private og-image (str canonical-url "freememo/landing-hero.png"))
 
@@ -293,12 +293,10 @@
        (str/join (for [[q a] lc/faq-items]
                    (str (tag "h3" (esc q)) (tag "p" (fragments-html a)))))))
 
-(defn- pact-html []
-  (str (tag "h2" (esc (:pact/title lc/copy)))
-       (tag "h3" (esc (:pact/benefits-heading lc/copy)))
-       (items (:pact/benefits lc/copy))
-       (tag "h3" (esc (:pact/limits-heading lc/copy)))
-       (items (:pact/limits lc/copy))
+(defn- commitments-html []
+  (str (tag "h2" (esc (:commitments/title lc/copy)))
+       (str/join (for [[heading text] (:commitments/items lc/copy)]
+                   (str (tag "h3" (esc heading)) (tag "p" (fragments-html text)))))
        ;; The Electric page composes this line around a mailto link, so the
        ;; sentence is this namespace's own.
        (tag "p" (str (esc "Questions, bug reports, or feature ideas: ")
@@ -320,7 +318,7 @@
        "<body>"
        (tag "main"
          (str (hero-html) (loops-html) (objection-html)
-              (features-html) (faq-html) (pact-html)))
+              (features-html) (faq-html) (commitments-html)))
        (tag "footer"
          (str (link "https://github.com/adham-omran/freememo" "Source")
               " "

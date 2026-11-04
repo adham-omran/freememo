@@ -85,7 +85,7 @@
                          ["objection title" (:objection/title lc/copy)]
                          ["features title" (:features/title lc/copy)]
                          ["faq title" (:faq/title lc/copy)]
-                         ["pact title" (:pact/title lc/copy)]]]
+                         ["commitments title" (:commitments/title lc/copy)]]]
         (is (str/includes? text s) label))
       (testing "and the data-driven blocks, not only the headings"
         (is (str/includes? text (first (first lc/features))))
@@ -101,16 +101,63 @@
   (testing "and the surrounding fragments are still there"
     (is (str/includes? (visible-text document) "Self-host, yes"))))
 
+(deftest commitments-section-replaces-the-pact
+  ;; The expected words come from plans/paying-customer-commitments.md, "Final
+  ;; text", not from `lc/copy`, so a copy edit that drifts from the approved
+  ;; text fails here.
+  (let [text (visible-text document)]
+    (doseq [s ["What you can count on"
+               "Support from the developer"
+               "Your email goes to the developer, not to a queue."
+               "Pay for what you use"
+               "Credits you already bought keep their balance."
+               "Questions, bug reports, or feature ideas:"]]
+      (is (str/includes? text s) s))))
+
+(deftest commitment-items-that-carry-links-survive
+  ;; Today's items are strings. The availability item will carry a link, so the
+  ;; renderer must take the parts shape before that item exists.
+  (let [doc (with-redefs [lc/copy (assoc lc/copy :commitments/items
+                                         [["Linked item" [{:t "Read the "}
+                                                          {:t "probe page" :href "/probe-target"}
+                                                          {:t " for details."}]]])]
+              (crawler-page/landing-document))]
+    (is (str/includes? doc "href=\"/probe-target\""))
+    (is (str/includes? doc ">probe page</a>"))
+    (is (str/includes? (visible-text doc) "Read the probe page for details."))))
+
+(def ^:private maturity-words
+  "Words that describe FreeMemo as unfinished. FreeMemo has paying customers,
+   and plans/paying-customer-commitments.md took this framing out of every
+   public text. `\\bpact\\b` keeps `compact` and `impact` legal."
+  #"(?i)pre-production|early access|early-user|\bpact\b")
+
+(defn- strings-in
+  "Every string anywhere inside `x`."
+  [x]
+  (filter string? (tree-seq coll? seq x)))
+
+(deftest no-public-text-calls-freememo-unfinished
+  (testing "the landing copy, as data"
+    (doseq [s (strings-in [lc/copy lc/loops lc/features lc/faq-items])]
+      (is (not (re-find maturity-words s)) s)))
+  (testing "the crawler document, which also holds its own inline prose"
+    (is (not (re-find maturity-words document))))
+  (testing "both app shells, whose meta tags a link preview reads"
+    (doseq [shell ["public/freememo/index.prod.html" "public/freememo/index.dev.html"]]
+      (is (not (re-find maturity-words (slurp (io/resource shell)))) shell))))
+
 (deftest document-escapes-every-value
   (testing "no stray angle bracket from a copy string"
     ;; Every value passes through `esc`. Counting tags is the cheap proxy: an
     ;; unescaped `<` in copy would open a tag that never closes.
     (is (= (count (re-seq #"<" document)) (count (re-seq #">" document)))))
 
-  (testing "the quoted phrase in the FAQ question does not break the markup"
-    ;; faq-items holds `What "pre-production" actually means`, whose quotes would
-    ;; end an attribute if a value ever landed in one unescaped.
-    (is (str/includes? document "&quot;pre-production&quot;"))))
+  (testing "a quote in a copy value cannot end an attribute"
+    ;; The copy held a quoted FAQ question until the pre-production entry went,
+    ;; so the escape is tested on its own rather than through today's copy.
+    (is (= "say &quot;hi&quot; &amp; &lt;b&gt;"
+           (#'crawler-page/esc "say \"hi\" & <b>")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Head drift. The title, description, Open Graph values and JSON-LD are

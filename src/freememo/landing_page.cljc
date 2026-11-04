@@ -1,7 +1,7 @@
 (ns freememo.landing-page
   "Public landing page for unauthenticated visitors. Multi-section page:
    hero → three-loop diagram → objection rebuttal → feature grid → FAQ →
-   early-user pact → footer.
+   commitments → footer.
 
    The page describes reading, in-app practice, and optional Anki sync.
    Every factual claim must trace to a shipped capability.
@@ -203,6 +203,21 @@
               (dom/h3 (dom/props {:class "landing-feature-title"}) (dom/text title))
               (dom/p (dom/props {:class "landing-feature-desc"}) (dom/text desc)))))))))
 
+(e/defn TextRun
+  "A text run, which is a string or a vector of `{:t :href}` parts.
+   Post: link parts become anchors and plain parts become text, in order.
+   The FAQ answers and the commitment items are both this shape, so both read
+   it here. `crawler-page/fragments-html` is the crawler's equivalent."
+  [run]
+  (e/client
+    (if (string? run)
+      (dom/text run)
+      (e/for-by :t [frag run]
+        (if (:href frag)
+          (dom/a (dom/props {:href (:href frag) :target "_blank" :rel "noopener"})
+            (dom/text (:t frag)))
+          (dom/text (:t frag)))))))
+
 (e/defn FAQ []
   (e/client
     (dom/section
@@ -218,37 +233,28 @@
               (dom/props {:class "landing-faq-item"})
               (dom/h3 (dom/props {:class "landing-faq-q"}) (dom/text q))
               (dom/p (dom/props {:class "landing-faq-a"})
-                (if (string? a)
-                  (dom/text a)
-                  (e/for-by :t [frag a]
-                    (if (:href frag)
-                      (dom/a (dom/props {:href (:href frag) :target "_blank" :rel "noopener"})
-                        (dom/text (:t frag)))
-                      (dom/text (:t frag)))))))))))))
+                (TextRun a)))))))))
 
-(e/defn EarlyUserPact []
+(e/defn Commitments []
   (e/client
     (dom/section
-      (dom/props {:class "landing-pact"})
+      (dom/props {:class "landing-commitments"})
       (dom/div
-        (dom/props {:class "landing-pact-card"})
+        (dom/props {:class "landing-commitments-card"})
         (dom/h2
-          (dom/props {:class "landing-pact-title"})
-          (dom/text (:pact/title lc/copy)))
+          (dom/props {:class "landing-commitments-title"})
+          (dom/text (:commitments/title lc/copy)))
         (dom/div
-          (dom/props {:class "landing-pact-grid"})
-          (dom/div
-            (dom/h4 (dom/props {:class "landing-pact-h"}) (dom/text (:pact/benefits-heading lc/copy)))
-            (dom/ul
-              (e/for-by identity [b (:pact/benefits lc/copy)]
-                (dom/li (dom/text b)))))
-          (dom/div
-            (dom/h4 (dom/props {:class "landing-pact-h"}) (dom/text (:pact/limits-heading lc/copy)))
-            (dom/ul
-              (e/for-by identity [l (:pact/limits lc/copy)]
-                (dom/li (dom/text l))))))
+          (dom/props {:class "landing-commitments-grid"})
+          (e/for-by first [item (:commitments/items lc/copy)]
+            (let [[heading text] item]
+              (dom/div
+                (dom/props {:class "landing-commitments-item"})
+                (dom/h3 (dom/props {:class "landing-commitments-h"}) (dom/text heading))
+                (dom/p (dom/props {:class "landing-commitments-text"})
+                  (TextRun text))))))
         (dom/p
-          (dom/props {:class "landing-pact-contact"})
+          (dom/props {:class "landing-commitments-contact"})
           (dom/text "Questions, bug reports, or feature ideas: ")
           (dom/a
             (dom/props {:href "mailto:contact@adham-omran.com"})
@@ -281,5 +287,5 @@
         (Objection)
         (Features)
         (FAQ)
-        (EarlyUserPact))
+        (Commitments))
       (Footer auth-mode))))

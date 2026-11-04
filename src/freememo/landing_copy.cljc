@@ -47,15 +47,15 @@
 
    :faq/title "Questions"
 
-   :pact/title "The early-user pact"
-   :pact/benefits-heading "What you get"
-   :pact/benefits ["Direct line to the team. Bug reports and feature requests land on the developer's screen, not in a queue."
-                   "Your feedback ships into the product on a scale of days, not quarters."
-                   "No app subscription during pre-production. Hosted AI and configured storage charges use credits."]
-   :pact/limits-heading "What we don't promise"
-   :pact/limits ["No SLA. The server might be down for an hour."
-                 "No data warranty. Export your cards to Anki regularly."
-                 "No long-term price guarantee. Credit prices and access terms may change."]})
+   ;; Each item is [heading text]. The text is a string or a vector of
+   ;; `{:t :href}` parts, the same shape as an FAQ answer, so an item can carry a
+   ;; link. Every claim here is a commitment to paying customers: see
+   ;; plans/paying-customer-commitments.md before you add or soften one.
+   :commitments/title "What you can count on"
+   :commitments/items [["Support from the developer"
+                        "Your email goes to the developer, not to a queue. You get a reply within 3 working days, or within 1 working day if you made a purchase in the last 12 months. Working days are Saturday to Wednesday."]
+                       ["Pay for what you use"
+                        "There is no subscription. Hosted AI and stored files spend credits. We announce a price change at least 7 days before it starts, in the changelog and in the update email. Credits you already bought keep their balance."]]})
 
 (def loops
   "Three parts of the study workflow. Each entry is
@@ -107,7 +107,7 @@
    `{:t text}`, optionally with `:href`. Both renderers must handle both shapes —
    a renderer that assumes a string drops the answer that has a link."
   [["What does it cost?"
-    "There is no app subscription during pre-production. Hosted AI calls spend credits, including OCR, card generation, transcription, fact distillation, and answer grading. When hosted storage metering is enabled, stored files also spend credits over time, even with AI off. Settings shows the storage rate and credit balance. With storage metering enabled, a zero balance pauses video playback and starts a grace period. Video files can be removed after that period; transcripts, extracts, and cards stay. Self-hosting uses your own OpenRouter key and storage configuration."]
+    "There is no subscription. Hosted AI calls spend credits, including OCR, card generation, transcription, fact distillation, and answer grading. When hosted storage metering is enabled, stored files also spend credits over time, even with AI off. Settings shows the storage rate and credit balance. With storage metering enabled, a zero balance pauses video playback and starts a grace period. Video files can be removed after that period; transcripts, extracts, and cards stay. Self-hosting uses your own OpenRouter key and storage configuration."]
    ["Where does my reading go?"
     "In the hosted app, your documents, extracted text, and cards live on the FreeMemo server, tied to your account. A Zotero import goes there once you pick it. Anki sync pushes copies into your local collection over AnkiConnect, and edits you make there pull back. Your browser connects to Zotero and Anki locally. Self-hosted and desktop local libraries use the storage you run."]
    ["Will my cards work in regular Anki?"
@@ -119,6 +119,4 @@
    ["Can I run it offline or self-host?"
     [{:t "Self-host, yes — the "}
      {:t "codebase" :href "https://github.com/adham-omran/freememo"}
-     {:t " runs locally with Postgres and a JVM, so your reading and cards can live on your own machine. The desktop app also has a local mode without sign-in or sync. That mode is still in testing. AI features such as OCR, generation, transcription, and grading need an internet connection. Desktop local mode hides AI features until you sign in."}]]
-   ["What does \"pre-production\" actually mean for me?"
-    "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
+     {:t " runs locally with Postgres and a JVM, so your reading and cards can live on your own machine. The desktop app also has a local mode without sign-in or sync. That mode is still in testing. AI features such as OCR, generation, transcription, and grading need an internet connection. Desktop local mode hides AI features until you sign in."}]]])
