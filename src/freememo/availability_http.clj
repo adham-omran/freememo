@@ -22,14 +22,22 @@
 (defn- month-label [{:keys [year month]}]
   (str (.getDisplayName (Month/of (int month)) TextStyle/FULL Locale/ENGLISH) " " year))
 
-(defn- table [current]
+(defn- row-html [label percent target result]
+  (str "<tr><td>" (esc label) "</td><td>" (esc (availability/format-percent percent)) "</td>"
+       "<td>" (esc (str target "%")) "</td><td>" result "</td></tr>"))
+
+(defn- closed-row-html [{:keys [minutes-up minutes target] :as row}]
+  (row-html (month-label row) (* 100.0 (/ (double minutes-up) minutes)) target
+            (if (= :met (availability/result row)) "Met" "Missed")))
+
+(defn- table [current closed]
   (str "<table class=\"availability-table\"><thead><tr>"
        "<th scope=\"col\">Month</th><th scope=\"col\">Availability</th>"
-       "<th scope=\"col\">Target</th><th scope=\"col\">Result</th></tr></thead><tbody><tr>"
-       "<td>" (esc (month-label current)) "</td>"
-       "<td>" (esc (availability/format-percent (:percent current))) "</td>"
-       "<td>" (esc (str availability/uptime-target "%")) "</td>"
-       "<td>In progress</td></tr></tbody></table>"))
+       "<th scope=\"col\">Target</th><th scope=\"col\">Result</th></tr></thead><tbody>"
+       (when current
+         (row-html (month-label current) (:percent current) availability/uptime-target "In progress"))
+       (apply str (map closed-row-html closed))
+       "</tbody></table>"))
 
 (def ^:private style
   (str "<style>"
@@ -42,8 +50,9 @@
        "</style>"))
 
 (defn page-html
-  "Render the page for `current`, a map from `availability/current-month`, or nil."
-  [current]
+  "Render the page for `current`, a map from `availability/current-month` or nil,
+   and `closed`, the stored months to show, newest first."
+  [current closed]
   (str "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
        "<title>Availability</title>"
@@ -54,15 +63,15 @@
        "<header class=\"docs-header\"><a class=\"docs-brand\" href=\"/\">FreeMemo</a></header>"
        "<main id=\"content\" class=\"docs-main\"><h1>Availability</h1>"
        "<p class=\"availability-lead\">" (esc lead) "</p>"
-       (if current
-         (table current)
+       (when (or current (seq closed)) (table current closed))
+       (when-not current
          (str "<p class=\"availability-note\" role=\"status\">" (esc not-available) "</p>"))
        "</main></body></html>"))
 
 (defn response
   "Return the availability page for GET and HEAD /availability, 405 for another
    method, and nil for another route."
-  [{:keys [uri request-method]}]
+  [{:keys [uri request-method now]}]
   (when (= "/availability" uri)
     (let [allowed? (contains? #{nil :get :head} request-method)]
       {:status (if allowed? 200 405)
@@ -71,5 +80,7 @@
                   (not allowed?) (assoc "Allow" "GET, HEAD"))
        :body (cond
                (= :head request-method) ""
-               allowed? (page-html (availability/cached-current-month))
+               allowed? (page-html (availability/cached-current-month)
+                          (availability/visible-months (availability/stored-months)
+                                                       (or now (java.time.Instant/now))))
                :else "Method not allowed")})))
