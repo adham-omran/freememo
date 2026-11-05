@@ -1,6 +1,7 @@
 (ns freememo.contact-support
   "Contact support link for Help and Settings
-   (plans/paying-customer-commitments.md, \"Contact support\").
+   (plans/paying-customer-commitments.md, \"Contact support\"), and the line that
+   links the availability page.
 
    The text functions are pure. The server decides who is a Paying Customer
    (freememo.db/support-contact). The client gets the boolean and the account
@@ -19,6 +20,15 @@
   (str "You get a reply within "
        (if paying? "1 working day" "3 working days")
        ". Working days are Saturday to Wednesday."))
+
+(def availability-href "/availability")
+
+(def availability-line
+  "The line under the reply time: [before link-text after]. A signed-in user
+   never sees the landing page, so this is the app's way to the availability
+   page. No command palette entry: the page is outside the app, and Help and
+   Settings both show this line."
+  ["The " "availability page" " shows FreeMemo's availability for each month."])
 
 (defn- encode [s]
   #?(:clj (-> (java.net.URLEncoder/encode ^String s "UTF-8")
@@ -41,7 +51,7 @@
                 (peek (e/as-vec (e/server (e/Offload #(db/support-contact user-id)))))]
       (dom/div
         (dom/props {:class "contact-support"
-                    :style {:margin-top "16px" :font-size "13px"}})
+                    :style {:margin "16px 0" :font-size "13px"}})
         (dom/a
           (dom/props {:href (mailto-href paying? account)
                       :style {:color "var(--color-primary-text)" :font-weight "600"
@@ -49,4 +59,15 @@
           (dom/text "Contact support"))
         (dom/p
           (dom/props {:style {:margin "4px 0 0" :color "var(--color-text-secondary)"}})
-          (dom/text (reply-line paying?)))))))
+          (dom/text (reply-line paying?)))
+        ;; A new tab, so that the user keeps their place in the app.
+        (let [[before link after] availability-line]
+          (dom/p
+            (dom/props {:class "contact-support-availability"
+                        :style {:margin "4px 0 0" :color "var(--color-text-secondary)"}})
+            (dom/text before)
+            (dom/a
+              (dom/props {:href availability-href :target "_blank" :rel "noopener"
+                          :style {:color "var(--color-primary-text)" :text-decoration "underline"}})
+              (dom/text link))
+            (dom/text after)))))))
