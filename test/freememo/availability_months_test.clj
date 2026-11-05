@@ -121,6 +121,7 @@
 
 (deftest page-shows-stored-months-and-the-current-month
   (with-redefs [availability/stored-months (fn [] stored)
+                availability/stored-outages (fn [] [])
                 http/get (fn [& _] (prom-body 1000000))]
     (let [d (Jsoup/parse (:body (page/response {:uri "/availability" :request-method :get :now (at "2026-11-04T10:00:00Z")})))
           rows (rows-of d)]
@@ -132,6 +133,7 @@
 
 (deftest page-shows-stored-months-when-prometheus-fails
   (with-redefs [availability/stored-months (fn [] stored)
+                availability/stored-outages (fn [] [])
                 http/get (fn [& _] {:status 500 :body "boom"})]
     (let [d (Jsoup/parse (:body (page/response {:uri "/availability" :request-method :get :now (at "2026-11-04T10:00:00Z")})))
           text (.text d)]

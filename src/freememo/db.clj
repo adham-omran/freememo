@@ -3561,11 +3561,14 @@
                        {:builder-fn rs/as-unqualified-maps})))
 
 (def outage-cause-labels
-  "The four causes an outage can have, as stored, each with the label that the
-   page shows."
+  "The causes an outage can have, as stored, each with the label that the page
+   shows. The table's CHECK constraint is built from these keys.
+   `government-internet-shutdown` is the internet shutdown that the government
+   of Iraq orders on national school exam days."
   {"server-internet-provider" "Server internet provider"
    "network-tunnel" "Network tunnel"
    "freememo-server" "FreeMemo server"
+   "government-internet-shutdown" "Iraq's exam-day internet shutdown"
    "not-yet-known" "Not yet known"})
 
 (def outage-causes
@@ -3584,11 +3587,17 @@
       year INTEGER NOT NULL,
       month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
       minutes INTEGER NOT NULL CHECK (minutes >= 15),
-      cause TEXT NOT NULL DEFAULT 'not-yet-known'
-        CHECK (cause IN ('server-internet-provider', 'network-tunnel',
-                         'freememo-server', 'not-yet-known')),
+      cause TEXT NOT NULL DEFAULT 'not-yet-known',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )"]))
+    )"])
+  ;; CREATE TABLE IF NOT EXISTS never alters a live table, so the CHECK is set
+  ;; here on every boot. A new cause in `outage-cause-labels` reaches it with no
+  ;; other edit. The keys are constants in this file, never user input.
+  (jdbc/execute! ds ["ALTER TABLE availability_outages DROP CONSTRAINT IF EXISTS availability_outages_cause_check"])
+  (jdbc/execute! ds [(str "ALTER TABLE availability_outages ADD CONSTRAINT availability_outages_cause_check
+                           CHECK (cause IN ("
+                          (str/join ", " (map #(str "'" % "'") (sort outage-causes)))
+                          "))")]))
 
 (defn store-availability-outage!
   "Store an outage with its month. A known start keeps its cause and its
@@ -3621,6 +3630,19 @@
   (pos? (:next.jdbc/update-count
          (jdbc/execute-one! ds
            ["UPDATE availability_outages SET cause = ? WHERE started_at = ?"
+            cause (java.sql.Timestamp/from started-at)]))))
+
+(defn fill-availability-outage-cause!
+  "Set the cause of the outage that started at `started-at`, but only while its
+   cause is still not-yet-known, so that a cause set by hand wins. Returns true
+   when a row changed. Throws for a cause outside `outage-causes`."
+  [started-at cause]
+  (when-not (contains? outage-causes cause)
+    (throw (ex-info "Unknown outage cause" {:cause cause :allowed outage-causes})))
+  (pos? (:next.jdbc/update-count
+         (jdbc/execute-one! ds
+           ["UPDATE availability_outages SET cause = ?
+             WHERE started_at = ? AND cause = 'not-yet-known'"
             cause (java.sql.Timestamp/from started-at)]))))
 
 (defn setup-schema []

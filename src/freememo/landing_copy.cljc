@@ -59,7 +59,7 @@
                        ["Availability you can check"
                         [{:t "FreeMemo aims for 99.0% availability in each calendar month, measured from the public internet. The "}
                          {:t "availability page" :href "/availability"}
-                         {:t " shows the result for each month, including any month we miss. This is a target, not a guarantee, and a missed month gives no refund."}]]]})
+                         {:t " shows the result for each month, including any month we miss. This is a target, not a guarantee."}]]]})
 
 (def loops
   "Three parts of the study workflow. Each entry is

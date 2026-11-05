@@ -11,7 +11,7 @@
 (def ^:private lead
   (str "FreeMemo aims for 99.0% availability in each calendar month, in UTC. Availability is the "
        "share of minutes in which a probe on the public internet reached FreeMemo. A minute with no "
-       "measurement counts as down. This is a target, not a guarantee, and a missed month gives no refund."))
+       "measurement counts as down. This is a target, not a guarantee."))
 
 (def ^:private not-available
   "The figures for the current month are not available now. Try again later.")

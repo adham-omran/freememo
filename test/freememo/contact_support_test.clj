@@ -35,3 +35,10 @@
     (is (= "Account: a&b+c d@x.test\n\n\n" (query-param href "body")))
     (is (not (str/includes? (second (str/split href #"\?" 2)) "+"))
         "a plus sign is %2B or the client reads it as a space")))
+
+(deftest the-availability-line-names-the-page-and-links-it
+  (let [[before link after] cs/availability-line]
+    (is (= "The availability page shows FreeMemo's availability for each month."
+           (str before link after)))
+    (is (= "availability page" link))
+    (is (= "/availability" cs/availability-href))))

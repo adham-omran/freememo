@@ -144,7 +144,7 @@
         (with-redefs [http/get (fn [& _] {:status 500 :body ""})]
           (is (str/includes? (:body (page/response {:uri "/availability" :request-method :get :now (at now-s)}))
                              "Network tunnel")))
-        (testing "a value outside the four causes is rejected and changes nothing"
+        (testing "a value outside the causes is rejected and changes nothing"
           (is (thrown? clojure.lang.ExceptionInfo (availability/set-outage-cause! start :weather)))
           (is (thrown? clojure.lang.ExceptionInfo (availability/set-outage-cause! start "Network tunnel")))
           (is (= ["network-tunnel"] (causes))))
@@ -155,6 +155,51 @@
             (availability/store-outages! (at now-s)))
           (is (= ["network-tunnel"] (causes)))))
       (clean!))))
+
+(deftest an-exam-day-shutdown-is-a-cause
+  ;; The table on a live install was created with only the first four causes. The
+  ;; schema step must widen its CHECK, or the UPDATE below throws.
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (do
+      (clean!)
+      (db/store-availability-month! {:year 2026 :month 10 :minutes-up 44194 :minutes 44640 :target 99.0})
+      (with-redefs [http/get (range-body [[1000 1035]])]
+        (availability/store-outages! (at now-s)))
+      (let [start (str (Instant/ofEpochSecond (+ oct-start (* 60 1000))))]
+        (is (true? (availability/set-outage-cause! start :government-internet-shutdown)))
+        (is (= ["government-internet-shutdown"] (mapv :cause (db/availability-outages))))
+        (with-redefs [http/get (fn [& _] {:status 500 :body ""})]
+          (is (str/includes? (:body (page/response {:uri "/availability" :request-method :get :now (at now-s)}))
+                             "Iraq&#39;s exam-day internet shutdown"))))
+      (clean!))))
+
+(deftest the-sweep-fills-recorded-causes-and-keeps-hand-set-ones
+  (if-not (db-up?)
+    (is true "PostgreSQL is unavailable; integration assertion skipped")
+    (do
+      (clean!)
+      (db/store-availability-month! {:year 2026 :month 10 :minutes-up 44194 :minutes 44640 :target 99.0})
+      (with-redefs [http/get (range-body [[1000 1035] [3000 3020]])]
+        (availability/store-outages! (at now-s)))
+      (let [first-start (str (Instant/ofEpochSecond (+ oct-start (* 60 1000))))
+            second-start (str (Instant/ofEpochSecond (+ oct-start (* 60 3000))))
+            causes #(into {} (map (juxt (comp str :started-at) :cause)) (db/availability-outages))]
+        (availability/set-outage-cause! second-start :freememo-server)
+        (with-redefs [availability/recorded-causes {first-start :government-internet-shutdown
+                                                    second-start :network-tunnel
+                                                    "2026-10-20T00:00:00Z" :network-tunnel}]
+          (is (= 1 (availability/fill-recorded-causes!))))
+        (is (= {first-start "government-internet-shutdown"
+                second-start "freememo-server"}
+               (causes))
+            "a recorded cause fills an unknown cause only, and a start with no outage is skipped"))
+      (clean!))))
+
+(deftest every-recorded-cause-is-a-known-cause-at-a-minute-start
+  (doseq [[start cause] availability/recorded-causes]
+    (is (contains? db/outage-causes (name cause)) start)
+    (is (zero? (mod (.getEpochSecond (Instant/parse start)) 60)) start)))
 
 ;; ── Seam 3: the rendered page ──────────────────────────────────────
 
