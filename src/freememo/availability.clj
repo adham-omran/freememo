@@ -309,15 +309,55 @@
   "Operator function. Set the cause of the outage that started at `started-at`
    (an Instant, or an ISO string such as \"2026-10-28T03:12:00Z\"). `cause` is
    one of :server-internet-provider, :network-tunnel, :freememo-server,
-   :not-yet-known. Returns true when an outage changed, false when none starts
+   :government-internet-shutdown, :not-yet-known (the keys of
+   `db/outage-cause-labels`). Returns true when an outage changed, false when none starts
    at that time. Any other cause throws and changes nothing."
   [started-at cause]
   (db/set-availability-outage-cause!
    (if (string? started-at) (Instant/parse started-at) started-at)
    (if (keyword? cause) (name cause) cause)))
 
+(def recorded-causes
+  "Causes found after the outage, by its start (UTC). Prod has no REPL, so a
+   cause goes here and the deploy sets it. `fill-recorded-causes!` sets each one
+   while its outage is still not-yet-known, so `set-outage-cause!` wins.
+
+   The exam-day shutdowns match the second round and the special round of
+   Iraq's national school exams in 2026: Cloudflare Radar and Internet Society
+   Pulse report cuts at about 03:30-04:10 UTC on these days. 2026-11-03 is the
+   server's internet provider (the operator's report)."
+  {"2026-09-01T03:30:00Z" :government-internet-shutdown
+   "2026-09-02T03:30:00Z" :government-internet-shutdown
+   "2026-09-03T03:30:00Z" :government-internet-shutdown
+   "2026-09-05T03:32:00Z" :government-internet-shutdown
+   "2026-09-06T03:30:00Z" :government-internet-shutdown
+   "2026-09-07T03:30:00Z" :government-internet-shutdown
+   "2026-09-08T03:30:00Z" :government-internet-shutdown
+   "2026-09-09T03:30:00Z" :government-internet-shutdown
+   "2026-09-10T03:30:00Z" :government-internet-shutdown
+   "2026-09-26T03:30:00Z" :government-internet-shutdown
+   "2026-09-28T03:31:00Z" :government-internet-shutdown
+   "2026-10-04T03:30:00Z" :government-internet-shutdown
+   "2026-10-06T03:30:00Z" :government-internet-shutdown
+   "2026-10-08T03:30:00Z" :government-internet-shutdown
+   "2026-10-10T03:30:00Z" :government-internet-shutdown
+   "2026-10-12T03:30:00Z" :government-internet-shutdown
+   "2026-11-03T17:14:00Z" :server-internet-provider})
+
+(defn fill-recorded-causes!
+  "Set each cause in `recorded-causes` on its stored outage, while that outage's
+   cause is still not-yet-known. Returns the number of outages changed."
+  []
+  (reduce (fn [n [start cause]]
+            (if (db/fill-availability-outage-cause! (Instant/parse start) (name cause)) (inc n) n))
+          0
+          recorded-causes))
+
 (defn- close-months-job! [] (close-months! (Instant/now)))
-(defn- store-outages-job! [] (store-outages! (Instant/now)))
+(defn- store-outages-job! []
+  ;; Store first, so that an outage stored in this run gets its recorded cause.
+  (store-outages! (Instant/now))
+  (fill-recorded-causes!))
 
 ;; Two jobs, so that a failure in one does not skip the other.
 (db/register-sweep-job! ::close-months #'close-months-job!)
