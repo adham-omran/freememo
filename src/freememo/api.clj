@@ -30,7 +30,6 @@
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
    [freememo.settings :as settings]
-   [freememo.storage-meter :as storage-meter]
    [freememo.credits :as credits]
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
@@ -1368,33 +1367,29 @@
       (try
         (let [payload (json/parse-string (String. raw "UTF-8") true)
               reference-id (:referenceId payload)
-              status (or (:paymentStatus payload) (:status payload))]
-          (cond
-            (str/blank? reference-id)
-            (json-response 200 {:success true})
-
-            (#{"Complete" "Delivered"} status)
-            (let [r (db/complete-credit-order! reference-id)]
-              (when (:licensed r)
-                (commands/bump! (:user-id r) :credits-granted)
-                (tel/log! {:level :info :id ::wayl-licensed
-                           :data {:reference-id reference-id :user-id (:user-id r)}}
-                  "Wayl payment granted a desktop license"))
-              (when (:credited r)
-                (storage-meter/top-up-landed! (:user-id r))
-                (commands/bump! (:user-id r) :credits-granted)
-                (tel/log! {:level :info :id ::wayl-credited
-                           :data {:reference-id reference-id :amount (:amount r)
-                                  :user-id (:user-id r)}}
-                  "Wayl payment credited"))
-              (json-response 200 {:success true}))
-
-            (#{"Cancelled" "Rejected" "Returned"} status)
-            (do (db/fail-credit-order! reference-id)
-                (json-response 200 {:success true}))
-
-            :else
-            (json-response 200 {:success true})))
+              status (or (:paymentStatus payload) (:status payload))
+              r (when-not (str/blank? reference-id)
+                  (credits/apply-wayl-status! reference-id status (:total payload)))]
+          ;; One line per verified webhook (plans/wayl-link-lifecycle.md 5.1).
+          ;; It names no `customer` field: the payload carries the buyer's
+          ;; name, phone and address.
+          (tel/log! {:level :info :id ::wayl-webhook-received
+                     :data {:reference-id reference-id :event (:event payload)
+                            :payment-status (:paymentStatus payload) :status (:status payload)
+                            :outcome (:outcome r)}}
+            "Wayl webhook received")
+          (case (:outcome r)
+            :licensed
+            (tel/log! {:level :info :id ::wayl-licensed
+                       :data {:reference-id reference-id :user-id (:user-id r)}}
+              "Wayl payment granted a desktop license")
+            :credited
+            (tel/log! {:level :info :id ::wayl-credited
+                       :data {:reference-id reference-id :amount (:amount r)
+                              :user-id (:user-id r)}}
+              "Wayl payment credited")
+            nil)
+          (json-response 200 {:success true}))
         (catch Exception e
           (tel/error! {:id ::wayl-webhook} e)
           (json-response 500 {:success false :error "Webhook processing failed"}))))))

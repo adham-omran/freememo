@@ -20,6 +20,7 @@
    [freememo.document-picker :as picker]
    [freememo.measured-list :as measured]
    [freememo.window-ranges :as ranges]
+   [freememo.inline-error :refer [InlineError]]
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-link :as link])
@@ -306,9 +307,8 @@
                 (let [r (e/server (e/Offload #(start-license-checkout!* user-id base-url client-country)))]
                   (case r (if (:ok r)
                             (do (navigate-external! (:url r)) (t))
-                            (do (reset! !error (:error r)) (t (:error r))))))))))
-        (when error
-          (dom/p (dom/props {:style {:color "var(--color-danger-text)"}}) (dom/text error))))
+                            (do (reset! !error (:error r)) (t (:error r)))))))))
+          (InlineError error)))
       (dom/section
         (dom/props {:class "settings-group"})
         (group/GroupHeading "Signed-in computers")

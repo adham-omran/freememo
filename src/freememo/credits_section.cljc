@@ -16,6 +16,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.settings-group :as group]
    [freememo.motion :as motion]
+   [freememo.inline-error :refer [InlineError]]
    [freememo.storage-copy :as storage-copy]
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
@@ -118,13 +119,9 @@
                         (if (:ok r)
                           (do (navigate-external! (:url r)) (t))
                           (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
+          (InlineError checkout-error)
 
           (dom/div
             (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
                                               :color "var(--color-text-secondary)"}})
-            (dom/text (or note "")))
-
-          (when checkout-error
-            (dom/div
-              (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
-              (dom/text checkout-error))))))))
+            (dom/text (or note ""))))))))

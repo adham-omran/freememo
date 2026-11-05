@@ -22,8 +22,7 @@
             [freememo.config :as config]
             [freememo.credits :as credits]
             [freememo.db :as db]
-            [freememo.desktop-version :as desktop-version]
-            [freememo.wayl :as wayl])
+            [freememo.desktop-version :as desktop-version])
   (:import [java.time Duration Instant]))
 
 (def trial-open?
@@ -173,23 +172,17 @@
 
 (defn start-checkout!
   "13.1.3 — a pending desktop_license order and its Wayl link.
-   Post: {:ok true :url u} or {:ok false :error msg}. The license is written
-         when the webhook completes the order (`db/complete-credit-order!`)."
+   Post: see `credits/open-order!`. The license is written when the webhook
+         completes the order (`db/complete-credit-order!`)."
   [user-id base-url country-code]
   (if-let [price (price-iqd)]
-    (let [reference-id (str "fm-dl-" (random-uuid))]
-      (db/insert-credit-order! user-id reference-id price "desktop_license")
-      (let [r (wayl/create-link! {:reference-id reference-id
-                                  :amount-iqd price
-                                  :label (str "FreeMemo desktop license (versions "
-                                           desktop-version/desktop-major " and "
-                                           (inc desktop-version/desktop-major) ")")
-                                  :webhook-url (str base-url "/api/wayl/webhook")
-                                  :redirection-url (str base-url "/credits/return")
-                                  :currency-suffix? (not= "IQ" country-code)})]
-        (if (:ok r)
-          (do (db/set-order-wayl-fields! reference-id (:code r) (:link-id r))
-              {:ok true :url (:url r)})
-          (do (db/fail-credit-order! reference-id)
-              {:ok false :error (:error r)}))))
+    (credits/open-order! user-id
+      {:kind "desktop_license"
+       :reference-id (str "fm-dl-" (random-uuid))
+       :amount-iqd price
+       :label (str "FreeMemo desktop license (versions "
+                desktop-version/desktop-major " and "
+                (inc desktop-version/desktop-major) ")")
+       :base-url base-url
+       :currency-suffix? (not= "IQ" country-code)})
     {:ok false :error "Desktop license pricing is not configured."}))

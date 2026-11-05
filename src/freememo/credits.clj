@@ -150,9 +150,198 @@
       (ledger-annotation endpoint model tokens)
       {:user-id user-id :endpoint endpoint :model model :usd usd})))
 
+;; ── Order routing (plans/wayl-link-lifecycle.md §3) ──
+;;
+;; Every Wayl status that reaches an order passes through `apply-wayl-status!`:
+;; the webhook, the return page (`reconcile-order!`) and the close that runs
+;; before a new checkout and in the hourly sweep (`close-link!`). So one place
+;; decides what a status does, checks the amount and bumps the buyer's view.
+
+(defn status->action
+  "What a Wayl link status does to its order: `:complete` for a paid link,
+   `:fail` for a closed unpaid link, `:wait` for every other value, nil and an
+   unknown string included."
+  [status]
+  (case status
+    ("Complete" "Delivered") :complete
+    ("Cancelled" "Rejected" "Returned") :fail
+    :wait))
+
+(defn- parse-total
+  "Wayl's `total` as a long, or nil. The GET gives a string, the webhook a number."
+  [total]
+  (some-> total str str/trim parse-long))
+
+(defn- check-amount!
+  "Log ::wayl-amount-mismatch when Wayl's total differs from the order's amount.
+   It only logs: the order is credited anyway (plans/wayl-link-lifecycle.md,
+   Decisions). A missing total or an unknown order logs nothing."
+  [reference-id total]
+  (let [paid (parse-total total)
+        order (db/get-credit-order reference-id)
+        expected (:credit_orders/amount_iqd order)]
+    (when (and paid expected (not= paid (long expected)))
+      (tel/log! {:level :warn :id ::wayl-amount-mismatch
+                 :data {:reference-id reference-id :user-id (:credit_orders/user_id order)
+                        :kind (:credit_orders/kind order)
+                        :expected-iqd expected :wayl-total paid}}
+        "Wayl reports a different amount than the order. The order is credited anyway"))))
+
+(defn- apply-action!
+  "Run `action` on the order and return {:outcome kw :user-id u :amount n}.
+   Outcomes: :credited, :licensed, :already, :unknown-order (complete);
+   :failed, :not-pending (fail); :waiting (wait). A credit or a license bumps
+   the buyer's :credits-granted channel and closes the storage grace window."
+  [reference-id action total]
+  (case action
+    :complete
+    (do (check-amount! reference-id total)
+        (let [r (db/complete-credit-order! reference-id)
+              outcome (cond (:credited r) :credited
+                            (:licensed r) :licensed
+                            (= :already (:reason r)) :already
+                            :else :unknown-order)]
+          (when (:credited r) (storage-meter/top-up-landed! (:user-id r)))
+          (when (#{:credited :licensed} outcome)
+            (commands/bump! (:user-id r) :credits-granted))
+          {:outcome outcome :user-id (:user-id r) :amount (:amount r)}))
+
+    :fail
+    (let [n (or (:next.jdbc/update-count (first (db/fail-credit-order! reference-id))) 0)]
+      {:outcome (if (pos? n) :failed :not-pending)})
+
+    :wait
+    {:outcome :waiting}))
+
+(defn apply-wayl-status!
+  "Apply one Wayl status to the order `reference-id`.
+   Pre:  `status` and `total` come from a verified webhook or from Wayl's API.
+   Post: a paid status credits (or licenses) the order once, even when `total`
+         differs from the order's amount, which logs ::wayl-amount-mismatch.
+         A closed status fails a pending order. Any other status changes nothing.
+   Returns {:outcome kw :user-id u :amount n}. See `apply-action!`."
+  [reference-id status total]
+  (apply-action! reference-id (status->action status) total))
+
+(defn- with-reconcile-keys
+  "The keys the return page reads, added to an applied outcome."
+  [applied wayl-status]
+  (assoc applied :ok true :wayl-status wayl-status
+    :credited (= :credited (:outcome applied))
+    :licensed (= :licensed (:outcome applied))))
+
+(defn reconcile-order!
+  "Look up an order's state at Wayl and apply it through `apply-wayl-status!`.
+   Lets the return page recover when the webhook cannot reach us
+   (dev/localhost) or was dropped in prod.
+   Returns {:ok true :outcome kw :wayl-status s :credited bool :licensed bool
+   :user-id u :amount n}, or {:ok false :outcome :lookup-failed :error msg}."
+  [reference-id]
+  (let [w (wayl/get-link-status reference-id)]
+    (if (:ok w)
+      (with-reconcile-keys (apply-wayl-status! reference-id (:status w) (:total w)) (:status w))
+      {:ok false :outcome :lookup-failed :error (:error w)})))
+
+(defn close-link!
+  "Close the Wayl link of `reference-id` and settle its order.
+   Invalidate answers with the link's status. A paid status credits the order.
+   Any other status fails it, because the link can no longer be paid. When
+   invalidate refuses (a paid or closed link gives 400), fall back to
+   `reconcile-order!`. A status that means wait, or a failed lookup, leaves the
+   order pending, and the next sweep tries again.
+   Returns the `reconcile-order!` shape."
+  [reference-id]
+  (let [r (wayl/invalidate-link! reference-id)]
+    (if (:ok r)
+      (let [action (if (= :complete (status->action (:status r))) :complete :fail)]
+        (with-reconcile-keys (apply-action! reference-id action (:total r)) (:status r)))
+      (reconcile-order! reference-id))))
+
+;; ── Merchant token check (§4.2, §4.3) ──
+
+(defonce ^:private !wayl-auth
+  ;; :unknown until the first check answers, then :ok or :failed. :unknown lets
+  ;; checkout pass, so a slow boot check never blocks a payment.
+  (atom :unknown))
+
+(defn wayl-auth-state
+  "The merchant token flag: :unknown, :ok or :failed."
+  []
+  @!wayl-auth)
+
+(defn- set-wayl-auth!
+  "Store the result of one token check. Log only a change of state: a new
+   failure at :error (mailed), a recovery at :info. Returns the new state."
+  [{:keys [ok error]}]
+  (let [new-state (if ok :ok :failed)
+        [old _] (reset-vals! !wayl-auth new-state)]
+    (cond
+      (and (= :failed new-state) (not= :failed old))
+      (tel/log! {:level :error :id ::wayl-auth-failed :data {:error error :was old}}
+        "Wayl refuses the merchant token. Checkout is disabled until it passes again")
+
+      (and (= :ok new-state) (= :failed old))
+      (tel/log! {:level :info :id ::wayl-auth-recovered}
+        "Wayl accepts the merchant token again. Checkout is enabled"))
+    new-state))
+
+(defn check-wayl-auth!
+  "Ask Wayl whether the merchant token is valid and store the answer. No-op
+   (returns nil) when no token is configured, as on a self-host. Also the
+   hourly sweep job."
+  []
+  (when (config/wayl-merchant-token)
+    (set-wayl-auth! (wayl/verify-auth-key))))
+
+(defonce ^:private !boot-check (atom nil))
+
+(defn check-wayl-auth-at-boot!
+  "Run `check-wayl-auth!` once per process on a background thread, so boot
+   does not wait for Wayl. Called by the server entrypoints after the schema
+   (and so the sweep scheduler) is set up. A second call does nothing."
+  []
+  (when (compare-and-set! !boot-check nil :started)
+    (future
+      (try (check-wayl-auth!)
+        (catch Throwable t (tel/error! {:id ::wayl-auth-boot-check} t))))))
+
+(db/register-sweep-job! ::wayl-auth #'check-wayl-auth!)
+
 ;; ── Purchase (§5.5) ──
 
 (declare top-up-packs iqd-display?)
+
+(def payments-unavailable
+  "The checkout error while Wayl refuses the merchant token."
+  "Payments are unavailable. Try again later.")
+
+(defn open-order!
+  "Open one checkout: the shared body of both `start-checkout!` fns.
+   Steps, in this order (plans/wayl-link-lifecycle.md 3.4):
+   1. Refuse when the token flag is :failed. :unknown passes.
+   2. Close each pending order of the same user and `kind` (`close-link!`),
+      so the buyer has one payable link of a kind at a time.
+   3. Insert the new pending order.
+   4. Create its Wayl link. A provider error fails the order.
+   Returns {:ok true :url u} or {:ok false :error msg}."
+  [user-id {:keys [kind reference-id amount-iqd label base-url currency-suffix?]}]
+  (if (= :failed (wayl-auth-state))
+    {:ok false :error payments-unavailable}
+    (do
+      (doseq [old (db/pending-order-references user-id kind)]
+        (close-link! old))
+      (db/insert-credit-order! user-id reference-id amount-iqd kind)
+      (let [r (wayl/create-link! (cond-> {:reference-id reference-id
+                                          :amount-iqd amount-iqd
+                                          :webhook-url (str base-url "/api/wayl/webhook")
+                                          :redirection-url (str base-url "/credits/return")
+                                          :currency-suffix? currency-suffix?}
+                                   label (assoc :label label)))]
+        (if (:ok r)
+          (do (db/set-order-wayl-fields! reference-id (:code r) (:link-id r))
+              {:ok true :url (:url r)})
+          (do (db/fail-credit-order! reference-id)
+              {:ok false :error (:error r)}))))))
 
 (defn start-checkout!
   "Create a pending order + Wayl top-up link for a preset amount.
@@ -160,9 +349,7 @@
          (top-up-packs country-code), so IQD for Iraq and whole USD for
          every other country; base-url is the app's public HTTPS origin;
          country-code is ISO-3166 alpha-2 or nil.
-   Post: a pending credit_orders row exists for the pack's IQD; returns
-         {:ok true :url u} or {:ok false :error msg} (order marked failed on
-         provider error). Non-IQ (incl. nil) country → URL has
+   Post: see `open-order!`. Non-IQ (incl. nil) country → URL has
          `currency=usd` appended."
   [user-id amount base-url country-code]
   (let [pack (some #(when (= amount (:amount %)) %) (top-up-packs country-code))]
@@ -174,45 +361,11 @@
       {:ok false :error "Invalid top-up amount"}
 
       :else
-      (let [amount-iqd (:iqd pack)
-            reference-id (str "fm-" (random-uuid))
-            usd? (not (iqd-display? country-code))]
-      (db/insert-credit-order! user-id reference-id amount-iqd)
-      (let [r (wayl/create-link! {:reference-id reference-id
-                                  :amount-iqd amount-iqd
-                                  :webhook-url (str base-url "/api/wayl/webhook")
-                                  :redirection-url (str base-url "/credits/return")
-                                  :currency-suffix? usd?})]
-        (if (:ok r)
-          (do (db/set-order-wayl-fields! reference-id (:code r) (:link-id r))
-              {:ok true :url (:url r)})
-          (do (db/fail-credit-order! reference-id)
-              {:ok false :error (:error r)})))))))
-
-;; ── Reconciliation (§5.10.2) — webhook miss / dev fallback ──
-
-(defn reconcile-order!
-  "Look up an order's state at Wayl and credit idempotently if Wayl reports it
-   paid and our order is still pending. Lets the return page recover when the
-   webhook can't reach us (dev/localhost) or was dropped in prod.
-   Returns the same shape as `db/complete-credit-order!` plus {:ok bool}."
-  [reference-id]
-  (let [w (wayl/get-link-status reference-id)]
-    (if-not (:ok w)
-      {:ok false :error (:error w)}
-      (let [s (:status w)]
-        (cond
-          (#{"Complete" "Delivered"} s)
-          (let [r (db/complete-credit-order! reference-id)]
-            (when (:credited r) (storage-meter/top-up-landed! (:user-id r)))
-            (assoc r :ok true :wayl-status s))
-
-          (#{"Cancelled" "Rejected" "Returned"} s)
-          (do (db/fail-credit-order! reference-id)
-              {:ok true :credited false :wayl-status s})
-
-          :else
-          {:ok true :credited false :wayl-status s})))))
+      (open-order! user-id {:kind "credits"
+                            :reference-id (str "fm-" (random-uuid))
+                            :amount-iqd (:iqd pack)
+                            :base-url base-url
+                            :currency-suffix? (not (iqd-display? country-code))}))))
 
 ;; ── Abandoned checkouts ──
 
@@ -227,28 +380,26 @@
   24)
 
 (defn- sweep-order!
-  "Check one pending order at Wayl. Credit it when Wayl reports it paid; else
-   mail about it once. Returns the outcome keyword."
+  "Close one pending order's link (`close-link!`). A paid link credits the
+   order. An unpaid link fails it and mails about it once. A link that is still
+   in progress, or a failed lookup, stays pending for the next sweep.
+   Returns the outcome keyword."
   [{:keys [reference-id user-id kind amount-iqd created-at email display-name tries paid]}]
-  (let [r (reconcile-order! reference-id)]
-    (cond
-      (not (:ok r))
-      ;; wayl/get-link-status already mailed the lookup failure. The order
-      ;; stays unmarked, so the next sweep tries it again.
-      :lookup-failed
+  (let [r (close-link! reference-id)]
+    (case (:outcome r)
+      ;; wayl/get-link-status already mailed the lookup failure.
+      :lookup-failed :lookup-failed
 
-      (or (:credited r) (:licensed r))
-      (do (commands/bump! user-id :credits-granted)
-          (tel/log! {:level :info :id ::sweep-credited
+      (:credited :licensed)
+      (do (tel/log! {:level :info :id ::sweep-credited
                      :data {:reference-id reference-id :user-id user-id :email email
                             :kind kind :amount-iqd amount-iqd}}
             "Paid checkout credited by the sweep: the buyer never reached the return page")
           :credited)
 
-      (= :already (:reason r))
-      :already-complete
+      :already :already-complete
 
-      :else
+      :failed
       (do (tel/log! {:level :info :id ::checkout-abandoned
                      :data {:reference-id reference-id :user-id user-id
                             :email email :name display-name
@@ -257,14 +408,19 @@
                             :orders-by-user tries :paid-orders-by-user paid}}
             "Checkout abandoned: the user went to Wayl and did not pay")
           (db/mark-order-abandon-alerted! reference-id)
-          :abandoned))))
+          :abandoned)
+
+      :waiting :still-pending
+
+      ;; :not-pending (another path settled it first) or :unknown-order.
+      (:outcome r))))
 
 (defn sweep-abandoned-checkouts!
   "Hourly sweep job. Each pending order between `abandon-after-minutes` and
-   `abandon-lookback-hours` old is checked at Wayl once more: a paid one is
+   `abandon-lookback-hours` old has its link closed at Wayl: a paid one is
    credited (the buyer closed the tab before the return page), and an unpaid
-   one logs ::checkout-abandoned, which freememo.logging mails, once per order.
-   Returns the outcome per reference-id. No-op when credits are off."
+   one fails and logs ::checkout-abandoned, which freememo.logging mails, once
+   per order. Returns the outcome per reference-id. No-op when credits are off."
   []
   (when (config/credits-enabled?)
     (into {}

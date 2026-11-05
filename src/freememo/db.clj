@@ -5017,6 +5017,17 @@
                           user-id desktop-version/desktop-major
                           (inc desktop-version/desktop-major) source order-reference-id])))
 
+(defn pending-order-references
+  "Reference ids of the user's pending orders of one `kind`, oldest first."
+  [user-id kind]
+  (mapv :reference_id
+    (jdbc/execute! ds
+      ["SELECT reference_id FROM credit_orders
+        WHERE user_id = ? AND kind = ? AND status = 'pending'
+        ORDER BY created_at"
+       user-id kind]
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn set-order-wayl-fields!
   "Record Wayl's code/link-id on a pending order after link creation."
   [reference-id wayl-code wayl-link-id]

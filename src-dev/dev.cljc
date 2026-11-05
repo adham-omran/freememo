@@ -24,6 +24,7 @@
    #?(:clj [freememo.memory-sampler :as memory-sampler])
    ;; Electric-free too: db, config, typst and postal.
    #?(:clj [freememo.receipt :as receipt])
+   #?(:clj [freememo.credits :as credits])
 
    #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
@@ -185,6 +186,8 @@
      (activity-reporter/start!)
      ;; Payment receipts: a no-op sweep unless RECEIPTS_ENABLED=true and SMTP is set.
      (receipt/start!)
+     ;; Wayl merchant token check, on a background thread. A no-op with no token.
+     (credits/check-wayl-auth-at-boot!)
 
      (def nrepl-server (start-nrepl-on-free-port! 7888 20))
 

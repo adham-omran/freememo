@@ -37,6 +37,7 @@
    #?(:clj [freememo.activity-reporter :as activity-reporter])
    #?(:clj [freememo.memory-sampler :as memory-sampler])
    #?(:clj [freememo.receipt :as receipt])
+   #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.desktop :as desktop])
    #?(:clj [freememo.peer :as peer])))
@@ -207,6 +208,8 @@
        (activity-reporter/start!)
        ;; Payment receipts: a no-op sweep unless RECEIPTS_ENABLED=true and SMTP is set.
        (receipt/start!)
+       ;; Wayl merchant token check, on a background thread. A no-op with no token.
+       (credits/check-wayl-auth-at-boot!)
        (install-exam-generation-shutdown-hook!)
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.

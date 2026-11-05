@@ -252,6 +252,12 @@
               :freememo.wayl/create-link
               :freememo.wayl/create-link-failed
               :freememo.wayl/get-link-status
+              ;; Wayl reports a paid total that differs from the order. The
+              ;; order is credited anyway, so a person checks the difference.
+              :freememo.credits/wayl-amount-mismatch
+              ;; Wayl refuses the merchant token, so checkout is disabled.
+              ;; Logged once per change of state (credits/set-wayl-auth!).
+              :freememo.credits/wayl-auth-failed
               ;; A buyer paid and got no receipt. Someone sends it by hand.
               :freememo.receipt/receipt-gave-up
               ;; Deployment-hook failures, in the money pool because a configured
