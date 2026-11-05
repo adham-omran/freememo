@@ -133,7 +133,7 @@
   ;; The target and its page go live together: the item links the page.
   (let [text (visible-text document)]
     (doseq [s ["Availability you can check"
-               "FreeMemo aims for 99.0% availability in each calendar month, measured from the public internet. The availability page shows the result for each month, including any month we miss. This is a target, not a guarantee, and a missed month gives no refund."
+               "FreeMemo aims for 99.0% availability in each calendar month, measured from the public internet. The availability page shows the result for each month, including any month we miss. This is a target, not a guarantee."
                "What happens if FreeMemo goes down?"
                "FreeMemo aims for 99.0% availability in each calendar month. The availability page shows the result for the current month and the three months before it. Outages of 15 minutes or more are listed there with their cause."]]
       (is (str/includes? text s) s))
