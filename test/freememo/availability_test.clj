@@ -106,7 +106,7 @@
 (deftest page-shows-the-current-month-when-prometheus-answers
   (stub-prometheus (prom-answer 1000000)
     (fn [_]
-      (let [response (with-redefs [availability/stored-months (fn [] [])] (page/response {:uri "/availability" :request-method :get}))
+      (let [response (with-redefs [availability/stored-months (fn [] []) availability/stored-outages (fn [] [])] (page/response {:uri "/availability" :request-method :get}))
             d (doc response)
             text (.text d)]
         (is (= 200 (:status response)))
@@ -114,7 +114,7 @@
         (is (= "Availability" (.text (.selectFirst d "h1"))))
         (is (empty? (.select d "script")))
         (is (str/includes? text "FreeMemo aims for 99.0% availability in each calendar month, in UTC."))
-        (is (str/includes? text "This is a target, not a guarantee, and a missed month gives no refund."))
+        (is (str/includes? text "This is a target, not a guarantee."))
         (is (= ["Month" "Availability" "Target" "Result"] (mapv #(.text %) (.select d "th"))))
         (let [cells (mapv #(.text %) (.select d "tbody tr td"))]
           (is (re-matches #"\d+\.\d\d%" (nth cells 1)))
@@ -127,7 +127,7 @@
     (availability/clear-cache!)
     (stub-prometheus response
       (fn [_]
-        (let [d (doc (with-redefs [availability/stored-months (fn [] [])] (page/response {:uri "/availability" :request-method :get})))
+        (let [d (doc (with-redefs [availability/stored-months (fn [] []) availability/stored-outages (fn [] [])] (page/response {:uri "/availability" :request-method :get})))
               text (.text d)]
           (is (str/includes? text "The figures for the current month are not available now. Try again later."))
           (is (empty? (.select d "td")))
