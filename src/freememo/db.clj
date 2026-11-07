@@ -1179,6 +1179,15 @@
                       REFERENCES undo_log(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_staged_delete
                       ON topics(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+  ;; Covering index for `get-learning-queue-ids`. The key columns match the
+  ;; queue order, so the read is an Index Only Scan with an Incremental Sort. The
+  ;; worst-case fixture reads 5.4k pages without it and 0.7k with it
+  ;; (plans/low-end-tablet-performance/issues/09-covering-index.md). CONCURRENTLY
+  ;; needs autocommit, which each `execute!` on `ds` is. If a build fails, it
+  ;; leaves an INVALID index, and IF NOT EXISTS then skips it: DROP it by hand.
+  (jdbc/execute! ds ["CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_topics_learn_queue
+                      ON topics(user_id, priority, sm_rank)
+                      INCLUDE (id, kind, status, dismissed, staged_delete_id, next_review_at)"])
   ;; The same marker on assistant chats. Added here rather than in
   ;; setup-schema-assistant!, which runs before undo_log exists.
   (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS staged_delete_id BIGINT
