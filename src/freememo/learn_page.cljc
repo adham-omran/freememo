@@ -94,12 +94,15 @@
   "Display rows for the visible window of the queue, in one query by primary key.
 
    Pre : `ids` is the vector that `prepare-queue-ids` returned. `offset` and
-         `limit` come from Scroll-window.
+         `limit` come from Scroll-window. `_refresh` is the refresh value of the
+         queue read. It is unused, and it is an argument so that a refresh
+         that leaves `ids` equal still runs this fn again (a rename, a status
+         or a source change keeps a topic in the queue at the same index).
    Post: a map from queue index to display row, for the indexes in the window
          that still have a topic. Only these rows are formatted. A failed read
          gives `{}`: the id read already reported the failure, and a window that
          shows no row for a moment is not a claim that the queue is empty."
-  [user-id ids offset limit]
+  [_refresh user-id ids offset limit]
   #?(:clj
      (let [n (count ids)
            from (max 0 (min n (long offset)))
@@ -147,7 +150,9 @@
        (let [{:keys [rows error] :as queue} (prepare-queue-ids _refresh user-id)]
          (if error
            (throw (ex-info error {:region :learn-queue}))
-           (assoc queue :rows (vec rows))))))
+           ;; :refresh rides in the value so the window read can depend on
+           ;; it: a bump with an equal id vector must still refetch the rows.
+           (assoc queue :rows (vec rows) :refresh _refresh)))))
      :cljs (loading/region-success {:rows [] :error nil})))
 
 (defn queue-summary-result* [_refresh user-id]
@@ -607,10 +612,22 @@
                                       :position "relative" :scrollbar-gutter "stable"}})
                   (let [[offset limit] (Scroll-window row-height item-count dom/node
                                          {:overquery-factor 2 :reset-key user-id})
-                        ;; One primary-key query for the window. It is a plain
-                        ;; call, not an Offload: it takes milliseconds, and an
-                        ;; Offload would blank every row at each scroll step.
-                        window (e/server (queue-window-rows user-id ids-vec offset limit))]
+                        ;; One primary-key query for the window, as a plain
+                        ;; call and not an `e/Offload`. An Offload read goes
+                        ;; empty while its next thunk runs, so every row would
+                        ;; unmount at each scroll step (docs/electric-patterns.md,
+                        ;; "An Empty e/Offload Empties Everything Downstream").
+                        ;; A client `(peek (e/as-vec …))` would turn that into
+                        ;; nil, which still shows no row until the answer
+                        ;; arrives. The read is a primary-key lookup of about
+                        ;; 25 rows, so it blocks this session's server thread
+                        ;; for milliseconds. If the database stalls, this
+                        ;; session waits for the pool timeout, and then
+                        ;; `get-queue-display-rows` returns an error and the
+                        ;; window is `{}`. It never throws, so the socket stays
+                        ;; open. `(:refresh queue)` makes a refresh refetch the
+                        ;; window when the ids are equal.
+                        window (e/server (queue-window-rows (:refresh queue) user-id ids-vec offset limit))]
                     (dom/props {:class "tape-scroll"
                                 :style {:--count item-count
                                         :--grid-cols grid-cols
