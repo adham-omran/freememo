@@ -202,7 +202,7 @@
                          (-> (ring-response/resource-response "index.dev.html" {:root "public/freememo"})
                            (ring-response/content-type "text/html")))
                      (wrap-resource "public") ; 5. serve assets from disk.
-                     (wrap-content-type) ; 4. boilerplate – to server assets with correct mime/type.
+                     (wrap-content-type {:mime-types {"webmanifest" "application/manifest+json"}}) ; 4. boilerplate – to server assets with correct mime/type.
                      (wrap-no-store) ; 4b. dev: never cache static assets (so CSS/HTML edits show on reload)
                      (electric-ring/wrap-electric-websocket ; 3. install Electric server.
                        (fn [ring-request] (electric-boot ring-request))) ; boot server-side Electric process

@@ -49,6 +49,13 @@
                     (str manifest-folder (:output-name module))))
           {})))))
 
+(def extra-mime-types
+  "Extension to media type, for `wrap-content-type`'s `:mime-types` option.
+   Ring's table has no `.webmanifest`, and Chrome ignores a manifest that does
+   not arrive as `application/manifest+json`. Every server that mounts
+   `wrap-content-type` for the app passes this map."
+  {"webmanifest" "application/manifest+json"})
+
 (def ^:private hashed-bundle-uri
   "Shadow-cljs `:module-hash-names true` writes `<name>.<32 hex digits>.js` into
    the build's `:output-dir`, `/freememo/js/`. The pattern ends at `.js`, so a

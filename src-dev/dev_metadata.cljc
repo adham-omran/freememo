@@ -100,7 +100,7 @@
                  (-> (ring-response/resource-response "index.metadata.html" {:root "public/freememo"})
                      (ring-response/content-type "text/html")))
                (wrap-resource "public")
-               (wrap-content-type)
+               (wrap-content-type {:mime-types {"webmanifest" "application/manifest+json"}})
                (electric-ring/wrap-electric-websocket
                  (fn [ring-request] (electric-boot ring-request)))
                (wrap-params))

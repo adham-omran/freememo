@@ -1,0 +1,15 @@
+{
+  "name": "FreeMemo",
+  "short_name": "FreeMemo",
+  "description": "Turn PDFs, EPUBs, articles and video into flashcards, paced reading and AI-graded quizzes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#2563eb",
+  "background_color": "#f8fafc",
+  "icons": [
+    {"src": "/freememo/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/freememo/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/freememo/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

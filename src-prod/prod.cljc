@@ -224,7 +224,7 @@
            (wrap-resource (:resources-path config))
            (wrap-vendor-cache-headers)
            (shell/wrap-hashed-bundle-cache-headers)
-           (wrap-content-type)
+           (wrap-content-type {:mime-types shell/extra-mime-types})
            (wrap-not-modified)
            (wrap-ensure-cache-bust-on-server-deployment)
            (electric-ring/wrap-electric-websocket (fn [ring-request] (freememo.main/electric-boot ring-request)))
