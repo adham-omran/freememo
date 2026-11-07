@@ -408,6 +408,13 @@
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_preview TEXT
                       GENERATED ALWAYS AS (left(content_text || '', 400)) STORED"])
 
+  ;; Analyze after 2% of the rows change, not the default 10%. A large import
+  ;; then refreshes the planner statistics of `topics` soon, and the Learn queue
+  ;; query stops choosing a plan that spills to disk. SET is idempotent. It is a
+  ;; table setting, so account transfer is not affected. db.clj never
+  ;; hot-reloads: a new schema step runs at the next boot.
+  (jdbc/execute! ds ["ALTER TABLE topics SET (autovacuum_analyze_scale_factor = 0.02)"])
+
   ;; Topic files (binary storage, split from old documents.file_data)
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS topic_files (
@@ -9374,10 +9381,36 @@
    Sorted, so the rendered SQL is stable across JVM runs."
   (str "(" (str/join ", " (map #(str "'" % "'") (sort structural-kinds))) ")"))
 
+(def ^:private learning-queue-where-sql
+  "The LRN-002 membership filter on `topics t`. The full read, the lean id read
+   and the count all rest on this one rule, so they cannot disagree."
+  (str "WHERE t.user_id = ?
+                AND t.kind NOT IN " structural-kinds-sql "
+                AND t.staged_delete_id IS NULL
+                AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
+                AND (t.status = 'active' OR t.status IS NULL)
+                AND NOT t.dismissed"))
+
+(def ^:private learning-queue-order-sql
+  "The LRN-002 four-key order: priority, sm_rank (NULLS LAST), the daily hash
+   of the id, then the id."
+  "ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
+                       md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC")
+
+(def ^:private learning-queue-display-columns
+  "t.id, t.parent_id, t.kind, t.title, t.priority,
+                     t.next_review_at, t.interval_days, t.a_factor,
+                     t.status, t.content_preview,
+                     s.url, s.title, s.csl_type, s.container_title")
+
 (defn get-learning-queue
-  "Due topics for incremental reading. Single query, no UNION.
-   Feeds BOTH the Start Learning session and the Learn overview list, so the
-   list IS the queue: the top row is the topic the session opens.
+  "Due topics for incremental reading, with every display column. The Learn
+   page and Start Learning read `get-learning-queue-ids` and
+   `get-queue-display-rows` instead; this full read stays as the reference that
+   the lean pair must equal (test/freememo/learn_queue_db_test.clj).
+   Single query, no UNION. The lean pair feeds BOTH the Start Learning session
+   and the Learn overview list, so the list IS the queue: the top row is the
+   topic the session opens.
    Ordering (SuperMemo outstanding-queue model): date gates membership only;
    priority orders the queue; a per-day hash of the id breaks ties within a
    priority band, so equal-priority topics shuffle daily (stable within a day,
@@ -9387,7 +9420,7 @@
    daily hash would discard the order the import went to the trouble of
    preserving. NULLS LAST keeps natively created topics on the hash.
    Selects `t.content_preview`, the STORED generated column holding 400
-   characters of stripped text. learn-page/prepare-queue-rows takes 80
+   characters of stripped text. learn-page/prepare-queue-row takes 80
    characters from it, so the bound leaves 5x of headroom. It is a real column,
    so pgjdbc QUALIFIES the key (`:topics/content_preview`).
    NEVER take the prefix here with `left(t.content, n)`. A prefix over a TOASTed
@@ -9411,24 +9444,63 @@
   [user-id]
   (try
     {:rows (jdbc/execute! ds
-             [(str "SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
-                     t.next_review_at, t.interval_days, t.a_factor,
-                     t.status, t.content_preview,
-                     s.url, s.title, s.csl_type, s.container_title
+             [(str "SELECT " learning-queue-display-columns "
               FROM topics t
               LEFT JOIN sources s ON s.id = t.source_id
-              WHERE t.user_id = ?
-                AND t.kind NOT IN " structural-kinds-sql "
-                AND t.staged_delete_id IS NULL
-                AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
-                AND (t.status = 'active' OR t.status IS NULL)
-                AND NOT t.dismissed
-              ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
-                       md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC")
+              " learning-queue-where-sql " " learning-queue-order-sql)
               user-id])
      :error nil}
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
+      {:rows [] :error (ex-message e)})))
+
+(defn get-learning-queue-ids
+  "The Learn queue as ids only, in LRN-002 order: the same filter and the same
+   four-key order as `get-learning-queue`, with no text columns. The Learn
+   overview and the Start Learning session both read this, so the top row of the
+   list is the topic that the session opens. The list length is the row count.
+
+   Pre : `user-id` identifies an existing user.
+   Post: `{:rows [{:topics/id id :topics/kind kind} …] :error nil}`, or
+         `{:rows [] :error message}` when the query fails. NEVER throws. The
+         caller MUST render `:error` and not treat empty `:rows` as an empty
+         queue."
+  [user-id]
+  (try
+    {:rows (jdbc/execute! ds
+             [(str "SELECT t.id, t.kind FROM topics t "
+                learning-queue-where-sql " " learning-queue-order-sql)
+              user-id])
+     :error nil}
+    (catch Exception e
+      (tel/error! {:id ::get-learning-queue-ids} e)
+      {:rows [] :error (ex-message e)})))
+
+(defn get-queue-display-rows
+  "Display rows for some queue topics, in one query by primary key. Each row has
+   the columns of `get-learning-queue`, and rows come in the order of `ids`. An
+   id that no longer matches (the topic was deleted or left the queue) gives no
+   row. It does not apply the queue filter: the ids come from a queue read.
+   The `user_id` check keeps one user from reading another user's topic.
+
+   Pre : `ids` is a seq of topic ids.
+   Post: `{:rows [row …] :error nil}`, or `{:rows [] :error message}`. NEVER
+         throws."
+  [user-id ids]
+  (try
+    (if (empty? ids)
+      {:rows [] :error nil}
+      (let [by-id (into {}
+                    (map (juxt :topics/id identity))
+                    (jdbc/execute! ds
+                      [(str "SELECT " learning-queue-display-columns "
+                              FROM topics t
+                              LEFT JOIN sources s ON s.id = t.source_id
+                              WHERE t.user_id = ? AND t.id = ANY(?)")
+                       user-id (int-array ids)]))]
+        {:rows (into [] (keep by-id) ids) :error nil}))
+    (catch Exception e
+      (tel/error! {:id ::get-queue-display-rows} e)
       {:rows [] :error (ex-message e)})))
 
 (defn get-learning-queue-count
