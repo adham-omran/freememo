@@ -49,44 +49,69 @@
                  (<= days 30) (str "in " days "d")
                  :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))))
 
-(defn prepare-queue-rows
-  "Queue rows shaped for the overview table.
+(defn prepare-queue-ids
+  "The Learn queue as topic ids in LRN-002 order, with no text.
 
    Pre : `user-id` identifies an existing user.
-   Post: `{:rows [row …] :error nil}`, or `{:rows [] :error message}`, carrying
-         db/get-learning-queue's failure through untouched. The caller MUST
-         render `:error` — an empty `:rows` alone does not mean an empty queue."
+   Post: `{:rows [id …] :error nil}`, or `{:rows [] :error message}`, carrying
+         db/get-learning-queue-ids's failure through untouched. The caller MUST
+         render `:error` — an empty `:rows` alone does not mean an empty queue.
+         The count of `:rows` is the scroll length of the list."
   [_refresh user-id]
   #?(:clj
-     (let [{:keys [rows error]} (db/get-learning-queue user-id)]
-       {:error error
-        :rows (vec (map (fn [row]
-                          (let [kind (:topics/kind row)
-                                parent-id (:topics/parent_id row)
-                                title (or (:topics/title row) "")
-                                ;; 400 characters of ALREADY-STRIPPED text from
-                                ;; the content_preview generated column, so
-                                ;; extract-preview only truncates here.
-                                ;; Qualified key: it is a real column now, not
-                                ;; the expression it replaced.
-                                content (or (:topics/content_preview row) "")
-                                is-root (nil? parent-id)
-                                display-title (if is-root
-                                                title
-                                                (let [preview (util/extract-preview content 80)]
-                                                  (if (seq preview) preview title)))]
-                            {:id (:topics/id row)
-                             :kind kind
-                             :title title
-                             :root? is-root
-                             :display-title display-title
-                             :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
-                             :due-date (format-due-date (:topics/next_review_at row))
-                             :status (or (:topics/status row) "active")
-                             :source-container (:sources/container_title row)
-                             :source-title (:sources/title row)}))
-                     rows))})
+     (let [{:keys [rows error]} (db/get-learning-queue-ids user-id)]
+       {:error error :rows (mapv :topics/id rows)})
      :cljs {:rows [] :error nil}))
+
+#?(:clj
+   (defn- prepare-queue-row
+     "One display row for the overview table, from a db/get-queue-display-rows row."
+     [row]
+     (let [kind (:topics/kind row)
+           parent-id (:topics/parent_id row)
+           title (or (:topics/title row) "")
+           ;; 400 characters of ALREADY-STRIPPED text from the content_preview
+           ;; generated column, so extract-preview only truncates here.
+           ;; Qualified key: it is a real column, not an expression.
+           content (or (:topics/content_preview row) "")
+           is-root (nil? parent-id)
+           display-title (if is-root
+                           title
+                           (let [preview (util/extract-preview content 80)]
+                             (if (seq preview) preview title)))]
+       {:id (:topics/id row)
+        :kind kind
+        :title title
+        :root? is-root
+        :display-title display-title
+        :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
+        :due-date (format-due-date (:topics/next_review_at row))
+        :status (or (:topics/status row) "active")
+        :source-container (:sources/container_title row)
+        :source-title (:sources/title row)})))
+
+(defn queue-window-rows
+  "Display rows for the visible window of the queue, in one query by primary key.
+
+   Pre : `ids` is the vector that `prepare-queue-ids` returned. `offset` and
+         `limit` come from Scroll-window.
+   Post: a map from queue index to display row, for the indexes in the window
+         that still have a topic. Only these rows are formatted. A failed read
+         gives `{}`: the id read already reported the failure, and a window that
+         shows no row for a moment is not a claim that the queue is empty."
+  [user-id ids offset limit]
+  #?(:clj
+     (let [n (count ids)
+           from (max 0 (min n (long offset)))
+           to (max from (min n (+ from (long limit))))
+           {:keys [rows]} (db/get-queue-display-rows user-id (subvec ids from to))
+           by-id (into {} (map (juxt :topics/id identity)) rows)]
+       (into {}
+         (keep (fn [i]
+                 (when-let [row (by-id (nth ids i))]
+                   [i (prepare-queue-row row)])))
+         (range from to)))
+     :cljs {}))
 
 (defn get-queue-summary* [_refresh user-id]
   #?(:clj (db/get-queue-summary user-id)
@@ -119,7 +144,7 @@
   #?(:clj
      (read-region/measured-result :learn-queue
        (fn []
-       (let [{:keys [rows error] :as queue} (prepare-queue-rows _refresh user-id)]
+       (let [{:keys [rows error] :as queue} (prepare-queue-ids _refresh user-id)]
          (if error
            (throw (ex-info error {:region :learn-queue}))
            (assoc queue :rows (vec rows))))))
@@ -568,8 +593,8 @@
                 (e/Offload #(assoc (queue-result* refresh user-id)
                               :request-key [refresh user-id :queue])))))
           (e/fn [queue phase error]
-            (let [items-vec (e/server (:rows queue))
-                  item-count (e/server (count items-vec))]
+            (let [ids-vec (e/server (:rows queue))
+                  item-count (e/server (count ids-vec))]
               (case (e/snapshot (route-timing/mark-first-useful! :learn :queue))
                 (dom/div
                   (dom/props {:role "rowgroup"
@@ -581,7 +606,11 @@
                                       :min-height (if (zero? item-count) "72px" "0")
                                       :position "relative" :scrollbar-gutter "stable"}})
                   (let [[offset limit] (Scroll-window row-height item-count dom/node
-                                         {:overquery-factor 2 :reset-key user-id})]
+                                         {:overquery-factor 2 :reset-key user-id})
+                        ;; One primary-key query for the window. It is a plain
+                        ;; call, not an Offload: it takes milliseconds, and an
+                        ;; Offload would blank every row at each scroll step.
+                        window (e/server (queue-window-rows user-id ids-vec offset limit))]
                     (dom/props {:class "tape-scroll"
                                 :style {:--count item-count
                                         :--grid-cols grid-cols
@@ -589,7 +618,7 @@
                     (dom/table
                       (dom/props {:role "presentation"})
                       (e/for [i (Tape offset limit)]
-                        (when-let [item (e/server (nth items-vec i nil))]
+                        (when-let [item (e/server (get window i))]
                           (QueueRow item i navigate!)))))
                   (when (zero? item-count)
                     (dom/div
