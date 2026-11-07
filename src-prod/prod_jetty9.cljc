@@ -42,6 +42,7 @@
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
            (shell/wrap-prod-index-page config)
            (wrap-resource (:resources-path config))
+           (shell/wrap-hashed-bundle-cache-headers)
            (wrap-content-type)
            (wrap-not-modified)
            (wrap-ensure-cache-bust-on-server-deployment))

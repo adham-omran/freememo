@@ -49,6 +49,28 @@
                     (str manifest-folder (:output-name module))))
           {})))))
 
+(def ^:private hashed-bundle-uri
+  "Shadow-cljs `:module-hash-names true` writes `<name>.<32 hex digits>.js` into
+   the build's `:output-dir`, `/freememo/js/`. The pattern ends at `.js`, so a
+   `.map` file and `manifest.edn` do not match. It allows one path segment, so
+   `/freememo/js/sub/` does not match."
+  #"^/freememo/js/[A-Za-z0-9_-]+\.[0-9A-Fa-f]{32}\.js$")
+
+(defn wrap-hashed-bundle-cache-headers
+  "Mark the hashed client bundle as immutable for one year.
+
+   The hash in the file name changes with the bytes, so the bytes behind a URL
+   never change. Only a 200 answer gets the header: a 404 for that path must not
+   stay in a cache. Thread this BEFORE `wrap-ensure-cache-bust-on-server-deployment`,
+   which only sets a default when no header exists."
+  [next-handler]
+  (fn [ring-req]
+    (let [response (next-handler ring-req)]
+      (if (and (= 200 (:status response))
+               (re-matches hashed-bundle-uri (str (:uri ring-req))))
+        (ring-response/header response "Cache-Control" "public, max-age=31536000, immutable")
+        response))))
+
 (def text-only-paths
   "Paths where an HTML response is a lie, so this handler answers 404 instead.
 

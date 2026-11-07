@@ -223,6 +223,7 @@
            (shell/wrap-prod-index-page config)
            (wrap-resource (:resources-path config))
            (wrap-vendor-cache-headers)
+           (shell/wrap-hashed-bundle-cache-headers)
            (wrap-content-type)
            (wrap-not-modified)
            (wrap-ensure-cache-bust-on-server-deployment)
