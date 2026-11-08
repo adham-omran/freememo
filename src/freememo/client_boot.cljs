@@ -170,12 +170,17 @@
 
 (defn- stalled-heartbeat?
   "Whether this message on Electric's socket shows a process that stopped
-   reading it: a server heartbeat with no `onmessage` to echo it."
+   reading it: a server heartbeat with no `onmessage` to echo it.
+
+   A live process cannot give a false positive here. Electric sets
+   `onmessage` when the process subscribes, right after the socket opens
+   (`electric-client3/connector`). The server sends its first heartbeat 45 s
+   after open (`ELECTRIC-HEARTBEAT-INTERVAL`)."
   [socket event]
   (and (= "HEARTBEAT" (.-data event))
     (nil? (.-onmessage socket))))
 
-(defn- observe-electric-closes!
+(defn- observe-electric-socket!
   "Give every socket opened to Electric's URL a `close` listener that calls the
    close handler, and a `message` listener that calls the stall handler on a
    heartbeat nobody reads. Each socket gets the handlers current when it opens.
@@ -239,7 +244,7 @@
         report-once! (fn [termination error]
                        (when (compare-and-set! !reported? false true)
                          (send-failure! termination error)))]
-    (observe-electric-closes!
+    (observe-electric-socket!
       (fn [event]
         (when (and (server-terminated-codes (.-code event))
                 (not @!deliberate-stop?))
