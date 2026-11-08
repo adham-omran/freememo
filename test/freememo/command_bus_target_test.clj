@@ -61,3 +61,18 @@
     (bus/publish-focus-target! ::row card)
     (is (not-any? #(= :rename-topic (:id %))
           (palette/palette-rows :library @bus/!ctx "Rename")))))
+
+(deftest retract-focus-target-where-clears-a-matching-owner
+  (testing "a kept page that hides retracts the target of a row inside it"
+    (bus/publish-focus-target! :row-in-learn topic)
+    (bus/retract-focus-target-where! #(= :row-in-learn %))
+    (is (nil? (:focus-target @bus/!ctx)))
+    (is (nil? (:focus-target-owner @bus/!ctx))))
+  (testing "the target of a row outside the page stays"
+    (bus/publish-focus-target! :row-in-library topic)
+    (bus/retract-focus-target-where! #(= :row-in-learn %))
+    (is (= topic (:focus-target @bus/!ctx))))
+  (testing "no target at all is a no-op"
+    (bus/retract-focus-target! :row-in-library)
+    (bus/retract-focus-target-where! (constantly true))
+    (is (nil? (:focus-target @bus/!ctx)))))

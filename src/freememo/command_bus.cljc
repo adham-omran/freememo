@@ -93,6 +93,19 @@
                   ctx)))
   nil)
 
+(defn retract-focus-target-where!
+  "Clear the focus target if `pred` accepts its owner. A kept page that hides
+   calls this with \"is the owner inside me\", because a hidden row cannot
+   send the focusout that would retract its own target. Returns nil.
+   Post: a target owned by another surface stays."
+  [pred]
+  (swap! !ctx (fn [ctx]
+                (if (and (contains? ctx :focus-target-owner)
+                         (pred (:focus-target-owner ctx)))
+                  (dissoc ctx :focus-target :focus-target-owner)
+                  ctx)))
+  nil)
+
 (defn- context-target
   "The focus target, when `entry` applies to it; else nil."
   [entry ctx]

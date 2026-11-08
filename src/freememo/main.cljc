@@ -51,6 +51,7 @@
             [freememo.video-import-modal :refer [VideoUploadActivity]]
             [freememo.import-modal :refer [StagingUploadActivity]]
             [freememo.command-bus :as bus]
+            [freememo.context-menu-surface :as menu-surface]
             [freememo.command-palette :refer [CommandPalette]]
             [freememo.page-title :refer [PageTitle]]
             [freememo.page-title-format :as page-title-format]
@@ -439,9 +440,6 @@
                     (dom/props {:id "main-content"
                                 :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
                     (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                    (when (= active-tab :library)
-                      (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
-                        (LibraryPage user-id navigate!)))
                     (when (= active-tab :search)
                       (r/pop ; consume 'search from route; SearchPage reads remaining segments
                         (SearchPage user-id navigate!)))
@@ -471,7 +469,25 @@
                           (LearnPage user-id navigate! nil shown?)
                           ;; The page does not remount, so its queue cannot mark
                           ;; first useful again. Last form: an effect gates nothing.
-                          (when shown? (route-timing/mark-kept-useful! :learn)))))
+                          ;; A hide releases the focus target of a row inside the
+                          ;; page (ticket 16). Each branch holds only an effect, so
+                          ;; the flip remounts nothing of the page above.
+                          (if shown?
+                            (route-timing/mark-kept-useful! :learn)
+                            (menu-surface/release-focus-within! dom/node)))))
+                    ;; Library stays mounted too (ticket 17). It takes its sub-view
+                    ;; segment as a value and holds the last one while hidden,
+                    ;; so it has no r/pop here.
+                    (when (contains? kept :library)
+                      (let [shown? (= active-tab :library)]
+                        (dom/div
+                          (dom/props {:class "kept-page"
+                                      :data-kept (if shown? "shown" "hidden")
+                                      :aria-hidden (if shown? "false" "true")})
+                          (LibraryPage user-id navigate! (second r/route) shown?)
+                          (if shown?
+                            (route-timing/mark-kept-useful! :library)
+                            (menu-surface/release-focus-within! dom/node)))))
                     (when (= active-tab :schedule)
                       (r/pop ; consume 'schedule; SchedulePage reads the id segment
                         (SchedulePage user-id navigate!)))

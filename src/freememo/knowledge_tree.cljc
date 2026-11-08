@@ -7,6 +7,7 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
+   [freememo.held-counter :as held-counter]
    [freememo.loading :as loading]
    [freememo.read-region :as read-region]
    [freememo.route-timing :as route-timing]
@@ -408,8 +409,8 @@
             (let [[requested-revision _user-id filter-text kind-filter status-filter
                    sort-col sort-dir expansion]
                   request-key
-                  _rev (+ (e/watch (us/get-atom _user-id :refresh))
-                         (e/watch (us/get-atom _user-id :tree-mutations)))
+                  _rev (+ (held-counter/HeldCounter _user-id :refresh)
+                         (held-counter/HeldCounter _user-id :tree-mutations))
                   result-key [_rev _user-id filter-text kind-filter status-filter
                               sort-col sort-dir expansion]
                   items-result (e/Offload #(assoc
@@ -519,8 +520,8 @@
             ;; These server values update client atoms as sibling statements.
             ;; Pending reads cannot suppress the table shell or its controls.
             (let [server-revision
-                  (e/server (+ (e/watch (us/get-atom user-id :refresh))
-                             (e/watch (us/get-atom user-id :tree-mutations))))]
+                  (e/server (+ (held-counter/HeldCounter user-id :refresh)
+                             (held-counter/HeldCounter user-id :tree-mutations)))]
               (when (not= server-revision revision)
                 (case server-revision (reset! !revision server-revision))))
             (let [next-forbidden

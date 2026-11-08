@@ -26,7 +26,7 @@
    another tab shows. On the target tablet a Learn unmount cost 8.5 s and its
    mount 5 s on every switch
    (plans/low-end-tablet-performance/issues/14-electric-mount-cost.md)."
-  #{:learn})
+  #{:learn :library})
 
 (defn keep-tab!
   "Remember `tab` in `!kept` when it is a kept tab, and return the kept set.

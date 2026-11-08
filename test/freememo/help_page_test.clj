@@ -3,7 +3,9 @@
   (:require
    [clojure.set :as set]
    [clojure.test :refer [deftest is testing]]
-   [freememo.help-content :as help]))
+   [clojure.string :as str]
+   [freememo.help-content :as help]
+   [freememo.help-page :as hp]))
 
 (defn- workflow-step-labels [title]
   (some->> help/sections
@@ -59,3 +61,18 @@
           (is (set/subset? expected actual)
             (str "Help is missing steps from " title ": "
               (pr-str (set/difference expected (or actual #{}))))))))))
+
+(deftest section-html-is-one-escaped-string
+  (let [html (hp/section-html {:slug "s" :title "A & B" :intro "Use <b> {toggle-palette}"
+                               :steps [{:label "L \"1\"" :detail "D1"}
+                                       {:label "L2" :detail "D2"}]})]
+    (testing "text is escaped"
+      (is (str/includes? html "A &amp; B"))
+      (is (str/includes? html "Use &lt;b&gt;"))
+      (is (str/includes? html "L &quot;1&quot;")))
+    (testing "chord tokens resolve, so no braces remain"
+      (is (not (str/includes? html "{toggle-palette}"))))
+    (testing "structure: heading, intro, one li per step, no inline style"
+      (is (= 1 (count (re-seq #"<h2 " html))))
+      (is (= 2 (count (re-seq #"<li " html))))
+      (is (not (str/includes? html "style="))))))

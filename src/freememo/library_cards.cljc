@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    #?(:cljs [freememo.library-card-row :as row-view])
    [freememo.scroll :refer [Scroll-window]]
+   [freememo.held-counter :as held-counter]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.a11y :as a11y]
@@ -1604,7 +1605,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; acyclic value flow — no atom bridge, no reactive write.
           manifest (e/server
                      (let [rev (+ refresh
-                                 (e/watch (us/get-atom user-id :card-mutations))
+                                 (held-counter/HeldCounter user-id :card-mutations)
                                  sync-revision)]
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (review-overlay/AnkiOverlay
@@ -1645,9 +1646,9 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; the wire (counts, filtered-ids, manifest, window rows).
           snapshot (e/server
                      (let [revision [refresh
-                                     (e/watch (us/get-atom user-id :card-mutations))
+                                     (held-counter/HeldCounter user-id :card-mutations)
                                      sync-revision
-                                     (e/watch (us/get-atom user-id :tree-mutations))]]
+                                     (held-counter/HeldCounter user-id :tree-mutations)]]
                        (e/Offload #(load-user-cards* revision user-id))))
           result (e/server
                    (e/Offload #(assoc (query-loaded-cards* snapshot user-id opts)
