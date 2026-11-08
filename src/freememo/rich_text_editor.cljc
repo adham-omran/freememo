@@ -185,6 +185,24 @@
              (editor-actions/insert-audio! ed
                (some-> (.getSelection ed true) .-index)))))))
 
+(defn- release-quill-instance!
+  "Cut the dead Quill instance off the DOM it built.
+   Quill 2 keeps every instance in a module-level WeakMap keyed by its container
+   and has no destroy call. An Electric frame still holds the container of each
+   Learn review, so each dead instance stayed alive with its root, toolbar and
+   bubble tooltip (about 850 detached nodes a review, plus the blot tree). A
+   field set to nil cuts each of those links. The instance is only the WeakMap
+   value from here, and the container no longer reaches any DOM
+   (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
+   Pre : `destroy-editor!` has removed every listener on the instance.
+   Post: the instance holds no DOM. Never call a method on it afterwards."
+  [editor]
+  #?(:clj nil
+     :cljs
+     (doseq [k ["theme" "scroll" "root" "selection" "clipboard" "keyboard" "history"
+                "uploader" "editor" "composition" "emitter"]]
+       (aset ^js editor k nil))))
+
 (defn destroy-editor!
   "Destroy the current global editor instance (if any).
 
@@ -239,7 +257,9 @@
            (when (and tb (.-isConnected tb))
              (.remove tb))
            (when ct
-             (set! (.-innerHTML ct) "")))
+             (set! (.-innerHTML ct) ""))
+           ;; Last: nothing below may call the editor again.
+           (release-quill-instance! ed))
          (reset! !editor-state nil)
          (reset! !last-selection nil)))))
 
