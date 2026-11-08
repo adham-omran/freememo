@@ -63,5 +63,9 @@
 (deftest the-dashboard-mounts-after-the-queue
   (let [source (slurp "src/freememo/learn_page.cljc")]
     (is (str/includes? source "(when (e/watch !queue-ready)\n            (LearnDashboard revision refresh user-id))"))
-    (is (= 2 (n-of #"\(ready-after-paint! !queue-ready\)" source))
-        "the queue marks ready when it loads and when it fails")))
+    (is (= 1 (n-of #"\(queue-shown! !queue-ready\)" source))
+        "the loaded queue marks ready and first useful in one plain call")
+    (is (= 1 (n-of #"\(e/snapshot \(ready-after-paint! !queue-ready\)\)" source))
+        "a failed queue marks ready too")
+    (is (not (str/includes? source "(do (ready-after-paint!"))
+        "Electric may skip a form whose value is unused, so no effect sits first in a do")))

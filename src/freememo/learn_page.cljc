@@ -544,6 +544,15 @@
      :clj (reset! !ready true))
   :ready)
 
+(defn queue-shown!
+  "The queue's rows are in the DOM: mark Learn's first useful and let the
+   dashboard start after the next paint. One plain call, because Electric may
+   skip a form whose value is unused, so both effects cannot sit in a `do`.
+   Post: :marked."
+  [!ready]
+  (ready-after-paint! !ready)
+  (route-timing/mark-first-useful! :learn :queue))
+
 (e/defn QueueRow [item i navigate!]
   (e/client
     (let [item-status (or (:status item) "active")
@@ -613,8 +622,7 @@
           (e/fn [queue phase error]
             (let [ids-vec (e/server (:rows queue))
                   item-count (e/server (count ids-vec))]
-              (case (e/snapshot (do (ready-after-paint! !queue-ready)
-                                      (route-timing/mark-first-useful! :learn :queue)))
+              (case (e/snapshot (queue-shown! !queue-ready))
                 (dom/div
                   (dom/props {:role "rowgroup"
                               :class (str "learn-queue-scroll"
