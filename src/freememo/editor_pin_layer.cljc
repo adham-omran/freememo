@@ -47,12 +47,20 @@
 (e/defn DocumentPinSpec
   "The ref spec of the document open in the editor.
    Pre : dctx bound, as for the editor and the content toolbar.
-   Post: {:topic-id id} when that document can hold pins, else nil."
+   Post: {:topic-id id} when that document can hold pins, else nil. Nil also
+         while the spec of a new topic is on its way.
+
+   **Read the Offload through a client `e/as-vec`.** A Learn step changes
+   `topic-id`, so the Offload runs a new thunk and is empty until it answers.
+   Returned bare, that empty value unmounted every consumer and mounted it
+   again within one round trip. On a slow tablet that churn made Electric's
+   runtime read one remote signal twice (`Concurrent store reader.`), and the
+   page went blank (plans/low-end-tablet-performance/issues/13-learn-session-blank-page.md)."
   []
   (e/client
     (let [user-id dctx/user-id
           topic-id (pin-topic-id (boolean dctx/merged?) dctx/editor-doc-id dctx/topic-id)]
-      (e/server (e/Offload #(pin-spec* user-id topic-id))))))
+      (peek (e/as-vec (e/server (e/Offload #(pin-spec* user-id topic-id))))))))
 
 (e/defn EditorPinLayer
   "The pin layer of the document editor, or nothing when the open topic

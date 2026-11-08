@@ -32,6 +32,17 @@
    raises the banner from there. The measurements are in
    `plans/card-refresh-server-local.md` §4.
 
+   **A client-side socket failure can stall the same way, with the socket still
+   open.** On a slow device, Electric's `socket-transfer` can throw
+   `Concurrent store reader.` (a race in the runtime). It cancels every session,
+   which removes Electric's `onmessage`, and the teardown never ends. The page
+   goes blank, no continuation runs, and no close event comes until the server
+   times out 59 s later with 1013. The socket shows it first: a server
+   `HEARTBEAT` arrives while `onmessage` is nil. Electric echoes heartbeats from
+   `onmessage` only, so a live process never leaves it nil while the socket is
+   open. `boot!` reports and banners on that heartbeat. See
+   `plans/low-end-tablet-performance/issues/13-learn-session-blank-page.md`.
+
    **The banner is plain DOM on purpose.** Electric is dead by the time it
    renders, so it cannot be an `e/defn`. It is appended to `document.body`, the
    one parent Electric adds to and removes from by identity rather than by child
@@ -155,17 +166,28 @@
 
 (defonce ^:private !electric-close-handler (atom nil))
 
+(defonce ^:private !electric-stall-handler (atom nil))
+
+(defn- stalled-heartbeat?
+  "Whether this message on Electric's socket shows a process that stopped
+   reading it: a server heartbeat with no `onmessage` to echo it."
+  [socket event]
+  (and (= "HEARTBEAT" (.-data event))
+    (nil? (.-onmessage socket))))
+
 (defn- observe-electric-closes!
   "Give every socket opened to Electric's URL a `close` listener that calls the
-   handler current at the time the socket opens.
+   close handler, and a `message` listener that calls the stall handler on a
+   heartbeat nobody reads. Each socket gets the handlers current when it opens.
 
    Pre : called before the process opens its socket.
    Post: `js/WebSocket` still constructs native sockets, with the native
          prototype and constants. It is replaced at most once per page load.
    Invariant: a socket reports to the process that opened it, so the close of a
          socket from an earlier dev reload never reaches a later process."
-  [handler]
+  [handler stall-handler]
   (reset! !electric-close-handler handler)
+  (reset! !electric-stall-handler stall-handler)
   ;; String keys for the marker, read and write alike: Closure renames a dotted
   ;; property that no extern names.
   (when-not (aget js/WebSocket "freememoObservesCloses")
@@ -175,7 +197,12 @@
                                     (new native url)
                                     (new native url protocols))]
                        (when (= url electric-client/*ws-server-url*)
-                         (.addEventListener socket "close" @!electric-close-handler))
+                         (.addEventListener socket "close" @!electric-close-handler)
+                         (let [stall-handler @!electric-stall-handler]
+                           (.addEventListener socket "message"
+                             (fn [event]
+                               (when (stalled-heartbeat? socket event)
+                                 (stall-handler))))))
                        socket))]
       (set! (.-prototype observed) (.-prototype native))
       (doseq [constant ["CONNECTING" "OPEN" "CLOSING" "CLOSED"]]
@@ -220,7 +247,14 @@
             (.-code event) (.-reason event))
           (report-once! "server-close"
             (str "close " (.-code event) ": " (.-reason event)))
-          (raise-banner!))))
+          (raise-banner!)))
+      (fn []
+        (when-not @!deliberate-stop?
+          (let [error (js/Error.
+                        "Electric client process stopped reading its socket")]
+            (js/console.error (.-message error))
+            (report-once! "stalled" error)
+            (raise-banner!)))))
     (let [cancel (task
                    (fn [_]
                      ;; Success is not a healthy state here — only a deliberate
