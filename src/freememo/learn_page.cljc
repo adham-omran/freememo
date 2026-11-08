@@ -1,6 +1,7 @@
 (ns freememo.learn-page
   "Learn tab — incremental reading with spaced review queue."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.context-menu-surface :as menu-surface]
@@ -206,50 +207,125 @@
 
 ;; Dashboard UI
 
-(e/defn Bar-chart [data]
+;; The charts are one markup string each. A bar as Electric DOM cost about 15
+;; frames (g, title, rect, text, their props and styles). A string costs none.
+
+(defn- esc
+  "HTML-escape text for markup. Post: a string."
+  [s]
+  (-> (str s)
+    (str/replace "&" "&amp;")
+    (str/replace "<" "&lt;")
+    (str/replace ">" "&gt;")
+    (str/replace "\"" "&quot;")))
+
+(defn- num-str [x] (str (double x)))
+
+(defn- bar-title [n date]
+  (str n (if (= 1 n) " topic on " " topics on ") date))
+
+(defn- label-fill [today?]
+  (if today? "var(--color-success-dark)" "var(--color-text-secondary)"))
+
+(defn- text-markup [x y size weight today? s]
+  (str "<text x=\"" (num-str x) "\" y=\"" (num-str y) "\" text-anchor=\"middle\" style=\"fill:"
+    (label-fill today?) ";font-size:" size "px;font-weight:" weight "\">" (esc s) "</text>"))
+
+(defn bar-chart-markup
+  "Markup of the Studied chart.
+   Pre : data is a seq of {:date :label :count :today}.
+   Post: {:view-box string, :markup string of svg children}; the markup is \"\" for no data."
+  [data]
+  (let [w 300 top 16 plot-h 100 base (+ top plot-h)
+        n (max 1 (count data))
+        slot (/ w n)
+        bw (* slot 0.62)
+        maxc (max 1 (reduce max 0 (map :count data)))]
+    {:view-box (str "0 0 " w " " (+ base 16))
+     :markup
+     (apply str
+       (map-indexed
+         (fn [i d]
+           (let [c (:count d)
+                 today? (:today d)
+                 bh (if (zero? c) 2 (* plot-h (/ c maxc)))
+                 x (+ (* i slot) (/ (- slot bw) 2))
+                 y (- base bh)]
+             (str "<g><title>" (esc (bar-title c (:date d))) "</title>"
+               "<rect x=\"" (num-str x) "\" y=\"" (num-str y) "\" width=\"" (num-str bw)
+               "\" height=\"" (num-str bh) "\" rx=\"2\" style=\"fill:"
+               (if today? "var(--color-success)" "var(--color-primary-text)")
+               ";opacity:" (if (zero? c) "0.4" "1") "\"/>"
+               (when (pos? c)
+                 (text-markup (+ x (/ bw 2)) (- y 3) 8 (if today? "700" "500") today? c))
+               (text-markup (+ x (/ bw 2)) (+ base 12) 9 (if today? "700" "400") today? (:label d))
+               "</g>")))
+         data))}))
+
+(defn future-due-chart-markup
+  "Markup of the Future due chart: a backlog bar, one bar per day, a running-total line and the total.
+   Pre : future-due is {:backlog n :days [{:date :count :today}]}.
+   Post: {:view-box string, :markup string of svg children}."
+  [future-due]
+  (let [raw (into [{:count (:backlog future-due) :backlog true :date "overdue"}]
+              (:days future-due))
+        n (max 1 (count raw))
+        w 340 top 16 plot-h 100 base (+ top plot-h)
+        slot (/ w n) bw (* slot 0.62)
+        maxc (max 1 (reduce max 0 (map :count raw)))
+        total (max 1 (reduce + 0 (map :count raw)))
+        cums (vec (reductions + (map :count raw)))
+        bars (map-indexed
+               (fn [i d]
+                 (let [c (:count d)
+                       bh (if (zero? c) 2 (* plot-h (/ c maxc)))
+                       x (+ (* i slot) (/ (- slot bw) 2))]
+                   (assoc d :x x :bh bh :y (- base bh) :cx (+ x (/ bw 2))
+                     :cy (- base (* plot-h (/ (nth cums i) total)))
+                     :offset (- i 1))))
+               raw)
+        line-pts (str/join " " (map (fn [b] (str (num-str (:cx b)) "," (num-str (:cy b)))) bars))]
+    {:view-box (str "0 0 " w " " (+ base 16))
+     :markup
+     (str
+       (apply str
+         (for [bar bars
+               :let [today? (:today bar)]]
+           (str "<g><title>"
+             (esc (if (:backlog bar)
+                    (str (:count bar) " overdue (backlog)")
+                    (bar-title (:count bar) (:date bar))))
+             "</title>"
+             "<rect x=\"" (num-str (:x bar)) "\" y=\"" (num-str (:y bar)) "\" width=\"" (num-str bw)
+             "\" height=\"" (num-str (:bh bar)) "\" rx=\"2\" style=\"fill:"
+             (cond (:backlog bar) "var(--color-warning, #d97706)"
+                   today? "var(--color-success)"
+                   :else "var(--color-primary-text)")
+             ";opacity:" (if (zero? (:count bar)) "0.35" "1") "\"/>"
+             (when (or (:backlog bar) (zero? (mod (:offset bar) 5)))
+               (text-markup (:cx bar) (+ base 12) 9 (if today? "700" "400") today?
+                 (if (:backlog bar) "‹" (:offset bar))))
+             "</g>")))
+       "<polyline points=\"" line-pts "\" fill=\"none\" style=\"stroke:var(--color-text-secondary);"
+       "stroke-width:1.5;opacity:0.7\"/>"
+       "<text x=\"" w "\" y=\"" (+ top 2) "\" text-anchor=\"end\" style=\"fill:var(--color-text-secondary);"
+       "font-size:9px\">" (esc (str "Σ " total)) "</text>")}))
+
+(defn set-svg-markup!
+  "Write `markup` as the children of the svg `node`. Post: nil."
+  [node markup]
+  #?(:cljs (set! (.-innerHTML node) markup)
+     :clj nil)
+  nil)
+
+(e/defn Chart-svg [{:keys [view-box markup]}]
   (e/client
-    (let [w 300 top 16 plot-h 100 base (+ top plot-h)
-          n (max 1 (count data))
-          slot (/ w n)
-          bw (* slot 0.62)
-          maxc (max 1 (reduce max 0 (map :count data)))
-          bars (vec (map-indexed
-                      (fn [i d]
-                        (let [c (:count d)
-                              bh (if (zero? c) 2 (* plot-h (/ c maxc)))
-                              x (+ (* i slot) (/ (- slot bw) 2))]
-                          (assoc d :i i :x x :bh bh :y (- base bh))))
-                      data))]
-      (svg/svg
-        (dom/props {:viewBox (str "0 0 " w " " (+ base 16)) :width "100%"
-                    :style {:display "block"}})
-        (e/for [bar (e/diff-by :date bars)]
-          (svg/g
-            (svg/title (dom/text (str (:count bar)
-                                   (if (= 1 (:count bar)) " topic on " " topics on ")
-                                   (:date bar))))
-            (svg/rect
-              (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
-                          :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary-text)")
-                                  :opacity (if (zero? (:count bar)) "0.4" "1")}}))
-            ;; Count above each non-zero bar (zeros omitted to avoid clutter).
-            (when (pos? (:count bar))
-              (svg/text
-                (dom/props {:x (+ (:x bar) (/ bw 2)) :y (- (:y bar) 3) :text-anchor "middle"
-                            :style {:fill (if (:today bar)
-                                            "var(--color-success-dark)"
-                                            "var(--color-text-secondary)")
-                                    :font-size "8px"
-                                    :font-weight (if (:today bar) "700" "500")}})
-                (dom/text (str (:count bar)))))
-            (svg/text
-              (dom/props {:x (+ (:x bar) (/ bw 2)) :y (+ base 12) :text-anchor "middle"
-                          :style {:fill (if (:today bar)
-                                          "var(--color-success-dark)"
-                                          "var(--color-text-secondary)")
-                                  :font-size "9px"
-                                  :font-weight (if (:today bar) "700" "400")}})
-              (dom/text (:label bar)))))))))
+    (svg/svg
+      (dom/props {:viewBox view-box :width "100%" :style {:display "block"}})
+      (set-svg-markup! dom/node markup))))
+
+(e/defn Bar-chart [data]
+  (e/client (Chart-svg (bar-chart-markup data))))
 
 (e/defn Chart-card [title data]
   (e/client
@@ -257,67 +333,8 @@
       (dom/div (dom/props {:class "dash-cap"}) (dom/text title))
       (Bar-chart data))))
 
-;; Anki-style Future Due: one backlog bar (overdue), today at day 0, then
-;; forward days; a cumulative line (running total) overlays on the right.
 (e/defn Future-due-chart [future-due]
-  (e/client
-    (let [backlog (:backlog future-due)
-          days (:days future-due)
-          ;; Backlog bar (offset -1) prepended to the day series.
-          raw (into [{:label "" :count backlog :backlog true :date "overdue"}] days)
-          n (max 1 (count raw))
-          w 340 top 16 plot-h 100 base (+ top plot-h)
-          slot (/ w n) bw (* slot 0.62)
-          maxc (max 1 (reduce max 0 (map :count raw)))
-          total (max 1 (reduce + 0 (map :count raw)))
-          cums (vec (reductions + (map :count raw)))
-          bars (vec (map-indexed
-                      (fn [i d]
-                        (let [c (:count d)
-                              bh (if (zero? c) 2 (* plot-h (/ c maxc)))
-                              x (+ (* i slot) (/ (- slot bw) 2))
-                              cum (nth cums i)]
-                          (assoc d :i i :x x :bh bh :y (- base bh)
-                                 :cx (+ x (/ bw 2))
-                                 :cy (- base (* plot-h (/ cum total)))
-                                 :offset (- i 1))))
-                      raw))
-          line-pts (apply str (interpose " " (map (fn [b] (str (:cx b) "," (:cy b))) bars)))]
-      (svg/svg
-        (dom/props {:viewBox (str "0 0 " w " " (+ base 16)) :width "100%"
-                    :style {:display "block"}})
-        (e/for [bar (e/diff-by :date bars)]
-          (svg/g
-            (svg/title (dom/text (if (:backlog bar)
-                                   (str (:count bar) " overdue (backlog)")
-                                   (str (:count bar)
-                                        (if (= 1 (:count bar)) " topic on " " topics on ")
-                                        (:date bar)))))
-            (svg/rect
-              (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
-                          :style {:fill (cond (:backlog bar) "var(--color-warning, #d97706)"
-                                              (:today bar) "var(--color-success)"
-                                              :else "var(--color-primary-text)")
-                                  :opacity (if (zero? (:count bar)) "0.35" "1")}}))
-            (when (or (:backlog bar) (zero? (mod (:offset bar) 5)))
-              (svg/text
-                (dom/props {:x (+ (:x bar) (/ bw 2)) :y (+ base 12) :text-anchor "middle"
-                            :style {:fill (if (:today bar)
-                                            "var(--color-success-dark)"
-                                            "var(--color-text-secondary)")
-                                    :font-size "9px"
-                                    :font-weight (if (:today bar) "700" "400")}})
-                (dom/text (if (:backlog bar) "‹" (str (:offset bar))))))))
-        ;; Cumulative running-total line.
-        (svg/polyline
-          (dom/props {:points line-pts :fill "none"
-                      :style {:stroke "var(--color-text-secondary)"
-                              :stroke-width "1.5" :opacity "0.7"}}))
-        ;; Cumulative total, top-right.
-        (svg/text
-          (dom/props {:x w :y (+ top 2) :text-anchor "end"
-                      :style {:fill "var(--color-text-secondary)" :font-size "9px"}})
-          (dom/text (str "Σ " total)))))))
+  (e/client (Chart-svg (future-due-chart-markup future-due))))
 
 (e/defn Kpi-tile [icon value label]
   (e/client
@@ -519,6 +536,14 @@
             (dom/props {:class "progressive-region-failed" :role "status"})
             (dom/text (str "Could not load the learning summary. " error))))))))
 
+(defn ready-after-paint!
+  "Set `!ready` to true after the next frame paints, so the work that waits for
+   it starts in a task of its own. Post: :ready."
+  [!ready]
+  #?(:cljs (js/requestAnimationFrame (fn [_] (js/setTimeout #(reset! !ready true) 0)))
+     :clj (reset! !ready true))
+  :ready)
+
 (e/defn QueueRow [item i navigate!]
   (e/client
     (let [item-status (or (:status item) "active")
@@ -563,7 +588,7 @@
           (dom/props {:role "cell" :class "learn-queue-date"})
           (dom/text (or due-date "—")))))))
 
-(e/defn QueueTable [revision refresh user-id navigate!]
+(e/defn QueueTable [revision refresh user-id navigate! !queue-ready]
   (e/client
     (let [grid-cols "1fr 90px 120px"
           row-height 36
@@ -588,7 +613,8 @@
           (e/fn [queue phase error]
             (let [ids-vec (e/server (:rows queue))
                   item-count (e/server (count ids-vec))]
-              (case (e/snapshot (route-timing/mark-first-useful! :learn :queue))
+              (case (e/snapshot (do (ready-after-paint! !queue-ready)
+                                      (route-timing/mark-first-useful! :learn :queue)))
                 (dom/div
                   (dom/props {:role "rowgroup"
                               :class (str "learn-queue-scroll"
@@ -632,10 +658,12 @@
                   (loading/RegionNotice phase error)))))
           (e/fn [_phase] (LearnQueueSkeleton))
           (e/fn [error]
-            (dom/div
-              (dom/props {:class "learn-queue-failed" :role "status"})
-              (dom/text (str "The queue could not load. This does not mean that you are caught up. "
-                          error)))))))))
+            ;; A failed queue must not hold the dashboard back.
+            (case (e/snapshot (ready-after-paint! !queue-ready))
+              (dom/div
+                (dom/props {:class "learn-queue-failed" :role "status"})
+                (dom/text (str "The queue could not load. This does not mean that you are caught up. "
+                            error))))))))))
 
 (defn held-revision
   "The revision a kept Learn page reads: `live` while shown, else the last value
@@ -662,6 +690,7 @@
   [user-id navigate! viewer-nav shown?]
   (e/client
     (let [!revision (atom ::pending)
+          !queue-ready (atom false)
           revision (e/watch !revision)
           ;; Starts at nil, not at `live`: e/with-cycle makes its atom from the
           ;; initial value, so a reactive initial value would reset it. The
@@ -684,8 +713,11 @@
         (dom/div
           (dom/props {:class "page-container"})
           (StartLearningRegion revision refresh user-id navigate! viewer-nav)
-          (QueueTable revision refresh user-id navigate!)
-          (LearnDashboard revision refresh user-id))))))
+          (QueueTable revision refresh user-id navigate! !queue-ready)
+          ;; The dashboard mounts after the queue shows its rows, so the queue
+          ;; is not behind the charts and no one task builds both.
+          (when (e/watch !queue-ready)
+            (LearnDashboard revision refresh user-id)))))))
 
 (e/defn LearnPage
   "`shown?` is false while Main keeps the page mounted behind another tab."

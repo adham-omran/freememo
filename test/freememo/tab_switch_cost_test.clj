@@ -69,7 +69,7 @@
   (testing "no region e/fn closes over shown?: an e/fn over a changing value
             remounts the region's whole loaded body on every hide and show"
     (let [source (slurp "src/freememo/learn_page.cljc")]
-      (is (str/includes? source "(e/defn QueueTable [revision refresh user-id navigate!]"))
+      (is (str/includes? source "(e/defn QueueTable [revision refresh user-id navigate! !queue-ready]"))
       (is (not (str/includes? (subs source 0 (str/index-of source "(defn held-revision"))
                                 "shown?"))
           "every region is defined above held-revision and LearnOverview, so none may read shown?"))))
