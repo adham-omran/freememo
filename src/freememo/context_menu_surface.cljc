@@ -68,6 +68,22 @@
       :clj nil)
    nil))
 
+(defn release-focus-within!
+  "Release the focus a kept page holds when it hides. A hidden row sends a
+   focusout only when the browser repairs focus, and that differs between
+   browsers, so a menu key could act on a row nobody sees.
+   Clears the focus target whose owner is inside `container`, and blurs the
+   focused element when it is inside `container`. Returns nil.
+   Pre : `container` is the kept page's DOM node."
+  [container]
+  #?(:cljs (when container
+             (bus/retract-focus-target-where!
+               (fn [owner] (and (instance? js/Node owner) (.contains container owner))))
+             (let [active (.-activeElement js/document)]
+               (when (and active (.contains container active))
+                 (.blur active)))))
+  nil)
+
 (defn retract-focus-target!
   "Clear the focus target `owner` holds. Call from e/on-unmount. Returns nil."
   [owner]

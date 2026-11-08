@@ -51,6 +51,7 @@
             [freememo.video-import-modal :refer [VideoUploadActivity]]
             [freememo.import-modal :refer [StagingUploadActivity]]
             [freememo.command-bus :as bus]
+            [freememo.context-menu-surface :as menu-surface]
             [freememo.command-palette :refer [CommandPalette]]
             [freememo.page-title :refer [PageTitle]]
             [freememo.page-title-format :as page-title-format]
@@ -471,7 +472,12 @@
                           (LearnPage user-id navigate! nil shown?)
                           ;; The page does not remount, so its queue cannot mark
                           ;; first useful again. Last form: an effect gates nothing.
-                          (when shown? (route-timing/mark-kept-useful! :learn)))))
+                          ;; A hide releases the focus target of a row inside the
+                          ;; page (ticket 16). Each branch holds only an effect, so
+                          ;; the flip remounts nothing of the page above.
+                          (if shown?
+                            (route-timing/mark-kept-useful! :learn)
+                            (menu-surface/release-focus-within! dom/node)))))
                     (when (= active-tab :schedule)
                       (r/pop ; consume 'schedule; SchedulePage reads the id segment
                         (SchedulePage user-id navigate!)))

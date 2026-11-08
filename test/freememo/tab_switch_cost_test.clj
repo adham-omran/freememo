@@ -79,3 +79,16 @@
   (is (= 7 (learn-page/held-revision false nil 7)) "nothing held yet: read live")
   (is (= 9 (learn-page/held-revision true 7 9)))
   (is (= 7 (learn-page/held-revision false 7 9)) "hidden: keep the last value"))
+
+(deftest a-hidden-kept-page-releases-its-focus-target
+  (let [main (slurp "src/freememo/main.cljc")
+        surface (slurp "src/freememo/context_menu_surface.cljc")
+        start (str/index-of main "(when (contains? kept :learn)")
+        end (str/index-of main "(when (= active-tab :schedule)" start)
+        body (subs main start end)]
+    (testing "the hide releases focus from the page's own node, as the last form"
+      (is (str/includes? body "(menu-surface/release-focus-within! dom/node)"))
+      (is (< (str/index-of body "(LearnPage") (str/index-of body "release-focus-within!"))))
+    (testing "the release is a plain fn in the surface ns, so a second kept page reuses it"
+      (is (str/includes? surface "(defn release-focus-within!"))
+      (is (str/includes? surface "bus/retract-focus-target-where!")))))
