@@ -41,6 +41,9 @@
             :jvm-opts    ["-Xss4m" "-Dtaoensso.telemere.ct-min-level=:info"]
             :extra-deps  {thheller/shadow-cljs          {:mvn/version "2.26.2"}
                           io.github.clojure/tools.build {:mvn/version "0.10.8"}}}
+           ;; Diagnostic only: `playwright/tablet-rig-rebuild.sh --diag` fills target/frame-count with a patched
+           ;; Electric runtime3.cljc. Not in :prod, not in the uberjar, not in deploy.
+           :frame-count {:extra-paths ["target/frame-count"]}
            :jetty9 {:override-deps {ring/ring {:mvn/version "1.9.6"}}
                     :extra-deps    {ring/ring-jetty-adapter                       {:mvn/version "1.8.2"}
                                     ring/ring-servlet                             {:mvn/version "1.8.2"}
