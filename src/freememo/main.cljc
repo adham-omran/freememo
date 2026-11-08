@@ -440,9 +440,6 @@
                     (dom/props {:id "main-content"
                                 :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
                     (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                    (when (= active-tab :library)
-                      (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
-                        (LibraryPage user-id navigate!)))
                     (when (= active-tab :search)
                       (r/pop ; consume 'search from route; SearchPage reads remaining segments
                         (SearchPage user-id navigate!)))
@@ -477,6 +474,19 @@
                           ;; the flip remounts nothing of the page above.
                           (if shown?
                             (route-timing/mark-kept-useful! :learn)
+                            (menu-surface/release-focus-within! dom/node)))))
+                    ;; Library stays mounted too (ticket 17). It takes its sub-view
+                    ;; segment as a value and holds the last one while hidden,
+                    ;; so it has no r/pop here.
+                    (when (contains? kept :library)
+                      (let [shown? (= active-tab :library)]
+                        (dom/div
+                          (dom/props {:class "kept-page"
+                                      :data-kept (if shown? "shown" "hidden")
+                                      :aria-hidden (if shown? "false" "true")})
+                          (LibraryPage user-id navigate! (second r/route) shown?)
+                          (if shown?
+                            (route-timing/mark-kept-useful! :library)
                             (menu-surface/release-focus-within! dom/node)))))
                     (when (= active-tab :schedule)
                       (r/pop ; consume 'schedule; SchedulePage reads the id segment

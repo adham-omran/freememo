@@ -8,13 +8,20 @@
    [hyperfiddle.router5 :as r]
    [freememo.knowledge-tree :refer [DocumentTreeView document-kind-options]]
    [freememo.library-cards :refer [LibraryCardsView LibraryViewToggle]]
-   [freememo.math :as math]
-   #?(:clj [freememo.user-state :as us])))
+   [freememo.held-counter :as held-counter]
+   [freememo.math :as math]))
 
-(e/defn LibraryPage [user-id navigate!]
+(e/defn LibraryPage
+  "`live-sub` is the sub-view segment of the route, and `shown?` is false while
+   Main keeps the page mounted behind another tab. A hidden page keeps the
+   sub-view it last showed, and its server watches hold their last revision
+   (plans/low-end-tablet-performance/issues/17-keep-library-alive.md)."
+  [user-id navigate! live-sub shown?]
   (e/client
-    (let [[sub] r/route
+    (let [sub (e/with-cycle [held ::held-counter/none]
+                (held-counter/held-value shown? held live-sub))
           cards-view? (= 'cards sub)]
+     (binding [held-counter/shown? shown?]
       (dom/div
         (dom/props {:class "page-container"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
@@ -27,7 +34,7 @@
         ;; re-runs it for free — `ensure!` memoizes per group.
         (when cards-view? (e/snapshot (math/prefetch-katex!)))
         (if cards-view?
-          (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+          (let [refresh (held-counter/HeldCounter user-id :refresh)]
             (LibraryCardsView user-id navigate! refresh))
           (let [!filter-text (atom "")
                 filter-text (e/watch !filter-text)
@@ -96,4 +103,4 @@
 
             ;; Tree view
             (DocumentTreeView user-id navigate! filter-text
-              sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd)))))))
+              sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd))))))))
