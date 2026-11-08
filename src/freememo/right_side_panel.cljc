@@ -62,9 +62,10 @@
     (e/for-by identity [_k [root-topic-id]]
       (let [;; A saved state restores at every Viewer viewport, including a state
             ;; a command set. Only a document with no saved state starts closed on
-            ;; a phone, where the open panel covers the document. A deref, not a
-            ;; watch: rotating the phone must not re-create !open?.
-            default-open?   (not @viewport/!phone?)
+            ;; a phone or a portrait tablet (900px or less), where the open panel
+            ;; covers the document. A deref, not a watch: rotating the device must
+            ;; not re-create !open?.
+            default-open?   (not @viewport/!compact?)
             persisted-open? (e/server (settings/get-assistant-open user-id root-topic-id default-open?))
             initial-open?   persisted-open?
             !open? (atom initial-open?)

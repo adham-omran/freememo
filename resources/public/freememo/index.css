@@ -4888,22 +4888,13 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     .hierarchy-side-panel[data-motion] { transition: none; }
 }
 
-/* Compact (portrait tablet): a manually-opened side panel keeps its persisted
-   desktop width, which can crowd out the content column on a narrow screen.
-   Cap each open panel so the content always keeps room; the collapsed 32px
-   state is below the cap and unaffected. */
+/* Phone and portrait tablet: an open side panel covers the document. As a
+   column it left the document about 134px wide at 414px, which is four words
+   per line. On the 601px Redmi Pad SE, the two open panels at 60vw each left
+   the document no width at all. The collapsed 32px rail stays in the row, so
+   its toggle never covers text. `.document-columns` and the full-height
+   workspace anchor the overlay. */
 @media (max-width: 900px) {
-    .assistant-side-panel,
-    .hierarchy-side-panel {
-        max-width: 60vw;
-    }
-}
-
-/* Phone: an open side panel covers the document. As a column it left the
-   document about 134px wide at 414px, which is four words per line. The
-   collapsed 32px rail stays in the row, so its toggle never covers text.
-   `.document-columns` and the full-height workspace anchor the overlay. */
-@media (max-width: 600px) {
     .document-columns,
     .document-workspace--assistant-full {
         position: relative;
@@ -4921,14 +4912,20 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
         left: 0;
         width: min(var(--side-panel-width, 280px), 85%);
     }
-    /* A chat needs the whole width, and nobody reads beside it at 414px. */
     .assistant-side-panel:not(.assistant-side-panel--collapsed) {
         right: 0;
-        width: 100%;
-        border-left: 0;
+        width: min(var(--side-panel-width, 360px), 85%);
     }
     /* An overlay has no neighbouring column to resize against. */
     .side-panel__resize { display: none; }
+}
+
+/* A chat needs the whole width on a phone, and nobody reads beside it at 414px. */
+@media (max-width: 600px) {
+    .assistant-side-panel:not(.assistant-side-panel--collapsed) {
+        width: 100%;
+        border-left: 0;
+    }
 }
 
 /* Header row containing the hamburger toggle + (when open) the title label.
@@ -6187,12 +6184,12 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     max-width: 40vw;
 }
 
-/* Phone: an empty card table shrinks to its message and the document takes
-   the rest. At the saved split, "No cards yet" took about 40% of the height.
-   The divider has nothing to resize, so it hides. The first pending or saved
-   card removes .card-table-empty and restores the split. Each :has() searches
-   only the bottom panel, never the editor subtree. */
-@media (max-width: 600px) {
+/* Phone and portrait tablet: an empty card table shrinks to its message and
+   the document takes the rest. At the saved split, "No cards yet" took about
+   40% of the height. The divider has nothing to resize, so it hides. The first
+   pending or saved card removes .card-table-empty and restores the split. Each
+   :has() searches only the bottom panel, never the editor subtree. */
+@media (max-width: 900px) {
     .document-columns--split:has(~ .bottom-panel .card-table-empty) {
         flex: 1;
         height: auto;
