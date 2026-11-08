@@ -3,6 +3,9 @@
 
 #?(:cljs (defonce ^:private !next-run-id (atom 0)))
 #?(:cljs (defonce ^:private !active-run (atom nil)))
+;; tab -> the region that first marked useful for it. A kept page never
+;; remounts, so a later show reuses this (mark-kept-useful!).
+#?(:cljs (defonce ^:private !useful-region (atom {})))
 
 #?(:cljs
    (defn- stop-observer! [run]
@@ -80,6 +83,7 @@
        (when (and (= tab (:tab run)) (not (:useful-marked? run)))
          (let [mark-name (str "freememo:route:" (:id run) ":useful")]
            (swap! !active-run assoc :useful-marked? true)
+           (swap! !useful-region assoc tab region)
            (js/requestAnimationFrame
              (fn [_timestamp]
                (let [resources (array-seq (.getEntriesByType js/performance "resource"))
@@ -101,5 +105,17 @@
                  (stop-observer! run)
                  (when (= (:id run) (:id @!active-run))
                    (swap! !active-run assoc :observer nil))))))))
+     :clj nil)
+  :marked)
+
+(defn mark-kept-useful!
+  "Mark first useful for a kept page that shows again. Main keeps such a page
+   mounted, so its region does not mount again and cannot mark by itself.
+   Marks only when that region marked once before, so a page left before its
+   data arrived waits for its region as usual.
+   Post: returns :marked."
+  [tab]
+  #?(:cljs (when-let [region (get @!useful-region tab)]
+             (mark-first-useful! tab region))
      :clj nil)
   :marked)

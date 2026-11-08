@@ -350,19 +350,31 @@
                     ;; Derive active tab from URL route
                     [page] r/route
                     active-tab (if page (keyword (str page)) :home)
+                    ;; The tabs whose page stays mounted once visited. The binding
+                    ;; is read below, so its swap! runs on each tab change.
+                    !kept (atom #{})
+                    kept (nav/keep-tab! !kept active-tab)
                     ;; Every tab change funnels through here — rail items,
                     ;; in-page links and bus/run-nav! all call it — so
                     ;; it is the one place a :nav trail entry belongs. Only the
                     ;; nav TYPE is recorded: a search nav carries the user's
                     ;; query text, which must not reach the log.
+                    ;;
+                    ;; navigate! must be ONE value for the life of the shell.
+                    ;; Its only free variable is !nav-cmd. It reads the tab it
+                    ;; leaves from the URL when it is called, not from
+                    ;; `active-tab`: a closure over `active-tab` was a new value
+                    ;; on every tab switch, and every always-mounted consumer
+                    ;; (rail, banners, palette, invokers) ran again for it
+                    ;; (plans/low-end-tablet-performance/issues/14-electric-mount-cost.md).
                     navigate! (fn
                                 ([tab]
-                                 (trail/record! :nav {:tab tab :from active-tab})
+                                 (trail/record! :nav {:tab tab :from (nav/current-tab)})
                                  (route-timing/start-navigation! tab)
                                  (reset! !nav-cmd {:route (nav->route tab) :id (random-uuid)}))
                                 ([tab nav]
                                  (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
-                                 (trail/record! :nav {:tab tab :from active-tab
+                                 (trail/record! :nav {:tab tab :from (nav/current-tab)
                                                       :nav-type (:type nav)})
                                  (route-timing/start-navigation! tab)
                                  (reset! !nav-cmd {:route (nav->route tab nav) :id (random-uuid)})))]
@@ -423,44 +435,60 @@
                           (dom/On "click" (fn [_] (navigate! :library)) nil)))))
 
                   ;; Tab content
-                  (case (route-timing/mark-shell! active-tab)
-                    (dom/main
-                      (dom/props {:id "main-content"
-                                  :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
-                      (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                      (when (= active-tab :library)
-                        (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
-                          (LibraryPage user-id navigate!)))
-                      (when (= active-tab :search)
-                        (r/pop ; consume 'search from route; SearchPage reads remaining segments
-                          (SearchPage user-id navigate!)))
-                      (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                      (when (= active-tab :knowledge)
-                        (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
-                          (KnowledgePage user-id navigate!)))
-                      (when (= active-tab :graph) (GraphPage user-id navigate!))
-                      (when (= active-tab :quiz) (r/pop (QuizPage user-id navigate!)))
-                      (when (= active-tab :comprehension)
-                        (r/pop (ComprehensionPage user-id navigate!)))
-                      (when (= active-tab :help)
-                        (r/pop ; consume 'help; HelpPage reads the slug segment
-                          (HelpPage user-id)))
-                      (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
-                      (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
-                      (when (= active-tab :learn) (LearnPage user-id navigate! nil))
-                      (when (= active-tab :schedule)
-                        (r/pop ; consume 'schedule; SchedulePage reads the id segment
-                          (SchedulePage user-id navigate!)))
-                      (when (= active-tab :curriculum)
-                        (r/pop
-                          (CurriculumPage user-id navigate!)))
-                      (when (= active-tab :viewer)
-                        (ViewerContent user-id enc-key navigate! llm-enabled?))
-                      ;; One title owner per route: Main for plain tabs, the page for
-                      ;; tabs whose routes name an item. A tab with no label reads
-                      ;; Not found (plans/reactive-page-title.md §4).
-                      (when-not (page-title-format/self-titled-tabs active-tab)
-                        (PageTitle user-id [:label active-tab])))))
+                  (dom/main
+                    (dom/props {:id "main-content"
+                                :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph :schedule :curriculum} active-tab) "hidden" "auto")}})
+                    (when (= active-tab :home) (HomePage navigate! user-id enc-key))
+                    (when (= active-tab :library)
+                      (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
+                        (LibraryPage user-id navigate!)))
+                    (when (= active-tab :search)
+                      (r/pop ; consume 'search from route; SearchPage reads remaining segments
+                        (SearchPage user-id navigate!)))
+                    (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
+                    (when (= active-tab :knowledge)
+                      (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
+                        (KnowledgePage user-id navigate!)))
+                    (when (= active-tab :graph) (GraphPage user-id navigate!))
+                    (when (= active-tab :quiz) (r/pop (QuizPage user-id navigate!)))
+                    (when (= active-tab :comprehension)
+                      (r/pop (ComprehensionPage user-id navigate!)))
+                    (when (= active-tab :help)
+                      (r/pop ; consume 'help; HelpPage reads the slug segment
+                        (HelpPage user-id)))
+                    (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
+                    (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
+                    ;; Learn stays mounted after its first visit and is hidden
+                    ;; while another tab shows. On the tablet, unmounting it
+                    ;; cost 8.5 s and mounting it 5 s on every switch
+                    ;; (plans/low-end-tablet-performance/issues/14-electric-mount-cost.md).
+                    (when (contains? kept :learn)
+                      (let [shown? (= active-tab :learn)]
+                        (dom/div
+                          (dom/props {:class "kept-page"
+                                      :data-kept (if shown? "shown" "hidden")
+                                      :aria-hidden (if shown? "false" "true")})
+                          (LearnPage user-id navigate! nil shown?)
+                          ;; The page does not remount, so its queue cannot mark
+                          ;; first useful again. Last form: an effect gates nothing.
+                          (when shown? (route-timing/mark-kept-useful! :learn)))))
+                    (when (= active-tab :schedule)
+                      (r/pop ; consume 'schedule; SchedulePage reads the id segment
+                        (SchedulePage user-id navigate!)))
+                    (when (= active-tab :curriculum)
+                      (r/pop
+                        (CurriculumPage user-id navigate!)))
+                    (when (= active-tab :viewer)
+                      (ViewerContent user-id enc-key navigate! llm-enabled?))
+                    ;; One title owner per route: Main for plain tabs, the page for
+                    ;; tabs whose routes name an item. A tab with no label reads
+                    ;; Not found (plans/reactive-page-title.md §4).
+                    (when-not (page-title-format/self-titled-tabs active-tab)
+                      (PageTitle user-id [:label active-tab]))
+                    ;; The shell mark is the LAST form, not a `case` around dom/main: a
+                    ;; `case` remounts its branch each time its test re-emits, and that
+                    ;; would unmount the kept Learn page on every tab switch.
+                    (route-timing/mark-shell! active-tab)))
 
                 ;; Activity popover — a sibling of the page column, anchored to
                 ;; the rail's docked edge (index.css), so an open popover never

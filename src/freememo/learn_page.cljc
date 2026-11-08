@@ -424,16 +424,14 @@
                   :role "status"})
       (dom/text (str "Could not load this section. " error)))))
 
-(e/defn LearnDashboard [revision user-id]
+(e/defn LearnDashboard [revision refresh user-id]
   (e/client
     (dom/div (dom/props {:class "learn-dashboard"})
       (loading/WithLatestRegion [revision user-id :kpis]
         (e/fn []
           (e/server
-            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                            (e/watch (us/get-atom user-id :queue-mutations)))]
-              (e/Offload #(assoc (learn-kpis-result* refresh user-id)
-                            :request-key [refresh user-id :kpis])))))
+            (e/Offload #(assoc (learn-kpis-result* refresh user-id)
+                          :request-key [refresh user-id :kpis]))))
         (e/fn [kpis phase error]
           (dom/div
             (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
@@ -446,10 +444,8 @@
         (loading/WithLatestRegion [revision user-id :studied]
           (e/fn []
             (e/server
-              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                              (e/watch (us/get-atom user-id :queue-mutations)))]
-                (e/Offload #(assoc (studied-series-result* refresh user-id)
-                              :request-key [refresh user-id :studied])))))
+              (e/Offload #(assoc (studied-series-result* refresh user-id)
+                            :request-key [refresh user-id :studied]))))
           (e/fn [studied phase error]
             (dom/div
               (dom/props {:class (str "learn-chart-region"
@@ -462,10 +458,8 @@
         (loading/WithLatestRegion [revision user-id :future-due]
           (e/fn []
             (e/server
-              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                              (e/watch (us/get-atom user-id :queue-mutations)))]
-                (e/Offload #(assoc (future-due-result* refresh user-id)
-                              :request-key [refresh user-id :future-due])))))
+              (e/Offload #(assoc (future-due-result* refresh user-id)
+                            :request-key [refresh user-id :future-due]))))
           (e/fn [future-due phase error]
             (dom/div
               (dom/props {:class (str "learn-chart-region"
@@ -482,10 +476,8 @@
       (loading/WithLatestRegion [revision user-id :status]
         (e/fn []
           (e/server
-            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                            (e/watch (us/get-atom user-id :queue-mutations)))]
-              (e/Offload #(assoc (status-breakdown-result* refresh user-id)
-                            :request-key [refresh user-id :status])))))
+            (e/Offload #(assoc (status-breakdown-result* refresh user-id)
+                          :request-key [refresh user-id :status]))))
         (e/fn [status phase error]
           (dom/div
             (dom/props {:class (when (= phase :refreshing) "progressive-region-refreshing")})
@@ -498,16 +490,14 @@
         (Teaser-card "Total study time" "See how long you actually study.")
         (Teaser-card "Expected study time" "Know how long your queue will take.")))))
 
-(e/defn StartLearningRegion [revision user-id navigate! viewer-nav]
+(e/defn StartLearningRegion [revision refresh user-id navigate! viewer-nav]
   (e/client
     (dom/div (dom/props {:class "learn-start-region"})
       (loading/WithLatestRegion [revision user-id :queue-summary]
         (e/fn []
           (e/server
-            (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                            (e/watch (us/get-atom user-id :queue-mutations)))]
-              (e/Offload #(assoc (queue-summary-result* refresh user-id)
-                            :request-key [refresh user-id :queue-summary])))))
+            (e/Offload #(assoc (queue-summary-result* refresh user-id)
+                          :request-key [refresh user-id :queue-summary]))))
         (e/fn [summary phase error]
           (let [due-today (:due-today summary)
                 session-active? (= :learn-session (:type viewer-nav))]
@@ -573,7 +563,7 @@
           (dom/props {:role "cell" :class "learn-queue-date"})
           (dom/text (or due-date "—")))))))
 
-(e/defn QueueTable [revision user-id navigate!]
+(e/defn QueueTable [revision refresh user-id navigate!]
   (e/client
     (let [grid-cols "1fr 90px 120px"
           row-height 36
@@ -593,10 +583,8 @@
         (loading/WithLatestServerRegion [revision user-id :queue]
           (e/fn []
             (e/server
-              (let [refresh (+ (e/watch (us/get-atom user-id :refresh))
-                              (e/watch (us/get-atom user-id :queue-mutations)))]
-                (e/Offload #(assoc (queue-result* refresh user-id)
-                              :request-key [refresh user-id :queue])))))
+              (e/Offload #(assoc (queue-result* refresh user-id)
+                            :request-key [refresh user-id :queue]))))
           (e/fn [queue phase error]
             (let [ids-vec (e/server (:rows queue))
                   item-count (e/server (count ids-vec))]
@@ -649,26 +637,57 @@
               (dom/text (str "The queue could not load. This does not mean that you are caught up. "
                           error)))))))))
 
-(e/defn LearnOverview [user-id navigate! viewer-nav]
+(defn held-revision
+  "The revision a kept Learn page reads: `live` while shown, else the last value
+   it read. A plain function, so a flip of `shown?` that keeps the value equal
+   emits nothing downstream.
+   Pre : live is a number; held is nil before the first read.
+   Post: live when shown? or when nothing is held yet, else held."
+  [shown? held live]
+  (if (or shown? (nil? held)) live held))
+
+(e/defn LearnOverview
+  "The Learn tab. Main keeps it mounted after the first visit and hides it while
+   another tab shows (plans/low-end-tablet-performance/issues/14-electric-mount-cost.md).
+
+   `shown?` is false while the page is kept but hidden. Then `refresh` holds its
+   last value, so a Learn session's review steps do not query the six regions
+   again behind the session. When the page shows again, `refresh` catches up and
+   each region refreshes in place, keeping its last value meanwhile.
+
+   Only the server-sited `refresh` reads `shown?`. Never close a region's e/fn
+   over it: an e/fn over a value is a new e/fn when the value changes, and the
+   region then remounts its whole loaded body on every hide and show (measured
+   on the tablet: the 24 queue rows rebuilt 4 times per toggle)."
+  [user-id navigate! viewer-nav shown?]
   (e/client
     (let [!revision (atom ::pending)
-          revision (e/watch !revision)]
+          revision (e/watch !revision)
+          ;; Starts at nil, not at `live`: e/with-cycle makes its atom from the
+          ;; initial value, so a reactive initial value would reset it. The
+          ;; choice is a plain call, not an Electric `if`: an `if` switches
+          ;; branch frames when `shown?` flips and emits `refresh` again with an
+          ;; equal value, and every region then queried again on each hide.
+          refresh (e/server
+                    (let [live (+ (e/watch (us/get-atom user-id :refresh))
+                                 (e/watch (us/get-atom user-id :queue-mutations)))]
+                      (e/with-cycle [held nil]
+                        (held-revision shown? held live))))]
       ;; The client sentinel mounts the shell. The server revision arrives as a
       ;; sibling update and changes only each data region's request key.
-      (let [server-revision
-            (e/server (+ (e/watch (us/get-atom user-id :refresh))
-                       (e/watch (us/get-atom user-id :queue-mutations))))]
-        (when (not= server-revision revision)
-          (case server-revision (reset! !revision server-revision))))
+      (when (not= refresh revision)
+        (case refresh (reset! !revision refresh)))
       ;; The full-width outer div scrolls, so the scrollbar sits at the pane
       ;; edge and not at the edge of the 960px column.
       (dom/div
         (dom/props {:class "learn-page"})
         (dom/div
           (dom/props {:class "page-container"})
-          (StartLearningRegion revision user-id navigate! viewer-nav)
-          (QueueTable revision user-id navigate!)
-          (LearnDashboard revision user-id))))))
+          (StartLearningRegion revision refresh user-id navigate! viewer-nav)
+          (QueueTable revision refresh user-id navigate!)
+          (LearnDashboard revision refresh user-id))))))
 
-(e/defn LearnPage [user-id navigate! viewer-nav]
-  (LearnOverview user-id navigate! viewer-nav))
+(e/defn LearnPage
+  "`shown?` is false while Main keeps the page mounted behind another tab."
+  [user-id navigate! viewer-nav shown?]
+  (LearnOverview user-id navigate! viewer-nav shown?))

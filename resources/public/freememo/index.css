@@ -3944,7 +3944,7 @@ textarea:hover {
    add no DOM node, so no Electric frame changes shape. A spinner fades in
    after 300ms, so a fast load shows nothing. */
 body:not(:has(> *))::before,
-#main-content:not(:has(> *))::before,
+#main-content:not(:has(> :not(.kept-page[data-kept="hidden"])))::before,
 .page-container:not(:has(> *))::before,
 .topic-page:not(:has(> *))::before {
     content: "";
@@ -3964,7 +3964,7 @@ body:not(:has(> *))::before {
     left: 50%;
     margin: -11px 0 0 -11px;
 }
-#main-content:not(:has(> *))::before,
+#main-content:not(:has(> :not(.kept-page[data-kept="hidden"])))::before,
 .topic-page:not(:has(> *))::before {
     margin: 64px auto 0;
 }
@@ -6630,6 +6630,31 @@ form[aria-busy="true"] {
     border-bottom: 1px solid var(--color-border);
     font-size: 13px;
     color: var(--color-text-primary);
+}
+
+/* ── Kept page ─────────────────────────────────────────────────────
+   Main keeps the Learn page mounted after its first visit and hides it while
+   another tab shows (freememo.navigation/kept-tabs). On the target tablet an
+   unmount cost 8.5 s and a mount 5 s on every switch.
+   Hidden, the page stays laid out. `display: none` would give its virtual
+   scroll a height of 0 and unmount every row. `content-visibility: hidden`
+   does the same through the ResizeObserver: on the tablet the hidden queue
+   rebuilt about 15,000 frames during one visit to another tab. The second
+   rule hides every descendant, so a rule that sets `visibility: visible` (a
+   placed row menu) cannot show through. Hidden content leaves the
+   accessibility tree, and `pointer-events: none` keeps it from a click. */
+.kept-page {
+    height: 100%;
+}
+.kept-page[data-kept="hidden"] {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    visibility: hidden;
+    pointer-events: none;
+}
+.kept-page[data-kept="hidden"] * {
+    visibility: hidden !important;
 }
 
 /* ── Learn Dashboard ───────────────────────────────────────────── */

@@ -1,7 +1,41 @@
 (ns freememo.navigation
   "Navigation state constructors and schema.
    All navigation mutations should use these constructors to ensure
-   consistent data shapes. No ad-hoc map construction.")
+   consistent data shapes. No ad-hoc map construction."
+  (:require [clojure.string :as str]))
+
+(defn path->tab
+  "The tab that a URL path names: its first segment as a keyword, or :home for
+   the root. The same rule as Main's `active-tab`, which reads router5's route.
+   Pre : path is a URL path such as \"/library/documents\", or nil.
+   Post: a keyword."
+  [path]
+  (let [seg (first (remove empty? (str/split (str path) #"/")))]
+    (if seg (keyword seg) :home)))
+
+(defn current-tab
+  "The tab the browser shows now, read from the URL when it is called. Main's
+   navigate! uses it, so that navigate! does not close over `active-tab` and
+   stays one value. Client only; nil on the JVM."
+  []
+  #?(:cljs (path->tab (.-pathname js/location))
+     :clj nil))
+
+(def kept-tabs
+  "The tabs whose page Main keeps mounted after the first visit, hidden while
+   another tab shows. On the target tablet a Learn unmount cost 8.5 s and its
+   mount 5 s on every switch
+   (plans/low-end-tablet-performance/issues/14-electric-mount-cost.md)."
+  #{:learn})
+
+(defn keep-tab!
+  "Remember `tab` in `!kept` when it is a kept tab, and return the kept set.
+   Pre : !kept is an atom holding a set of tab keywords.
+   Post: the set never shrinks, and holds only members of `kept-tabs`."
+  [!kept tab]
+  (if (contains? kept-tabs tab)
+    (swap! !kept conj tab)
+    @!kept))
 
 ;; Viewer nav types (stored in !viewer-nav atom in Main):
 ;; {:type :topic           :topic-id _ :origin _}

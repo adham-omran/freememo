@@ -15,17 +15,20 @@
 
 (defn build-client "
 invoke like: clj -X:build:prod build-client`
+Add `:source-map true` for a bundle that ships a `.js.map` file, to attribute
+profile time to namespaces (plans/low-end-tablet-performance). The deploy never
+passes it, so the default bundle stays the same.
 Note: do not use `clj -T`, because Electric shadow compilation requires
 application classpath to be available"
-  [{:keys [optimize debug verbose version shadow-build git-commit]
-    :or {optimize true, debug false, verbose false, version electric-user-version, shadow-build :prod, git-commit default-git-commit}
+  [{:keys [optimize debug verbose version shadow-build git-commit source-map]
+    :or {optimize true, debug false, verbose false, source-map false, version electric-user-version, shadow-build :prod, git-commit default-git-commit}
     :as config}]
   (log/info 'build-client (pr-str config #_argmap))
   (b/delete {:path "resources/public/freememo/js"})
   (b/delete {:path "resources/electric-manifest.edn"})
 
   ; bake electric-user-version into artifact, cljs and clj
-  (b/write-file {:path "resources/electric-manifest.edn" :content (-> config (dissoc :version :shadow-build) (assoc :hyperfiddle/electric-user-version version :git-commit git-commit))})
+  (b/write-file {:path "resources/electric-manifest.edn" :content (-> config (dissoc :version :shadow-build :source-map) (assoc :hyperfiddle/electric-user-version version :git-commit git-commit))})
 
   ; "java.lang.NoClassDefFoundError: com/google/common/collect/Streams" is fixed by
   ; adding com.google.guava/guava {:mvn/version "31.1-jre"} to deps,
@@ -36,7 +39,8 @@ application classpath to be available"
         {:debug   debug,
          :verbose verbose,
          :config-merge
-         [{:compiler-options {:optimizations (if optimize :advanced :simple)}
+         [{:compiler-options (cond-> {:optimizations (if optimize :advanced :simple)}
+                               source-map (assoc :source-map true))
            :closure-defines  {'hyperfiddle.electric-client3/ELECTRIC_USER_VERSION version}}]})
       shadow-status (assert (= shadow-status :done) "shadow-api/release error")) ; fail build on error
   (shadow-server/stop!)
