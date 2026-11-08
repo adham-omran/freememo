@@ -173,25 +173,31 @@
           loses focus, so a later mousedown on its padding cannot focus it.
           Escape whose target is the container itself passes through: the
           second Escape closes the modal.
-   Note : no teardown. Both listeners live on the editor's own DOM and die
-          with it, as the Quill bindings die with the keyboard module."
+          Returns a teardown fn that removes both listeners.
+   Note : the container can outlive the editor. The document editor's container
+          is an Electric node, and an old Electric frame can keep it alive. The
+          keydown closure holds the root, so `destroy-editor!` calls the
+          teardown (plans/low-end-tablet-performance/issues/20-session-dom-growth.md)."
   [editor]
   #?(:clj nil
      :cljs
      (let [^js ed editor
            ^js root (.-root ed)
-           ^js container (.-container ed)]
-       (.addEventListener container "keydown"
-         (fn [^js e]
-           (when (and (= "Escape" (.-key e))
-                      (not (.-isComposing e))
-                      (.contains root (.-target e)))
-             (.stopPropagation e)
-             (when-not (editor-popovers/close-open!)
-               (.setAttribute container "tabindex" "-1")
-               (.focus container #js {:preventScroll true})))))
-       (.addEventListener container "blur"
-         (fn [_] (.removeAttribute container "tabindex"))))))
+           ^js container (.-container ed)
+           on-key (fn [^js e]
+                    (when (and (= "Escape" (.-key e))
+                               (not (.-isComposing e))
+                               (.contains root (.-target e)))
+                      (.stopPropagation e)
+                      (when-not (editor-popovers/close-open!)
+                        (.setAttribute container "tabindex" "-1")
+                        (.focus container #js {:preventScroll true}))))
+           on-blur (fn [_] (.removeAttribute container "tabindex"))]
+       (.addEventListener container "keydown" on-key)
+       (.addEventListener container "blur" on-blur)
+       (fn []
+         (.removeEventListener container "keydown" on-key)
+         (.removeEventListener container "blur" on-blur)))))
 
 (defn focused-enter-or-space?
   "True for an Enter/Space keydown on the focused element itself

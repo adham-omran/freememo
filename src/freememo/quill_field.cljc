@@ -611,13 +611,15 @@
            ;; The custom menu replaces the hidden Bubble tooltip.
            (a11y/label-quill-toolbar! (.-parentElement container))
            ;; Tab moves to the next field, as in any form; the format menu's
-           ;; indent buttons indent. Escape leaves the editor.
+           ;; indent buttons indent. Escape leaves the editor: its install
+           ;; returns a teardown, so it is in :teardowns below.
            (a11y/free-quill-tab! ed)
-           (a11y/install-editor-escape! ed)
            ;; Add cloze shortcuts only to a cloze field.
            (when cloze? (editor-actions/install-cloze-bindings! ed))
            {:editor ed
             :teardowns [markdown-teardown
+                        ;; Escape leaves the editor.
+                        (a11y/install-editor-escape! ed)
                         (format-menu/install! ed {:image? true
                                                   :audio? true
                                                   :cloze? (boolean cloze?)})

@@ -78,7 +78,9 @@
           node (when ready? (editor-root generation))
           spec (DocumentPinSpec)
           list-open? (e/watch pin-state/!document-pin-list-open?)]
-      (e/for-by identity [_k (if spec [spec] [])]
+      ;; The key shadows `spec`, so a frame never sees the next document's
+      ;; spec before Electric removes it (see `pin-pane/PinLayer`).
+      (e/for-by identity [spec (if spec [spec] [])]
         (e/on-unmount #(reset! pin-state/!document-pin-list-open? false))
         (when node
           (pin-pane/PinLayer user-id spec node :quill scope list-open?

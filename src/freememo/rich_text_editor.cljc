@@ -185,23 +185,46 @@
              (editor-actions/insert-audio! ed
                (some-> (.getSelection ed true) .-index)))))))
 
-(defn- release-quill-instance!
-  "Cut the dead Quill instance off the DOM it built.
-   Quill 2 keeps every instance in a module-level WeakMap keyed by its container
-   and has no destroy call. An Electric frame still holds the container of each
-   Learn review, so each dead instance stayed alive with its root, toolbar and
-   bubble tooltip (about 850 detached nodes a review, plus the blot tree). A
-   field set to nil cuts each of those links. The instance is only the WeakMap
-   value from here, and the container no longer reaches any DOM
-   (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
-   Pre : `destroy-editor!` has removed every listener on the instance.
-   Post: the instance holds no DOM. Never call a method on it afterwards."
+(defn- empty-dead-quill!
+  "Drop the content and the UI nodes of a Quill instance that is being destroyed.
+
+   Something can keep a dead editor reachable for the rest of the session, so
+   its garbage must be small. Electric v3 keeps each frame that crossed the wire
+   in its socket, with the last value of each signal. Old frames of
+   `RichTextEditorComponent` and `PinLayer` still hold the container and the
+   `.ql-editor` root of each Learn review. Quill hangs its whole instance off
+   both: a WeakMap keyed by the container, and listeners on the root. So each
+   review kept about 850 detached nodes alive: the document, the bubble tooltip
+   and its toolbar (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
+
+   Pre : the editor's DOM is out of the document. A scroll event from the empty
+         content would otherwise reach the reading-position tracker while the
+         old topic is still active, and it could save the top of the document.
+   Post: the instance holds one empty line, no undo stack, an empty tooltip
+         and toolbar, and no reference to the old toolbar controls. The
+         instance stays usable, so a late timer (the syntax module's
+         highlight) does not throw."
   [editor]
   #?(:clj nil
      :cljs
-     (doseq [k ["theme" "scroll" "root" "selection" "clipboard" "keyboard" "history"
-                "uploader" "editor" "composition" "emitter"]]
-       (aset ^js editor k nil))))
+     (try
+       (let [^js ed editor]
+         (.setContents ed #js [] "silent")
+         (some-> (.-history ed) .clear)
+         ;; The toolbar module keeps every button and select in `controls`,
+         ;; and the theme keeps every picker. Emptying the toolbar node alone
+         ;; left those 343 nodes alive.
+         (when-let [^js toolbar (.getModule ed "toolbar")]
+           (set! (.-controls toolbar) #js [])
+           (when-let [^js bar (.-container toolbar)]
+             (set! (.-innerHTML bar) "")))
+         (when-let [^js theme (.-theme ed)]
+           (set! (.-pickers theme) #js [])
+           (when-let [^js tip (some-> (.-tooltip theme) .-root)]
+             (set! (.-innerHTML tip) ""))))
+       ;; A failure here must not stop `destroy-editor!` from clearing its state.
+       (catch :default e
+         (log/log-warn (str "empty-dead-quill! failed: " (.-message e)))))))
 
 (defn destroy-editor!
   "Destroy the current global editor instance (if any).
@@ -219,7 +242,7 @@
        (reset! !editor-ready? false)
        (reset! merged-window/!blocked-range nil)
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown focus-anchor-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown focus-anchor-teardown escape-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -244,6 +267,9 @@
            ;; current page.
            (when page-marker-teardown (page-marker-teardown))
            (when focus-anchor-teardown (focus-anchor-teardown))
+           ;; Remove the Escape listeners on the container. Their closure holds
+           ;; the root, and the container can outlive the editor.
+           (when escape-teardown (escape-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -258,8 +284,8 @@
              (.remove tb))
            (when ct
              (set! (.-innerHTML ct) ""))
-           ;; Last: nothing below may call the editor again.
-           (release-quill-instance! ed))
+           ;; After the clear above, so the emptied nodes are out of the document.
+           (empty-dead-quill! ed))
          (reset! !editor-state nil)
          (reset! !last-selection nil)))))
 
@@ -547,7 +573,7 @@
        (a11y/label-quill-toolbar! container)
        ;; Tab indents the line; Escape leaves the editor.
        (a11y/install-tab-indent! editor)
-       (a11y/install-editor-escape! editor)
+       (swap! !editor-state assoc :escape-teardown (a11y/install-editor-escape! editor))
        editor)))
 
 (defn init-editor-with-scope!

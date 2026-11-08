@@ -347,31 +347,6 @@
   ;; one's (plans/document-question-pins.md §2.2).
   (js/WeakMap.))
 
-;; Every layer that has not been torn down. Electric can run `install!` for a
-;; branch that it drops before it registers the branch's `e/on-unmount`: a Learn
-;; step ran it twice and tore down once, so each review kept one layer. The
-;; layer's listeners kept the old editor's DOM (about 850 nodes) alive. This
-;; set lets the next `install!` tear down a layer whose container has left the
-;; document (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
-(defonce ^:private !live (js/Set.))
-
-(def ^:private mount-grace-ms 2000)
-
-(defn- sweep-stale!
-  "Tear down each live layer whose container is not in the document and either
-   was in it before, or has been out of it for `mount-grace-ms`. A younger
-   layer whose container was never seen in the document stays, because it may
-   still be mounting. Electric installed a layer on an editor root that was
-   already gone, so that case has no earlier sighting."
-  []
-  (let [now (js/Date.now)]
-    (doseq [^js rec (js/Array.from !live)]
-      (let [^js c (.-container rec)]
-        (when (.-isConnected c) (set! (.-connected rec) true))
-        (when (and (not (.-isConnected c))
-                   (or (.-connected rec) (> (- now (.-born rec)) mount-grace-ms)))
-          ((.-teardown rec)))))))
-
 (defn layer-for
   "The handle of the pin layer installed on `container`, or nil."
   [^js container]
@@ -504,7 +479,6 @@
          `teardown!`. The layer repaints itself on scroll, resize, and any
          change to the pane's DOM — a new document, or KaTeX typesetting."
   [^js container callbacks]
-  (sweep-stale!)
   (let [layer (el "div" "question-pin-layer")
         badges (el "div" "question-pin-layer__badges")
         finger (el "div" "question-pin-layer__finger")
@@ -536,9 +510,7 @@
                                (set! (.. ask -style -display) "none")))
         observer (js/MutationObserver. (fn [_ _]
                                          (schedule!)
-                                         (when quill? (relocate-soon!))))
-        rec #js {:container container :connected (.-isConnected container) :teardown nil
-                 :born (js/Date.now)}]
+                                         (when quill? (relocate-soon!))))]
     (set! (.-type ask) "button")
     (set! (.-textContent ask) "Ask")
     (.setAttribute ask "aria-label" "Ask about the selected passage")
@@ -568,27 +540,18 @@
                    :relocate! #(relocate! handle)
                    :teardown!
                    (fn []
-                     ;; Idempotent: a sweep and Electric's unmount may both call it.
-                     (when (.has !live rec)
-                       (.delete !live rec)
-                       (.disconnect observer)
-                       (some-> @!relocate-timer js/clearTimeout)
-                       (when (identical? token (:token (.get !layers container)))
-                         (.delete !layers container))
-                       (.removeEventListener container "mouseup" on-up)
-                       (.removeEventListener container "keyup" on-up)
-                       (.removeEventListener container "scroll" schedule!)
-                       (.removeEventListener js/window "resize" schedule!)
-                       (.removeEventListener js/document "selectionchange" on-selection)
-                       (when (exists? js/Highlight)
-                         (.delete (.-highlights js/CSS) highlight-name))
-                       (.remove layer))))]
-      (set! (.-teardown rec) (:teardown! handle))
-      (.add !live rec)
-      ;; A container that is already out of the document gets no later install
-      ;; to sweep it, so look again once the grace has passed.
-      (when-not (.-isConnected container)
-        (js/setTimeout sweep-stale! (+ mount-grace-ms 100)))
+                     (.disconnect observer)
+                     (some-> @!relocate-timer js/clearTimeout)
+                     (when (identical? token (:token (.get !layers container)))
+                       (.delete !layers container))
+                     (.removeEventListener container "mouseup" on-up)
+                     (.removeEventListener container "keyup" on-up)
+                     (.removeEventListener container "scroll" schedule!)
+                     (.removeEventListener js/window "resize" schedule!)
+                     (.removeEventListener js/document "selectionchange" on-selection)
+                     (when (exists? js/Highlight)
+                       (.delete (.-highlights js/CSS) highlight-name))
+                     (.remove layer)))]
       (.set !layers container handle)
       handle)))
 

@@ -444,8 +444,16 @@
     ;; plans/commit-range-walkthrough.md): a pane stays mounted when the route
     ;; or the step moves to another file, and the layer, its popover and its
     ;; pins belong to one.
-    (e/for-by identity [_k [[node spec model scope]]]
-      (let [!popover (atom nil)
+    ;;
+    ;; The body reads the four values from its own key, never from the
+    ;; arguments. With the arguments, a Learn step gave the old frame the new
+    ;; editor root before Electric removed it. That frame installed a second
+    ;; layer on the new root, and nothing tore it down: 2 installs and 1
+    ;; teardown per step. Its listeners kept that editor's DOM alive
+    ;; (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
+    (e/for-by identity [k [[node spec model scope]]]
+      (let [[node spec model scope] k
+            !popover (atom nil)
             popover (e/watch !popover)
             handle (install-layer! node model scope !popover)
             located (e/watch (located-atom handle))
