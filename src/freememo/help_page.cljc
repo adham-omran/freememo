@@ -6,6 +6,7 @@
    filters sections and steps (3.1) through help-content/filter-sections, the
    one matching rule."
   (:require
+   [clojure.string :as str]
    [freememo.command-bus :as bus]
    [freememo.contact-support :refer [ContactSupport]]
    [freememo.help-content :as help]
@@ -46,31 +47,47 @@
      :clj nil)
   (reset! !query ""))
 
+(defn- esc
+  "HTML-escape `s` for element text. Post: a string."
+  [s]
+  (str/escape (str s) {\& "&amp;" \< "&lt;" \> "&gt;" \" "&quot;"}))
+
+(defn section-html
+  "The inner HTML of one section: heading, intro and the step list, chord tokens
+   resolved and every text escaped. Styling lives in index.css (.help-section__*),
+   so the string holds no style attribute.
+
+   One string per section, set once through `set-html!`, builds one Electric
+   frame instead of about 18 per section (plans/low-end-tablet-performance,
+   ticket 18). Pre : `section` has :title, :intro and :steps.
+   Post: a string."
+  [{:keys [title intro steps]}]
+  (str "<h2 class=\"help-section__title\">" (esc title) "</h2>"
+    "<p class=\"help-section__intro\">" (esc (help/resolve-chords intro)) "</p>"
+    "<ol class=\"help-section__steps\">"
+    (apply str
+      (for [{:keys [label detail]} steps]
+        (str "<li class=\"help-section__step\"><strong>" (esc (help/resolve-chords label))
+          "</strong> \u2014 " (esc (help/resolve-chords detail)) "</li>")))
+    "</ol>"))
+
+(defn set-html!
+  "Set `node`'s inner HTML to `html`. A plain fn, so Electric builds no frame
+   for it. Post: nil. CLJ no-op."
+  [node html]
+  #?(:cljs (set! (.-innerHTML node) html)
+     :clj nil)
+  nil)
+
 (e/defn HelpSection
   "One section. `target?` marks the section /help/<slug> names."
-  [{:keys [slug title intro steps]} target?]
+  [{:keys [slug] :as section} target?]
   (e/client
     (dom/section
       (dom/props {:id (section-dom-id slug)
                   :class (if target? "help-section help-section--target" "help-section")})
-      (dom/h2
-        (dom/props {:style {:font-size "18px" :font-weight "600" :margin-bottom "4px"
-                            :color "var(--color-text-primary)"}})
-        (dom/text title))
-      (dom/p
-        (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)"
-                            :margin-bottom "10px"}})
-        (dom/text (help/resolve-chords intro)))
-      (dom/ol
-        (dom/props {:style {:padding-left "20px" :display "flex"
-                            :flex-direction "column" :gap "8px"}})
-        (e/for-by :label [{:keys [label detail]} steps]
-          (dom/li
-            (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"
-                                :line-height "1.5"}})
-            (dom/strong (dom/text (help/resolve-chords label)))
-            (dom/text " — ")
-            (dom/text (help/resolve-chords detail))))))))
+      ;; Last form: a fire-and-forget effect. Re-runs when the HTML changes.
+      (set-html! dom/node (section-html section)))))
 
 (e/defn HelpPage [user-id]
   (e/client
@@ -81,10 +98,9 @@
           query (e/watch !query)
           shown (help/filter-sections query)]
       (dom/div
-        (dom/props {:style {:max-width "820px" :margin "0 auto" :padding "32px 24px"}})
+        (dom/props {:class "help-page"})
         (dom/h1
-          (dom/props {:style {:font-size "26px" :font-weight "700" :margin-bottom "6px"
-                              :color "var(--color-text-primary)"}})
+          (dom/props {:class "help-page__title"})
           (dom/text "Help"))
         (dom/p
           (dom/a
@@ -95,16 +111,13 @@
             (dom/props {:href "/docs"})
             (dom/text "Browse public documentation")))
         (dom/p
-          (dom/props {:style {:font-size "15px" :color "var(--color-text-secondary)"
-                              :margin-bottom "28px"}})
+          (dom/props {:class "help-page__lede"})
           (dom/text "FreeMemo runs three review systems over what you read: a priority queue for reading, FSRS-6 for quiz questions, and your own Anki for cards. Here's how to use it, feature by feature."))
         ;; plans/getting-started-checklist.md 5.2 — the same command as the palette.
         (dom/p
-          (dom/props {:style {:font-size "14px" :margin "-16px 0 28px"}})
+          (dom/props {:class "help-page__checklist"})
           (dom/a
-            (dom/props {:href "/"
-                        :style {:color "var(--color-primary-text)" :font-weight "600"
-                                :text-decoration "underline" :cursor "pointer"}})
+            (dom/props {:href "/" :class "help-page__checklist-link"})
             (dom/text "Show the getting-started checklist")
             (dom/On "click" (fn [e] (.preventDefault e) (bus/dispatch! :show-getting-started)) nil)))
         (ContactSupport user-id)
