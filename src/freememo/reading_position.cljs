@@ -6,8 +6,8 @@
    1. `installed!` — a content writer reports, from inside its own plain fn and
       after its write, that `surface` now holds `topic-id`'s content in `node`
       (§4 3.6). A restore runs only against an install of its own topic (3.7).
-   2. `stored!` — the keyed `ReadingPosition` frame hands over the server's
-      row, or nil when there is none (§4 3.5.2).
+   2. `stored!` — `ReadingPosition` hands over the server's row for the
+      tracker's own [topic-id surface], or nil when there is none (§4 3.5.2).
    3. Document-level listeners, installed once (§4 3.4, 4.4): `scroll` and the
       user-input events in the capture phase, `pagehide`, and
       `visibilitychange`. `scroll` does not bubble, but a capture-phase listener
