@@ -92,6 +92,23 @@ _Avoid_: Mixed-form retry, copied exam
 The existing timed assessment over short knowledge-graph questions.
 _Avoid_: Exam
 
+## Learn
+
+**Learn Session**:
+The run of due topics that a user reads one after the other, started from the
+Learn page. The queue is fixed when the session starts.
+_Avoid_: Review session, study session, Learn page
+
+**Next**:
+The action that ends the current topic in a Learn Session, schedules its next
+review, and shows the next topic in the queue.
+_Avoid_: Advance, skip
+
+**Topic View**:
+The part of the Learn Session screen that shows one topic: its body, its
+toolbars, its cards, and the panes around it.
+_Avoid_: Viewer, reader, topic page
+
 ## Service Commitments
 
 **Availability**:
