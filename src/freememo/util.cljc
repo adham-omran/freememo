@@ -172,13 +172,19 @@
    re-emits the same id keeps what the user changed.
 
    `!seen` maps `slot` to the key last seen. An absent slot always resets, so
-   the first call on a mount seeds the atoms."
-  [!seen slot k pairs]
-  (when (not= (get @!seen slot ::unseeded) k)
-    (swap! !seen assoc slot k)
-    (doseq [[!a v] pairs]
-      (reset! !a v)))
-  nil)
+   the first call on a mount seeds the atoms.
+
+   `on-reset!`, when given, is a thunk that runs on each reset, before the
+   atoms. It resets what no atom holds, for example the text of an
+   uncontrolled input."
+  ([!seen slot k pairs] (reset-on-key! !seen slot k pairs nil))
+  ([!seen slot k pairs on-reset!]
+   (when (not= (get @!seen slot ::unseeded) k)
+     (swap! !seen assoc slot k)
+     (when on-reset! (on-reset!))
+     (doseq [[!a v] pairs]
+       (reset! !a v)))
+   nil))
 
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!

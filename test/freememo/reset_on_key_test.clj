@@ -42,3 +42,17 @@
     (let [!seen (atom {}) !a (atom :stale)]
       (util/reset-on-key! !seen :topic nil [[!a nil]])
       (is (nil? @!a)))))
+
+(deftest on-reset-runs-once-per-new-key
+  (testing "the thunk resets what no atom holds (an uncontrolled input box), before the atoms"
+    (let [!seen (atom {}) !a (atom :stale) !log (atom [])
+          on-reset! #(swap! !log conj [:thunk @!a])]
+      (is (nil? (util/reset-on-key! !seen :topic 1 [[!a nil]] on-reset!)))
+      (is (= [[:thunk :stale]] @!log))
+      (reset! !a :typed)
+      (util/reset-on-key! !seen :topic 1 [[!a nil]] on-reset!)
+      (is (= :typed @!a) "an equal key runs nothing")
+      (is (= 1 (count @!log)))
+      (util/reset-on-key! !seen :topic 2 [[!a nil]] on-reset!)
+      (is (= [[:thunk :stale] [:thunk :typed]] @!log))
+      (is (nil? @!a)))))

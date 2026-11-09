@@ -88,31 +88,46 @@
                      (reset! !filter-text "")))))
      :clj nil))
 
+(defn clear-filter-input!
+  "Empty the uncontrolled filter input and cancel its pending debounced write,
+   so the old text can land neither in the box nor in !filter-text."
+  [!timer node]
+  #?(:cljs (do (util/cancel-debounce! !timer)
+               (set! (.-value node) ""))
+     :clj nil))
+
 (e/defn CardFilterBar
   "Text, kind and Unsynced filters for the card table.
-   Pre:  mounted in a frame keyed on the topic, so a topic change unmounts it.
-         The atoms belong to ContentCardTable; `kind` and `unsynced?` are their
-         watched values.
+   Pre:  the atoms belong to ContentCardTable; `kind` and `unsynced?` are their
+         watched values. `topic-id` is the table's topic.
    Post: !filter-text holds the input's text 150 ms after the last keystroke.
-         Unmount clears all three filters, so every topic starts unfiltered.
-   The input is uncontrolled. Clearing !filter-text does not clear the box, and
-   that is why a topic change remounts this component instead of resetting it."
-  [!filter-text !filter-kind !filter-unsynced? kind unsynced?]
+         A new `topic-id` clears all three filters and the input box, so every
+         topic starts unfiltered. Unmount clears the three filters too.
+   The frame stays mounted across a topic change: a Learn Session Next does
+   not build it again (plans/learn-next-speed/issues/05). The input is
+   uncontrolled, so the reset empties the box itself."
+  [!filter-text !filter-kind !filter-unsynced? kind unsynced? topic-id]
   (e/client
-    (let [!timer (atom nil)]
+    (let [!timer (atom nil)
+          !seen (atom {})]
       (e/on-unmount #(reset-filters! !timer !filter-text !filter-kind !filter-unsynced?))
       (dom/input
         (dom/props {:type "text" :class "input card-filter-input"
                     :placeholder "Filter cards…" :aria-label "Filter cards"})
-        ;; Keyed by the node: the old and new bars of a topic change are both
-        ;; mounted for a moment, in an order nothing promises.
+        ;; Keyed by the node, so a remount of the bar retracts only its own
+        ;; invoker, in whatever order the old and new bars mount.
         (let [node dom/node]
           (bus/publish-invoker! :filter-cards node #(focus-filter-input! node))
           (e/on-unmount #(bus/retract-invoker! :filter-cards node)))
         (dom/On "input"
           (fn [e] (util/debounce! !timer !filter-text (-> e .-target .-value) 150))
           nil)
-        (dom/On "keydown" (fn [e] (on-filter-keydown! e !timer !filter-text)) nil))
+        (dom/On "keydown" (fn [e] (on-filter-keydown! e !timer !filter-text)) nil)
+        ;; The per-topic reset. Last form: an effect gates no frame.
+        (let [node dom/node]
+          (util/reset-on-key! !seen :topic topic-id
+            [[!filter-text ""] [!filter-kind ""] [!filter-unsynced? false]]
+            #(clear-filter-input! !timer node))))
       (e/for [[t {picked :kind}] (forms-ext/Select! :kind kind card-filter/kind-options
                                    :class "input card-filter-kind"
                                    :aria-label "Filter by card kind")]
@@ -336,9 +351,8 @@
             ;; slots (docs/electric-patterns.md, "An e/for Gets an Element of Its Own").
             (dom/div
               (dom/props {:class "card-filter-bar"})
-              (e/for-by identity [_topic [topic-id]]
-                (CardFilterBar !filter-text !filter-kind !filter-unsynced?
-                  filter-kind filter-unsynced?))))
+              (CardFilterBar !filter-text !filter-kind !filter-unsynced?
+                filter-kind filter-unsynced? topic-id)))
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
             (let [scroll-node dom/node
@@ -433,9 +447,9 @@
       ;; This component stays mounted across a Learn Session Next, so the open
       ;; card editor and the review position of topic N reset when the scope
       ;; changes, or they show on topic N+1. The scope is the table's own: the
-      ;; review cursors are row indexes into its list. The filters reset
-      ;; through CardFilterBar's keyed remount, which also clears the input
-      ;; box. !landed holds card ids, unique across topics, so it stays.
+      ;; review cursors are row indexes into its list. CardFilterBar resets
+      ;; the filters and its input box on the same key change. !landed holds
+      ;; card ids, unique across topics, so it stays.
       ;; Last form: an effect gates no frame.
       (util/reset-on-key! !topic-seen :scope topic-id
         [[!editing-card nil] [!review-cursors {}] [!review-target nil]
