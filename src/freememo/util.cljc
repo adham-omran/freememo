@@ -160,6 +160,26 @@
                                         (reset! !debounced v)) ms)))
      :clj nil))
 
+(defn reset-on-key!
+  "Resets each atom of `pairs` ([[!a v] …]) to its `v` when `k` differs from
+   the key that `!seen` holds for `slot`, then records `k`. Returns nil.
+
+   The one reset path for view state that outlives its subject. The Topic View
+   stays mounted across a Learn Session Next (plans/learn-next-in-place.md), so
+   a component's atoms see the next topic as a new key, not as a new mount.
+   Call this with the topic id as `k`, and an atom that holds topic N's state
+   starts clean on topic N+1. An equal key does nothing, so a refresh that
+   re-emits the same id keeps what the user changed.
+
+   `!seen` maps `slot` to the key last seen. An absent slot always resets, so
+   the first call on a mount seeds the atoms."
+  [!seen slot k pairs]
+  (when (not= (get @!seen slot ::unseeded) k)
+    (swap! !seen assoc slot k)
+    (doseq [[!a v] pairs]
+      (reset! !a v)))
+  nil)
+
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
   "Begin a split-pane drag. Call from a pointerdown handler.

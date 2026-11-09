@@ -21,6 +21,7 @@
    [freememo.rich-text-editor :as editor]
    [clojure.string :as str]
    [freememo.topic-kinds :as topic-kinds]
+   [freememo.util :as util]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])
@@ -302,12 +303,10 @@
    Keying on the seed also stops a refresh from resetting state the user
    changed, such as the page they scrolled to.
 
-   `!seen` maps `slot` to the key last seen; an absent slot always seeds."
+   `!seen` maps `slot` to the key last seen; an absent slot always seeds.
+   One atom's case of util/reset-on-key!, the one reset path."
   [!a !seen slot k v]
-  (when (not= (get @!seen slot ::unseeded) k)
-    (swap! !seen assoc slot k)
-    (reset! !a v))
-  nil)
+  (util/reset-on-key! !seen slot k [[!a v]]))
 
 (defn seed-layout!
   "Reseeds DocumentLayoutState's per-document atoms from `resolved`. One plain
@@ -324,10 +323,15 @@
       (all? has-source-pane? initial-editor-hidden?))))
 
 (defn seed-view!
-  "Reseeds DocumentViewState's per-topic atoms. See seed-layout!."
-  [!seen !current-page !total topic-id initial-page pdf-page-count]
+  "Reseeds DocumentViewState's per-topic atoms. See seed-layout!.
+   `per-topic` holds [!a v] pairs that go back to `v` when the topic changes:
+   panel and modal flags, which hold topic N's state and must not show on
+   topic N+1 after a Learn Session Next
+   (plans/learn-next-speed/issues/06-reset-per-topic-state.md)."
+  [!seen !current-page !total topic-id initial-page pdf-page-count per-topic]
   (reseed! !current-page !seen :current-page [topic-id initial-page] initial-page)
-  (reseed! !total !seen :total [topic-id pdf-page-count] (or-else pdf-page-count 0)))
+  (reseed! !total !seen :total [topic-id pdf-page-count] (or-else pdf-page-count 0))
+  (util/reset-on-key! !seen :per-topic topic-id per-topic))
 
 (defn default-split-pct []
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
@@ -787,7 +791,13 @@
           phone? (e/watch viewport/!phone?)
           reading-mode? (all? phone? (= (:origin queue-ctx) :learn))]
       {;; As in DocumentLayoutState: in the map so that they always run.
-       ::seeded (seed-view! !seen !current-page !total topic-id initial-page pdf-page-count)
+       ;; The panel flags reset per topic. !video-el and !video-playhead stay:
+       ;; the player owns the element, and the playhead carries its own
+       ;; :topic-id for consumers to compare.
+       ::seeded (seed-view! !seen !current-page !total topic-id initial-page pdf-page-count
+                  [[!show-bib false] [!doc-options-open false]
+                   [!score-region nil] [!score-pages {}] [!score-modal-open? false]
+                   [!score-edit nil] [!video-region nil]])
        :!current-page !current-page :current-page current-page
        :on-page-change! on-page-change!
        :last-page-save last-page-save :t-last-page t-last-page

@@ -199,6 +199,8 @@
           !review-cursors (atom {})
           !review-target (atom nil)
           !review-message (atom nil)
+          ;; Keys for the per-topic reset in the last form (util/reset-on-key!).
+          !topic-seen (atom {})
           ;; Row keys of the last card query, server-side, for row-motion/arrivals!.
           !seen (e/server (atom {}))
           ;; Card ids whose pending row has landed (land-pending!).
@@ -427,4 +429,14 @@
                                   "No cards yet. Use the Generate button above to create flashcards from this content.")))))))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
-          (dom/text "Error loading cards: " (e/server (:error cards-result))))))))
+          (dom/text "Error loading cards: " (e/server (:error cards-result)))))
+      ;; This component stays mounted across a Learn Session Next, so the open
+      ;; card editor and the review position of topic N reset when the scope
+      ;; changes, or they show on topic N+1. The scope is the table's own: the
+      ;; review cursors are row indexes into its list. The filters reset
+      ;; through CardFilterBar's keyed remount, which also clears the input
+      ;; box. !landed holds card ids, unique across topics, so it stays.
+      ;; Last form: an effect gates no frame.
+      (util/reset-on-key! !topic-seen :scope topic-id
+        [[!editing-card nil] [!review-cursors {}] [!review-target nil]
+         [!review-message nil]]))))

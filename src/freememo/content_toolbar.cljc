@@ -27,6 +27,7 @@
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
+   [freememo.util :as util]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.editor-pin-layer :refer [EditorPinControls]]
    [freememo.tooltip :as tooltip]
@@ -156,9 +157,11 @@
           popover-less? (or dctx/is-code?
                           (contains? topic-kinds/read-only-content-kinds dctx/kind))
 
-          ;; Overflow menu state
+          ;; Overflow menu state. It closes on a topic change (see the last
+          ;; form): this component stays mounted across a Learn Session Next.
           !overflow-open (atom false)
           overflow-open (e/watch !overflow-open)
+          !topic-seen (atom {})
           ;; Content-aware collapse — !collapse-tier atom drives the `.collapse-N`
           ;; class on .toolbar-container. ResizeObserver lives in
           ;; install-overflow-detector! (plain Clojure fn) to keep this e/defn's
@@ -283,4 +286,8 @@
             (when overflow-open
               (dom/div
                 (dom/props {:class "toolbar-overflow-backdrop"})
-                (dom/On "click" (fn [_] (reset! !overflow-open false)) nil))))))))))
+                (dom/On "click" (fn [_] (reset! !overflow-open false)) nil)))))))
+      ;; The overflow menu of topic N does not stay open on topic N+1. The
+      ;; collapse tier stays: the detector measures it again on every change
+      ;; to the toolbar's content. Last form: an effect gates no frame.
+      (util/reset-on-key! !topic-seen :topic topic-id [[!overflow-open false]]))))
