@@ -117,6 +117,17 @@
     (let [!gate (atom {:id "g" :from 41 :at 1000})]
       (is (nil? (learn-session/tap-next! !gate 41 true 7 1050)))
       (is (nil? @editor/!held-topic-id))))
+  (testing "a tap on a kind with no editor body holds nothing"
+    (reset! editor/!held-topic-id nil)
+    (let [!gate (atom nil)]
+      (is (some? (learn-session/tap-next! !gate 41 false 7 1000)))
+      (is (nil? @editor/!held-topic-id))))
+  (testing "Postpone holds the editor only for a kind with an editor body"
+    (reset! editor/!held-topic-id nil)
+    (learn-session/hold-editor! 41 false)
+    (is (nil? @editor/!held-topic-id))
+    (learn-session/hold-editor! 41 true)
+    (is (= 41 @editor/!held-topic-id)))
   (testing "a failed save releases the editor"
     (reset! editor/!held-topic-id 41)
     (is (= :released (learn-session/release-editor!)))

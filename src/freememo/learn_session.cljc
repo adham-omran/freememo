@@ -47,9 +47,12 @@
   "Hold the editor read-only for `topic-id` from the tap on Next or Postpone
    until the next body is in, so a key typed while the save runs changes
    nothing (plans/learn-next-speed/issues/10-edit-during-save-window.md).
-   `install-body!` and `destroy-editor!` clear the hold. Returns `topic-id`."
-  [topic-id]
-  (reset! editor/!held-topic-id topic-id))
+   `install-body!` and `destroy-editor!` clear the hold. Only a kind with an
+   editor body (`body-kind?`) holds: no editor of another kind installs a body
+   that would clear it. Returns the hold."
+  [topic-id body-kind?]
+  (when body-kind?
+    (reset! editor/!held-topic-id topic-id)))
 
 (defn release-editor!
   "The save failed and the session stays on the topic: the editor takes edits
@@ -215,7 +218,7 @@
   (when (tap-allowed? @!gate topic-id (:topic-id @editor/!editor-state) body-kind? t)
     (let [id (str (random-uuid))]
       (reset! !gate {:id id :from topic-id :at t})
-      (hold-editor! topic-id)
+      (hold-editor! topic-id body-kind?)
       {:id id :topic-id topic-id :pending (pending-edit user-id)})))
 
 (defn advanced!
@@ -258,7 +261,7 @@
               (let [event (dom/On "click"
                             (fn [_]
                               (let [v @!postpone-days]
-                                (hold-editor! topic-id)
+                                (hold-editor! topic-id (editor-body-kind? kind))
                                 {:id (str (random-uuid))
                                  :days (js/parseInt v)
                                  :topic-id topic-id

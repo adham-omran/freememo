@@ -745,17 +745,17 @@
   "Hold the document editor read-only while the body of another topic loads,
    or while a Learn Next or Postpone saves the topic's edit.
 
-   Pre : `loading?` is `editor-pane/editor-read-only?`: true while the editor
+   Pre : `read-only?` is `editor-pane/editor-read-only?`: true while the editor
          still shows the body of the previous topic, after a topic change, and
          while `!held-topic-id` holds the topic in view. `_ready?` is the caller's watch
          of `!editor-ready?`, so that the call runs again once Quill is built.
-   Post: Quill takes no user edit while `loading?` is true, and takes edits
+   Post: Quill takes no user edit while `read-only?` is true, and takes edits
          again when it is false. A change with source \"api\" (`set-content!`,
          `install-body!`) still applies, so the new body can load.
    Inv : no-op while no editor is live."
-  [loading? _ready?]
+  [read-only? _ready?]
   #?(:cljs (when-let [^js ed (current-editor)]
-             (.enable ed (not loading?)))
+             (.enable ed (not read-only?)))
      :clj nil))
 
 (defn get-current-html!
