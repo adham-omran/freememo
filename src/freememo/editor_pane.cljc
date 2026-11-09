@@ -149,6 +149,22 @@
   [content-topic-id topic-id]
   (not= content-topic-id topic-id))
 
+(defn editor-read-only?
+  "Whether the editor takes no user edit.
+
+   Pre : `loading?` is `editor-loading?`. `held-topic-id` is
+         `editor/!held-topic-id`, `topic-id` the topic in view.
+   Post: true while the body of another topic is on screen, and from a Learn
+         tap on Next or Postpone of `topic-id` until the next body is in, so a
+         key typed while the save runs changes nothing
+         (plans/learn-next-speed/issues/10-edit-during-save-window.md). False
+         again after a failed save, which clears the hold.
+   Inv : a plain fn, so a caller's value changes only when the answer does. A
+         hold of another topic never makes this editor read-only."
+  [loading? held-topic-id topic-id]
+  (or loading?
+      (and (some? held-topic-id) (= held-topic-id topic-id))))
+
 (defn loading-attr
   "The editor host's `data-loading` value. A plain call, so the prop is always
    present and changes in place (docs/electric-patterns.md, \"An Absent Props
@@ -385,7 +401,8 @@
                   ;; that wrapper's children (plans/katex-timeout-notice.md 4.3.1).
                   (MathNotice static-content)
                   (binding [dctx/initial-html static-content]
-                    (RichTextEditorComponent loading?))
+                    (RichTextEditorComponent
+                      (editor-read-only? loading? (e/watch editor/!held-topic-id) topic-id)))
                   ;; Question pins on the text (plans/document-question-pins.md
                   ;; §3.4). Beside the editor, never inside it.
                   (EditorPinLayer)

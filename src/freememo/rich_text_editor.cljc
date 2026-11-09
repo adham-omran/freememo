@@ -79,6 +79,13 @@
 (defonce !dirty-html (atom nil))
 (defonce !saved-edit-id (atom nil))
 
+;; The topic whose Next or Postpone in a Learn Session is saving its edit, or
+;; nil. The tap sets it, so the editor takes no edit from the tap until the next
+;; body is in (plans/learn-next-speed/issues/10-edit-during-save-window.md). A
+;; failed save clears it, so the topic takes edits again. A body install that
+;; moves the topic and a teardown also clear it, so it never outlives its body.
+(defonce !held-topic-id (atom nil))
+
 (defn publish-dirty! [html]
   (reset! !dirty-html
     (merged-window/edit-entry @!editor-state html (str (random-uuid)))))
@@ -240,6 +247,7 @@
      :cljs
      (do
        (reset! !editor-ready? false)
+       (reset! !held-topic-id nil)
        (reset! merged-window/!blocked-range nil)
        (swap! !init-gen inc)
        (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown context-menu-teardown clip-drag-teardown formula-teardown markdown-teardown resize-focus-teardown page-marker-teardown focus-anchor-teardown escape-teardown a11y-observer]} @!editor-state]
@@ -701,6 +709,7 @@
                  (when-not patched? (set-content! html content-topic-id true))
                  (when changed?
                    (reset! !dirty-html nil)
+                   (reset! !held-topic-id nil)
                    (when-not patched? (reset! !last-selection nil)))))))))))
 
 (defn install-body-after-work! [html content-topic-id scope saved-edit-id _work-revision]
@@ -733,10 +742,12 @@
        false)))
 
 (defn set-read-only!
-  "Hold the document editor read-only while the body of another topic loads.
+  "Hold the document editor read-only while the body of another topic loads,
+   or while a Learn Next or Postpone saves the topic's edit.
 
-   Pre : `loading?` is true while the editor still shows the body of the
-         previous topic, after a topic change. `_ready?` is the caller's watch
+   Pre : `loading?` is `editor-pane/editor-read-only?`: true while the editor
+         still shows the body of the previous topic, after a topic change, and
+         while `!held-topic-id` holds the topic in view. `_ready?` is the caller's watch
          of `!editor-ready?`, so that the call runs again once Quill is built.
    Post: Quill takes no user edit while `loading?` is true, and takes edits
          again when it is false. A change with source \"api\" (`set-content!`,

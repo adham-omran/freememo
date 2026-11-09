@@ -43,6 +43,21 @@
     (reset! editor/!saved-edit-id edit-id))
   :marked)
 
+(defn hold-editor!
+  "Hold the editor read-only for `topic-id` from the tap on Next or Postpone
+   until the next body is in, so a key typed while the save runs changes
+   nothing (plans/learn-next-speed/issues/10-edit-during-save-window.md).
+   `install-body!` and `destroy-editor!` clear the hold. Returns `topic-id`."
+  [topic-id]
+  (reset! editor/!held-topic-id topic-id))
+
+(defn release-editor!
+  "The save failed and the session stays on the topic: the editor takes edits
+   again. Returns :released."
+  []
+  (reset! editor/!held-topic-id nil)
+  :released)
+
 (defn finish-topic!*
   "Save the topic's pending edit, then schedule the topic. Next and Postpone
    call this from `e/Offload`, so neither write holds the session thread.
@@ -193,12 +208,14 @@
 
    Pre : `t` is the tap's `event.timeStamp`.
    Post: nil when the tap does not count (`tap-allowed?`). Otherwise the gate
-         is closed on `topic-id` with `:at t`, and the result is the Next event
+         is closed on `topic-id` with `:at t`, the editor is held read-only
+         (`hold-editor!`), and the result is the Next event
          `{:id :topic-id :pending}`."
   [!gate topic-id body-kind? user-id t]
   (when (tap-allowed? @!gate topic-id (:topic-id @editor/!editor-state) body-kind? t)
     (let [id (str (random-uuid))]
       (reset! !gate {:id id :from topic-id :at t})
+      (hold-editor! topic-id)
       {:id id :topic-id topic-id :pending (pending-edit user-id)})))
 
 (defn advanced!
@@ -241,6 +258,7 @@
               (let [event (dom/On "click"
                             (fn [_]
                               (let [v @!postpone-days]
+                                (hold-editor! topic-id)
                                 {:id (str (random-uuid))
                                  :days (js/parseInt v)
                                  :topic-id topic-id
@@ -259,7 +277,8 @@
                             (case (e/client (reset! !show-postpone false))
                               (t))))
                       ;; The banner strip shows the error. Stay on the topic.
-                      (t (:error result)))))))
+                      (case (release-editor!)
+                        (t (:error result))))))))
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 12px"}})
               (dom/text "Cancel")
@@ -315,7 +334,8 @@
                             (t))))
                     ;; The banner strip shows the error. Stay on the topic.
                     (case (reset! !gate nil)
-                      (t (:error result)))))))))))))
+                      (case (release-editor!)
+                        (t (:error result))))))))))))))
 
 (defn learn-queue-ctx
   "The queue context TopicPage gets for a Learn topic. A plain fn so that a

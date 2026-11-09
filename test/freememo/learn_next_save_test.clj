@@ -15,11 +15,13 @@
 (use-fixtures :each
   (fn [f]
     (let [dirty @editor/!dirty-html
-          saved @editor/!saved-edit-id]
+          saved @editor/!saved-edit-id
+          held @editor/!held-topic-id]
       (try (f)
            (finally
              (reset! editor/!dirty-html dirty)
-             (reset! editor/!saved-edit-id saved))))))
+             (reset! editor/!saved-edit-id saved)
+             (reset! editor/!held-topic-id held))))))
 
 (def ^:private scope {:user-id 7 :topic-id 41})
 (def ^:private edit {:html "<p>edit</p>" :topic-id 41 :save-scope scope :edit-id "e1"})
@@ -102,3 +104,20 @@
       (is (= [:schedule :failure] (mapv first calls)))
       (is (= "Next" (:what (nth (second calls) 2))))
       (is (= {:success false :error "db down"} result)))))
+
+;; plans/learn-next-speed/issues/10-edit-during-save-window.md
+(deftest a-counted-tap-holds-the-editor-and-a-failure-releases-it
+  (reset! editor/!held-topic-id nil)
+  (testing "a tap that counts holds the editor for the tapped topic"
+    (let [!gate (atom nil)]
+      (is (some? (learn-session/tap-next! !gate 41 true 7 1000)))
+      (is (= 41 @editor/!held-topic-id))))
+  (testing "a tap that does not count leaves the hold as it is"
+    (reset! editor/!held-topic-id nil)
+    (let [!gate (atom {:id "g" :from 41 :at 1000})]
+      (is (nil? (learn-session/tap-next! !gate 41 true 7 1050)))
+      (is (nil? @editor/!held-topic-id))))
+  (testing "a failed save releases the editor"
+    (reset! editor/!held-topic-id 41)
+    (is (= :released (learn-session/release-editor!)))
+    (is (nil? @editor/!held-topic-id))))

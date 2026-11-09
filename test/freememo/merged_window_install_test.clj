@@ -8,6 +8,7 @@
 (def ^:dynamic *dirty*)
 (def ^:dynamic *selection*)
 (def ^:dynamic *installs*)
+(def ^:dynamic *held*)
 
 (def *blocked-range* (atom nil))
 (def ^:dynamic *patch-result* nil)
@@ -39,14 +40,15 @@
                        'merged-window/install-allowed? 'window/install-allowed?
                        'merged-window/snapshot-current? 'window/snapshot-current?
                        'patch-overlapping-body! 'patch-body!
-                       'merged-window/!blocked-range '*blocked-range*}
+                       'merged-window/!blocked-range '*blocked-range*
+                       '!held-topic-id '*held*}
                       (cljs-form (cons 'fn (drop 3 form))))))
             :else (recur)))))))
 
 (defmacro with-editor [dirty & body]
   `(binding [*editor-state* (atom {:save-scope {:body-key :first}})
              *dirty* (atom ~dirty) *selection* (atom {:index 10 :length 5})
-             *installs* (atom [])]
+             *installs* (atom []) *held* (atom nil)]
      ~@body))
 
 (deftest an-unsaved-body-keeps-its-content-and-selection
@@ -146,3 +148,20 @@
     (is (= [] @*installs*))
     (is (= 10 (:topic-id @*editor-state*)))
     (is (= 10 (get-in @*editor-state* [:save-scope :editor-doc-id])))))
+
+;; plans/learn-next-speed/issues/10-edit-during-save-window.md: Learn's tap on
+;; Next holds the editor read-only for topic 10 until the next body is in.
+(deftest the-next-body-ends-the-hold-of-the-learn-tap
+  (with-editor nil
+    (reset! *editor-state* {:topic-id 10 :save-scope {:body-key :first :editor-doc-id 10}})
+    (reset! *held* 10)
+    ((actual-installer) "next body" 20 {:body-key :next :editor-doc-id 20} nil)
+    (is (= 20 (:topic-id @*editor-state*)))
+    (is (nil? @*held*))))
+
+(deftest a-refused-body-keeps-the-hold-of-the-learn-tap
+  (with-editor {:edit-id "pending"}
+    (reset! *editor-state* {:topic-id 10 :save-scope {:body-key :first :editor-doc-id 10}})
+    (reset! *held* 10)
+    ((actual-installer) "next body" 20 {:body-key :next :editor-doc-id 20} "older")
+    (is (= 10 @*held*))))

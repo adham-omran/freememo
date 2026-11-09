@@ -19,10 +19,13 @@
      `install-body!`, so the text-change listener and a highlight tag an edit
      with the topic of the body on screen.
    - Skips in-place update if user has unsaved edits (don't damage user input).
-   - `loading?` is true while the editor still shows the previous topic's body
-     after a topic change. The editor is read-only for that time
-     (plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md)."
-  [loading?]
+   - `read-only?` is true while the editor still shows the previous topic's
+     body after a topic change, and from a Learn tap on Next or Postpone until
+     the next body is in (`editor-pane/editor-read-only?`). The editor takes no
+     user edit for that time
+     (plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md,
+     plans/learn-next-speed/issues/10-edit-during-save-window.md)."
+  [read-only?]
   (e/client
     (dom/div
       (dom/props {:class "quill-editor-wrapper"
@@ -76,11 +79,12 @@
                         (when-let [t @!timer-id] (js/clearTimeout t))
                         (editor/destroy-editor!)))
 
-        ;; Read-only while the previous topic's body is still on screen. The
+        ;; Read-only while the previous topic's body is still on screen, and
+        ;; while a Learn Next or Postpone saves this topic's edit. The
         ;; topic id no longer moves here: `install-body!` moves it with the
         ;; save scope, so an edit in the load window cannot be tagged with the
         ;; next topic. `ready?`'s watch makes this run again once Quill exists.
-        (editor/set-read-only! loading? (e/watch editor/!editor-ready?))
+        (editor/set-read-only! read-only? (e/watch editor/!editor-ready?))
 
         ;; Update content in-place when initial-html changes reactively
         ;; (page navigation, OCR scan, !refresh re-fetch).

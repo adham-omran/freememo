@@ -21,3 +21,16 @@
     (is (false? (pane/editor-spinner? nil true 10))))
   (testing "the content read held a PDF page, so it has no topic body to keep"
     (is (true? (pane/editor-spinner? nil true nil)))))
+
+(deftest the-editor-is-read-only-from-a-learn-tap-until-the-next-body
+  ;; plans/learn-next-speed/issues/10-edit-during-save-window.md
+  (testing "no tap and no load: the editor takes edits"
+    (is (false? (pane/editor-read-only? false nil 10))))
+  (testing "Next or Postpone on topic 10 saves: a key typed now changes nothing"
+    (is (true? (pane/editor-read-only? false 10 10))))
+  (testing "the queue moved to 11 and its body loads"
+    (is (true? (pane/editor-read-only? true 10 11))))
+  (testing "a held topic that is not in view holds nothing (the Library editor)"
+    (is (false? (pane/editor-read-only? false 10 12))))
+  (testing "the save failed, so the hold is gone and topic 10 takes edits again"
+    (is (false? (pane/editor-read-only? false nil 10)))))
