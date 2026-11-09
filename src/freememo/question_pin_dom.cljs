@@ -471,6 +471,19 @@
         true)
     false))
 
+(defn- body-replaced?
+  "Whether the mutation `records` replaced the whole body of `container`:
+   it has children, and each of them was added in this batch. An edit
+   rebuilds one line, so it never makes this true; a new document does."
+  [^js container records]
+  (let [added (js/Set.)]
+    (doseq [^js r (array-seq records)]
+      (when (identical? container (.-target r))
+        (doseq [n (array-seq (.-addedNodes r))] (.add added n))))
+    (and (pos? (.-size added))
+         (pos? (.-childElementCount container))
+         (every? #(.has added %) (array-seq (.-children container))))))
+
 (defn install!
   "Attach pins, the finger and the Ask button to `container`.
    `callbacks`: {:on-ask (fn [capture]) :on-open-pin (fn [pin rect])
@@ -508,9 +521,15 @@
         on-up (fn [_] (js/setTimeout #(place-ask! handle) 0))
         on-selection (fn [_] (when-not (live-range container)
                                (set! (.. ask -style -display) "none")))
-        observer (js/MutationObserver. (fn [_ _]
-                                         (schedule!)
-                                         (when quill? (relocate-soon!))))]
+        ;; A new body (a Learn Next keeps the editor) finds the pins again at
+        ;; once, before the frame paints. With the 300 ms wait, the repaint
+        ;; put the previous topic's badges over the next body for a frame or
+        ;; more (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
+        observer (js/MutationObserver. (fn [records _]
+                                         (if (and quill? (body-replaced? container records))
+                                           (relocate! handle)
+                                           (when quill? (relocate-soon!)))
+                                         (schedule!)))]
     (set! (.-type ask) "button")
     (set! (.-textContent ask) "Ask")
     (.setAttribute ask "aria-label" "Ask about the selected passage")
