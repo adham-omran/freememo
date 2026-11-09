@@ -31,72 +31,130 @@
   #?(:cljs (some-> (editor/current-editor) .-root) :clj nil))
 
 (defn pin-spec*
-  "The ref spec of `topic-id` when the document editor can hold its pins, else
-   nil. Only a document ref qualifies: a repository file opens the code pane."
+  "The answer {:spec s} for `topic-id`. `s` is the ref spec of the topic when
+   the document editor can hold its pins, else nil. Only a document ref
+   qualifies: a repository file opens the code pane. The answer is never nil,
+   so the client can tell a nil spec from a read that still runs."
   [user-id topic-id]
-  #?(:clj (when (docref/document? (docref/for-topic user-id topic-id)) {:topic-id topic-id})
+  #?(:clj {:spec (when (and topic-id (docref/document? (docref/for-topic user-id topic-id)))
+                   {:topic-id topic-id})}
      :cljs nil))
 
-(defn- pin-topic-id
+(defn pin-topic-id
   "The topic a document's pins are read through: the PDF root in the merged
    view, which `dctx/editor-doc-id` holds there, so a scroll from page to page
-   keeps one spec; else the open topic."
-  [merged? editor-doc-id topic-id]
-  (if merged? editor-doc-id topic-id))
+   keeps one spec. Else the topic whose body the editor shows
+   (`dctx/effective-content-topic-id`). After a Learn Next, that id stays on
+   the previous topic until the next body arrives, so the pins never show
+   over the text of another topic (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md)."
+  [merged? editor-doc-id content-topic-id]
+  (if merged? editor-doc-id content-topic-id))
+
+(defn pin-scope
+  "The view scope of the editor's pin layer (plans/document-question-pins.md
+   §3.3.2): a page view's scope says which page the stale rule tests."
+  [merged? topic-id]
+  (if merged? {:merged? true} {:merged? false :topic-id topic-id}))
+
+(defn held-spec
+  "The spec that the editor and the toolbar show. `answer` is the latest
+   {:spec s} answer, or nil while the read for a new topic runs. Meanwhile
+   the previous spec stays, so the toolbar controls and the layer keep their
+   frames. A nil spec comes only from an answer.
+   Inv : a plain fn, for `e/with-cycle`."
+  [held answer]
+  (if (some? answer) (:spec answer) held))
+
+(defn controls-key
+  "The key list of the toolbar pin controls: one constant key while the
+   document can have pins, else none.
+   Inv : a plain fn, so a new spec emits no diff and the controls keep their
+         frames."
+  [spec]
+  (if spec [::controls] []))
+
+(defn close-list-on-change!
+  "Close the pin list when the editor shows the pins of another document.
+   `!last` holds the spec of the last call. Post: nil."
+  [!last !list-open? spec]
+  (when (not= spec @!last)
+    (when (some? @!last) (reset! !list-open? false))
+    (reset! !last spec))
+  nil)
 
 (e/defn DocumentPinSpec
   "The ref spec of the document open in the editor.
    Pre : dctx bound, as for the editor and the content toolbar.
-   Post: {:topic-id id} when that document can hold pins, else nil. Nil also
-         while the spec of a new topic is on its way.
+   Post: {:topic-id id} when that document can hold pins, else nil. While the
+         spec of a new topic is on its way, the previous spec.
 
    **Read the Offload through a client `e/as-vec`.** A Learn step changes
    `topic-id`, so the Offload runs a new thunk and is empty until it answers.
    Returned bare, that empty value unmounted every consumer and mounted it
    again within one round trip. On a slow tablet that churn made Electric's
    runtime read one remote signal twice (`Concurrent store reader.`), and the
-   page went blank (plans/low-end-tablet-performance/issues/13-learn-session-blank-page.md)."
+   page went blank (plans/low-end-tablet-performance/issues/13-learn-session-blank-page.md).
+
+   **Hold the previous spec while the read runs.** The `e/as-vec` reads the
+   run as nil. Returned as is, that nil unmounted the toolbar pin controls on
+   each Learn Next (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md)."
   []
   (e/client
     (let [user-id dctx/user-id
-          topic-id (pin-topic-id (boolean dctx/merged?) dctx/editor-doc-id dctx/topic-id)]
-      (peek (e/as-vec (e/server (e/Offload #(pin-spec* user-id topic-id))))))))
+          topic-id (pin-topic-id (boolean dctx/merged?) dctx/editor-doc-id
+                     dctx/effective-content-topic-id)
+          answer (peek (e/as-vec (e/server (e/Offload #(pin-spec* user-id topic-id)))))]
+      (e/with-cycle [held nil]
+        (held-spec held answer)))))
 
 (e/defn EditorPinLayer
   "The pin layer of the document editor, or nothing when the open topic
    cannot have pins. A page view's scope says which page the stale rule tests
    (§3.3.2).
    Pre : mounted beside the editor, with dctx bound.
-   Post: the pin list is closed whenever the document changes."
+   Post: the pin list is closed whenever the document changes. A Learn Next
+         between two documents keeps the layer's frames: `PinLayer` is keyed
+         by the editor root, and the spec and the scope are values."
   []
   (e/client
     (let [user-id dctx/user-id
           merged? (boolean dctx/merged?)
-          scope (if merged? {:merged? true} {:merged? false :topic-id dctx/topic-id})
+          scope (pin-scope merged?
+                  (pin-topic-id merged? dctx/editor-doc-id dctx/effective-content-topic-id))
           generation (e/watch editor/!content-generation)
           ready? (e/watch editor/!editor-ready?)
           node (when ready? (editor-root generation))
           spec (DocumentPinSpec)
-          list-open? (e/watch pin-state/!document-pin-list-open?)]
-      ;; The key shadows `spec`, so a frame never sees the next document's
-      ;; spec before Electric removes it (see `pin-pane/PinLayer`).
-      (e/for-by identity [spec (if spec [spec] [])]
+          list-open? (e/watch pin-state/!document-pin-list-open?)
+          !last-spec (atom nil)]
+      ;; An element of its own for the layer's keyed loop, which mounts beside
+      ;; the editor in the editor host (docs/electric-patterns.md, "An `e/for`
+      ;; Gets an Element of Its Own"). `display: contents` (index.css).
+      (dom/div
+        (dom/props {:class "editor-pin-layer"})
         (e/on-unmount #(reset! pin-state/!document-pin-list-open? false))
-        (when node
-          (pin-pane/PinLayer user-id spec node :quill scope list-open?
-            pin-state/!document-pin-list-open?))))))
+        (pin-pane/PinLayer user-id spec node :quill scope list-open?
+          pin-state/!document-pin-list-open?)
+        (close-list-on-change! !last-spec pin-state/!document-pin-list-open? spec)))))
 
 (e/defn EditorPinControls
   "The content toolbar's Pins toggle and Ask N pins button for the document
    in the editor, after a divider, or nothing when it cannot have pins. A
    repository file has its own controls in the code pane header.
-   Pre : dctx bound, as for the content toolbar."
+   Pre : dctx bound, as for the content toolbar.
+   Post: a Learn Next between two documents keeps the controls' frames. The
+         key is constant while the spec is present, so the new spec arrives
+         as a value."
   []
   (e/client
     (let [user-id dctx/user-id
           spec (DocumentPinSpec)]
-      (when spec
-        (dom/div (dom/props {:class "toolbar-group-divider"}))
-        (dom/div
-          (dom/props {:class "toolbar-group"})
-          (pin-pane/PinHeaderControls user-id spec pin-state/!document-pin-list-open?))))))
+      ;; `display: contents` (index.css): the divider and the group stay
+      ;; layout children of the toolbar.
+      (dom/div
+        (dom/props {:class "editor-pin-controls"})
+        (e/for-by identity [_k (controls-key spec)]
+          (dom/div (dom/props {:class "toolbar-group-divider"}))
+          (dom/div
+            (dom/props {:class "toolbar-group"})
+            (pin-pane/PinHeaderControls user-id spec pin-state/!document-pin-list-open?)))))))

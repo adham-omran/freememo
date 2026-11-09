@@ -9532,6 +9532,9 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 @keyframes question-finger-in { from { opacity: 0; } to { opacity: 1; } }
 
 .question-pin-popover-host, .question-pin-list-host { display: contents; }
+/* The document editor's pin layer and the toolbar's pin controls: each is an
+   element of its own for a keyed loop, and adds no box (freememo.editor-pin-layer). */
+.editor-pin-layer, .editor-pin-controls { display: contents; }
 .question-pin-popover {
     position: fixed; z-index: 1045; box-sizing: border-box;
     width: 320px; max-width: calc(100vw - 16px); padding: 8px;

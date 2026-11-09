@@ -567,6 +567,19 @@
   (schedule!)
   nil)
 
+(defn set-scope!
+  "Give the layer the view `scope` that its placement rule reads, and find
+   the pins again under it. A kept layer gets a new scope when the editor
+   shows another topic (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
+   Post: no effect when `scope` is the scope the layer has. Only a :quill
+         layer reads a scope, so only a :quill layer finds its pins again."
+  [{:keys [!state schedule! relocate!]} scope]
+  (when (not= scope (:scope @!state))
+    (swap! !state assoc :scope scope)
+    (when (= :quill (:model @!state)) (relocate!))
+    (schedule!))
+  nil)
+
 (defn located
   "The atom of a :quill layer's {pin-id {:range :placement}}, which changes
    each time the pins are found again. Empty on other layers."

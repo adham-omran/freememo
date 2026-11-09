@@ -70,10 +70,18 @@
                (str/index-of teardowns "(format-menu/install! ed")))))))
 
 (deftest pin-layer-frames-read-their-own-key
-  (testing "PinLayer binds node, spec, model and scope from its key"
+  ;; Since plans/learn-next-speed/issues/04-pin-layers-keep-frames.md the key
+  ;; holds only the node and the model. The spec and the scope are values, so
+  ;; a Learn Next keeps the layer. The node, which installs the layer, still
+  ;; comes from the key, and a new scope goes to the installed layer
+  ;; (`retarget-layer!`), never to a second install.
+  (testing "PinLayer binds node and model from its key"
     (let [layer (form-body (slurp "src/freememo/question_pin_pane.cljc") "(e/defn PinLayer")]
-      (is (str/includes? layer "(e/for-by identity [k [[node spec model scope]]]"))
-      (is (str/includes? layer "(let [[node spec model scope] k"))))
-  (testing "EditorPinLayer's frame binds spec from its key"
+      (is (str/includes? layer "(e/for-by identity [k (layer-key node spec model)]"))
+      (is (str/includes? layer "(let [[node model] k"))
+      (is (str/includes? layer "(install-layer! node model !popover)"))
+      (is (str/includes? layer "(retarget-layer! handle !popover !spec spec scope)"))))
+  (testing "EditorPinLayer passes PinLayer the node, and has no key of its own"
     (let [layer (form-body (slurp "src/freememo/editor_pin_layer.cljc") "(e/defn EditorPinLayer")]
-      (is (str/includes? layer "(e/for-by identity [spec (if spec [spec] [])]")))))
+      (is (str/includes? layer "(pin-pane/PinLayer user-id spec node :quill scope"))
+      (is (not (str/includes? layer "e/for-by"))))))

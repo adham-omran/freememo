@@ -31,12 +31,12 @@
 
 (defn- install-layer!
   "Attach the pin layer to `node`, whose text model is `model` (:blocks,
-   :source or :quill). `scope` is the :quill view, {:merged? :topic-id}
-   (plans/document-question-pins.md §3.3), and nil otherwise.
+   :source or :quill). The layer gets its scope from `retarget-layer!`, so a
+   new scope never installs a second layer.
    Post: the layer handle."
-  [node model scope !popover]
+  [node model !popover]
   #?(:cljs (pin-dom/install! node
-             {:model model :scope scope
+             {:model model :scope nil
               :on-ask (fn [{:keys [quote anchor offset rect]}]
                         (reset! !popover {:id (random-uuid) :mode :new :quote quote
                                           :anchor anchor :offset offset :rect rect}))
@@ -44,6 +44,48 @@
                              (reset! !popover {:id (random-uuid) :mode :edit
                                                :pin pin :rect rect}))})
      :clj nil))
+
+(defn- retarget-layer!
+  "Point the layer `handle` at the file `spec` names, in the view `scope`:
+   {:merged? :topic-id} on a :quill layer (plans/document-question-pins.md
+   §3.3), nil on the others. A move to another file closes the popover,
+   because it belongs to the file that it was opened on. `!spec` holds the
+   spec of the last call.
+   Post: nil."
+  [handle !popover !spec spec scope]
+  #?(:cljs (do (when handle (pin-dom/set-scope! handle scope))
+               (when (not= spec @!spec)
+                 (when (some? @!spec) (reset! !popover nil))
+                 (reset! !spec spec))
+               nil)
+     :clj nil))
+
+(defn layer-key
+  "The key list of a pin layer: one key for `node` and `model` while the pane
+   shows a file that can have pins, else none. The spec is not in the key.
+   A kept layer takes the next file's spec as a value, so a Learn Next
+   builds no new frames (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
+   Inv : a plain fn, so an equal key list emits no diff."
+  [node spec model]
+  (if (and node spec) [[node model]] []))
+
+(defn held-view
+  "The [spec view] that a layer shows. `answer` is the [spec view] of the
+   latest read, or nil while a read runs. While the read for the same spec
+   runs again (a pin changed), the layer keeps `held`. While the read for a
+   new spec runs, it shows nothing: no pin of the previous file stays.
+   Inv : a plain fn, for `e/with-cycle`."
+  [held spec answer]
+  (cond
+    (some? answer) answer
+    (= spec (first held)) held
+    :else nil))
+
+(defn held-answer
+  "`answer`, or `held` while a new read runs (`answer` nil).
+   Inv : a plain fn, for `e/with-cycle`."
+  [held answer]
+  (if (some? answer) answer held))
 
 (defn- teardown-layer! [handle]
   #?(:cljs (when handle (pin-dom/teardown! handle)) :clj nil))
@@ -440,36 +482,52 @@
    pane's element, never inside it: the layer adds no node to the pane."
   [user-id spec node model scope list-open? !list-open?]
   (e/client
-    ;; Keyed by pane AND file at a commit (§6.3.6 of
-    ;; plans/commit-range-walkthrough.md): a pane stays mounted when the route
-    ;; or the step moves to another file, and the layer, its popover and its
-    ;; pins belong to one.
+    ;; Keyed by the pane's node and model only. A pane stays mounted when the
+    ;; route, the walkthrough step (§6.3.6 of plans/commit-range-walkthrough.md)
+    ;; or a Learn Next moves it to another file, and so does its layer: the
+    ;; spec and the scope come in as values. A move to another file closes the
+    ;; popover (`retarget-layer!`) and empties the pins until the next file's
+    ;; view arrives (`held-view`), so nothing of the previous file stays.
+    ;; Before, the key held the spec too, and each Learn Next built the layer
+    ;; and its list again (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
     ;;
-    ;; The body reads the four values from its own key, never from the
+    ;; The body reads the node and the model from its own key, never from the
     ;; arguments. With the arguments, a Learn step gave the old frame the new
     ;; editor root before Electric removed it. That frame installed a second
     ;; layer on the new root, and nothing tore it down: 2 installs and 1
     ;; teardown per step. Its listeners kept that editor's DOM alive
     ;; (plans/low-end-tablet-performance/issues/20-session-dom-growth.md).
-    (e/for-by identity [k [[node spec model scope]]]
-      (let [[node spec model scope] k
+    (e/for-by identity [k (layer-key node spec model)]
+      (let [[node model] k
             !popover (atom nil)
+            !spec (atom nil)
             popover (e/watch !popover)
-            handle (install-layer! node model scope !popover)
+            handle (install-layer! node model !popover)
             located (e/watch (located-atom handle))
             rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
             ;; SERVER-FORM binding: the view stays on the server, and only the
-            ;; pins cross, with their locations in this file.
-            view (e/server (e/Offload #(snapshot-view* rev user-id spec)))
-            pins (e/server (vec (:pins view)))
-            tombstones (e/server (vec (:tombstones view)))
-            open-count (e/server (or (:open-count view) 0))
-            doc-key (e/server (e/Offload #(doc-key* user-id spec)))]
+            ;; pins cross, with their locations in this file. An Offload is
+            ;; empty while it runs a new thunk, and a kept frame must not see
+            ;; that: an empty `pins` unmounts the list and every consumer
+            ;; (docs/electric-patterns.md, "An Empty `e/Offload` Empties
+            ;; Everything Downstream"). So the server `e/as-vec` reads the run
+            ;; as nil, and `held-view` keeps or drops the last view.
+            answer (e/server
+                     (e/with-cycle [held nil]
+                       (held-view held spec
+                         (peek (e/as-vec
+                                 (e/Offload #(vector spec (snapshot-view* rev user-id spec))))))))
+            ;; The client `e/as-vec` covers the round trip of the first mount.
+            pins (or (peek (e/as-vec (e/server (vec (:pins (second answer)))))) [])
+            tombstones (or (peek (e/as-vec (e/server (vec (:tombstones (second answer)))))) [])
+            open-count (or (peek (e/as-vec (e/server (or (:open-count (second answer)) 0)))) 0)
+            doc-key (peek (e/as-vec (e/server (e/Offload #(doc-key* user-id spec)))))]
         (e/on-unmount #(teardown-layer! handle))
         (PublishPinCommands handle node spec doc-key open-count)
         (Finger user-id spec handle)
         (PinPopoverHost user-id spec popover !popover)
         (PinList user-id (with-located pins located) tombstones list-open? !list-open? handle)
+        (retarget-layer! handle !popover !spec spec scope)
         (show-pins! handle pins)))))
 
 (e/defn PinHeaderControls
@@ -477,9 +535,17 @@
   [user-id spec !list-open?]
   (e/client
     (let [rev (e/server (e/watch (us/get-atom user-id :question-mutations)))
-          counts (e/server (e/Offload #(pin-counts* rev user-id spec)))
-          open (e/server (:open counts 0))
-          total (e/server (:total counts 0))]
+          ;; Read on the client through `e/as-vec`, and held while a new read
+          ;; runs. A bare Offload is empty for that time: the texts unmounted,
+          ;; and the Ask button's props map went absent, so its `display:
+          ;; none` was lost (docs/electric-patterns.md, "An Absent Props Map
+          ;; Nulls Every Prop on Its Node"). A kept toolbar reads again on each
+          ;; Learn Next (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
+          counts (e/with-cycle [held nil]
+                   (held-answer held
+                     (peek (e/as-vec (e/server (e/Offload #(pin-counts* rev user-id spec)))))))
+          open (:open counts 0)
+          total (:total counts 0)]
       (dom/span
         (dom/props {:class "question-pin-controls"})
         (dom/button
