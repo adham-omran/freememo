@@ -15,9 +15,14 @@
   "Renders a Quill rich text editor that persists across page navigations.
    - Init once when first mounted (no destroy/recreate on topic-id change).
    - Updates content in-place via set-content! when initial-html changes.
-   - Updates topic-id in editor state so text-change listener tags dirty-html correctly.
-   - Skips in-place update if user has unsaved edits (don't damage user input)."
-  []
+   - The topic id in the editor state moves with the save scope, inside
+     `install-body!`, so the text-change listener and a highlight tag an edit
+     with the topic of the body on screen.
+   - Skips in-place update if user has unsaved edits (don't damage user input).
+   - `loading?` is true while the editor still shows the previous topic's body
+     after a topic change. The editor is read-only for that time
+     (plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md)."
+  [loading?]
   (e/client
     (dom/div
       (dom/props {:class "quill-editor-wrapper"
@@ -62,17 +67,20 @@
             (js/setTimeout
               (fn []
                 (when (and (.-isConnected node) (nil? (editor/current-editor)))
-                  (editor/init-editor-with-scope! node (or initial-html "") doc-id save-scope)))
+                  ;; The body's document, the same id as the save scope's,
+                  ;; so the tag and the scope agree from the first build.
+                  (editor/init-editor-with-scope! node (or initial-html "")
+                    (or body-doc-id doc-id) save-scope)))
               0)))
         (e/on-unmount (fn []
                         (when-let [t @!timer-id] (js/clearTimeout t))
                         (editor/destroy-editor!)))
 
-        ;; Tag dirty-html with the DOCUMENT, not the page. The text-change
-        ;; listener reads this, and EditorPane's save gate compares against it —
-        ;; in merged mode a scroll moves the page, and tagging by page would
-        ;; make that scroll discard the reader's unsaved edit.
-        (editor/update-topic-id! doc-id)
+        ;; Read-only while the previous topic's body is still on screen. The
+        ;; topic id no longer moves here: `install-body!` moves it with the
+        ;; save scope, so an edit in the load window cannot be tagged with the
+        ;; next topic. `ready?`'s watch makes this run again once Quill exists.
+        (editor/set-read-only! loading? (e/watch editor/!editor-ready?))
 
         ;; Update content in-place when initial-html changes reactively
         ;; (page navigation, OCR scan, !refresh re-fetch).

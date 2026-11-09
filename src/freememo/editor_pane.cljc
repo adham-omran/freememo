@@ -137,6 +137,44 @@
          {:success false :error (.getMessage ex)}))
      :cljs nil))
 
+(defn editor-loading?
+  "Whether the editor still shows the body of another topic.
+
+   Pre : `content-topic-id` is the topic the body was fetched for
+         (`dctx/effective-content-topic-id`), `topic-id` the topic in view.
+   Post: true from a topic change until the new body arrives. The content read
+         latches the previous `[id body]` tuple meanwhile (topic_state), so the
+         ids differ. Always false on a PDF page, whose content id is the page.
+   Inv : a plain fn, so a caller's value changes only when the answer does."
+  [content-topic-id topic-id]
+  (not= content-topic-id topic-id))
+
+(defn loading-attr
+  "The editor host's `data-loading` value. A plain call, so the prop is always
+   present and changes in place (docs/electric-patterns.md, \"An Absent Props
+   Map Nulls Every Prop on Its Node\")."
+  [loading?]
+  (if loading? "true" "false"))
+
+(defn editor-spinner?
+  "Whether the editor area shows the spinner instead of the editor host.
+
+   Pre : `static-content` is the body for the editor or nil, `editor-live?`
+         whether a Quill instance is up, `content-topic-id` the topic the body
+         was fetched for.
+   Post: true on the first fetch (no body and no editor yet), and while the
+         content id is nil: the content read held a PDF page before, which has
+         no topic body, so a switch from a PDF to a text topic shows the
+         spinner as it always did. A switch between two topic bodies is false:
+         the editor host stays mounted, read-only, until the new body loads
+         (plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md).
+   Inv : a plain fn, so the `if` over it re-selects only when the answer
+         changes (docs/electric-patterns.md, \"An `if` on a Flag Re-emits an
+         Equal Value\")."
+  [static-content editor-live? content-topic-id]
+  (or (and (nil? static-content) (not editor-live?))
+      (nil? content-topic-id)))
+
 (e/defn EditorPane
   []
   (e/client
@@ -306,16 +344,15 @@
             ;; it the swap emits shrink+grow, which ripples up the DAG and fires
             ;; `e/on-unmount` — and the unmount this branch reaches is
             ;; RichTextEditorComponent's, which calls `destroy-editor!`.
+            ;;
+            ;; The test is a plain call, so it emits only when its value
+            ;; changes. A topic change with a body on screen no longer swaps
+            ;; this branch: the host stays mounted and `loading?` (below) holds
+            ;; the old body read-only until the new one installs.
             (e/Reconcile
-             (if (or (and (nil? static-content) (not editor-live?))
-                  ;; Stale body from the previous topic: on a switch the content
-                  ;; re-fetch is pending and its value latches (never nil), so the
-                  ;; old text would otherwise sit under the new topic-id until the
-                  ;; new body swaps in. The fetched-for id lags the live topic-id
-                  ;; here → show the spinner instead of the stale text. No-op for
-                  ;; real PDFs (id pinned to page-topic-id in DocumentViewState).
-                  (not= effective-content-topic-id topic-id))
-              ;; Loading — the FIRST fetch, or a topic switch mid-load.
+             (if (editor-spinner? static-content editor-live? effective-content-topic-id)
+              ;; Loading — the FIRST fetch, or a switch from a PDF page, whose
+              ;; body is not a topic body.
               ;;
               ;; `editor-live?` is what keeps a nil content from tearing the
               ;; editor down. This branch unmounts RichTextEditorComponent, whose
@@ -335,25 +372,30 @@
               (loading/Spinner)
               ;; Render editor for any string (including "") — PDF pages without
               ;; scanned text yet are editable
-              (dom/div
-                (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
-                                    :overflow "hidden"}
-                            :data-role "editor-host"})
-                ;; Above the text, outside `.quill-editor-wrapper`: Quill owns
-                ;; that wrapper's children (plans/katex-timeout-notice.md 4.3.1).
-                (MathNotice static-content)
-                (binding [dctx/initial-html static-content]
-                  (RichTextEditorComponent))
-                ;; Question pins on the text (plans/document-question-pins.md
-                ;; §3.4). Beside the editor, never inside it.
-                (EditorPinLayer)
-                ;; Lend the topic to the context menu's image rows (pin, image
-                ;; occlusion). The editor is plain JS and knows no topic; the
-                ;; Quill installer reads these facts at right-click time
-                ;; (plans/custom-context-menu.md 4.1.1). Re-run on every change,
-                ;; so the pin cap check never reads a stale count.
-                (menu-surface/provide-facts! dom/node
-                  {:topic-id topic-id :root-topic-id root-topic-id :pin-count pin-count})))))
+              (let [loading? (editor-loading? effective-content-topic-id topic-id)]
+                (dom/div
+                  ;; `data-loading` draws the thin loading overlay over the old
+                  ;; body (index.css). A CSS rule on an attribute, so the load
+                  ;; window adds no DOM node and no Electric frame.
+                  (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
+                                      :overflow "hidden" :position "relative"}
+                              :data-role "editor-host"
+                              :data-loading (loading-attr loading?)})
+                  ;; Above the text, outside `.quill-editor-wrapper`: Quill owns
+                  ;; that wrapper's children (plans/katex-timeout-notice.md 4.3.1).
+                  (MathNotice static-content)
+                  (binding [dctx/initial-html static-content]
+                    (RichTextEditorComponent loading?))
+                  ;; Question pins on the text (plans/document-question-pins.md
+                  ;; §3.4). Beside the editor, never inside it.
+                  (EditorPinLayer)
+                  ;; Lend the topic to the context menu's image rows (pin, image
+                  ;; occlusion). The editor is plain JS and knows no topic; the
+                  ;; Quill installer reads these facts at right-click time
+                  ;; (plans/custom-context-menu.md 4.1.1). Re-run on every change,
+                  ;; so the pin cap check never reads a stale count.
+                  (menu-surface/provide-facts! dom/node
+                    {:topic-id topic-id :root-topic-id root-topic-id :pin-count pin-count}))))))
 
           ;; The reader's place in the notes (plans/reading-position-memory.md
           ;; §4 3.5.4). A nil topic mounts no tracker, so a PDF-backed or media

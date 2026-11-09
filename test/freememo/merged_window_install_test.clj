@@ -126,3 +126,23 @@
                                        :read-request {:fence "A"} :expected-read-request {:fence "B"}} "B")
     (is (= [] @*installs*))
     (is (= :first (get-in @*editor-state* [:save-scope :body-key])))))
+
+;; plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md: the
+;; editor's topic and its save scope change together. A Next keeps the editor
+;; mounted, so the old body stays in it until the new one installs, and an edit
+;; or a highlight in that window must stay on the old topic.
+(deftest an-installed-body-moves-the-editor-topic-with-its-scope
+  (with-editor nil
+    (reset! *editor-state* {:topic-id 10 :save-scope {:body-key :first :editor-doc-id 10}})
+    ((actual-installer) "next body" 20 {:body-key :next :editor-doc-id 20} nil)
+    (is (= [["next body" 20 true]] @*installs*))
+    (is (= 20 (:topic-id @*editor-state*)))
+    (is (= 20 (get-in @*editor-state* [:save-scope :editor-doc-id])))))
+
+(deftest a-refused-body-keeps-the-editor-topic-with-its-scope
+  (with-editor {:edit-id "pending"}
+    (reset! *editor-state* {:topic-id 10 :save-scope {:body-key :first :editor-doc-id 10}})
+    ((actual-installer) "next body" 20 {:body-key :next :editor-doc-id 20} "older")
+    (is (= [] @*installs*))
+    (is (= 10 (:topic-id @*editor-state*)))
+    (is (= 10 (get-in @*editor-state* [:save-scope :editor-doc-id])))))

@@ -105,7 +105,7 @@
 ;; Whether a Quill instance is built and usable.
 ;;
 ;; Its own atom, deliberately NOT a read of `!editor-state`. Two components need
-;; this flag, and `update-topic-id!` swaps `!editor-state` on every evaluation of
+;; this flag, and `install-body!` swaps `!editor-state` from an evaluation of
 ;; one of them — so watching that map means watching an atom the same component
 ;; writes. Work-skipping damps the loop only while every value in the map stays
 ;; `=` across the swap, which is a property no future field is obliged to keep.
@@ -548,7 +548,7 @@
                               ;; nothing, which costs one querySelectorAll per
                               ;; scroll event and needs no mode flag here.
                               ;; The document is read LIVE from !editor-state,
-                              ;; never closed over: `update-topic-id!` changes it
+                              ;; never closed over: `install-body!` changes it
                               ;; without rebuilding, which is exactly what leaving
                               ;; merged mode does.
                               :page-marker-teardown
@@ -690,7 +690,13 @@
                                 (some (set (get-in state [:save-scope :page-numbers])) (:page-numbers scope)))
                    patched? (when overlap? (patch-overlapping-body! state html scope))]
                (when (or (not overlap?) patched?)
-                 (swap! !editor-state assoc :save-scope scope :installed-body-html html)
+                 ;; The topic moves WITH the scope, never before it. A Learn
+                 ;; Session Next keeps the editor mounted, so the previous
+                 ;; body stays here until this install, and an edit or a
+                 ;; highlight in that window must stay on the previous topic
+                 ;; (plans/learn-next-speed/issues/02-editor-stays-mounted-across-next.md).
+                 (swap! !editor-state assoc :save-scope scope :installed-body-html html
+                   :topic-id (:editor-doc-id scope))
                  (reset! merged-window/!blocked-range nil)
                  (when-not patched? (set-content! html content-topic-id true))
                  (when changed?
@@ -726,13 +732,19 @@
          false)
        false)))
 
-(defn update-topic-id!
-  "Update the topic-id in editor state without reinitializing Quill.
-   The text-change listener reads from !editor-state, so this ensures
-   dirty-html is tagged with the correct topic-id after page navigation."
-  [new-topic-id]
-  #?(:cljs (when @!editor-state
-             (swap! !editor-state assoc :topic-id new-topic-id))
+(defn set-read-only!
+  "Hold the document editor read-only while the body of another topic loads.
+
+   Pre : `loading?` is true while the editor still shows the body of the
+         previous topic, after a topic change. `_ready?` is the caller's watch
+         of `!editor-ready?`, so that the call runs again once Quill is built.
+   Post: Quill takes no user edit while `loading?` is true, and takes edits
+         again when it is false. A change with source \"api\" (`set-content!`,
+         `install-body!`) still applies, so the new body can load.
+   Inv : no-op while no editor is live."
+  [loading? _ready?]
+  #?(:cljs (when-let [^js ed (current-editor)]
+             (.enable ed (not loading?)))
      :clj nil))
 
 (defn get-current-html!
