@@ -102,15 +102,24 @@
 
 ;; ---------------------------------------------------------------------------
 ;; The Next gate
-;; (plans/learn-next-speed/issues/03-next-enabled-when-body-shown.md)
+;; (plans/learn-next-speed/issues/03-next-enabled-when-body-shown.md,
+;;  plans/learn-next-speed/issues/08-gate-waits-after-early-body.md)
 ;;
 ;; A tap on Next closes the gate. The gate opens when the next topic shows:
 ;; for a topic whose body is in the editor, when `install-body!` (or a cold
 ;; editor build) puts that topic's body in. A slow network then cannot let a
 ;; second tap skip a topic that never appeared, and a fast device has no fixed
-;; floor. Each mark below is set by a timer of its own tap.
+;; floor.
 ;;
-;;   :min?   `next-min-ms` after the tap. The gate never opens before it.
+;; The minimum blocks a double tap. It applies to the tap, not to the button:
+;; a tap counts only when its input time is `next-min-ms` or more after the
+;; previous tap (`:at`). A timer cannot hold the minimum, because a long task
+;; of the topic switch often starts just after an early body and delays the
+;; timer by 300 to 400 ms (ticket 08). The input time of a tap does not move
+;; when a long task delays its dispatch.
+;;
+;; Each mark below is set by a timer of its own tap, after the advance:
+;;
 ;;   :timer? `next-timer-ms` after the advance. It opens a topic of another
 ;;           kind (PDF, video, audio), which has no "content shown" signal.
 ;;   :cap?   `next-cap-ms` after the advance. It opens the gate on any topic,
@@ -131,24 +140,38 @@
   "Whether Next is disabled.
 
    Pre : `gate` is nil (no tap yet, or a failed Next) or
-         `{:id :from & marks}`, where `:from` is the tapped topic. `topic-id` is
-         the topic in view. `shown-id` is the topic whose body is in the editor
+         `{:id :from :at & marks}`, where `:from` is the tapped topic and `:at`
+         the tap's input time. `topic-id` is the topic in view. `shown-id` is
+         the topic whose body is in the editor
          (`(:topic-id @editor/!editor-state)`). `body-kind?` is
          `editor-body-kind?` of the topic in view.
    Post: false with no gate and after the cap. Otherwise true until the queue
-         has moved past the tapped topic, the minimum has passed, and the new
-         topic shows: its body is in the editor, or the timer of another kind
-         has run.
-   Inv : a plain fn, so `:disabled` changes only when the answer does."
+         has moved past the tapped topic and the new topic shows: its body is
+         in the editor, or the timer of another kind has run.
+   Inv : a plain fn, so `:disabled` changes only when the answer does. It has
+         no minimum: `tap-allowed?` holds the minimum on the tap."
   [gate topic-id shown-id body-kind?]
   (boolean
     (and gate
          (not (:cap? gate))
-         (or (not (:min? gate))
-             (= topic-id (:from gate))
+         (or (= topic-id (:from gate))
              (if body-kind?
                (not= shown-id topic-id)
                (not (:timer? gate)))))))
+
+(defn tap-allowed?
+  "Whether a tap on Next at input time `t` counts.
+
+   Pre : the arguments of `next-gate-closed?`, and `t`, the tap's
+         `event.timeStamp` (the clock of `:at`).
+   Post: true when the gate is open and `t` is `next-min-ms` or more after the
+         previous tap's `:at`. So the second tap of a double tap never counts,
+         even when the next body is already in or a long task dispatches the
+         tap late."
+  [gate topic-id shown-id body-kind? t]
+  (and (not (next-gate-closed? gate topic-id shown-id body-kind?))
+       (or (nil? (:at gate))
+           (>= (- t (:at gate)) next-min-ms))))
 
 (defn mark-gate
   "`gate` with `mark` set, when `gate` is still the gate of tap `id`. A timer
@@ -168,14 +191,14 @@
   "The click handler of Next. It runs before Electric sees the click, so a
    second tap in the same frame finds the gate closed.
 
-   Post: nil while the gate is closed. Otherwise the gate is closed on
-         `topic-id`, the minimum timer runs, and the result is the Next event
+   Pre : `t` is the tap's `event.timeStamp`.
+   Post: nil when the tap does not count (`tap-allowed?`). Otherwise the gate
+         is closed on `topic-id` with `:at t`, and the result is the Next event
          `{:id :topic-id :pending}`."
-  [!gate topic-id body-kind? user-id]
-  (when-not (next-gate-closed? @!gate topic-id (:topic-id @editor/!editor-state) body-kind?)
+  [!gate topic-id body-kind? user-id t]
+  (when (tap-allowed? @!gate topic-id (:topic-id @editor/!editor-state) body-kind? t)
     (let [id (str (random-uuid))]
-      (reset! !gate {:id id :from topic-id})
-      (mark-gate-later! !gate id :min? next-min-ms)
+      (reset! !gate {:id id :from topic-id :at t})
       {:id id :topic-id topic-id :pending (pending-edit user-id)})))
 
 (defn advanced!
@@ -276,7 +299,7 @@
             ;; while it runs. `tap-next!` closes the gate in the click
             ;; handler itself, so a double tap advances one topic.
             (let [event (dom/On "click"
-                          (fn [_] (tap-next! !gate topic-id body-kind? user-id))
+                          (fn [e] (tap-next! !gate topic-id body-kind? user-id (.-timeStamp e)))
                           nil)
                   [t _error] (e/Token event)]
               (when t
