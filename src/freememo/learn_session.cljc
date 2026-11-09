@@ -13,6 +13,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.merged-window :as merged-window]
    [freememo.editor-pane :as editor-pane]
+   [freememo.reading-anchor :as reading-anchor]
    #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.db :as db])))
 
@@ -99,8 +100,94 @@
                 (commands/bump! user-id :postpone-topic))))
      :cljs nil))
 
+;; ---------------------------------------------------------------------------
+;; The Next gate
+;; (plans/learn-next-speed/issues/03-next-enabled-when-body-shown.md)
+;;
+;; A tap on Next closes the gate. The gate opens when the next topic shows:
+;; for a topic whose body is in the editor, when `install-body!` (or a cold
+;; editor build) puts that topic's body in. A slow network then cannot let a
+;; second tap skip a topic that never appeared, and a fast device has no fixed
+;; floor. Each mark below is set by a timer of its own tap.
+;;
+;;   :min?   `next-min-ms` after the tap. The gate never opens before it.
+;;   :timer? `next-timer-ms` after the advance. It opens a topic of another
+;;           kind (PDF, video, audio), which has no "content shown" signal.
+;;   :cap?   `next-cap-ms` after the advance. It opens the gate on any topic,
+;;           so a body that never arrives cannot hold Next disabled for ever.
+;; ---------------------------------------------------------------------------
+
+(def ^:private next-min-ms 150)
+(def ^:private next-timer-ms 500)
+(def ^:private next-cap-ms 10000)
+
+(defn editor-body-kind?
+  "Whether a topic of `kind` shows its body in the editor, so that the Next
+   gate opens on the editor's signal. Every other kind keeps the timer."
+  [kind]
+  (contains? reading-anchor/editor-kinds kind))
+
+(defn next-gate-closed?
+  "Whether Next is disabled.
+
+   Pre : `gate` is nil (no tap yet, or a failed Next) or
+         `{:id :from & marks}`, where `:from` is the tapped topic. `topic-id` is
+         the topic in view. `shown-id` is the topic whose body is in the editor
+         (`(:topic-id @editor/!editor-state)`). `body-kind?` is
+         `editor-body-kind?` of the topic in view.
+   Post: false with no gate and after the cap. Otherwise true until the queue
+         has moved past the tapped topic, the minimum has passed, and the new
+         topic shows: its body is in the editor, or the timer of another kind
+         has run.
+   Inv : a plain fn, so `:disabled` changes only when the answer does."
+  [gate topic-id shown-id body-kind?]
+  (boolean
+    (and gate
+         (not (:cap? gate))
+         (or (not (:min? gate))
+             (= topic-id (:from gate))
+             (if body-kind?
+               (not= shown-id topic-id)
+               (not (:timer? gate)))))))
+
+(defn mark-gate
+  "`gate` with `mark` set, when `gate` is still the gate of tap `id`. A timer
+   of an earlier tap leaves a later gate as it is."
+  [gate id mark]
+  (if (and gate (= id (:id gate)))
+    (assoc gate mark true)
+    gate))
+
+(defn- mark-gate-later!
+  "Set `mark` on the gate of tap `id` after `ms`."
+  [!gate id mark ms]
+  #?(:cljs (js/setTimeout (fn [] (swap! !gate mark-gate id mark)) ms)
+     :clj nil))
+
+(defn tap-next!
+  "The click handler of Next. It runs before Electric sees the click, so a
+   second tap in the same frame finds the gate closed.
+
+   Post: nil while the gate is closed. Otherwise the gate is closed on
+         `topic-id`, the minimum timer runs, and the result is the Next event
+         `{:id :topic-id :pending}`."
+  [!gate topic-id body-kind? user-id]
+  (when-not (next-gate-closed? @!gate topic-id (:topic-id @editor/!editor-state) body-kind?)
+    (let [id (str (random-uuid))]
+      (reset! !gate {:id id :from topic-id})
+      (mark-gate-later! !gate id :min? next-min-ms)
+      {:id id :topic-id topic-id :pending (pending-edit user-id)})))
+
+(defn advanced!
+  "The queue has moved past the tapped topic: start the timer of other kinds
+   and the cap for the gate of tap `id`."
+  [!gate id]
+  (mark-gate-later! !gate id :timer? next-timer-ms)
+  (mark-gate-later! !gate id :cap? next-cap-ms)
+  :advanced)
+
 ;; Shared bottom bar with Postpone + Next
-(e/defn BottomBar [user-id topic-id !queue-idx]
+(e/defn BottomBar [user-id topic-id kind !queue-idx]
   (e/client
     (let [!show-postpone (atom false)
           show-postpone (e/watch !show-postpone)
@@ -164,9 +251,14 @@
               (e/on-unmount (fn [] (bus/retract-invoker! :postpone-topic))))
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
-        ;; Next button — disabled briefly after click to prevent skipping during content load
-        (let [!busy (atom false)
-              busy (e/watch !busy)]
+        ;; Next button. Disabled from the tap until the next topic shows (the
+        ;; Next gate above), so a second tap cannot skip a topic that never
+        ;; appeared. `!editor-state` changes only on an editor build, a body
+        ;; install and a teardown, and this bar never writes it.
+        (let [!gate (atom nil)
+              body-kind? (editor-body-kind? kind)
+              busy (next-gate-closed? (e/watch !gate) topic-id
+                     (:topic-id (e/watch editor/!editor-state)) body-kind?)]
           (dom/button
             (dom/props {:class "btn btn-primary"
                         :disabled busy
@@ -181,29 +273,25 @@
             ;; that edit first, then schedules the topic, in one Offload
             ;; (plans/learn-next-speed/issues/01-next-saves-pending-edit-first.md).
             ;; The Offload thunk reads only the event, so it never changes
-            ;; while it runs. Next stays disabled until the answer is in.
+            ;; while it runs. `tap-next!` closes the gate in the click
+            ;; handler itself, so a double tap advances one topic.
             (let [event (dom/On "click"
-                          (fn [_]
-                            (when-not @!busy
-                              {:id (str (random-uuid))
-                               :topic-id topic-id
-                               :pending (pending-edit user-id)}))
+                          (fn [_] (tap-next! !gate topic-id body-kind? user-id))
                           nil)
                   [t _error] (e/Token event)]
               (when t
-                (reset! !busy true)
                 (let [result (e/server
                                (e/Offload
                                  #(advance-topic* user-id (:topic-id event) (:pending event))))]
                   ;; Empty until the answer, so neither branch mounts before it.
                   (if (:success result)
                     (do (e/on-unmount #(do (swap! !queue-idx inc)
-                                         (js/setTimeout (fn [] (reset! !busy false)) 500)))
+                                         (advanced! !gate (:id event))))
                         (case (mark-edit-saved! (:saved-edit-id result))
                           (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
                             (t))))
                     ;; The banner strip shows the error. Stay on the topic.
-                    (case (reset! !busy false)
+                    (case (reset! !gate nil)
                       (t (:error result)))))))))))))
 
 (defn learn-queue-ctx
@@ -280,6 +368,6 @@
                   ;; a new key on this node, not a mount. The bar below stays
                   ;; still. Last form: an effect gates no frame.
                   (motion/on-new-key! dom/node topic-id motion/arrive-forward!))
-                (BottomBar user-id topic-id !queue-idx)))
+                (BottomBar user-id topic-id kind !queue-idx)))
             ;; The session owns the title. TopicPage never writes one.
             (PageTitle user-id [:topic topic-id])))))))
