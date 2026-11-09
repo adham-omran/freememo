@@ -81,6 +81,14 @@
     (= spec (first held)) held
     :else nil))
 
+(defn pins-for-spec
+  "The pins a layer shows for `spec`. `spec+pins` is the [view-spec pins] that
+   crossed from the server, or nil. Pins of another spec are dropped: the
+   client knows the new spec a round trip before the server's view follows.
+   Post: a vector, empty when the pins are not for `spec`."
+  [spec [view-spec pins]]
+  (if (and (some? spec) (= spec view-spec)) (vec pins) []))
+
 (defn held-answer
   "`answer`, or `held` while a new read runs (`answer` nil).
    Inv : a plain fn, for `e/with-cycle`."
@@ -518,7 +526,11 @@
                          (peek (e/as-vec
                                  (e/Offload #(vector spec (snapshot-view* rev user-id spec))))))))
             ;; The client `e/as-vec` covers the round trip of the first mount.
-            pins (or (peek (e/as-vec (e/server (vec (:pins (second answer)))))) [])
+            ;; The pins cross with the spec of their view, so the client drops
+            ;; them in the same frame as the spec moves, one round trip before
+            ;; the server's empty view arrives (`pins-for-spec`).
+            pins (pins-for-spec spec
+                   (peek (e/as-vec (e/server [(first answer) (vec (:pins (second answer)))]))))
             tombstones (or (peek (e/as-vec (e/server (vec (:tombstones (second answer)))))) [])
             open-count (or (peek (e/as-vec (e/server (or (:open-count (second answer)) 0)))) 0)
             doc-key (peek (e/as-vec (e/server (e/Offload #(doc-key* user-id spec)))))]

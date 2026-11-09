@@ -36,12 +36,24 @@
   (is (= {:open 2} (pane/held-answer {:open 1} {:open 2})))
   (is (nil? (pane/held-answer nil nil))))
 
-(deftest the-document-spec-is-held-while-it-is-read
-  (testing "a read that runs keeps the previous spec"
-    (is (= {:topic-id 1} (epl/held-spec {:topic-id 1} nil))))
-  (testing "an answer gives its spec, nil included"
-    (is (= {:topic-id 2} (epl/held-spec {:topic-id 1} {:spec {:topic-id 2}})))
-    (is (nil? (epl/held-spec {:topic-id 1} {:spec nil})))))
+(deftest the-document-spec-moves-with-the-body
+  (testing "an answer for the topic gives its spec, nil included"
+    (is (= {:topic-id 2} (epl/held-spec {:topic-id 1} 2 {:for 2 :spec {:topic-id 2}})))
+    (is (nil? (epl/held-spec {:topic-id 1} 2 {:for 2 :spec nil}))))
+  (testing "an answer for the previous topic gives the next document's spec at once"
+    (is (= {:topic-id 2} (epl/held-spec {:topic-id 1} 2 {:for 1 :spec {:topic-id 1}})))
+    (is (= {:topic-id 2} (epl/held-spec {:topic-id 1} 2 nil))))
+  (testing "no spec before stays no spec until the answer"
+    (is (nil? (epl/held-spec nil 2 {:for 1 :spec nil})))
+    (is (nil? (epl/held-spec nil 2 nil))))
+  (testing "no topic gives no spec"
+    (is (nil? (epl/held-spec {:topic-id 1} nil nil)))))
+
+(deftest the-client-drops-pins-of-another-spec
+  (is (= [:a] (pane/pins-for-spec {:topic-id 1} [{:topic-id 1} [:a]])))
+  (is (= [] (pane/pins-for-spec {:topic-id 2} [{:topic-id 1} [:a]])))
+  (is (= [] (pane/pins-for-spec {:topic-id 1} nil)))
+  (is (= [] (pane/pins-for-spec nil [nil [:a]]))))
 
 (deftest the-controls-key-holds-no-spec
   (is (= (epl/controls-key {:topic-id 1}) (epl/controls-key {:topic-id 2})))

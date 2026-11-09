@@ -31,12 +31,14 @@
   #?(:cljs (some-> (editor/current-editor) .-root) :clj nil))
 
 (defn pin-spec*
-  "The answer {:spec s} for `topic-id`. `s` is the ref spec of the topic when
+  "The answer {:for topic-id :spec s}. `s` is the ref spec of the topic when
    the document editor can hold its pins, else nil. Only a document ref
-   qualifies: a repository file opens the code pane. The answer is never nil,
-   so the client can tell a nil spec from a read that still runs."
+   qualifies: a repository file opens the code pane. `:for` names the topic
+   the answer is for, so the client can tell an answer for the previous topic
+   from one for the topic it shows."
   [user-id topic-id]
-  #?(:clj {:spec (when (and topic-id (docref/document? (docref/for-topic user-id topic-id)))
+  #?(:clj {:for topic-id
+           :spec (when (and topic-id (docref/document? (docref/for-topic user-id topic-id)))
                    {:topic-id topic-id})}
      :cljs nil))
 
@@ -57,13 +59,22 @@
   (if merged? {:merged? true} {:merged? false :topic-id topic-id}))
 
 (defn held-spec
-  "The spec that the editor and the toolbar show. `answer` is the latest
-   {:spec s} answer, or nil while the read for a new topic runs. Meanwhile
-   the previous spec stays, so the toolbar controls and the layer keep their
-   frames. A nil spec comes only from an answer.
+  "The spec that the editor and the toolbar show for `topic-id`. `answer` is
+   the latest {:for :spec} answer, or nil.
+   Post: the answer's spec when it is for `topic-id`. Else, while the read for
+         `topic-id` runs: {:topic-id topic-id} when the previous spec was a
+         document's, nil when it was nil. A document's spec is always
+         {:topic-id id}, so this guess is the answer to come whenever the next
+         topic is a document too. The spec then moves in the same frame as
+         the body, a round trip before the answer, and the toolbar controls
+         and the layer keep their frames. A wrong guess (a repository file
+         after a document) lasts one round trip; the server checks every spec.
    Inv : a plain fn, for `e/with-cycle`."
-  [held answer]
-  (if (some? answer) (:spec answer) held))
+  [held topic-id answer]
+  (cond
+    (and (some? answer) (= topic-id (:for answer))) (:spec answer)
+    (and (some? held) (some? topic-id)) {:topic-id topic-id}
+    :else nil))
 
 (defn controls-key
   "The key list of the toolbar pin controls: one constant key while the
@@ -86,7 +97,7 @@
   "The ref spec of the document open in the editor.
    Pre : dctx bound, as for the editor and the content toolbar.
    Post: {:topic-id id} when that document can hold pins, else nil. While the
-         spec of a new topic is on its way, the previous spec.
+         answer for a new topic is on its way, see `held-spec`.
 
    **Read the Offload through a client `e/as-vec`.** A Learn step changes
    `topic-id`, so the Offload runs a new thunk and is empty until it answers.
@@ -95,9 +106,11 @@
    runtime read one remote signal twice (`Concurrent store reader.`), and the
    page went blank (plans/low-end-tablet-performance/issues/13-learn-session-blank-page.md).
 
-   **Hold the previous spec while the read runs.** The `e/as-vec` reads the
-   run as nil. Returned as is, that nil unmounted the toolbar pin controls on
-   each Learn Next (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md)."
+   **Do not wait for the read.** The `e/as-vec` reads the run as nil, a round
+   trip after the topic changed. Returned as is, that nil unmounted the
+   toolbar pin controls on each Learn Next, and the old spec showed the
+   previous topic's pins over the next body for a round trip. `held-spec`
+   gives the next spec at once (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md)."
   []
   (e/client
     (let [user-id dctx/user-id
@@ -105,7 +118,7 @@
                      dctx/effective-content-topic-id)
           answer (peek (e/as-vec (e/server (e/Offload #(pin-spec* user-id topic-id)))))]
       (e/with-cycle [held nil]
-        (held-spec held answer)))))
+        (held-spec held topic-id answer)))))
 
 (e/defn EditorPinLayer
   "The pin layer of the document editor, or nothing when the open topic
