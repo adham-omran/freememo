@@ -521,15 +521,15 @@
         on-up (fn [_] (js/setTimeout #(place-ask! handle) 0))
         on-selection (fn [_] (when-not (live-range container)
                                (set! (.. ask -style -display) "none")))
-        ;; A new body (a Learn Next keeps the editor) finds the pins again at
-        ;; once, before the frame paints. With the 300 ms wait, the repaint
-        ;; put the previous topic's badges over the next body for a frame or
-        ;; more (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
+        ;; A new body (a Learn Next keeps the editor) finds the pins again
+        ;; and repaints at once, in the task that put the body in. With the
+        ;; 300 ms wait, the previous topic's badges stayed on the next body
+        ;; (plans/learn-next-speed/issues/04-pin-layers-keep-frames.md).
         observer (js/MutationObserver. (fn [records _]
                                          (if (and quill? (body-replaced? container records))
-                                           (relocate! handle)
-                                           (when quill? (relocate-soon!)))
-                                         (schedule!)))]
+                                           (do (relocate! handle) (repaint! handle))
+                                           (do (schedule!)
+                                               (when quill? (relocate-soon!))))))]
     (set! (.-type ask) "button")
     (set! (.-textContent ask) "Ask")
     (.setAttribute ask "aria-label" "Ask about the selected passage")
