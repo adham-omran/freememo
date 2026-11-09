@@ -10,17 +10,94 @@
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.motion :as motion]
+   [freememo.rich-text-editor :as editor]
+   [freememo.merged-window :as merged-window]
+   [freememo.editor-pane :as editor-pane]
+   #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.db :as db])))
 
-#?(:clj
-   (defn advance-topic* [user-id id]
-     (db/advance-topic! user-id id)
-     (commands/bump! user-id :advance-topic)))
+(defn pending-edit
+  "The editor's edit that no save has acknowledged yet, or nil.
 
-#?(:clj
-   (defn postpone-topic* [user-id id days]
-     (db/postpone-topic! user-id id days)
-     (commands/bump! user-id :postpone-topic)))
+   Pre : client scope, read at the tap on Next.
+   Post: nil, or `{:html :save-scope :edit-id}` for an edit by `user-id`. The
+         save scope is the one captured when the edit was made, so the edit is
+         written to the topic it was made in.
+   Inv : the same test as the auto-save (`merged-window/save-needed?`). An edit
+         whose auto-save already landed gives nil, so a Next with no edit sends
+         no body."
+  [user-id]
+  (let [dirty @editor/!dirty-html]
+    (when (merged-window/save-needed? dirty user-id @editor/!saved-edit-id nil)
+      (select-keys dirty [:html :save-scope :edit-id]))))
+
+(defn mark-edit-saved!
+  "Tell the editor that the save Next made has landed, so the auto-save and the
+   in-place body load see the edit as saved.
+
+   Post: `editor/!saved-edit-id` is `edit-id` when the editor still holds that
+         edit. A newer edit is left to the auto-save. Returns :marked."
+  [edit-id]
+  (when (and edit-id (= edit-id (:edit-id @editor/!dirty-html)))
+    (reset! editor/!saved-edit-id edit-id))
+  :marked)
+
+(defn finish-topic!*
+  "Save the topic's pending edit, then schedule the topic. Next and Postpone
+   call this from `e/Offload`, so neither write holds the session thread.
+
+   Pre : `pending` is nil or a `pending-edit` value. `schedule!` is a thunk
+         that writes the topic's next review.
+   Post: `{:success true :saved-edit-id id-or-nil}` after both writes. On a
+         failure, `{:success false :error text}`: the schedule write did not
+         run when the save failed, and one `action-failure` row puts the error
+         in the banner strip. The caller then stays on the topic.
+   Inv : the save runs before the schedule write, so a failed save never moves
+         the session past the edit. Never throws, because an exception would
+         cross the `e/server` boundary.
+
+   Body-level reader conditional: Electric compiles the `e/Offload` call site
+   on both peers, so the var must exist on CLJS."
+  [user-id id pending what schedule!]
+  #?(:clj
+     (let [fail! (fn [action error]
+                   (let [text (or (activity/error-message error) "The edit was not saved.")]
+                     (try
+                       (activity/record-failure! user-id {:error text :what action :subject-id id})
+                       (catch Exception _ nil))
+                     {:success false :error text}))]
+       (try
+         (let [saved (if pending
+                       (editor-pane/save-editor-html!*
+                         (merge (:save-scope pending)
+                           {:user-id user-id :html (:html pending)}))
+                       {:success true})]
+           (if (:success saved)
+             (do (schedule!)
+                 {:success true :saved-edit-id (:edit-id pending)})
+             (fail! (str "Save before " what) (:error saved))))
+         (catch Exception ex
+           (fail! what ex))))
+     :cljs nil))
+
+(defn advance-topic*
+  "Next: save the pending edit, then advance the topic's schedule."
+  [user-id id pending]
+  #?(:clj (finish-topic!* user-id id pending "Next"
+            (fn []
+              (db/advance-topic! user-id id)
+              (commands/bump! user-id :advance-topic)))
+     :cljs nil))
+
+(defn postpone-topic*
+  "Postpone: save the pending edit, then postpone the topic by `days`."
+  [user-id id days pending]
+  #?(:clj (finish-topic!* user-id id pending "Postpone"
+            (fn []
+              (when (and days (pos? days))
+                (db/postpone-topic! user-id id days)
+                (commands/bump! user-id :postpone-topic))))
+     :cljs nil))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [user-id topic-id !queue-idx]
@@ -49,20 +126,30 @@
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:padding "6px 16px"}})
               (dom/text "Go")
+              ;; The tap captures the topic and its pending edit, so the
+              ;; Offload thunk below never changes while it runs.
               (let [event (dom/On "click"
                             (fn [_]
                               (let [v @!postpone-days]
                                 {:id (str (random-uuid))
-                                 :days (js/parseInt v)}))
+                                 :days (js/parseInt v)
+                                 :topic-id topic-id
+                                 :pending (pending-edit user-id)}))
                             nil)
                     [t _error] (e/Token event)]
                 (when t
-                  (e/on-unmount #(swap! !queue-idx inc))
-                  (let [days (:days event)]
-                    (case (e/server (when (and days (pos? days))
-                                      (postpone-topic* user-id topic-id days)))
-                      (case (e/client (reset! !show-postpone false))
-                        (t)))))))
+                  (let [result (e/server
+                                 (e/Offload
+                                   #(postpone-topic* user-id (:topic-id event)
+                                      (:days event) (:pending event))))]
+                    ;; Empty until the answer, so neither branch mounts before it.
+                    (if (:success result)
+                      (do (e/on-unmount #(swap! !queue-idx inc))
+                          (case (mark-edit-saved! (:saved-edit-id result))
+                            (case (e/client (reset! !show-postpone false))
+                              (t))))
+                      ;; The banner strip shows the error. Stay on the topic.
+                      (t (:error result)))))))
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 12px"}})
               (dom/text "Cancel")
@@ -90,15 +177,34 @@
             (let [node dom/node]
               (bus/publish-invoker! :advance-topic (fn [] (.click node)))
               (e/on-unmount (fn [] (bus/retract-invoker! :advance-topic))))
-            (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
+            ;; The tap captures the topic and its pending edit. Next saves
+            ;; that edit first, then schedules the topic, in one Offload
+            ;; (plans/learn-next-speed/issues/01-next-saves-pending-edit-first.md).
+            ;; The Offload thunk reads only the event, so it never changes
+            ;; while it runs. Next stays disabled until the answer is in.
+            (let [event (dom/On "click"
+                          (fn [_]
+                            (when-not @!busy
+                              {:id (str (random-uuid))
+                               :topic-id topic-id
+                               :pending (pending-edit user-id)}))
+                          nil)
                   [t _error] (e/Token event)]
               (when t
-                (e/on-unmount #(do (swap! !queue-idx inc)
-                                 (js/setTimeout (fn [] (reset! !busy false)) 500)))
                 (reset! !busy true)
-                (case (e/server (advance-topic* user-id topic-id))
-                  (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
-                    (t)))))))))))
+                (let [result (e/server
+                               (e/Offload
+                                 #(advance-topic* user-id (:topic-id event) (:pending event))))]
+                  ;; Empty until the answer, so neither branch mounts before it.
+                  (if (:success result)
+                    (do (e/on-unmount #(do (swap! !queue-idx inc)
+                                         (js/setTimeout (fn [] (reset! !busy false)) 500)))
+                        (case (mark-edit-saved! (:saved-edit-id result))
+                          (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
+                            (t))))
+                    ;; The banner strip shows the error. Stay on the topic.
+                    (case (reset! !busy false)
+                      (t (:error result)))))))))))))
 
 (defn learn-queue-ctx
   "The queue context TopicPage gets for a Learn topic. A plain fn so that a
