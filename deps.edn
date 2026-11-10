@@ -28,7 +28,7 @@
            ;; The Local Install starts PostgreSQL through this library (docs/adr/0001).
            ;; The platform binaries are in the :local-install alias.
            io.zonky.test/embedded-postgres {:mvn/version "2.1.0"
-                                            ;; Its default binaries are PostgreSQL 14 and clash with the 16.15 jars.
+                                            ;; Its default binaries are PostgreSQL 14 and clash with the 18.6 jars.
                                             :exclusions [io.zonky.test.postgres/embedded-postgres-binaries-linux-amd64-alpine
                                                          io.zonky.test.postgres/embedded-postgres-binaries-windows-amd64]}}
  :paths   ["src" "resources"]
@@ -37,10 +37,10 @@
                                                        com.hyperfiddle/hyperfiddle-agent  {:mvn/version "v0-alpha-SNAPSHOT"}
                                                        org.clojure/tools.deps             {:mvn/version "0.26.1553"}
                                                        io.github.nextjournal/clojure-mode {:git/sha "5d88847aecd253e047f36565e0455bfec7f4964d"}}}
-           ;; PostgreSQL 16.15 binaries for the Local Install, one jar per platform.
-           :local-install {:extra-deps {io.zonky.test.postgres/embedded-postgres-binaries-linux-amd64 {:mvn/version "16.15.0"}
-                                        io.zonky.test.postgres/embedded-postgres-binaries-darwin-arm64v8 {:mvn/version "16.15.0"}
-                                        io.zonky.test.postgres/embedded-postgres-binaries-darwin-amd64 {:mvn/version "16.15.0"}}}
+           ;; PostgreSQL 18.6 binaries for the Local Install, one jar per platform.
+           :local-install {:extra-deps {io.zonky.test.postgres/embedded-postgres-binaries-linux-amd64 {:mvn/version "18.6.0"}
+                                        io.zonky.test.postgres/embedded-postgres-binaries-darwin-arm64v8 {:mvn/version "18.6.0"}
+                                        io.zonky.test.postgres/embedded-postgres-binaries-darwin-amd64 {:mvn/version "18.6.0"}}}
            :prod {:extra-paths ["src-prod"] :jvm-opts ["-Xss4m"]}
            :test {:extra-paths ["test"]}
            :build ; use `clj -X:prod:build build-client`, NOT -T!
