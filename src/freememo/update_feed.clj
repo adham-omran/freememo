@@ -22,6 +22,7 @@
             [freememo.config :as config]
             [freememo.desktop-link :as link]
             [freememo.launch-env :as launch-env]
+            [freememo.release-version :as release-version]
             [freememo.local-http :as lhttp]
             [freememo.peer :as peer]
             [taoensso.telemere :as tel])
@@ -129,20 +130,21 @@
 (defn start!
   "Read the feed now, every `interval-hours`, and when the network comes back,
    off the caller's thread.
-   Post: no effect when this install has no version: it logs one line."
+   Post: no effect when this install has no Release Version (a dev build): it logs one line."
   [{:keys [version] :as opts}]
   (if (str/blank? version)
-    (log "no version known, so no update check")
+    (log "dev build has no Release Version, so no update check")
     (when-not @!timer
       (let [^ScheduledExecutorService ex (lhttp/daemon-scheduler "freememo-update-feed")]
         (reset! !timer ex)
         (link/on-online! #(.execute ex ^Runnable (fn [] (refresh! opts))))
         (.scheduleWithFixedDelay ex ^Runnable #(refresh! opts) 0 interval-hours TimeUnit/HOURS)))))
 
-(defn version-from-env
-  "Post: the version of this install, from `FREEMEMO_VERSION`, or nil."
+(defn installed-version
+  "Post: the Release Version of this install, or nil for a dev build."
   []
-  (some-> (launch-env/getenv "FREEMEMO_VERSION") str/trim not-empty))
+  (let [v (config/release-version)]
+    (when-not (= v release-version/dev) v)))
 
 (defn bump-banners!
   "Make every open tab of `user-id` re-read the banner strip."

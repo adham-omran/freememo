@@ -35,7 +35,9 @@ COPY deps.edn deps.edn
 ARG VERSION
 ENV VERSION=$VERSION
 ARG GIT_COMMIT
+ARG RELEASE_VERSION
 ENV GIT_COMMIT=$GIT_COMMIT
+ENV RELEASE_VERSION=$RELEASE_VERSION
 RUN clojure -A:prod -M -e ::ok       # preload – rebuilds if deps or commit version changes
 RUN clojure -A:build:prod -M -e ::ok # preload
 
@@ -79,7 +81,7 @@ RUN clojure -X:build vendor/verify! && clojure -X:build vendor/check-refs!
 # To empty the cache, run on the build host:
 #   docker builder prune --filter type=exec.cachemount
 RUN --mount=type=cache,id=freememo-shadow-cljs,target=/app/.shadow-cljs,sharing=locked \
-    clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
+    clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :release-version "\"$RELEASE_VERSION\"" :build/jar-name "app.jar"
 
 FROM eclipse-temurin:25-jre AS app
 WORKDIR /app

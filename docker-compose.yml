@@ -1,9 +1,9 @@
   services:
     postgres:
-      # Pinned to the exact minor, not floating `16-alpine`, so the minor only
+      # Pinned to the exact minor, not floating `18-alpine`, so the minor only
       # moves when this line moves. No deploy starts this service, so it is the
       # dev database only.
-      image: postgres:16.14-alpine
+      image: postgres:18.6-alpine
       # pg_stat_statements counts statements for the done-checks in
       # plans/server-query-performance.md (1.5). A database still needs
       # CREATE EXTENSION before it can read the view.
@@ -19,7 +19,7 @@
       ports:
         - "${FREEMEMO_BIND_IP:-127.0.0.1}:5432:5432"
       volumes:
-        - pgdata:/var/lib/postgresql/data
+        - pgdata18:/var/lib/postgresql
       healthcheck:
         test: ["CMD-SHELL", "pg_isready -U cardmaker"]
         interval: 5s
@@ -46,4 +46,4 @@
         postgres:
           condition: service_healthy
   volumes:
-    pgdata:
+    pgdata18:

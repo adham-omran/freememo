@@ -89,7 +89,7 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Layer | Technology |
 |-------|-----------|
 | Framework | Electric v3 — reactive full-stack Clojure |
-| Database | PostgreSQL 16 (next.jdbc + HikariCP + HoneySQL) |
+| Database | PostgreSQL 18 (next.jdbc + HikariCP + HoneySQL) |
 | Build | deps.edn + shadow-cljs |
 | PDF rendering | PDF.js 3.11.174 (self-hosted) |
 | Rich text | Quill 2.0.3 (self-hosted) |
@@ -207,7 +207,7 @@ gets the fix for free by setting that attribute.
 
 ## Database
 
-PostgreSQL 16 via `docker-compose.yml`. Default connection: `cardmaker:dev@localhost:5432/cardmaker`.
+PostgreSQL 18 via `docker-compose.yml`. Default connection: `cardmaker:dev@localhost:5432/cardmaker`.
 
 Schema auto-creates on first startup (no migration framework). Configure via environment variables — see below.
 
