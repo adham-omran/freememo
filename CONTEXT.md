@@ -153,7 +153,35 @@ A FreeMemo server that a person runs from the public code, with no freememo.net
 account. FreeMemo gives it no support.
 _Avoid_: Self-host (alone), official self-host
 
+**Release**:
+One publication of FreeMemo, made by each push of `unstable`: freememo.net
+runs it, and the public GitHub repository offers it as its latest release.
+_Avoid_: Deploy, build, version (alone)
+
+**Release Version**:
+The name of a Release: the UTC time of its commit, written as the two-digit
+year, the month, and the minute of that month (`26.11.13832` is 10 November
+2026, 14:32). A later Release always has a larger Release Version.
+_Avoid_: Major, build number, semver
+
+**App Update**:
+The app part of a Release, which a Local Install downloads by itself and starts
+using at its next start. It needs no new installer.
+_Avoid_: Patch, hot update, upgrade
+
+**Runtime**:
+The parts of a Local Install that an App Update cannot change: the Java
+runtime, PostgreSQL and the bundled media tools. A new Runtime needs a new
+installer.
+_Avoid_: Platform, bundle, major
+
+**Sync Protocol**:
+The number that names how a Local Install talks to freememo.net. A Local
+Install syncs only while its Sync Protocol matches the one freememo.net runs.
+_Avoid_: Major, desktop version, API version
+
 **Sync License**:
 A one-time purchase on a FreeMemo account that lets its Local Installs sync
-with freememo.net and use AI through freememo.net.
-_Avoid_: Desktop license, subscription
+with freememo.net and use AI through freememo.net, on every Release, with no
+end date.
+_Avoid_: Desktop license, subscription, versions 1 and 2
