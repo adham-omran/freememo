@@ -254,8 +254,10 @@
                             (deliver account acct)
                             (progress-page))
                           (catch clojure.lang.ExceptionInfo e
-                            (first-launch-page {:online? (not= ::offline (:type (ex-data e)))
-                                                :error (when (not= ::offline (:type (ex-data e))) (ex-message e))})))
+                            ;; `save-account!` may refuse with its own page (ticket 05).
+                            (or (:response (ex-data e))
+                              (first-launch-page {:online? (not= ::offline (:type (ex-data e)))
+                                                :error (when (not= ::offline (:type (ex-data e))) (ex-message e))}))))
                         (text 400 "Sign-in refused: the reply did not match this request.")))
 
                     [:get "/api/desktop/status"]

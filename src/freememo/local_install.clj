@@ -365,6 +365,22 @@
     {:origin origin
      :license-fn #(:license ((ns-resolve 'freememo.sync-client 'status)))}))
 
+;; Ticket 05: one library, one account.
+
+(defn- make-account-guard
+  "Post: `{:wrap f :user-id (fn [])}` from `freememo.local-account`, over the
+   database functions of `freememo.local-library`."
+  [account data-dir origin local-origin]
+  (require 'freememo.local-account 'freememo.local-library)
+  (let [lib #(deref (ns-resolve 'freememo.local-library %))]
+    ((ns-resolve 'freememo.local-account 'make-guard)
+     {:origin origin :local-origin local-origin :account account
+      :save-file! #(write-private! (io/file data-dir "account.json") (json/generate-string %))
+      :delete-file! #(io/delete-file (io/file data-dir "account.json") true)
+      :adopt! (lib 'adopt!) :renew! (lib 'renew!) :wipe! (lib 'wipe!)
+      :unsynced-count (lib 'unsynced-count) :revoked? (lib 'revoked?)
+      :library-ready? (lib 'library-ready?)})))
+
 (defn start!
   "Start everything. With no account, the first-launch page comes first and
    PostgreSQL starts after the sign-in.
@@ -414,10 +430,12 @@
         (require 'prod 'freememo.desktop 'freememo.logging 'freememo.connectivity 'freememo.sync-client)
         ((ns-resolve 'freememo.logging 'init!))
         ((ns-resolve 'freememo.desktop 'set-launch-config!) account)
-        (let [{:keys [wrap issue-token!]} (gate/make-gate
+        (let [guard (make-account-guard account data-dir origin local-origin)
+              {:keys [wrap issue-token!]} (gate/make-gate
                                             {:origin local-origin
                                              :secret (get install "cookie_secret")
-                                             :user-id (get account "user_id")
+                                             :user-id (:user-id guard)
+                                             :public? signin/public-request?
                                              :local-route @(ns-resolve 'freememo.desktop 'local-route)})
               pending? (first-download-pending? account)
               _ (when-let [first-server @!jetty]
@@ -426,9 +444,10 @@
                   (reset! !jetty nil))
               server ((ns-resolve 'prod 'start-server!)
                       {:port http-port
-                       :wrap-gate (fn [handler] (wrap (-> handler
-                                                      (signin/wrap-first-download pending?)
-                                                      (wrap-license-reminder (get account "origin")))))})]
+                       :wrap-gate (fn [handler] (wrap ((:wrap guard)
+                                                       (-> handler
+                                                         (signin/wrap-first-download pending?)
+                                                         (wrap-license-reminder (get account "origin"))))))})]
           (reset! !jetty server)
           (start-network-check!)
           (log "serving " local-origin)

@@ -69,7 +69,8 @@
 (defn make-gate
   "Pre:  `origin` is \"http://127.0.0.1:<port>\". `secret` is the cookie value,
          which the launcher keeps in the data directory so a cookie lasts
-         across restarts. `user-id` is the one account of this install.
+         across restarts. `user-id` is the one account of this install, or a
+         `(fn [])` that answers it (the account can change after a removal).
          `local-route` is `(fn [request])` for the shell endpoints, nil for none.
          `public?` is `(fn [request])`: true for a request that needs no cookie.
    Post: `{:wrap f, :issue-token! f}`. `(issue-token!)` returns a new one-time
@@ -131,7 +132,7 @@
                      (deny 401 "Unauthorized")
 
                      :else
-                     (let [request (assoc-in request [:session :user-id] user-id)]
+                     (let [request (assoc-in request [:session :user-id] (if (fn? user-id) (user-id) user-id))]
                        (or (when local-route (local-route request))
                          (mark-title (handler request))))))))]
     {:wrap wrap :issue-token! issue-token!}))
