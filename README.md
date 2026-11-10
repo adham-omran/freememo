@@ -2,7 +2,7 @@
 
 Three review systems over what you read: a priority queue for incremental reading, FSRS-6 for LLM-graded quiz questions, and your own Anki for flashcards. Import PDFs, EPUBs, web articles, scores, photos, and code repositories; extract, distill, and card them.
 
-**Try it at [freememo.net](https://freememo.net)** — no setup required. Or self-host using the instructions below.
+**Try it at [freememo.net](https://freememo.net)**. It needs no setup.
 
 Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (Clojure/ClojureScript) — a reactive framework where client and server code coexist in the same `.cljc` files with automatic WebSocket sync.
 
@@ -67,7 +67,7 @@ Open http://localhost:8080.
 - `google` — Google OAuth only; requires `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or a `resources/google_client.json` from Google Cloud Console).
 - `both` — show both.
 
-For password login, seed the first account with `ADMIN_USER` / `ADMIN_PASSWORD` (created at boot only if absent — see [Self-hosting](#self-hosting-with-docker)).
+For password login, seed the first account with `ADMIN_USER` / `ADMIN_PASSWORD` (created at boot only if absent).
 
 ### Optional: Zotero import
 
@@ -245,60 +245,6 @@ Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded 
 
 ## Production
 
-### Self-hosting with Docker
-
-Self-host on Linux or macOS with Docker — username/password login, no Google account required.
-Everything (Postgres + app) is defined in a single file, `docker-compose.selfhost.yml`.
-
-> **The image build needs outbound internet.** Third-party client libraries
-> (PDF.js, Quill, Konva, KaTeX, …) are not committed; the build downloads them and
-> verifies every byte against `vendor-lock.sha256`. The **running** container needs
-> no internet for them — they are baked into the image, so a LAN-only or
-> air-gapped deployment works once built.
-
-**1. Configure `.env`:**
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set, at minimum:
-
-```bash
-DB_PASSWORD=$(openssl rand -hex 32)       # set BEFORE first up (Postgres fixes it at init)
-ENC_KEY_SECRET=$(openssl rand -hex 32)    # session-cookie key
-AUTH_MODE=password                        # username/password login
-ADMIN_USER=admin
-ADMIN_PASSWORD=your-password-here
-COOKIE_SECURE=false                       # required to log in over plain HTTP (see security note)
-PLATFORM_OPENROUTER_API_KEY=sk-or-...     # all AI features (card gen, OCR, transcription)
-```
-
-**2. Start:**
-
-```bash
-APP_VERSION=$(git describe --tags --long --always --dirty 2>/dev/null || echo selfhost) \
-  docker compose -f docker-compose.selfhost.yml up -d --build
-```
-
-The app refuses to boot if `DB_PASSWORD` or `ENC_KEY_SECRET` is unset.
-`APP_VERSION` is optional here (defaults to `selfhost`); it's baked into the build for
-client/server version matching, which holds because one build produces both.
-
-**3. Log in** at http://localhost:8080 with your `ADMIN_USER` / `ADMIN_PASSWORD`.
-The account is created at boot only if it doesn't already exist — changing `ADMIN_PASSWORD`
-later will **not** reset it.
-
-Override the published port with `APP_PORT` (default 8080).
-Storage caps default to **unlimited**; set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env`.
-To accept uploads larger than 100 MB, also raise `STORAGE_REQUEST_MAX_BYTES` (the HTTP request-body ceiling) — it caps upload requests regardless of the per-user limit.
-
-> **⚠️ Security — plain HTTP over a LAN.** `COOKIE_SECURE=false` is needed to log in
-> without HTTPS, but it means the login password and session cookie travel **unencrypted**.
-> The app binds `0.0.0.0`, so anything on your network can reach it. Use plain HTTP only on a
-> **trusted local network**. For any real or internet-facing deployment, put the app behind an
-> HTTPS reverse proxy (see [Reverse Proxy](#reverse-proxy)) and set `COOKIE_SECURE=true`.
-
 ### Non-Docker (run the jar on the host)
 
 Requires a reachable Postgres (e.g. `docker compose up` for just the DB), ImageMagick on PATH
@@ -385,5 +331,7 @@ any page that displays or uses results from the database:
 ```
 
 ## License
+
+The code is MIT. A community-maintained Docker setup is in [docs/self-hosting.md](docs/self-hosting.md). It has no support from FreeMemo.
 
 Electric v3 is free for bootstrappers and non-commercial use, and available commercially under a business source license. See [Electric v3 license](https://tana.pub/lQwRvGRaQ7hM/electric-v3-license-change).
