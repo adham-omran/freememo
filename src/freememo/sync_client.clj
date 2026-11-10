@@ -610,13 +610,15 @@
 
 (defonce ^:private !lock (Object.))
 (defonce ^:private !running (atom false))
+;; True between `stop-scheduler!` and the next `start-scheduler!`: no sync starts.
+(defonce ^:private !stopped (atom false))
 
 (defn sync-now!
   "Run one sync unless one is already running.
    Post: returns the status after the sync. Errors are recorded and shown,
          never thrown, because the callers are a timer, Electron and a button."
   []
-  (when (compare-and-set! !running false true)
+  (when (and (not @!stopped) (compare-and-set! !running false true))
     (try
       (set-state! :syncing :progress {})
       (locking !lock (run-sync!))
@@ -646,7 +648,7 @@
 (defn choose-full-sync!
   "The user's answer to a full-sync choice: :download or :upload."
   [direction]
-  (when (compare-and-set! !running false true)
+  (when (and (not @!stopped) (compare-and-set! !running false true))
     (try
       (set-state! :syncing)
       (locking !lock
@@ -670,11 +672,14 @@
 ;; ── Scheduling (2.11) ──────────────────────────────────────────────
 
 (defonce ^:private !scheduler (atom nil))
+(defonce ^:private !online-listener? (atom false))
 
 (defn start-scheduler!
   "2.11 — sync now, every five minutes, and whenever the link comes back
-   online (2.11.1). Quit-time sync is Electron's call to /api/desktop/sync-now."
+   online (2.11.1). Quit-time sync is Electron's call to /api/desktop/sync-now.
+   Also lets syncs run again after `stop-scheduler!`."
   []
+  (reset! !stopped false)
   (when-not @!scheduler
     (let [^ScheduledExecutorService ex (Executors/newSingleThreadScheduledExecutor
                                          (reify ThreadFactory
@@ -684,7 +689,27 @@
       ;; the timer would stop for the life of the process.
       (let [run (fn [] (try (sync-now!) (catch Throwable e (tel/error! {:id ::scheduled-sync-failed} e))))]
         (.scheduleWithFixedDelay ex ^Runnable run 2 (* 60 interval-minutes) TimeUnit/SECONDS)
-        (link/on-online! #(.execute ex ^Runnable run))))))
+        ;; One listener for the life of the process: it uses the current executor.
+        (when (compare-and-set! !online-listener? false true)
+          (link/on-online! (fn []
+                             (when-let [^ScheduledExecutorService ex @!scheduler]
+                               (.execute ex ^Runnable (fn [] (try (sync-now!)
+                                                                  (catch Throwable e (tel/error! {:id ::scheduled-sync-failed} e))))))))))))) 
+
+(defn stop-scheduler!
+  "Stop the timer and wait for a sync that runs now. A library removal calls
+   this before it drops the schema.
+   Post: no sync runs and none starts, until `start-scheduler!`."
+  []
+  (reset! !stopped true)
+  (when-let [^ScheduledExecutorService ex (first (reset-vals! !scheduler nil))]
+    (.shutdown ex))
+  ;; `sync-now!` and `choose-full-sync!` set `!running` before they take the lock.
+  (let [deadline (+ (System/currentTimeMillis) 120000)]
+    (while (and @!running (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 50)))
+  (locking !lock nil)
+  nil)
 
 ;; ── Conflict report (§5) ───────────────────────────────────────────
 

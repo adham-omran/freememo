@@ -29,9 +29,11 @@
 (defn library-ready? [] (boolean (:library-ready (sync-client/status))))
 
 (defn wipe!
-  "Post: no row, table or large object of the library remains, the schema is
-         new and empty, and the sync link holds no token."
+  "Post: no sync runs, no row, table or large object of the library remains,
+         the schema is new and empty, and the sync link holds no token.
+         `adopt!` starts the sync scheduler again after the next sign-in."
   []
+  (sync-client/stop-scheduler!)
   (link/configure! {:origin (link/origin) :token nil :user-id nil})
   (jdbc/execute! db/ds ["SELECT lo_unlink(oid) FROM pg_largeobject_metadata"])
   (jdbc/execute! db/ds ["DROP SCHEMA public CASCADE"])
