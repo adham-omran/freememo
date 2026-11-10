@@ -149,17 +149,18 @@
    `opts`: `:data-dir` (a File; an empty temp dir by default), `:account` (the
    account.json map; `default-account` by default; nil leaves an existing
    file), `:origin` (the server's origin for the default account),
-   `:port` (the preferred port of a fresh install; a free one by default).
+   `:port` (the preferred port of a fresh install; a free one by default),
+   `:env` (more environment variables for the JVM, such as FREEMEMO_VERSION).
    Post: `{:data-dir :port :pg-port :open-url :process :log-file}`. `:open-url`
          is the one-time token URL of this start."
-  [{:keys [data-dir account origin port] :or {origin "http://127.0.0.1:1"}}]
+  [{:keys [data-dir account origin port env] :or {origin "http://127.0.0.1:1"}}]
   (let [data-dir (or data-dir (temp-dir "li-data"))
         _ (when (or account (not (.exists (io/file data-dir "account.json"))))
             (seed-account! data-dir (or account (default-account origin))))
         log-file (File/createTempFile "li-install" ".log")
         handle (spawn! "freememo.local-install"
                  ["--data-dir" (.getPath data-dir) "--port" (str (or port (free-port)))]
-                 {"FREEMEMO_HEADLESS" "true"} log-file)
+                 (merge {"FREEMEMO_HEADLESS" "true"} env) log-file)
         [_ ready-port pg-port] (await-line handle #"FREEMEMO_READY port=(\d+) pg_port=(\d+)")
         open-url (second (re-find #"FREEMEMO_OPEN_URL=(\S+)" (log-text handle)))]
     (assoc handle :data-dir data-dir :port (parse-long ready-port) :pg-port (parse-long pg-port)

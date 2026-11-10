@@ -23,7 +23,8 @@
             [next.jdbc.result-set :as rs]
             [freememo.db :as db]
             [freememo.desktop-link :as link]
-            [freememo.sync-client :as sync-client])
+            [freememo.sync-client :as sync-client]
+            [freememo.update-feed :as update-feed])
   (:import [java.io BufferedReader InputStreamReader]
            [java.nio.charset StandardCharsets]
            [java.security MessageDigest]))
@@ -147,6 +148,9 @@
 
     [:get "/api/desktop/status"]
     (json-response 200 (sync-client/status))
+
+    [:get "/api/desktop/update"]
+    (json-response 200 (update-feed/banner-state))
 
     nil))
 

@@ -81,6 +81,21 @@
               (fb/collapse-failures [(failure 1)]))]
     (is (= ["pause" "removal" "failure-1"] (mapv :key all)))))
 
+(deftest update-banners-say-what-the-student-must-do
+  (testing "a newer version gives \"Update available\" with the installer link"
+    (let [[b] (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}})]
+      (is (= "Update available" (:message b)))
+      (is (= "https://x/app" (:href b)))
+      (is (nil? (:dismiss b)))))
+  (testing "a refused major gives one banner, \"Update to keep syncing\""
+    (let [banners (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}
+                                      :update-required? true})]
+      (is (= ["Update to keep syncing"] (mapv :message banners)))
+      (is (= "https://x/app" (:href (first banners))))))
+  (testing "nothing to say gives no banner"
+    (is (empty? (fb/update-banners {:update-available nil :update-required? false})))
+    (is (empty? (fb/update-banners nil)))))
+
 (deftest no-state-gives-no-banner
   (is (empty? (fb/account-banners nil)))
   (is (empty? (fb/account-banners {:paused nil :removal nil})))

@@ -243,7 +243,38 @@
     (.add (java.awt.SystemTray/getSystemTray)
       (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
         (.setImageAutoSize true)
-        (.addActionListener (listener open!))))))
+        (.addActionListener (listener open!))))
+    menu))
+
+(defn- show-update-in-tray!
+  "Post: the tray menu has an \"Update available\" item first when `available`
+   is `{:url}`, and none when it is nil. A click opens the installer URL."
+  [^java.awt.PopupMenu menu available]
+  (let [label "Update available"]
+    (doseq [i (reverse (range (.getItemCount menu)))
+            :when (= label (.getLabel (.getItem menu i)))]
+      (.remove menu (int i)))
+    (when-let [url (:url available)]
+      (.insert menu
+        (doto (java.awt.MenuItem. label)
+          (.addActionListener (reify java.awt.event.ActionListener
+                                (actionPerformed [_ _] (open-browser! url)))))
+        0))))
+
+(defn- start-update-check!
+  "Read the update feed of the account's server (ticket 08). A newer version
+   shows in the web app (`update-feed/banner-state`) and in the tray `menu`
+   (nil when headless). Quiet when the feed cannot be read."
+  [account menu]
+  (let [update-feed-ns (do (require 'freememo.update-feed) (find-ns 'freememo.update-feed))
+        resolve-fn #(ns-resolve update-feed-ns %)
+        user-id (get account "user_id")]
+    ((resolve-fn 'start!)
+     {:origin (get account "origin")
+      :version ((resolve-fn 'version-from-env))
+      :on-change (fn [available]
+                   (when menu (show-update-in-tray! menu available))
+                   ((resolve-fn 'bump-banners!) user-id))})))
 
 (defn- show-error! [message]
   (binding [*out* *err*] (println (str "FreeMemo Local could not start: " message)))
@@ -310,9 +341,11 @@
         (reset! !jetty server)
         (log "serving " origin)
         (if (headless?)
-          (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
-          (do (install-tray! open! #(System/exit 0))
-              (open!)))
+          (do (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
+              (start-update-check! account nil))
+          (let [menu (install-tray! open! #(System/exit 0))]
+            (start-update-check! account menu)
+            (open!)))
         (println (str "FREEMEMO_READY port=" http-port " pg_port=" (.getPort pg)))
         (flush)
         {:port http-port :pg-port (.getPort pg) :open! open! :quit! quit!})
