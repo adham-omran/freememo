@@ -22,14 +22,15 @@
   "Run `(f li cookie stub)` with a Local Install at `installed`, and a stub that
    starts with `initial`."
   [initial f]
-  (let [s (stub/start! initial)
-        li (h/start-local-install! {:origin (:origin s) :env {"FREEMEMO_TEST_RELEASE_VERSION" installed}})]
+  (let [s (stub/start! initial)]
     (try
-      (f li (:cookie (h/sign-in! li)) s)
-      (finally
-        (when (h/alive? li) (h/stop! li))
-        (stub/stop! s)
-        (h/delete-tree! (:data-dir li))))))
+      (let [li (h/start-local-install! {:origin (:origin s) :env {"FREEMEMO_TEST_RELEASE_VERSION" installed}})]
+        (try
+          (f li (:cookie (h/sign-in! li)) s)
+          (finally
+            (when (h/alive? li) (h/stop! li))
+            (h/delete-tree! (:data-dir li)))))
+      (finally (stub/stop! s)))))
 
 (defn- banner-state [li cookie]
   (json/parse-string (:body (h/http (h/url li "/api/desktop/update") {:cookie cookie}))))
