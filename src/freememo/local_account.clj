@@ -83,8 +83,8 @@
            unsynced-count revoked? library-ready? online-fn]
     :or {online-fn signin/online?}}]
   (let [!account (atom account)
-        !fresh (atom false)
-        !flow (atom nil)
+        !first-download-open (atom false)
+        !signin-flow (atom nil)
         save! (fn [acct]
                 (let [held @!account
                       held-id (some-> held (get "user_id") long)]
@@ -92,7 +92,7 @@
                     (nil? held)
                     (do (save-file! acct)
                         (reset! !account acct)
-                        (reset! !fresh true)
+                        (reset! !first-download-open true)
                         (adopt! acct))
 
                     (= held-id (long (get acct "user_id")))
@@ -107,18 +107,18 @@
                               :response (other-account-page (get held "username") (get acct "username"))})))))
         new-flow! (fn []
                     ;; A flow answers one sign-in. A new one waits for the next.
-                    (reset! !flow (signin/make-flow {:origin origin :local-origin local-origin
+                    (reset! !signin-flow (signin/make-flow {:origin origin :local-origin local-origin
                                                      :save-account! save! :online-fn online-fn})))
         _ (new-flow!)
         wrap (fn [inner]
                (fn [request]
                  (let [method (:request-method request)
                        uri (:uri request)
-                       flow-handler (:handler @!flow)
+                       flow-handler (:handler @!signin-flow)
                        held @!account]
                    (cond
                      (#{"/first-launch/sign-in" "/callback"} uri)
-                     (let [flow @!flow
+                     (let [flow @!signin-flow
                            response ((:handler flow) request)]
                        ;; The sign-in is done: the next one needs a new flow.
                        (when (and (= "/callback" uri) (realized? (:account flow)))
@@ -142,9 +142,9 @@
                      (and (= :get method) (= "/" uri) (revoked?))
                      (reauth-page (get held "username"))
 
-                     (and @!fresh (= :get method) (= "/" uri))
+                     (and @!first-download-open (= :get method) (= "/" uri))
                      (if (library-ready?)
-                       (do (reset! !fresh false) (inner request))
+                       (do (reset! !first-download-open false) (inner request))
                        (signin/progress-page))
 
                      :else (inner request)))))]

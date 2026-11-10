@@ -40,6 +40,8 @@
 ;;   :retry?      the Retry button shows
 ;;   :topup?      the Top up button shows
 ;;   :dismiss     nil (cannot be dismissed) | :failures | :removal
+;;   :href        a URL for a link button (the update banners: the installer), or nil
+;;   :href-label  the text of that link; both keys are set together
 ;; ---------------------------------------------------------------------------
 
 (defn failure-lead
