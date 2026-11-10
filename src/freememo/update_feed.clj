@@ -21,6 +21,7 @@
             [clojure.string :as str]
             [freememo.commands :as commands]
             [freememo.config :as config]
+            [freememo.desktop-link :as link]
             [freememo.desktop-version :as desktop-version]
             [freememo.launch-env :as launch-env]
             [freememo.peer :as peer])
@@ -107,25 +108,28 @@
       (throw (ex-info (str "feed answered HTTP " (:status resp)) {})))
     body))
 
-(defn check!
+(defn refresh!
   "Read the feed once.
    Pre:  `opts` has `:origin`, `:version` (this install's version), and may have
          `:on-change` (a fn of the new `:available`).
-   Post: `banner-state` is current. A feed that cannot be read leaves it as it
-         was and logs one line."
+   Post: `banner-state` is current. A feed that cannot be read shows nothing: it
+         clears an earlier `:available` and logs one line."
   [{:keys [origin version on-change]}]
-  (try
-    (let [now (available (fetch-feed origin) version (os-key))
-          [before _] (swap-vals! !state assoc :available now)]
-      (when (not= (:available before) now)
-        (when on-change (on-change now))))
-    (catch Throwable e
-      (log "cannot read the update feed: " (or (ex-message e) (str e))))))
+  (let [now (try (available (fetch-feed origin) version (os-key))
+                 (catch Throwable e
+                   (log "cannot read the update feed: " (or (ex-message e) (str e)))
+                   nil))
+        [before _] (swap-vals! !state assoc :available now)]
+    (when (not= (:available before) now)
+      (when on-change
+        (try (on-change now)
+             (catch Throwable e (log "update callback failed: " (or (ex-message e) (str e)))))))))
 
 (defonce ^:private !timer (atom nil))
 
 (defn start!
-  "Read the feed now and every `interval-hours`, off the caller's thread.
+  "Read the feed now, every `interval-hours`, and when the network comes back,
+   off the caller's thread.
    Post: no effect when this install has no version: it logs one line."
   [{:keys [version] :as opts}]
   (if (str/blank? version)
@@ -135,7 +139,8 @@
                                            (reify ThreadFactory
                                              (newThread [_ r] (doto (Thread. r "freememo-update-feed") (.setDaemon true)))))]
         (reset! !timer ex)
-        (.scheduleWithFixedDelay ex ^Runnable #(check! opts) 0 interval-hours TimeUnit/HOURS)))))
+        (link/on-online! #(.execute ex ^Runnable (fn [] (refresh! opts))))
+        (.scheduleWithFixedDelay ex ^Runnable #(refresh! opts) 0 interval-hours TimeUnit/HOURS)))))
 
 (defn version-from-env
   "Post: the version of this install, from `FREEMEMO_VERSION`, or nil."
