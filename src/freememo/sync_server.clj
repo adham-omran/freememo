@@ -81,7 +81,7 @@
    perform `operation` (13.4). Every route goes through here, so no route
    carries its own license check.
    Post: 401 for a missing or revoked token, 409 for a different Sync
-         Protocol (the Local Install shows "Update to keep syncing"), 403 with the reason code for a
+         Protocol (the Local Install shows \"Update to keep syncing\"), 403 with the reason code for a
          refused operation (13.4.3)."
   [request operation f]
   (if-let [holder (desktop-auth/bearer-token request)]
@@ -102,7 +102,8 @@
   [request]
   (with-access request :meta
     (fn [{:keys [user-id]} body access]
-      (let [protocol (get body "protocol")]
+      (let [protocol (or (get body "protocol")
+                       (some-> (get-in request [:headers "x-freememo-sync-protocol"]) parse-long))]
         (if-let [error (desktop-version/protocol-error protocol)]
           (json-response 409 {:error error :protocol desktop-version/sync-protocol})
           (let [scm (:scm (jdbc/execute-one! db/ds ["INSERT INTO desktop_accounts (user_id, scm)
