@@ -24,8 +24,10 @@
             [freememo.desktop-link :as link]
             [freememo.desktop-version :as desktop-version]
             [freememo.launch-env :as launch-env]
-            [freememo.peer :as peer])
-  (:import [java.util.concurrent Executors ScheduledExecutorService ThreadFactory TimeUnit]))
+            [freememo.local-http :as lhttp]
+            [freememo.peer :as peer]
+            [taoensso.telemere :as tel])
+  (:import [java.util.concurrent ScheduledExecutorService TimeUnit]))
 
 (def interval-hours "How often a running Local Install reads the feed." 4)
 
@@ -95,7 +97,7 @@
 
 (defonce ^:private !state (atom {:available nil}))
 
-(defn- log [& parts] (println (apply str "[update-feed] " parts)) (flush))
+(defn- log [& parts] (tel/log! {:level :info :id ::update-feed} (apply str parts)))
 
 (defn- fetch-feed
   "Post: the feed map. Throws on a network error, a status other than 200, or a body that is not a map."
@@ -135,9 +137,7 @@
   (if (str/blank? version)
     (log "no version known, so no update check")
     (when-not @!timer
-      (let [^ScheduledExecutorService ex (Executors/newSingleThreadScheduledExecutor
-                                           (reify ThreadFactory
-                                             (newThread [_ r] (doto (Thread. r "freememo-update-feed") (.setDaemon true)))))]
+      (let [^ScheduledExecutorService ex (lhttp/daemon-scheduler "freememo-update-feed")]
         (reset! !timer ex)
         (link/on-online! #(.execute ex ^Runnable (fn [] (refresh! opts))))
         (.scheduleWithFixedDelay ex ^Runnable #(refresh! opts) 0 interval-hours TimeUnit/HOURS)))))

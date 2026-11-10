@@ -19,8 +19,9 @@
 
    NO db or app requires: this namespace is a pure Ring middleware, so tests
    load it with PostgreSQL stopped."
-  (:require [clojure.string :as str])
-  (:import [java.net URLDecoder]
+  (:require [clojure.string :as str]
+            [freememo.local-http :as http])
+  (:import [java.net URLEncoder]
            [java.nio.charset StandardCharsets]
            [java.security MessageDigest SecureRandom]
            [java.util Base64]
@@ -40,12 +41,6 @@
   (some->> (get-in request [:headers "cookie"])
     (re-find (re-pattern (str "(?:^|;\\s*)" cookie-name "=([^;]+)")))
     second))
-
-(defn- query-pairs [query-string]
-  (for [pair (str/split (or query-string "") #"&")
-        :when (not (str/blank? pair))
-        :let [[k v] (str/split pair #"=" 2)]]
-    [(URLDecoder/decode ^String k "UTF-8") (some-> v (URLDecoder/decode "UTF-8"))]))
 
 (defn- deny [status text]
   {:status status :headers {"Content-Type" "text/plain"} :body text})
@@ -94,20 +89,19 @@
         cookie-ok? (fn [request] (same-secret? (cookie-value request) secret))
         stripped-location (fn [request]
                             (let [rest-pairs (remove (fn [[k _]] (= k token-param))
-                                               (query-pairs (:query-string request)))]
+                                               (http/query-pairs (:query-string request)))
+                                  enc #(URLEncoder/encode ^String % "UTF-8")]
                               (str (:uri request)
                                 (when (seq rest-pairs)
-                                  (str "?" (->> (:query-string request)
-                                             (#(str/split % #"&"))
-                                             (remove #(str/starts-with? % (str token-param "=")))
-                                             (str/join "&")))))))
+                                  (str "?" (str/join "&" (map (fn [[k v]] (if v (str (enc k) "=" (enc v)) (enc k)))
+                                                           rest-pairs)))))))
         wrap (fn [handler]
                (fn [request]
                  (let [headers (:headers request)
                        origin-header (get headers "origin")
                        method (:request-method request)
                        websocket? (some-> (get headers "upgrade") str/lower-case (= "websocket"))
-                       token (some (fn [[k v]] (when (= k token-param) v)) (query-pairs (:query-string request)))]
+                       token (some (fn [[k v]] (when (= k token-param) v)) (http/query-pairs (:query-string request)))]
                    (cond
                      (not (contains? hosts (get headers "host")))
                      (deny 403 "Forbidden: wrong Host")

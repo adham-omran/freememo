@@ -32,7 +32,7 @@
 
    NO db or app requires, so tests load it with PostgreSQL stopped."
   (:require [cheshire.core :as json]
-            [clojure.string :as str])
+            [freememo.local-http :as http])
   (:import [java.net URI URLEncoder]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest HttpRequest$BodyPublishers
             HttpResponse$BodyHandlers]
@@ -114,21 +114,7 @@
 
 ;; ── Pages ──────────────────────────────────────────────────────────
 
-(defn- esc [s]
-  (-> (str s) (str/replace "&" "&amp;") (str/replace "<" "&lt;")
-    (str/replace ">" "&gt;") (str/replace "\"" "&quot;")))
-
-(defn- page [body-html & [script]]
-  {:status 200
-   :headers {"Content-Type" "text/html; charset=utf-8" "Cache-Control" "no-store"}
-   :body (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-           "<meta name=\"viewport\" content=\"width=device-width\">"
-           "<title>FreeMemo</title>"
-           "<style>body{font-family:system-ui,sans-serif;max-width:30rem;margin:5rem auto;padding:0 1rem}"
-           "button,.again{font-size:1rem;padding:.6rem 1.2rem;cursor:pointer}"
-           ".err{color:#b00020}</style></head><body>" body-html
-           (when script (str "<script>" script "</script>"))
-           "</body></html>")})
+(def ^:private page http/page)
 
 (defn first-launch-page
   "Post: the page with one action, \"Sign in\", or the offline message with
@@ -136,7 +122,7 @@
   [{:keys [online? error]}]
   (page
     (str "<h1>Welcome to FreeMemo</h1>"
-      (when error (str "<p class=\"err\" role=\"alert\">" (esc error) "</p>"))
+      (when error (str "<p class=\"err\" role=\"alert\">" (http/esc error) "</p>"))
       (if online?
         (str "<p>Sign in to get your library on this computer.</p>"
           "<form method=\"post\" action=\"/first-launch/sign-in\">"
@@ -173,7 +159,7 @@
   (page (str "<h1>Getting your library</h1>"
           "<p id=\"out\" role=\"status\">Starting</p>"
           "<p><button id=\"again\" type=\"button\" hidden>Try again</button></p>")
-    progress-script))
+    {:script progress-script}))
 
 ;; ── The flow ───────────────────────────────────────────────────────
 
@@ -181,12 +167,6 @@
   "True for the one request that the gate lets through without its cookie."
   [request]
   (and (= :get (:request-method request)) (= "/callback" (:uri request))))
-
-(defn- query-param [request k]
-  (some (fn [pair] (let [[pk pv] (str/split pair #"=" 2)]
-                     (when (= k (java.net.URLDecoder/decode ^String pk "UTF-8"))
-                       (some-> pv (java.net.URLDecoder/decode "UTF-8")))))
-    (str/split (or (:query-string request) "") #"&")))
 
 (defn- text [status body]
   {:status status :headers {"Content-Type" "text/plain; charset=utf-8"} :body body})
@@ -237,12 +217,12 @@
                     (cond
                       (realized? account) (progress-page)
                       :else
-                      (if-let [{:keys [verifier]} (take-pending! (query-param request "state"))]
-                        (if (query-param request "error")
+                      (if-let [{:keys [verifier]} (take-pending! (http/query-param request "state"))]
+                        (if (http/query-param request "error")
                           (do (reset! !error "Sign-in was not allowed. Try again.")
                               (first-launch-page {:online? true :error @!error}))
                           (try
-                            (let [token (exchange-code! origin (query-param request "code") verifier redirect-uri)
+                            (let [token (exchange-code! origin (http/query-param request "code") verifier redirect-uri)
                                   acct {"origin" origin
                                         "token" (get token "access_token")
                                         "user_id" (get token "user_id")

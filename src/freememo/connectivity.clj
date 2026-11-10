@@ -11,8 +11,9 @@
    (`link/on-sync-failed!`). They share one thread, so two checks never
    overlap."
   (:require [clj-http.client :as http]
-            [freememo.desktop-link :as link])
-  (:import [java.util.concurrent Executors ScheduledExecutorService ThreadFactory TimeUnit]))
+            [freememo.desktop-link :as link]
+            [freememo.local-http :as lhttp])
+  (:import [java.util.concurrent ScheduledExecutorService TimeUnit]))
 
 (def interval-seconds 15)
 
@@ -46,10 +47,7 @@
          `:on-offline!` as in `check!`. A second call does nothing."
   [{:keys [on-offline!]}]
   (when-not @!executor
-    (let [^ScheduledExecutorService ex (Executors/newSingleThreadScheduledExecutor
-                                         (reify ThreadFactory
-                                           (newThread [_ r] (doto (Thread. r "freememo-connectivity")
-                                                              (.setDaemon true)))))
+    (let [^ScheduledExecutorService ex (lhttp/daemon-scheduler "freememo-connectivity")
           run (fn [] (try (check! reachable? on-offline!)
                           (catch Throwable _ nil)))]
       (reset! !executor ex)

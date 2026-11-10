@@ -21,10 +21,11 @@
    `freememo.local-library`), so tests load this namespace with PostgreSQL
    stopped."
   (:require [clojure.string :as str]
+            [freememo.local-http :as http]
             [freememo.local-signin :as signin]))
 
-(def ^:private page @#'signin/page)
-(def ^:private esc @#'signin/esc)
+(def ^:private page http/page)
+(def ^:private esc http/esc)
 
 (defn- count-text [n]
   (cond (zero? n) "All changes on this computer are synced."

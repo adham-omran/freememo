@@ -14,7 +14,7 @@
 
    NO db or app requires: the launcher passes `license-fn`, so tests load this
    namespace with PostgreSQL stopped."
-  (:require [clojure.string :as str]))
+  (:require [freememo.local-http :as http]))
 
 (def nag-states
   "The license states that start a launch with the reminder."
@@ -38,28 +38,18 @@
     (str "Your FreeMemo trial has ended. Your library stays on this computer and keeps working. "
       "Sync with freememo.net needs a Sync License.")))
 
-(defn- esc [s]
-  (-> (str s) (str/replace "&" "&amp;") (str/replace "<" "&lt;")
-    (str/replace ">" "&gt;") (str/replace "\"" "&quot;")))
-
 (defn reminder-page
   "Post: a Ring response with the reminder. The page has its own title, which
          the gate marks as Local. It links to the checkout only when `buy?`."
   [origin license buy?]
-  {:status 200
-   :headers {"Content-Type" "text/html; charset=utf-8" "Cache-Control" "no-store"}
-   :body (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-           "<meta name=\"viewport\" content=\"width=device-width\">"
-           "<title>FreeMemo Sync License</title>"
-           "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:5rem auto;padding:0 1rem}"
-           "button,.buy{font-size:1rem;padding:.6rem 1.2rem;cursor:pointer}</style></head><body>"
-           "<h1>Sync License</h1><p id=\"text\">" (esc (reminder-text license)) "</p>"
-           (when buy?
-             (str "<p><a class=\"buy\" id=\"buy\" href=\"" (esc (purchase-url origin))
-               "\" target=\"_blank\" rel=\"noopener\">Buy a Sync License</a></p>"))
-           "<form method=\"post\" action=\"" continue-path "\">"
-           "<button type=\"submit\">Continue to my library</button></form>"
-           "</body></html>")})
+  (http/page
+    (str "<h1>Sync License</h1><p id=\"text\">" (http/esc (reminder-text license)) "</p>"
+      (when buy?
+        (str "<p><a class=\"buy\" id=\"buy\" href=\"" (http/esc (purchase-url origin))
+          "\" target=\"_blank\" rel=\"noopener\">Buy a Sync License</a></p>"))
+      "<form method=\"post\" action=\"" continue-path "\">"
+      "<button type=\"submit\">Continue to my library</button></form>")
+    {:title "FreeMemo Sync License"}))
 
 (defn wrap-reminder
   "Pre:  `license-fn` is `(fn [])`: the cached license map (string keys) or nil.
