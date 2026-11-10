@@ -64,9 +64,9 @@
 
 (def ^:private opts {:builder-fn rs/as-unqualified-lower-maps})
 
-(defn- insert-block! [conn {:keys [start end]} origin]
-  (jdbc/execute! conn ["INSERT INTO local_id_blocks (block_start, block_end, next_id, origin)
-                        VALUES (?, ?, ?, ?) ON CONFLICT (block_start) DO NOTHING" start end start origin]))
+(defn- insert-block! [conn {:keys [start end]}]
+  (jdbc/execute! conn ["INSERT INTO local_id_blocks (block_start, block_end, next_id)
+                        VALUES (?, ?, ?) ON CONFLICT (block_start) DO NOTHING" start end start]))
 
 (defn- seed-server-account!
   "2.12 — the local users row carries the server's id and nothing secret."
@@ -80,7 +80,7 @@
                                                               server_origin = EXCLUDED.server_origin"
                        user_id origin])
   (when-let [{:strs [start end]} id_block]
-    (insert-block! conn {:start start :end end} "server")))
+    (insert-block! conn {:start start :end end})))
 
 (defn- bind-account!
   "Seed or refuse, by the bound user id and the configuration:
