@@ -24,6 +24,8 @@
    #?(:clj [freememo.commands :as commands])
    #?(:clj [freememo.desktop-auth :as desktop-auth])
    #?(:clj [freememo.desktop-license :as license])
+   #?(:clj [freememo.desktop-link :as link])
+   #?(:clj [freememo.local-license :as local-license])
    #?(:clj [freememo.desktop-version :as desktop-version])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.peer :as peer])
@@ -93,6 +95,17 @@
             (license/price-label country))
      :cljs nil))
 
+(defn buy-url*
+  "Where a student buys a Sync License: the checkout in Settings on freememo.net.
+   nil while the license is not for sale (the trial is open), when it covers this
+   version, or before the first sync has cached a license."
+  [_refresh]
+  #?(:clj (let [state (get (:license (sync-client/status)) "state")]
+            (when (and (not license/trial-open?)
+                    (or (= "trial" state) (contains? local-license/nag-states state)))
+              (some-> (link/origin) local-license/purchase-url)))
+     :cljs nil))
+
 (defn devices* [_refresh user-id]
   #?(:clj (mapv #(-> % (update :created_at str) (update :last_used_at str) (update :revoked_at str))
             (desktop-auth/list-tokens user-id))
@@ -135,9 +148,19 @@
     "unlicensed" "The trial has ended. Sync is off. Local use continues."
     "Not checked yet."))
 
+(defn refusal-text
+  "Why the server refuses sync, from the cached license (string keys)."
+  [license]
+  (case (get license "state")
+    "unlicensed" "Sync is off because the trial has ended. Buy a Sync License to sync again."
+    "expired" (str "Sync is off because your Sync License does not cover this version, and the grace period ended"
+                (when-let [end (get license "grace-ends")] (str " on " (subs (str end) 0 10)))
+                ". Buy a Sync License to sync again.")
+    "Sync is off for this account."))
+
 (defn sync-text
   "The sync line. `status` comes from `sync-client/status`."
-  [{:keys [state error last-sync-at progress]}]
+  [{:keys [state error last-sync-at progress license]}]
   (case state
     :syncing (let [{:keys [downloaded downloaded-bytes total-rows total-bytes]} progress
                    mb #(str (quot (or % 0) 1048576) " MB")]
@@ -150,7 +173,7 @@
                  :else "Syncing now."))
     :offline "Offline. FreeMemo syncs when the connection returns."
     :update-required "This version can no longer sync. Download the new version from freememo.net."
-    :license-refused "Sync is off for this account."
+    :license-refused (refusal-text license)
     :full-sync-choice "This device and freememo.net need a full sync. Choose which copy to keep."
     :signed-out "This device was signed out. Quit FreeMemo and open it again to sign in."
     :error (str "The last sync failed: " error)
@@ -212,6 +235,11 @@
       (group/GroupHeading "Sync")
       (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
       (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
+      (let [url (e/server (buy-url* refresh))]
+        (when url
+          (dom/p (dom/props {:class "hint"})
+            (dom/a (dom/props {:href url :target "_blank" :rel "noopener" :id "buy-sync-license"})
+              (dom/text "Buy a Sync License")))))
       (dom/div
        (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
        (when (= :full-sync-choice (:state status))

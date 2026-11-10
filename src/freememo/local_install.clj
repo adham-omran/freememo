@@ -37,6 +37,7 @@
             [clojure.string :as str]
             [freememo.launch-env :as launch-env]
             [freememo.local-gate :as gate]
+            [freememo.local-license :as local-license]
             [freememo.local-signin :as signin]
             [ring.adapter.jetty :as jetty])
   (:import [io.zonky.test.db.postgres.embedded EmbeddedPostgres]
@@ -356,6 +357,14 @@
   ((ns-resolve 'freememo.connectivity 'start!)
    {:on-offline! @(ns-resolve 'freememo.sync-client 'note-offline!)}))
 
+(defn- wrap-license-reminder
+  "Ticket 07: the license reminder is the first page of a launch. It reads the
+   license that the last sync cached."
+  [handler origin]
+  (local-license/wrap-reminder handler
+    {:origin origin
+     :license-fn #(:license ((ns-resolve 'freememo.sync-client 'status)))}))
+
 (defn start!
   "Start everything. With no account, the first-launch page comes first and
    PostgreSQL starts after the sign-in.
@@ -417,7 +426,9 @@
                   (reset! !jetty nil))
               server ((ns-resolve 'prod 'start-server!)
                       {:port http-port
-                       :wrap-gate (fn [handler] (wrap (signin/wrap-first-download handler pending?)))})]
+                       :wrap-gate (fn [handler] (wrap (-> handler
+                                                      (signin/wrap-first-download pending?)
+                                                      (wrap-license-reminder (get account "origin")))))})]
           (reset! !jetty server)
           (start-network-check!)
           (log "serving " local-origin)
