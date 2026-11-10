@@ -38,7 +38,9 @@
             [freememo.launch-env :as launch-env]
             [freememo.local-gate :as gate]
             [freememo.local-license :as local-license]
+            [freememo.local-log :refer [log]]
             [freememo.local-signin :as signin]
+            [freememo.local-tray :as tray]
             [ring.adapter.jetty :as jetty])
   (:import [io.zonky.test.db.postgres.embedded EmbeddedPostgres]
            [java.lang ProcessBuilder$Redirect ProcessHandle]
@@ -68,10 +70,6 @@
       (str/includes? os "mac") (io/file home "Library" "Application Support" "FreeMemo Local")
       (str/includes? os "win") (io/file (or (System/getenv "APPDATA") home) "FreeMemo Local")
       :else (io/file (or (System/getenv "XDG_DATA_HOME") (str home "/.local/share")) "FreeMemo Local"))))
-
-(defn- log [& parts]
-  (println (apply str "[local-install] " parts))
-  (flush))
 
 ;; ── Files ──────────────────────────────────────────────────────────
 
@@ -231,52 +229,6 @@
     (harden-postgres! pg pgdata password)
     pg))
 
-;; ── Tray and browser ───────────────────────────────────────────────
-
-(defn open-browser! [url]
-  (try
-    (if (and (java.awt.Desktop/isDesktopSupported)
-          (.isSupported (java.awt.Desktop/getDesktop) java.awt.Desktop$Action/BROWSE))
-      (.browse (java.awt.Desktop/getDesktop) (java.net.URI. url))
-      (let [os (str/lower-case (System/getProperty "os.name" ""))
-            cmd (cond (str/includes? os "mac") "open" (str/includes? os "win") "explorer" :else "xdg-open")]
-        (.start (ProcessBuilder. ^java.util.List [cmd url]))))
-    (catch Exception e (log "cannot open the browser: " (ex-message e)))))
-
-(defn- headless? []
-  (or (= "true" (System/getenv "FREEMEMO_HEADLESS"))
-      (java.awt.GraphicsEnvironment/isHeadless)
-      (not (java.awt.SystemTray/isSupported))))
-
-(defn- install-tray! [open! quit!]
-  (let [image (javax.imageio.ImageIO/read (io/resource "public/freememo/icon-192.png"))
-        menu (java.awt.PopupMenu.)
-        listener (fn [f] (reify java.awt.event.ActionListener
-                           (actionPerformed [_ _] (f))))
-        item (fn [label f] (doto (java.awt.MenuItem. label) (.addActionListener (listener f))))]
-    (.add menu (item "Open FreeMemo" open!))
-    (.add menu (item "Quit" quit!))
-    (.add (java.awt.SystemTray/getSystemTray)
-      (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
-        (.setImageAutoSize true)
-        (.addActionListener (listener open!))))
-    menu))
-
-(defn- show-update-in-tray!
-  "Post: the tray menu has an \"Update available\" item first when `available`
-   is `{:url}`, and none when it is nil. A click opens the installer URL."
-  [^java.awt.PopupMenu menu available]
-  (let [label "Update available"]
-    (doseq [i (reverse (range (.getItemCount menu)))
-            :when (= label (.getLabel (.getItem menu i)))]
-      (.remove menu (int i)))
-    (when-let [url (:url available)]
-      (.insert menu
-        (doto (java.awt.MenuItem. label)
-          (.addActionListener (reify java.awt.event.ActionListener
-                                (actionPerformed [_ _] (open-browser! url)))))
-        0))))
-
 (defn- start-update-check!
   "Read the update feed of the account's server (ticket 08). A newer version
    shows in the web app (`update-feed/banner-state`) and in the tray `menu`
@@ -289,12 +241,12 @@
      {:origin (get account "origin")
       :version ((resolve-fn 'version-from-env))
       :on-change (fn [available]
-                   (when menu (show-update-in-tray! menu available))
+                   (when menu (tray/show-update! menu available))
                    ((resolve-fn 'bump-banners!) user-id))})))
 
 (defn- show-error! [message]
   (binding [*out* *err*] (println (str "FreeMemo Local could not start: " message)))
-  (when-not (headless?)
+  (when-not (tray/headless?)
     (try (javax.swing.JOptionPane/showMessageDialog nil message "FreeMemo Local"
            javax.swing.JOptionPane/ERROR_MESSAGE)
          (catch Throwable _ nil))))
@@ -412,15 +364,15 @@
                     (log "stopped"))
         quit! #(force quit-once)
         open-url! (fn [] (str local-origin "/?" gate/token-param "=" (@!issue)))
-        open! #(open-browser! (open-url!))
+        open! #(tray/open-browser! (open-url!))
         ;; The first gate shows the browser: the tray, and either the page or
         ;; the URL on stdout. A second gate (after a sign-in) does not.
         on-gate (fn [issue-token!]
                   (reset! !issue issue-token!)
                   (when (compare-and-set! !shown false true)
-                    (if (headless?)
+                    (if (tray/headless?)
                       (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
-                      (do (reset! !menu (install-tray! open! #(System/exit 0)))
+                      (do (reset! !menu (tray/install-tray! open! #(System/exit 0) (tray/server-label http-port nil)))
                           (open!)))))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
     (try
