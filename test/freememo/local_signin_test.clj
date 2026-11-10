@@ -73,3 +73,26 @@
       (let [response (callback f state)]
         (is (str/includes? (:body response) "Sign-in failed"))
         (is (empty? @saved))))))
+
+(deftest a-callback-error-with-a-wrong-state-does-not-cancel-the-sign-in
+  (let [saved (atom [])
+        f (flow :online? true :saved saved)
+        state (start-sign-in! f)
+        handler (:handler f)]
+    (handler {:request-method :get :uri "/callback" :query-string "error=access_denied"})
+    (handler {:request-method :get :uri "/callback" :query-string "error=access_denied&state=wrong"})
+    (is (str/includes? (:body (handler {:request-method :get :uri "/"})) "Sign in") "the page shows no error")
+    (is (not (str/includes? (:body (handler {:request-method :get :uri "/"})) "not allowed")))
+    (is (= 400 (:status (handler {:request-method :get :uri "/callback" :query-string "code=abc&state=wrong"}))))
+    (testing "the pending sign-in is still alive"
+      (with-redefs [signin/exchange-code! (fn [& _] {"access_token" "t" "user_id" 1})]
+        (is (= 200 (:status (callback f state))))
+        (is (= 1 (count @saved)))))))
+
+(deftest a-callback-error-with-the-right-state-cancels-the-sign-in
+  (let [f (flow :online? true :saved (atom []))
+        state (start-sign-in! f)
+        handler (:handler f)
+        body (:body (handler {:request-method :get :uri "/callback" :query-string (str "error=access_denied&state=" state)}))]
+    (is (str/includes? body "not allowed"))
+    (is (= 400 (:status (callback f state))))))

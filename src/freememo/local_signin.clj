@@ -236,28 +236,27 @@
                     [:get "/callback"]
                     (cond
                       (realized? account) (progress-page)
-                      (query-param request "error")
-                      (do (reset! !error "Sign-in was not allowed. Try again.")
-                          (reset! !pending nil)
-                          (first-launch-page {:online? true :error @!error}))
                       :else
                       (if-let [{:keys [verifier]} (take-pending! (query-param request "state"))]
-                        (try
-                          (let [token (exchange-code! origin (query-param request "code") verifier redirect-uri)
-                                acct {"origin" origin
-                                      "token" (get token "access_token")
-                                      "user_id" (get token "user_id")
-                                      "username" (get token "username")
-                                      "id_block" (get token "id_block")
-                                      "first_download" true}]
-                            (save-account! acct)
-                            (deliver account acct)
-                            (progress-page))
-                          (catch clojure.lang.ExceptionInfo e
-                            ;; `save-account!` may refuse with its own page (ticket 05).
-                            (or (:response (ex-data e))
-                              (first-launch-page {:online? (not= ::offline (:type (ex-data e)))
-                                                :error (when (not= ::offline (:type (ex-data e))) (ex-message e))}))))
+                        (if (query-param request "error")
+                          (do (reset! !error "Sign-in was not allowed. Try again.")
+                              (first-launch-page {:online? true :error @!error}))
+                          (try
+                            (let [token (exchange-code! origin (query-param request "code") verifier redirect-uri)
+                                  acct {"origin" origin
+                                        "token" (get token "access_token")
+                                        "user_id" (get token "user_id")
+                                        "username" (get token "username")
+                                        "id_block" (get token "id_block")
+                                        "first_download" true}]
+                              (save-account! acct)
+                              (deliver account acct)
+                              (progress-page))
+                            (catch clojure.lang.ExceptionInfo e
+                              ;; `save-account!` may refuse with its own page (ticket 05).
+                              (or (:response (ex-data e))
+                                (first-launch-page {:online? (not= ::offline (:type (ex-data e)))
+                                                    :error (when (not= ::offline (:type (ex-data e))) (ex-message e))})))))
                         (text 400 "Sign-in refused: the reply did not match this request.")))
 
                     [:get "/api/desktop/status"]
