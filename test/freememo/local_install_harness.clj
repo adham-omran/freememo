@@ -150,7 +150,7 @@
    account.json map; `default-account` by default; nil leaves an existing
    file), `:origin` (the server's origin for the default account),
    `:port` (the preferred port of a fresh install; a free one by default),
-   `:env` (more environment variables for the JVM, such as FREEMEMO_VERSION).
+   `:env` (more environment variables for the JVM, such as FREEMEMO_TEST_RELEASE_VERSION, which sets the Release Version).
    `:account :none` seeds no account, so the first-launch page comes first.
    The JVM gets `--origin <origin>` as its freememo.net.
    Post: `{:data-dir :port :pg-port :open-url :process :log-file}`. `:open-url`

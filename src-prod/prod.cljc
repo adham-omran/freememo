@@ -196,6 +196,7 @@
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
               :manifest-path "public/freememo/js/manifest.edn"})]
        (log/info (pr-str config))
+       (log/info "Release Version" (config/release-version))
        (assert (string? (:hyperfiddle/electric-user-version config)))
 
        ;; Memory evidence for a kernel kill. First, so that boot is on record.

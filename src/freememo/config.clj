@@ -266,6 +266,21 @@
   []
   git-commit-sha)
 
+(defonce ^{:private true
+           :doc "The Release Version baked into electric-manifest.edn at build
+   time (build.clj :release-version). \"dev\" with no manifest, or a manifest
+   with no Release Version (dev/REPL)."}
+  release-version-baked
+  (or (:release-version (load-edn (io/resource "electric-manifest.edn"))) "dev"))
+
+(defn release-version
+  "The Release Version of the running build (docs/adr/0002), or \"dev\" outside
+   a built artifact. `FREEMEMO_TEST_RELEASE_VERSION` replaces it, for the Seam 1
+   tests only."
+  []
+  (or (some-> (launch-env/getenv "FREEMEMO_TEST_RELEASE_VERSION") str/trim not-empty)
+      release-version-baked))
+
 (defn- credits-config [] (:credits config))
 
 (defn markup

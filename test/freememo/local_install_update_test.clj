@@ -23,7 +23,7 @@
    starts with `initial`."
   [initial f]
   (let [s (stub/start! initial)
-        li (h/start-local-install! {:origin (:origin s) :env {"FREEMEMO_VERSION" installed}})]
+        li (h/start-local-install! {:origin (:origin s) :env {"FREEMEMO_TEST_RELEASE_VERSION" installed}})]
     (try
       (f li (:cookie (h/sign-in! li)) s)
       (finally

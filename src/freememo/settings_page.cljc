@@ -539,13 +539,14 @@
       ;; Account export — the bytes the account holds (§5.7.1).
       (AccountTransferSection user-id)
 
-      ;; About — deployed build commit (baked at build time; "dev" locally)
-      (let [commit (e/server (config/git-commit))]
+      ;; About — Release Version and build commit (baked at build time; "dev" locally)
+      (let [commit (e/server (config/git-commit))
+            release (e/server (config/release-version))]
         (dom/div
           (dom/props {:style {:margin-top "16px" :padding-top "12px"
                               :border-top "1px solid var(--color-bg-subtle)"
                               :font-size "12px" :color "var(--color-text-label)"}})
-          (dom/text (str "freememo - " commit)))))))
+          (dom/text (str "freememo " release " (" commit ")")))))))
 
 (e/defn UsageSection
   "Settings → Usage: the credit balance, storage, and the AI cost ledger.

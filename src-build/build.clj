@@ -1,5 +1,6 @@
 (ns build
   (:require [clojure.java.io :as io]
+            [freememo.release-version :as release-version]
             [clojure.java.shell :as shell]
             [clojure.tools.build.api :as b]
             [clojure.tools.logging :as log]
@@ -13,6 +14,18 @@
 ;; :git-commit arg supplies it there, same as :version.
 (def default-git-commit (b/git-process {:git-args "rev-parse --short HEAD"}))
 
+;; The Release Version of HEAD (ADR 0002), baked beside the Electric cache key.
+;; nil under a Docker build (no .git): the deploy's :release-version arg supplies it.
+(def default-release-version
+  (try (release-version/of-commit) (catch Exception _ nil)))
+
+(defn print-release-version
+  "Print the Release Version of a commit, and nothing else. This is the one
+   entry point for a shell: `clojure -X:build build/print-release-version`
+   (scripts/release-version.sh wraps it). Optional arg `:commit \"<rev>\"`."
+  [{:keys [commit]}]
+  (println (release-version/of-commit (or (some-> commit str) "HEAD"))))
+
 (defn build-client "
 invoke like: clj -X:build:prod build-client`
 Add `:source-map true` for a bundle that ships a `.js.map` file, to attribute
@@ -20,15 +33,15 @@ profile time to namespaces (plans/low-end-tablet-performance). The deploy never
 passes it, so the default bundle stays the same.
 Note: do not use `clj -T`, because Electric shadow compilation requires
 application classpath to be available"
-  [{:keys [optimize debug verbose version shadow-build git-commit source-map]
-    :or {optimize true, debug false, verbose false, source-map false, version electric-user-version, shadow-build :prod, git-commit default-git-commit}
+  [{:keys [optimize debug verbose version shadow-build git-commit source-map release-version]
+    :or {optimize true, debug false, verbose false, source-map false, version electric-user-version, shadow-build :prod, git-commit default-git-commit, release-version default-release-version}
     :as config}]
   (log/info 'build-client (pr-str config #_argmap))
   (b/delete {:path "resources/public/freememo/js"})
   (b/delete {:path "resources/electric-manifest.edn"})
 
   ; bake electric-user-version into artifact, cljs and clj
-  (b/write-file {:path "resources/electric-manifest.edn" :content (-> config (dissoc :version :shadow-build :source-map) (assoc :hyperfiddle/electric-user-version version :git-commit git-commit))})
+  (b/write-file {:path "resources/electric-manifest.edn" :content (-> config (dissoc :version :shadow-build :source-map) (assoc :hyperfiddle/electric-user-version version :git-commit git-commit :release-version release-version))})
 
   ; "java.lang.NoClassDefFoundError: com/google/common/collect/Streams" is fixed by
   ; adding com.google.guava/guava {:mvn/version "31.1-jre"} to deps,
@@ -100,7 +113,7 @@ application classpath to be available"
     (when-not staged
       (b/delete {:path "target"})
       (when-not skip-client
-        (build-client (select-keys args [:optimize :debug :verbose :version :shadow-build :git-commit]))))
+        (build-client (select-keys args [:optimize :debug :verbose :version :shadow-build :git-commit :release-version]))))
     (if (and aot (not staged) (not (case-sensitive? "target")))
       (in-case-sensitive-image
         (fn [mount]

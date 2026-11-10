@@ -35,10 +35,16 @@
       :error ", sync failed"
       nil)))
 
+(defn version-label
+  "Post: the text of the disabled version line of the tray menu."
+  [version]
+  (str "Version " version))
+
 (defn install-tray!
   "Post: the tray icon is in the system tray. Returns its `PopupMenu`.
-         `open!` and `quit!` are `(fn [])`. `label` is the server-state text."
-  [open! quit! label]
+         `open!` and `quit!` are `(fn [])`. `label` is the server-state text.
+         `version` is the Release Version (or \"dev\"), shown as a disabled line."
+  [open! quit! label version]
   (let [image (javax.imageio.ImageIO/read (io/resource "public/freememo/icon-192.png"))
         menu (java.awt.PopupMenu.)
         listener (fn [f] (reify java.awt.event.ActionListener
@@ -46,6 +52,7 @@
         item (fn [label f] (doto (java.awt.MenuItem. label) (.addActionListener (listener f))))]
     (.add menu (item "Open FreeMemo" open!))
     (.add menu (doto (java.awt.MenuItem. label) (.setEnabled false)))
+    (.add menu (doto (java.awt.MenuItem. (version-label version)) (.setEnabled false)))
     (.add menu (item "Quit" quit!))
     (.add (java.awt.SystemTray/getSystemTray)
       (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
