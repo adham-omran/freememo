@@ -31,7 +31,10 @@
    Headless mode (`FREEMEMO_HEADLESS=true`, or no system tray): no tray and no
    browser. The launcher prints `FREEMEMO_OPEN_URL=<url>` on stdout instead.
    The Seam 1 harness (`freememo.local-install-harness`) uses it. SIGTERM
-   quits the same way as the tray item."
+   quits the same way as the tray item.
+
+   `--no-tab` starts the same way but opens no browser tab. The login item
+   (`freememo.local-login`) starts the installed app with it."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -40,6 +43,7 @@
             [freememo.local-gate :as gate]
             [freememo.local-license :as local-license]
             [freememo.local-log :refer [log]]
+            [freememo.local-login :as login]
             [freememo.local-postgres :as postgres]
             [freememo.local-signin :as signin]
             [freememo.local-tray :as tray]
@@ -168,6 +172,7 @@
       "--data-dir" (recur (next more) (assoc opts :data-dir (io/file (first more))))
       "--port" (recur (next more) (assoc opts :port (parse-long (first more))))
       "--origin" (recur (next more) (assoc opts :origin (first more)))
+      "--no-tab" (recur more (assoc opts :no-tab true))
       (recur more opts))))
 
 (defn- set-server-env! [pg-port install]
@@ -248,7 +253,7 @@
    PostgreSQL starts after the sign-in.
    Post: `{:port :pg-port :open! :quit!}`. `quit!` stops the web server, then
          PostgreSQL, once, and releases the lock."
-  [{:keys [data-dir port origin]}]
+  [{:keys [data-dir port origin no-tab]}]
   (let [data-dir (or data-dir (default-data-dir))
         _ (.mkdirs ^File data-dir)
         lock (lock-data-dir! data-dir)
@@ -281,8 +286,9 @@
                     (if (tray/headless?)
                       (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
                       (do (reset! !menu (tray/install-tray! open! #(System/exit 0) (tray/server-label http-port nil)
-                                                       ((requiring-resolve 'freememo.config/release-version))))
-                          (open!)))))]
+                                                   ((requiring-resolve 'freememo.config/release-version))
+                                                   (login/login-item)))
+                          (when-not no-tab (open!))))))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
     (try
       (let [account (or (find-account data-dir)

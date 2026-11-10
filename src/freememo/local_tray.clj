@@ -4,7 +4,8 @@
 
    The menu holds, in order: \"Update available\" (only while the update feed
    shows a newer version), \"Open FreeMemo\", a disabled line with the server
-   state, and \"Quit\". \"Start at login\" is ticket 09."
+   state, \"Start at login\" (macOS and Windows, `freememo.local-login`), and
+   \"Quit\". On macOS the icon is a template image (`template-image`)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [freememo.local-log :refer [log]]))
@@ -40,12 +41,36 @@
   [version]
   (str "Version " version))
 
+(defn template-image
+  "Post: a black silhouette of `image` that keeps its shape: the alpha is the
+         original alpha, less the white parts. macOS recolors a template
+         image for a light or dark menu bar."
+  [^java.awt.image.BufferedImage image]
+  (let [w (.getWidth image) h (.getHeight image)
+        out (java.awt.image.BufferedImage. w h java.awt.image.BufferedImage/TYPE_INT_ARGB)]
+    (doseq [x (range w) y (range h)]
+      (let [argb (.getRGB image x y)
+            a (bit-and (unsigned-bit-shift-right argb 24) 0xff)
+            lo (min (bit-and (unsigned-bit-shift-right argb 16) 0xff)
+                 (bit-and (unsigned-bit-shift-right argb 8) 0xff)
+                 (bit-and argb 0xff))]
+        (.setRGB out x y (unchecked-int (bit-shift-left (quot (* a (- 255 lo)) 255) 24)))))
+    out))
+
+(defn- mac? [] (str/includes? (str/lower-case (System/getProperty "os.name" "")) "mac"))
+
 (defn install-tray!
   "Post: the tray icon is in the system tray. Returns its `PopupMenu`.
          `open!` and `quit!` are `(fn [])`. `label` is the server-state text.
-         `version` is the Release Version (or \"dev\"), shown as a disabled line."
-  [open! quit! label version]
-  (let [image (javax.imageio.ImageIO/read (io/resource "public/freememo/icon-192.png"))
+         `version` is the Release Version (or \"dev\"), shown as a disabled line.
+         `login` is nil or `{:label :enabled? :checked? :toggle!}`: the
+         \"Start at login\" check item."
+  [open! quit! label version login]
+  (let [raw (javax.imageio.ImageIO/read (io/resource "public/freememo/icon-192.png"))
+        image (if (mac?)
+                (do (System/setProperty "apple.awt.enableTemplateImages" "true")
+                    (template-image raw))
+                raw)
         menu (java.awt.PopupMenu.)
         listener (fn [f] (reify java.awt.event.ActionListener
                            (actionPerformed [_ _] (f))))
@@ -53,6 +78,11 @@
     (.add menu (item "Open FreeMemo" open!))
     (.add menu (doto (java.awt.MenuItem. label) (.setEnabled false)))
     (.add menu (doto (java.awt.MenuItem. (version-label version)) (.setEnabled false)))
+    (when login
+      (.add menu (doto (java.awt.CheckboxMenuItem. (:label login) (boolean (:checked? login)))
+                   (.setEnabled (boolean (:enabled? login)))
+                   (.addItemListener (reify java.awt.event.ItemListener
+                                       (itemStateChanged [_ _] ((:toggle! login))))))))
     (.add menu (item "Quit" quit!))
     (.add (java.awt.SystemTray/getSystemTray)
       (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
