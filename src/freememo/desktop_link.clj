@@ -39,6 +39,21 @@
     (when (and online? (not (:online? before)))
       (doseq [f @!online-listeners] (f)))))
 
+(def ^:private !failure-listeners (atom []))
+
+(defn on-sync-failed!
+  "Call `f` after each failed sync. The Local Install's network check
+   (`freememo.connectivity`) uses it to check at once."
+  [f]
+  (swap! !failure-listeners conj f))
+
+(defn sync-failed!
+  "Post: every `on-sync-failed!` listener ran. A listener that throws does not
+         stop the others, and does not reach the caller."
+  []
+  (doseq [f @!failure-listeners]
+    (try (f) (catch Throwable _ nil))))
+
 (defn offline-message
   "4.6 — the text a network-only feature shows instead of running, or nil
    when it may run. Each feature returns it in its own error shape, so its

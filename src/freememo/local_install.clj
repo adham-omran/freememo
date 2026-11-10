@@ -270,6 +270,12 @@
                  "COOKIE_SECURE" "false" "AUTH_MODE" "password"}]
     (launch-env/set! k v)))
 
+(defn- start-network-check!
+  "Ticket 06: the JVM checks freememo.net itself, so no shell reports it."
+  []
+  ((ns-resolve 'freememo.connectivity 'start!)
+   {:on-offline! @(ns-resolve 'freememo.sync-client 'note-offline!)}))
+
 (defn start!
   "Start everything.
    Post: `{:port :pg-port :open! :quit!}`. `quit!` stops the web server, then
@@ -296,7 +302,7 @@
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
     (try
       (set-server-env! (.getPort pg) install)
-      (require 'prod 'freememo.desktop 'freememo.logging)
+      (require 'prod 'freememo.desktop 'freememo.logging 'freememo.connectivity 'freememo.sync-client)
       ((ns-resolve 'freememo.logging 'init!))
       ((ns-resolve 'freememo.desktop 'set-launch-config!) account)
       (let [{:keys [wrap issue-token!]} (gate/make-gate
@@ -308,6 +314,7 @@
             open-url! (fn [] (str origin "/?" gate/token-param "=" (issue-token!)))
             open! #(open-browser! (open-url!))]
         (reset! !jetty server)
+        (start-network-check!)
         (log "serving " origin)
         (if (headless?)
           (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
