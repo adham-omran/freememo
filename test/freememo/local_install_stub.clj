@@ -1,6 +1,6 @@
 (ns freememo.local-install-stub
   "A stub that plays freememo.net inside the test JVM, for Seam 1 tests that
-   need to control what the server says (the update feed, a refused major).
+   need to control what the server says (the update feed, a refused Sync Protocol).
    It answers only what a Local Install asks at start:
 
      GET  /api/desktop/feed   the feed in `:feed` (a map), or HTTP 500 when nil

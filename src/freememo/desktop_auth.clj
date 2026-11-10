@@ -17,6 +17,7 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [freememo.db :as db]
+            [freememo.desktop-version :as desktop-version]
             [freememo.sync-schema :as schema])
   (:import [java.security MessageDigest SecureRandom]
            [java.util Base64]))
@@ -169,15 +170,33 @@
       (some-> (:body request) slurp json/parse-string)
       (:params request))))
 
+(defn protocol-refusal
+  "The 409 answer for a request whose Sync Protocol differs from this server's,
+   or nil when it matches. The one answer for sync, sign-in and the AI proxy.
+   The number comes from the `X-FreeMemo-Sync-Protocol` header, else from
+   `body-protocol`. A request with neither is a web or test caller and passes,
+   unless it sends the retired major header: that is an old Local Install."
+  [request body-protocol]
+  (let [sent (or (some-> (get-in request [:headers "x-freememo-sync-protocol"]) parse-long)
+               body-protocol
+               (when (get-in request [:headers "x-freememo-major"]) 0))]
+    (when-let [error (and sent (desktop-version/protocol-error sent))]
+      (json-response 409 {:error error :protocol desktop-version/sync-protocol}))))
+
 (defn token-handler
   "POST /desktop/token — trade a code and its PKCE verifier for a token.
-   Post: 200 with the token, the account and a first id block; or 400 for a
+   Post: 200 with the token, the account and a first id block; 409 for a
+         different Sync Protocol (`protocol-refusal`); or 400 for a
          replayed, expired or mismatched code. The code is spent in the same
          statement that checks it, so a replay cannot win a race."
   [request]
-  (let [{:strs [code code_verifier redirect_uri device_name]} (request-params request)]
-    (if (some str/blank? [code code_verifier redirect_uri])
+  (let [{:strs [code code_verifier redirect_uri device_name]} (request-params request)
+        refusal (protocol-refusal request nil)]
+    (cond
+      refusal refusal
+      (some str/blank? [code code_verifier redirect_uri])
       (json-response 400 {:error "invalid_request"})
+      :else
       (jdbc/with-transaction [tx db/ds]
         (let [row (jdbc/execute-one! tx ["UPDATE desktop_auth_codes SET used_at = now()
                                           WHERE code_hash = ? AND used_at IS NULL AND expires_at > now()

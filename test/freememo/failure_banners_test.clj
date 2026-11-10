@@ -87,7 +87,7 @@
       (is (= "Update available" (:message b)))
       (is (= "https://x/app" (:href b)))
       (is (nil? (:dismiss b)))))
-  (testing "a refused major gives one banner, \"Update to keep syncing\""
+  (testing "a refused Sync Protocol gives one banner, \"Update to keep syncing\""
     (let [banners (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}
                                       :update-required? true})]
       (is (= ["Update to keep syncing"] (mapv :message banners)))

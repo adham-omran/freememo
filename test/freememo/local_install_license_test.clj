@@ -29,7 +29,7 @@
     {:method :post :cookie cookie :headers {"Origin" (str "http://127.0.0.1:" (:port li))}}))
 
 (deftest past-grace-the-reminder-comes-first-and-the-library-opens
-  (let [license {"state" "expired" "grace-ends" "2026-12-09T00:00:00Z" "client-major" 1}
+  (let [license {"state" "expired" "grace-ends" "2026-12-09T00:00:00Z"}
         s (stub/start! {:meta-status 200 :meta-body {"license" license "sync" "none"}})
         li1 (h/start-local-install! {:origin (:origin s)})
         data-dir (:data-dir li1)]

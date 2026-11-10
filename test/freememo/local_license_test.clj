@@ -33,13 +33,10 @@
 (deftest settings-has-its-own-text-for-each-state
   (let [texts (map section/license-text
                 [{"state" "trial" "trial-days-left" 12 "trial-ends" "2026-12-01T00:00:00Z"}
-                 {"state" "licensed" "covered-majors" [[1 2]]}
-                 {"state" "grace" "grace-ends" "2026-12-09T00:00:00Z"}
-                 {"state" "expired"}
+                 {"state" "licensed"}
                  {"state" "unlicensed"}])]
-    (is (= 5 (count (set texts))))
-    (is (str/includes? (first texts) "12 days left"))
-    (is (str/includes? (nth texts 2) "2026-12-09"))))
+    (is (= 3 (count (set texts))))
+    (is (str/includes? (first texts) "12 days left"))))
 
 (deftest sync-shows-its-refusal-reason
   (is (str/includes? (section/sync-text {:state :license-refused :license {"state" "unlicensed"}}) "trial has ended"))

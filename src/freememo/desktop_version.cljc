@@ -1,22 +1,27 @@
 (ns freememo.desktop-version
-  "The desktop app's declared versions (plans/electron-local-db-sync.md 13.3).
+  "What a Local Install and freememo.net must agree on (CONTEXT.md, Sync
+   Protocol; docs/adr/0002).
 
-   `desktop-major` is what a license covers (13.2). The maintainer bumps it by
-   hand. It is independent of the installer's release version, YYYY.M.N
-   (electron/scripts/version.mjs).
+   The Sync Protocol is one plain number. A breaking change to sync, sign-in
+   or the AI proxy raises it by one. Nothing else in FreeMemo has a major:
+   a Sync License covers every Release.
 
-   `sync-protocol` is what `meta` compares (2.3). It changes only together with
-   `desktop-major` (13.3.1). Inside one major, schema changes stay additive,
-   because an apply sets only the columns a payload carries (2.4.3).")
+   Inside one Sync Protocol, schema changes stay additive, because an apply
+   sets only the columns a payload carries (2.4.3).")
 
-(def desktop-major 1)
+(def sync-protocol 1)
 
-(def sync-protocol
-  "Encoded as major × 1000 + revision, so a protocol change that forgot the
-   major bump is a test failure (`desktop_version_test`)."
-  1000)
+(def protocol-header
+  "The request header with which a Local Install sends its Sync Protocol on
+   every sync, sign-in and AI proxy call."
+  "X-FreeMemo-Sync-Protocol")
 
-(defn protocol-major
-  "The desktop major a sync protocol number belongs to."
-  [protocol]
-  (quot protocol 1000))
+(defn protocol-error
+  "Compare the Sync Protocol that a request sent with this server's.
+   Post: nil when they are equal, `\"update-required\"` when the client is
+         older, `\"server-outdated\"` when it is newer or sent no number."
+  [sent]
+  (cond
+    (= sent sync-protocol) nil
+    (and (number? sent) (< sent sync-protocol)) "update-required"
+    :else "server-outdated"))

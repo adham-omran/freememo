@@ -2,9 +2,8 @@
   "The update feed of plans/local-install.md (\"New: updates\").
 
    Server side: freememo.net publishes `GET /api/desktop/feed`, a public route.
-   The body is `{current_major, current_version, installers {macos windows linux}}`.
-   The major is `desktop-version/desktop-major`. The version and the installer
-   URLs come from `DESKTOP_CURRENT_VERSION`, `DESKTOP_INSTALLER_MACOS`,
+   The body is `{current_version, installers {macos windows linux}}`.
+   The version and the installer URLs come from `DESKTOP_CURRENT_VERSION`, `DESKTOP_INSTALLER_MACOS`,
    `DESKTOP_INSTALLER_WINDOWS` and `DESKTOP_INSTALLER_LINUX` (env or config.edn
    `:desktop`). With no version set, the route answers 404.
 
@@ -13,7 +12,7 @@
    version, `banner-state` says so and the web app and the tray show \"Update
    available\". A feed that cannot be read shows nothing and logs one line.
 
-   `banner-state` also says when the server refused sync for an old major
+   `banner-state` also says when the server refused sync for an old Sync Protocol
    (the sync state `:update-required`). The web app then shows \"Update to keep
    syncing\"."
   (:require [cheshire.core :as json]
@@ -22,7 +21,6 @@
             [freememo.commands :as commands]
             [freememo.config :as config]
             [freememo.desktop-link :as link]
-            [freememo.desktop-version :as desktop-version]
             [freememo.launch-env :as launch-env]
             [freememo.local-http :as lhttp]
             [freememo.peer :as peer]
@@ -75,8 +73,7 @@
   "Post: the feed map, or nil when no version is configured."
   []
   (when-let [version (config/env-or-config "DESKTOP_CURRENT_VERSION" [:desktop :version])]
-    {"current_major" desktop-version/desktop-major
-     "current_version" version
+    {"current_version" version
      "installers" (into {}
                     (for [[k env] {"macos" "DESKTOP_INSTALLER_MACOS"
                                    "windows" "DESKTOP_INSTALLER_WINDOWS"

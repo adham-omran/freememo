@@ -1,18 +1,16 @@
 (ns freememo.desktop-license
   "Desktop licensing (plans/electron-local-db-sync.md §13), server side.
 
-   A license is a row in `desktop_licenses`. One bought during desktop major N
-   covers majors N and N + 1 (P2). `access` is the only function that decides
+   A Sync License is a row in `desktop_licenses`. One row covers sync and AI
+   on every Release, with no end date (ADR 0002). `access` is the only function that decides
    what an account may do (13.4). The sync routes, the id-block route and the
    AI proxy all call it.
 
    | State       | When                                  | Sync          | AI  |
    |-------------|---------------------------------------|---------------|-----|
-   | :licensed   | a license covers the client's major   | full          | yes |
+   | :licensed   | a license exists                     | full          | yes |
    | :trial      | the trial is open, or within 60 days  | full          | yes |
    |             | of the first sign-in                  |               |     |
-   | :grace      | a license, none covering, < 30 days   | download only | no  |
-   | :expired    | a license, none covering, ≥ 30 days   | none          | no  |
    | :unlicensed | no license, trial over                | none (O12)    | no  |
 
    Local use never depends on this (13.4.4). The desktop keeps working on its
@@ -21,8 +19,7 @@
             [next.jdbc.result-set :as rs]
             [freememo.config :as config]
             [freememo.credits :as credits]
-            [freememo.db :as db]
-            [freememo.desktop-version :as desktop-version])
+            [freememo.db :as db])
   (:import [java.time Duration Instant]))
 
 (def trial-open?
@@ -31,7 +28,6 @@
    start the 60-day trial (P4) and sales."
   true)
 (def trial-days "P4" 60)
-(def grace-days "O15" 30)
 
 (defn price-iqd
   "The license price in IQD, the currency Wayl charges in, or nil while the
@@ -71,28 +67,23 @@
         :else (throw (ex-info "not a timestamp" {:value t}))))
 
 (defn access
-  "13.4 — what the account may do from a desktop running `client-major`.
-   Pre:  `conn` is writable; the account may have no desktop_accounts row.
+  "13.4 — what the account may do from a Local Install.
+   Pre:  the account may have no desktop_accounts row.
    Post: {:state :sync (:full|:download|:none) :ai? bool, and the dates the
-         Settings page shows}. The first call in grace records its start, so
-         grace runs 30 days from the first sync the license did not cover.
+         Settings page shows}.
    Inv:  the answer depends only on the database and `now`, never on anything
-         the client sends except its major, so editing the desktop's cached
-         copy (13.6) unlocks nothing."
-  ([conn user-id client-major] (access conn user-id client-major (Instant/now)))
-  ([conn user-id client-major ^Instant now]
+         the client sends, so editing the desktop's cached copy (13.6)
+         unlocks nothing."
+  ([conn user-id] (access conn user-id (Instant/now)))
+  ([conn user-id ^Instant now]
    (let [opts {:builder-fn rs/as-unqualified-lower-maps}
-         account (jdbc/execute-one! conn ["SELECT trial_started_at, grace_started_at
+         account (jdbc/execute-one! conn ["SELECT trial_started_at
                                            FROM desktop_accounts WHERE user_id = ?" user-id] opts)
-         licenses (jdbc/execute! conn ["SELECT major_from, major_to FROM desktop_licenses
-                                        WHERE user_id = ? ORDER BY major_to DESC" user-id] opts)
-         covering (first (filter #(<= (:major_from %) client-major (:major_to %)) licenses))
+         licenses (jdbc/execute! conn ["SELECT id FROM desktop_licenses WHERE user_id = ?" user-id] opts)
          trial-ends (some-> (:trial_started_at account) ->instant (plus-days trial-days))
-         base {:client-major client-major
-               :covered-majors (mapv (juxt :major_from :major_to) licenses)
-               :trial-ends (some-> trial-ends str)}]
+         base {:trial-ends (some-> trial-ends str)}]
      (cond
-       covering
+       (seq licenses)
        (assoc base :state :licensed :sync :full :ai? true)
 
        trial-open?
@@ -102,17 +93,6 @@
        (assoc base :state :trial :sync :full :ai? true
          :trial-days-left (.toDays (Duration/between now trial-ends)))
 
-       (seq licenses)
-       (let [started (or (some-> (:grace_started_at account) ->instant)
-                       (do (jdbc/execute! conn ["UPDATE desktop_accounts SET grace_started_at = ?
-                                                 WHERE user_id = ? AND grace_started_at IS NULL"
-                                                (java.sql.Timestamp/from now) user-id])
-                           now))
-             grace-ends (plus-days started grace-days)]
-         (if (.isBefore now grace-ends)
-           (assoc base :state :grace :sync :download :ai? false :grace-ends (str grace-ends))
-           (assoc base :state :expired :sync :none :ai? false :grace-ends (str grace-ends))))
-
        :else
        (assoc base :state :unlicensed :sync :none :ai? false)))))
 
@@ -121,8 +101,6 @@
    (13.4.3)."
   [access]
   (case (:state access)
-    :grace "license-grace-download-only"
-    :expired "license-expired"
     :unlicensed "license-required"
     "license-refused"))
 
@@ -161,9 +139,7 @@
       {:kind "desktop_license"
        :reference-id (str "fm-dl-" (random-uuid))
        :amount-iqd price
-       :label (str "FreeMemo desktop license (versions "
-                desktop-version/desktop-major " and "
-                (inc desktop-version/desktop-major) ")")
+       :label "FreeMemo Sync License"
        :base-url base-url
        :currency-suffix? (not= "IQ" country-code)})
     {:ok false :error "Desktop license pricing is not configured."}))

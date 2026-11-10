@@ -28,7 +28,6 @@
    [freememo.occlusion-ordinals :as ord]
    [freememo.page-merge :as page-merge]
    [freememo.priority :as priority]
-   [freememo.desktop-version :as desktop-version]
    [freememo.sync-schema :as sync-schema]
    [freememo.text :as text]
    [freememo.topic-kinds :as topic-kinds]
@@ -3495,12 +3494,14 @@
     CREATE TABLE IF NOT EXISTS desktop_licenses (
       id BIGSERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      major_from INTEGER NOT NULL,
-      major_to INTEGER NOT NULL,
       source TEXT NOT NULL CHECK (source IN ('wayl', 'credits')),
       order_reference_id TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"])
+  ;; A Sync License covers every Release, so a row has no major range (ADR 0002).
+  ;; Every existing row, sold as "versions 1 and 2", now grants sync and AI.
+  (jdbc/execute! ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_from"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_to"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_licenses_user
                       ON desktop_licenses(user_id)"])
   ;; A Wayl order buys credits or a desktop license (13.1.3).
@@ -5029,8 +5030,7 @@
                   :returning [:*]}))))
 
 (defn grant-desktop-license!
-  "Write the license a purchase buys (13.1, 13.2): the current desktop major
-   and the next one.
+  "Write the Sync License a purchase buys (13.1). It covers every Release.
    Pre:  `tx` is the purchase's own transaction, so the payment and the
          license commit together (13.1.1, 13.1.2).
    Post: one desktop_licenses row per order. A replayed order reference writes
@@ -5038,11 +5038,10 @@
   [tx user-id source order-reference-id]
   (:desktop_licenses/id
    (jdbc/execute-one! tx ["INSERT INTO desktop_licenses
-                             (user_id, major_from, major_to, source, order_reference_id)
-                           VALUES (?, ?, ?, ?, ?)
+                             (user_id, source, order_reference_id)
+                           VALUES (?, ?, ?)
                            ON CONFLICT (order_reference_id) DO NOTHING RETURNING id"
-                          user-id desktop-version/desktop-major
-                          (inc desktop-version/desktop-major) source order-reference-id])))
+                          user-id source order-reference-id])))
 
 (defn pending-order-references
   "Reference ids of the user's pending orders of one `kind`, oldest first."

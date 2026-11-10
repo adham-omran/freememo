@@ -5,8 +5,7 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [freememo.db :as db]
-            [freememo.desktop-license :as license]
-            [freememo.desktop-version :as desktop-version])
+            [freememo.desktop-license :as license])
   (:import [java.time Duration Instant]))
 
 (defn- db-up? []
@@ -21,33 +20,30 @@
                             id (java.sql.Timestamp/from trial-started)]))
     id))
 
-(defn- license! [user-id from to]
-  (jdbc/execute! db/ds ["INSERT INTO desktop_licenses (user_id, major_from, major_to, source) VALUES (?, ?, ?, 'credits')"
-                        user-id from to]))
+(defn- license! [user-id]
+  (jdbc/execute! db/ds ["INSERT INTO desktop_licenses (user_id, source) VALUES (?, 'credits')" user-id]))
 
 (defn- days-ago ^Instant [now n] (.minus ^Instant now (Duration/ofDays n)))
 
-(deftest a-license-covers-its-major-and-the-next
+(deftest a-license-covers-every-release
   (when (db-up?)
     (with-redefs [license/trial-open? false]
      (let [now (Instant/now)
           u (user! :trial-started (days-ago now 400))]
-      (license! u 1 2)
-      (is (= :licensed (:state (license/access db/ds u 2 now))) "13.2: major_from 1 passes major 2")
-      (is (not= :licensed (:state (license/access db/ds u 3 now))) "13.2: and fails major 3")))))
+      (license! u)
+      (is (= :licensed (:state (license/access db/ds u now))) "a license has no end date")
+      (is (= :licensed (:state (license/access db/ds u (.plus now (Duration/ofDays 5000)))))
+        "and no version range")))))
 
 (deftest an-open-trial-has-no-end
   (when (db-up?)
     (let [now (Instant/now)]
       (with-redefs [license/trial-open? true]
         (let [u (user! :trial-started (days-ago now 400))
-              a (license/access db/ds u 1 now)]
+              a (license/access db/ds u now)]
           (is (= {:state :trial :sync :full :ai? true :trial-open? true}
                  (select-keys a [:state :sync :ai? :trial-open?])) "a trial 400 days old still syncs")
-          (is (nil? (:trial-ends a)) "the Settings page shows no end date"))
-        (let [u (user! :trial-started (days-ago now 400))]
-          (license! u 1 2)
-          (is (= :trial (:state (license/access db/ds u 3 now))) "an uncovered major is not in grace"))))))
+          (is (nil? (:trial-ends a)) "the Settings page shows no end date"))))))
 
 (deftest access-moves-with-the-clock
   (when (db-up?)
@@ -55,33 +51,16 @@
      (let [now (Instant/now)]
       (testing "covered"
         (let [u (user! :trial-started (days-ago now 400))]
-          (license! u 1 2)
+          (license! u)
           (is (= {:state :licensed :sync :full :ai? true}
-                 (select-keys (license/access db/ds u 1 now) [:state :sync :ai?])))))
+                 (select-keys (license/access db/ds u now) [:state :sync :ai?])))))
       (testing "trial"
         (let [u (user! :trial-started (days-ago now 10))]
           (is (= {:state :trial :sync :full :ai? true}
-                 (select-keys (license/access db/ds u 1 now) [:state :sync :ai?])))))
-      (testing "in grace: download only, no AI (13.4.2, O13)"
-        (let [u (user! :trial-started (days-ago now 400))]
-          (license! u 1 2)
-          (let [a (license/access db/ds u 3 now)]
-            (is (= {:state :grace :sync :download :ai? false} (select-keys a [:state :sync :ai?])))
-            (is (license/allows? a :download))
-            (is (not (license/allows? a :upload)))
-            (is (not (license/allows? a :ai))))))
-      (testing "past grace: refused with a reason (13.4.3)"
-        (let [u (user! :trial-started (days-ago now 400))]
-          (license! u 1 2)
-          (license/access db/ds u 3 (days-ago now 31))
-          (let [a (license/access db/ds u 3 now)]
-            (is (= :expired (:state a)))
-            (is (= #{:meta} (set (filter #(license/allows? a %)
-                                   [:meta :graves :upload :download :blob :finish :full-upload :full-download :ai]))))
-            (is (= "license-expired" (license/reason a))))))
+                 (select-keys (license/access db/ds u now) [:state :sync :ai?])))))
       (testing "trial over, never bought: nothing syncs (O12)"
         (let [u (user! :trial-started (days-ago now 61))
-              a (license/access db/ds u 1 now)]
+              a (license/access db/ds u now)]
           (is (= :unlicensed (:state a)))
           (is (not (license/allows? a :download)))))))))
 
@@ -95,11 +74,11 @@
                            {:builder-fn rs/as-unqualified-maps}))))
           (is (= 999 (:credit_balance_iqd (jdbc/execute-one! db/ds ["SELECT credit_balance_iqd FROM users WHERE id = ?" u]
                                             {:builder-fn rs/as-unqualified-maps}))))))
-      (testing "13.1: a paid purchase creates exactly one row for this major and the next"
+      (testing "13.1: a paid purchase creates exactly one row, with no version columns"
         (let [u (user! :balance 1500)]
           (is (:ok (license/buy-with-credits! u)))
-          (is (= [{:major_from desktop-version/desktop-major :major_to (inc desktop-version/desktop-major)}]
-                 (jdbc/execute! db/ds ["SELECT major_from, major_to FROM desktop_licenses WHERE user_id = ?" u]
+          (is (= [{:source "credits"}]
+                 (jdbc/execute! db/ds ["SELECT source FROM desktop_licenses WHERE user_id = ?" u]
                    {:builder-fn rs/as-unqualified-maps})))
           (is (= 500 (:credit_balance_iqd (jdbc/execute-one! db/ds ["SELECT credit_balance_iqd FROM users WHERE id = ?" u]
                                             {:builder-fn rs/as-unqualified-maps})))))))))

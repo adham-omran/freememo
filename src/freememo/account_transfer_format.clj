@@ -210,7 +210,8 @@
    :desktop_tokens "desktop sign-in tokens of the source deployment"
    :desktop_auth_codes "single-use sign-in codes that live 60 seconds"
    :desktop_accounts "the source deployment's sync epoch and trial start"
-   :desktop_licenses "billing of the source deployment"
+   :desktop_licenses "billing of the source deployment. A row has no version
+                       columns: it covers every Release (ADR 0002)"
    :availability_months "operator data: the closed months of the public
                          availability page. They describe the service, not an
                          account"

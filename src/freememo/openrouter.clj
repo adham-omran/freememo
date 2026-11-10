@@ -38,7 +38,7 @@
     (do (link/require-online! "AI")
         [(str (link/origin) "/api/desktop/ai" path)
          {"Authorization" (str "Bearer " (link/token))
-          "X-FreeMemo-Major" (str desktop-version/desktop-major)}])
+          desktop-version/protocol-header (str desktop-version/sync-protocol)}])
     [(str base-url path)
      (if api-key {"Authorization" (str "Bearer " api-key)} {})]))
 
