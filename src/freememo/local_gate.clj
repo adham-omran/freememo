@@ -4,9 +4,9 @@
    The user's own browser is the UI, and any web page or local program can send
    a request to 127.0.0.1. The gate lets a request through only when:
 
-   1. its Host header is the local origin, so DNS rebinding fails;
+   1. its Host header is `127.0.0.1:<port>` or `localhost:<port>`, so DNS rebinding fails;
    2. a state-changing request, or a WebSocket upgrade, carries an Origin header
-      that is the local origin, so a foreign page cannot act;
+      that is one of those two origins, so a foreign page cannot act;
    3. it carries the `fm_local` cookie with the install's secret. The launcher
       may name requests that need no cookie (`:public?`). Ticket 04 names the
       sign-in callback, which freememo.net's redirect sends without the
@@ -79,6 +79,9 @@
   [{:keys [origin secret user-id local-route public? now-ms]
     :or {now-ms #(System/currentTimeMillis)}}]
   (let [host (str/replace origin #"^https?://" "")
+        port (second (re-find #":(\d+)$" host))
+        hosts #{host (str "localhost:" port)}
+        origins (into #{origin} (map #(str "http://" %)) hosts)
         tokens (ConcurrentHashMap.)
         issue-token! (fn []
                        (let [t (new-token)]
@@ -106,11 +109,11 @@
                        websocket? (some-> (get headers "upgrade") str/lower-case (= "websocket"))
                        token (some (fn [[k v]] (when (= k token-param) v)) (query-pairs (:query-string request)))]
                    (cond
-                     (not= host (get headers "host"))
+                     (not (contains? hosts (get headers "host")))
                      (deny 403 "Forbidden: wrong Host")
 
                      (and (or websocket? (not (#{:get :head :options} method)))
-                       (not= origin origin-header))
+                       (not (contains? origins origin-header)))
                      (deny 403 "Forbidden: wrong Origin")
 
                      (and token (= :get method))

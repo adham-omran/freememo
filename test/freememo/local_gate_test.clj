@@ -45,7 +45,7 @@
 
 (deftest a-wrong-host-is-refused-even-with-the-cookie
   (let [{:keys [handler]} (make)]
-    (doseq [host ["evil.example" "127.0.0.1:1" "localhost:47077" nil]]
+    (doseq [host ["evil.example" "127.0.0.1:1" "localhost:1" "localhost" nil]]
       (is (= 403 (:status (handler (request {:headers {"host" host "cookie" (str "fm_local=" secret)}}))))
         (pr-str host)))))
 
@@ -89,3 +89,13 @@
   (let [{:keys [handler calls]} (make)]
     (is (= "status" (:body (handler (request {:uri "/api/desktop/status"})))))
     (is (empty? @calls))))
+
+(deftest localhost-is-an-accepted-host-and-origin
+  (let [{:keys [handler]} (make)]
+    (is (= 200 (:status (handler (request {:headers {"host" "localhost:47077" "cookie" (str "fm_local=" secret)}})))))
+    (is (= 200 (:status (handler (request {:request-method :post
+                                           :headers {"host" "localhost:47077" "cookie" (str "fm_local=" secret)
+                                                     "origin" "http://localhost:47077"}})))))
+    (is (= 403 (:status (handler (request {:request-method :post
+                                           :headers {"host" "localhost:47077" "cookie" (str "fm_local=" secret)
+                                                     "origin" "http://localhost:1"}})))))))
