@@ -41,6 +41,32 @@
         (.delete pid-file)
         (log "removed the stale postmaster.pid")))))
 
+(def pg-major
+  "The PostgreSQL major version that this Runtime embeds (ADR 0003)."
+  18)
+
+(defn retire-old-major!
+  "A data directory made by another major is never opened (ADR 0003): the
+   Local Install has no library, and the next sync makes a fresh one by a full
+   download. It moves the directory aside and never deletes it.
+   Post: `pgdata` is absent, or its `PG_VERSION` is `pg-major`. Returns the
+         moved directory, or nil when nothing moved."
+  [^File pgdata]
+  (let [version-file (io/file pgdata "PG_VERSION")]
+    (when (.exists version-file)
+      (let [found (str/trim (slurp version-file))]
+        (when (not= found (str pg-major))
+          (let [stamp (.format (java.time.LocalDate/now) java.time.format.DateTimeFormatter/BASIC_ISO_DATE)
+                aside (loop [n 0]
+                        (let [f (io/file (.getParentFile pgdata)
+                                         (str (.getName pgdata) ".pg" found "-" stamp (when (pos? n) (str "-" n))))]
+                          (if (.exists f) (recur (inc n)) f)))]
+            (when-not (.renameTo pgdata aside)
+              (throw (ex-info (str "Cannot move the PostgreSQL " found " data directory aside") {:pgdata (str pgdata)})))
+            (log "found a PostgreSQL " found " data directory, which PostgreSQL " pg-major
+                 " cannot open; moved it to " (.getName aside) " and starting with no library")
+            aside))))))
+
 (defn- harden-postgres!
   "Zonky's initdb uses trust auth, so any local user could read the library.
    Post: the `postgres` role has `password`, and `pg_hba.conf` accepts only
@@ -63,6 +89,7 @@
          password auth (`harden-postgres!`). Zonky runs initdb when `pgdata`
          is empty."
   ^EmbeddedPostgres [^File pgdata ^File data-dir password]
+  (retire-old-major! pgdata)
   (recover-postgres! pgdata)
   (let [pg-log (ProcessBuilder$Redirect/appendTo (io/file data-dir "postgres.log"))
         pg (-> (EmbeddedPostgres/builder)
