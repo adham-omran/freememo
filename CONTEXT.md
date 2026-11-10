@@ -136,6 +136,24 @@ A copy of one account's data that the customer makes and keeps.
 _Avoid_: Backup, export file
 
 **Paying Customer**:
-An account with at least one completed purchase, of credits or of a desktop
-license, in the last 12 months. Granted credits do not count.
+An account with at least one completed purchase, of credits or of a Sync
+License, in the last 12 months. Granted credits do not count.
 _Avoid_: Paid user, subscriber, customer (alone)
+
+## Distribution
+
+**Local Install**:
+FreeMemo that runs on the customer's own study computer, with its own local
+database, and syncs with a FreeMemo account on freememo.net. It is the paid way
+to use FreeMemo offline.
+_Avoid_: Self-host, self-hosted, desktop app (for this product)
+
+**Independent Self-Host**:
+A FreeMemo server that a person runs from the public code, with no freememo.net
+account. FreeMemo gives it no support.
+_Avoid_: Self-host (alone), official self-host
+
+**Sync License**:
+A one-time purchase on a FreeMemo account that lets its Local Installs sync
+with freememo.net and use AI through freememo.net.
+_Avoid_: Desktop license, subscription
