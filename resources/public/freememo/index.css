@@ -2878,7 +2878,8 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     white-space: nowrap;
     opacity: 0;
 }
-.nav-rail__label > span { overflow: hidden; text-overflow: ellipsis; }
+/* The label clips. Its spans must not: iOS Safari paints no text in a clipped
+   span when the phone drawer turns visible (plans/phone-drawer-labels.md). */
 .nav-rail:is([data-state="open"], [data-state="kept"]) .nav-rail__label { opacity: 1; }
 .nav-rail__sub {
     font-size: 12px;
