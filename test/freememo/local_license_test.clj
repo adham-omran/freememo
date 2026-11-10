@@ -46,3 +46,25 @@
   (is (str/includes? (section/sync-text {:state :license-refused
                                          :license {"state" "expired" "grace-ends" "2026-12-09T00:00:00Z"}})
         "grace period ended on 2026-12-09")))
+
+(deftest sync-text-differs-on-a-local-install
+  (let [signed-out (section/sync-text {:state :signed-out})
+        local-signed-out (section/sync-text {:state :signed-out :local-install? true})
+        update (section/sync-text {:state :update-required})
+        local-update (section/sync-text {:state :update-required :local-install? true})]
+    (is (str/includes? signed-out "Quit FreeMemo"))
+    (is (not (str/includes? local-signed-out "Quit FreeMemo")))
+    (is (str/includes? local-signed-out "sign in again"))
+    (is (str/includes? update "freememo.net"))
+    (is (str/includes? local-update "Install the new version"))))
+
+(deftest the-grace-reminder-shows-its-end-date
+  (let [body (:body ((handler {"state" "grace" "grace-ends" "2026-12-09T00:00:00Z"}) get-root))]
+    (is (str/includes? body "until 2026-12-09."))))
+
+(deftest no-buy-link-while-the-license-is-not-for-sale
+  (let [h (ll/wrap-reminder app {:origin "https://freememo.test" :buy? (constantly false)
+                                 :license-fn (constantly {"state" "unlicensed"})})
+        body (:body (h get-root))]
+    (is (not (str/includes? body "Buy a Sync License")))
+    (is (str/includes? body "Continue to my library"))))

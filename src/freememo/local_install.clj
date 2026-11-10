@@ -363,7 +363,9 @@
   [handler origin]
   (local-license/wrap-reminder handler
     {:origin origin
-     :license-fn #(:license ((ns-resolve 'freememo.sync-client 'status)))}))
+     :license-fn #(:license ((ns-resolve 'freememo.sync-client 'status)))
+     :buy? #(do (require 'freememo.desktop-license)
+          (not @(ns-resolve 'freememo.desktop-license 'trial-open?)))}))
 
 ;; Ticket 05: one library, one account.
 

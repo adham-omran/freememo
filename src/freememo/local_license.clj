@@ -31,7 +31,10 @@
   "Post: the sentence for `license` (a map with a \"state\" key)."
   [license]
   (if (= "grace" (get license "state"))
-    "Your Sync License does not cover this version. Sync downloads only, for now."
+    (str "Your Sync License does not cover this version. Sync downloads only"
+      (if-let [end (get license "grace-ends")]
+        (str ", until " (subs (str end) 0 (min 10 (count (str end)))) ".")
+        ", for now."))
     (str "Your FreeMemo trial has ended. Your library stays on this computer and keeps working. "
       "Sync with freememo.net needs a Sync License.")))
 
@@ -41,8 +44,8 @@
 
 (defn reminder-page
   "Post: a Ring response with the reminder. The page has its own title, which
-         the gate marks as Local."
-  [origin license]
+         the gate marks as Local. It links to the checkout only when `buy?`."
+  [origin license buy?]
   {:status 200
    :headers {"Content-Type" "text/html; charset=utf-8" "Cache-Control" "no-store"}
    :body (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -51,20 +54,22 @@
            "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:5rem auto;padding:0 1rem}"
            "button,.buy{font-size:1rem;padding:.6rem 1.2rem;cursor:pointer}</style></head><body>"
            "<h1>Sync License</h1><p id=\"text\">" (esc (reminder-text license)) "</p>"
-           "<p><a class=\"buy\" id=\"buy\" href=\"" (esc (purchase-url origin))
-           "\" target=\"_blank\" rel=\"noopener\">Buy a Sync License</a></p>"
+           (when buy?
+             (str "<p><a class=\"buy\" id=\"buy\" href=\"" (esc (purchase-url origin))
+               "\" target=\"_blank\" rel=\"noopener\">Buy a Sync License</a></p>"))
            "<form method=\"post\" action=\"" continue-path "\">"
            "<button type=\"submit\">Continue to my library</button></form>"
            "</body></html>")})
 
 (defn wrap-reminder
   "Pre:  `license-fn` is `(fn [])`: the cached license map (string keys) or nil.
-         `origin` is freememo.net's origin.
+         `origin` is freememo.net's origin. `buy?` is `(fn [])`: false while no
+         license is for sale (Settings follows the same rule, `buy-url*`).
    Post: until the student continues, GET / answers the reminder when the
          license state is in `nag-states`. POST to `continue-path` ends the
          reminder for this launch and redirects to /. Everything else goes to
          `handler`."
-  [handler {:keys [origin license-fn]}]
+  [handler {:keys [origin license-fn buy?] :or {buy? (constantly true)}}]
   (let [!seen (atom false)]
     (fn [request]
       (cond
@@ -75,7 +80,7 @@
         (and (not @!seen) (= :get (:request-method request)) (= "/" (:uri request)))
         (let [license (try (license-fn) (catch Throwable _ nil))]
           (if (contains? nag-states (get license "state"))
-            (reminder-page origin license)
+            (reminder-page origin license (boolean (buy?)))
             (handler request)))
 
         :else (handler request)))))

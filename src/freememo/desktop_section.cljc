@@ -30,6 +30,7 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.peer :as peer])
    #?(:clj [freememo.sync-client :as sync-client])
+   #?(:clj [freememo.update-feed :as update-feed])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [next.jdbc :as jdbc])
    #?(:clj [next.jdbc.result-set :as rs])))
@@ -44,8 +45,14 @@
 (defn desktop?* [_refresh]
   #?(:clj (peer/desktop?) :cljs false))
 
-(defn sync-status* [_refresh]
-  #?(:clj (sync-client/status) :cljs nil))
+(defn sync-status*
+  "The sync status, plus `:local-install?` and, on a Local Install with a newer
+   version in the feed, `:update-url`."
+  [_refresh]
+  #?(:clj (let [local? (peer/local-install?)]
+            (cond-> (assoc (sync-client/status) :local-install? local?)
+              local? (assoc :update-url (:url (:update-available (update-feed/banner-state))))))
+     :cljs nil))
 
 (defn sync-now!* []
   #?(:clj (sync-client/sync-now!) :cljs nil))
@@ -159,8 +166,10 @@
     "Sync is off for this account."))
 
 (defn sync-text
-  "The sync line. `status` comes from `sync-client/status`."
-  [{:keys [state error last-sync-at progress license]}]
+  "The sync line. `status` comes from `sync-status*`. On a Local Install
+   (`:local-install?`), the signed-out and update-required lines differ from
+   the Electron lines."
+  [{:keys [state error last-sync-at progress license local-install?]}]
   (case state
     :syncing (let [{:keys [downloaded downloaded-bytes total-rows total-bytes]} progress
                    mb #(str (quot (or % 0) 1048576) " MB")]
@@ -172,10 +181,14 @@
                  (str "Uploading your library: " (:uploaded progress) " items so far.")
                  :else "Syncing now."))
     :offline "Offline. FreeMemo syncs when the connection returns."
-    :update-required "This version can no longer sync. Download the new version from freememo.net."
+    :update-required (if local-install?
+                       "This version can no longer sync. Install the new version to sync again."
+                       "This version can no longer sync. Download the new version from freememo.net.")
     :license-refused (refusal-text license)
     :full-sync-choice "This device and freememo.net need a full sync. Choose which copy to keep."
-    :signed-out "This device was signed out. Quit FreeMemo and open it again to sign in."
+    :signed-out (if local-install?
+                  "freememo.net signed this computer out. Open the start page to sign in again."
+                  "This device was signed out. Quit FreeMemo and open it again to sign in.")
     :error (str "The last sync failed: " error)
     (if last-sync-at
       (str "Synced at " (subs (str last-sync-at) 0 16) ".")
@@ -235,6 +248,10 @@
       (group/GroupHeading "Sync")
       (dom/p (dom/props {:class "hint"}) (dom/text (sync-text status)))
       (dom/p (dom/props {:class "hint"}) (dom/text (license-text (:license status))))
+      (when-let [url (and (= :update-required (:state status)) (:update-url status))]
+        (dom/p (dom/props {:class "hint"})
+          (dom/a (dom/props {:href url :target "_blank" :rel "noopener" :id "download-update"})
+            (dom/text "Download the new version"))))
       (let [url (e/server (buy-url* refresh))]
         (when url
           (dom/p (dom/props {:class "hint"})
