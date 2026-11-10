@@ -150,20 +150,32 @@
    account.json map; `default-account` by default; nil leaves an existing
    file), `:origin` (the server's origin for the default account),
    `:port` (the preferred port of a fresh install; a free one by default).
+   `:account :none` seeds no account, so the first-launch page comes first.
+   The JVM gets `--origin <origin>` as its freememo.net.
    Post: `{:data-dir :port :pg-port :open-url :process :log-file}`. `:open-url`
-         is the one-time token URL of this start."
+         is the one-time token URL of this start. After a first-launch start,
+         `:pg-port` is nil, and `await-ready!` waits for the app."
   [{:keys [data-dir account origin port] :or {origin "http://127.0.0.1:1"}}]
   (let [data-dir (or data-dir (temp-dir "li-data"))
-        _ (when (or account (not (.exists (io/file data-dir "account.json"))))
+        _ (when (and (not= :none account)
+                  (or account (not (.exists (io/file data-dir "account.json")))))
             (seed-account! data-dir (or account (default-account origin))))
         log-file (File/createTempFile "li-install" ".log")
         handle (spawn! "freememo.local-install"
-                 ["--data-dir" (.getPath data-dir) "--port" (str (or port (free-port)))]
+                 ["--data-dir" (.getPath data-dir) "--port" (str (or port (free-port)))
+                  "--origin" origin]
                  {"FREEMEMO_HEADLESS" "true"} log-file)
-        [_ ready-port pg-port] (await-line handle #"FREEMEMO_READY port=(\d+) pg_port=(\d+)")
+        [_ ready-port pg-port] (await-line handle #"FREEMEMO_(?:SIGNIN_)?READY port=(\d+)(?: pg_port=(\d+))?")
         open-url (second (re-find #"FREEMEMO_OPEN_URL=(\S+)" (log-text handle)))]
-    (assoc handle :data-dir data-dir :port (parse-long ready-port) :pg-port (parse-long pg-port)
+    (assoc handle :data-dir data-dir :port (parse-long ready-port) :pg-port (some-> pg-port parse-long)
       :open-url open-url)))
+
+(defn await-ready!
+  "Wait until the app serves, after a first-launch sign-in.
+   Post: `li` with `:pg-port`."
+  [li]
+  (let [[_ pg-port] (await-line li #"FREEMEMO_READY port=\d+ pg_port=(\d+)")]
+    (assoc li :pg-port (parse-long pg-port))))
 
 (defn alive? [{:keys [^Process process]}] (.isAlive process))
 
