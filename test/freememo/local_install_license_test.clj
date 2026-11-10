@@ -46,7 +46,9 @@
             (let [page (h/http (h/url li "/") {:cookie cookie})]
               (is (= 200 (:status page)))
               (is (str/includes? (:body page) "Sync License"))
-              (is (str/includes? (:body page) (str (:origin s) "/settings#settings-desktop")))))
+              ;; `desktop-license/trial-open?` is true, so nothing is for sale: no buy link,
+              ;; as in Settings.
+              (is (not (str/includes? (:body page) "settings#settings-desktop")))))
           (testing "Continue opens the library, and the reminder does not come back"
             (is (= 303 (:status (post-continue li cookie))))
             (let [page (h/http (h/url li "/") {:cookie cookie})]

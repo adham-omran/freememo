@@ -72,7 +72,7 @@
     (fn [li cookie s]
       (await-feed-read s)
       (is (= {"update-available" nil "update-required?" false} (banner-state li cookie)))
-      (is (= 1 (count (re-seq #"\[update-feed\] cannot read the update feed" (h/log-text li))))))))
+      (is (= 1 (count (re-seq #"cannot read the update feed" (h/log-text li))))))))
 
 (deftest a-refused-major-shows-update-to-keep-syncing
   (with-install {:feed (feed "2026.12.5")
