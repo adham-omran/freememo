@@ -1,6 +1,6 @@
 (ns freememo.local-install-update-test
   "Seam 1 for ticket 08 of plans/local-install.md: the update feed and the
-   old-major message. A stub plays freememo.net (`freememo.local-install-stub`).
+   old Sync Protocol message. A stub plays freememo.net (`freememo.local-install-stub`).
    The web app's banner and `GET /api/desktop/update` read the same function,
    `update-feed/banner-state`, so the test reads the endpoint through HTTP.
    Each test starts one Local Install JVM, about a minute."
@@ -13,7 +13,7 @@
 (def ^:private installed "2026.11.100")
 
 (defn- feed [version]
-  {"current_major" 1 "current_version" version
+  {"current_version" version
    "installers" {"macos" "https://example.test/mac.dmg"
                  "windows" "https://example.test/win.exe"
                  "linux" "https://example.test/linux.deb"}})
@@ -75,7 +75,7 @@
       (is (= {"update-available" nil "update-required?" false} (banner-state li cookie)))
       (is (= 1 (count (re-seq #"cannot read the update feed" (h/log-text li))))))))
 
-(deftest a-refused-major-shows-update-to-keep-syncing
+(deftest a-refused-sync-protocol-shows-update-to-keep-syncing
   (with-install {:feed (feed "2026.12.5")
                  :meta-status 409
                  :meta-body {"error" "update-required" "protocol" 2000}}

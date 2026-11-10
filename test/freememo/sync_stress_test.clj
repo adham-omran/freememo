@@ -47,7 +47,7 @@
   [token ^ConcurrentHashMap model from]
   (loop [cursor nil to nil]
     (let [{:strs [rows graves cursor to]} (call server/download-handler token
-                                            (cond-> {:from from :cursor cursor :major 1}
+                                            (cond-> {:from from :cursor cursor}
                                               to (assoc :to to)))]
       ;; Long keys: Cheshire reads small numbers as Integer, and a Java map
       ;; tells Integer 5 from Long 5.

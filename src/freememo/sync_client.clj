@@ -103,7 +103,7 @@
                  (cond-> {:method method
                           :url (str (link/origin) path)
                           :headers {"Authorization" (str "Bearer " (link/token))
-                                    "X-FreeMemo-Major" (str desktop-version/desktop-major)}
+                                    desktop-version/protocol-header (str desktop-version/sync-protocol)}
                           :throw-exceptions false
                           :connection-timeout 15000
                           :socket-timeout 120000}
@@ -135,7 +135,7 @@
   (let [file (File/createTempFile "fm-blob" ".bin")
         resp (http/get (str (link/origin) "/api/sync/blob")
                {:headers {"Authorization" (str "Bearer " (link/token))
-                          "X-FreeMemo-Major" (str desktop-version/desktop-major)}
+                          desktop-version/protocol-header (str desktop-version/sync-protocol)}
                 :query-params {"t" t "k" (json/generate-string k) "c" col}
                 :as :stream :throw-exceptions false :socket-timeout 600000})]
     (when-not (= 200 (:status resp))
@@ -220,7 +220,7 @@
                                        WHERE usn = -1"] opts))
         {:strs [graves to]} (ok-body! (call! :post "/api/sync/graves"
                                         :json-body {:checkpoint checkpoint :graves local
-                                                    :major desktop-version/desktop-major})
+                                                   })
                               :graves)
         result (apply/with-apply-tx db/ds
                  (fn [tx]
@@ -346,7 +346,7 @@
   (reduce (fn [acc batch]
             (let [batch (upload-blobs! batch)
                   answer (ok-body! (call! :post "/api/sync/upload"
-                                     :json-body {:base base :rows batch :major desktop-version/desktop-major})
+                                     :json-body {:base base :rows batch})
                            :upload)
                   waiting (settle-upload! user-id batch answer wait-for-parents?)]
               (swap! !status update-in [:progress :uploaded] (fnil + 0) (count batch))
@@ -399,7 +399,7 @@
               (loop [cursor cursor to to touched touched first? first? waiting [] waiting-files {}]
                 (let [page (ok-body! (call! :post "/api/sync/download"
                                        :json-body (cond-> {:from from :exclude (or exclude []) :cursor cursor
-                                                           :major desktop-version/desktop-major}
+                                                          }
                                                     to (assoc :to to)
                                                     graves-from (assoc :graves_from graves-from)))
                              :download)
@@ -442,7 +442,7 @@
     (if (> (reduce + (map count (vals pending))) pending-key-cap)
       true
       (get (ok-body! (call! :post "/api/sync/finish"
-                       :json-body {:counts counts :pending pending :major desktop-version/desktop-major})
+                       :json-body {:counts counts :pending pending})
              :finish)
         "ok"))))
 
@@ -476,7 +476,7 @@
    (let [user-id (local-user-id)
          job (or resume
                (let [{:strs [to scm rows bytes]} (ok-body! (call! :post "/api/sync/full/download"
-                                                             :json-body {:major desktop-version/desktop-major})
+                                                             :json-body {})
                                                    :full-download)
                      job {"to" to "scm" scm "rows" rows "bytes" bytes
                           "cursor" nil "downloaded" 0 "downloaded_bytes" 0}]
@@ -519,7 +519,7 @@
   []
   (let [user-id (local-user-id)
         {:strs [base scm]} (ok-body! (call! :post "/api/sync/full/upload"
-                                       :json-body {:major desktop-version/desktop-major})
+                                       :json-body {})
                              :full-upload)]
     (apply/with-apply-tx db/ds
       (fn [tx]
@@ -562,7 +562,7 @@
     (ensure-id-blocks!)
     (let [{:keys [status body]} (call! :post "/api/sync/meta"
                                   :json-body {:protocol desktop-version/sync-protocol
-                                              :major desktop-version/desktop-major})]
+                                             })]
       (case (long status)
         409 (do (set-state! :update-required) (record! {:last_error (get body "error")}))
         200 (let [license (get body "license")]

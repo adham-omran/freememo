@@ -32,6 +32,7 @@
 
    NO db or app requires, so tests load it with PostgreSQL stopped."
   (:require [cheshire.core :as json]
+            [freememo.desktop-version :as desktop-version]
             [freememo.local-http :as http])
   (:import [java.net URI URLEncoder]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest HttpRequest$BodyPublishers
@@ -98,6 +99,7 @@
                         (-> (HttpRequest/newBuilder (URI. (str origin "/desktop/token")))
                           (.timeout (Duration/ofSeconds 30))
                           (.header "Content-Type" "application/json")
+                          (.header desktop-version/protocol-header (str desktop-version/sync-protocol))
                           (.POST (HttpRequest$BodyPublishers/ofString
                                    (json/generate-string {"code" code "code_verifier" verifier
                                                           "redirect_uri" redirect-uri
@@ -107,6 +109,9 @@
                       (catch java.io.IOException _
                         (throw (ex-info offline-message {:type ::offline}))))
         body (when (= 200 (.statusCode response)) (json/parse-string (.body response)))]
+    (when (= 409 (.statusCode response))
+      (throw (ex-info "Update FreeMemo to sign in. This version is older than freememo.net."
+               {:type ::update-required})))
     (when-not (and (map? body) (get body "access_token") (get body "user_id"))
       (throw (ex-info (str "Sign-in failed: freememo.net refused the code (HTTP " (.statusCode response) ")")
                {:type ::refused})))

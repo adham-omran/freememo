@@ -80,18 +80,17 @@
   "Run `(f holder body access)` when the token is valid and its account may
    perform `operation` (13.4). Every route goes through here, so no route
    carries its own license check.
-   Post: 401 for a missing or revoked token, 403 with the reason code for a
+   Post: 401 for a missing or revoked token, 409 for a different Sync
+         Protocol (the Local Install shows \"Update to keep syncing\"), 403 with the reason code for a
          refused operation (13.4.3)."
   [request operation f]
   (if-let [holder (desktop-auth/bearer-token request)]
     (let [body (when (#{:post} (:request-method request)) (body-json request))
-          major (or (some-> (get body "major") long)
-                  (some-> (get-in request [:headers "x-freememo-major"]) parse-long)
-                  desktop-version/desktop-major)
-          access (license/access db/ds (:user-id holder) major)]
-      (if (license/allows? access operation)
-        (f holder body access)
-        (json-response 403 {:error (license/reason access) :license access})))
+          access (license/access db/ds (:user-id holder))]
+      (or (desktop-auth/protocol-refusal request (get body "protocol"))
+        (if (license/allows? access operation)
+          (f holder body access)
+          (json-response 403 {:error (license/reason access) :license access}))))
     (json-response 401 {:error "unauthorized"})))
 
 ;; ── 1. meta (2.3, 2.3.2) ───────────────────────────────────────────
@@ -103,12 +102,10 @@
   [request]
   (with-access request :meta
     (fn [{:keys [user-id]} body access]
-      (let [protocol (get body "protocol")]
-        (if (not= protocol desktop-version/sync-protocol)
-          (json-response 409 {:error (if (and (number? protocol)
-                                           (< protocol desktop-version/sync-protocol))
-                                       "update-required" "server-outdated")
-                              :protocol desktop-version/sync-protocol})
+      (let [protocol (or (get body "protocol")
+                       (some-> (get-in request [:headers "x-freememo-sync-protocol"]) parse-long))]
+        (if-let [error (desktop-version/protocol-error protocol)]
+          (json-response 409 {:error error :protocol desktop-version/sync-protocol})
           (let [scm (:scm (jdbc/execute-one! db/ds ["INSERT INTO desktop_accounts (user_id, scm)
                                                      VALUES (?, md5(random()::text))
                                                      ON CONFLICT (user_id) DO UPDATE SET scm = desktop_accounts.scm

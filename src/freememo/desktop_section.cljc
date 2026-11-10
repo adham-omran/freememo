@@ -8,7 +8,7 @@
      installs signed in to the account, each revocable (3.2).
 
    Command palette decision (8.2, 13.8.2): no entries. Sync runs by itself
-   (2.11), and buying is a once-per-major action. Both live here only.
+   (2.11), and buying is a one-time action. Both live here only.
    Activity monitor decision (8.3): no entry. A sync reports its state on
    this tab and in no other place.
    Tab title decision (8.4): the conflict report is a Settings group, not a
@@ -26,7 +26,6 @@
    #?(:clj [freememo.desktop-license :as license])
    #?(:clj [freememo.desktop-link :as link])
    #?(:clj [freememo.local-license :as local-license])
-   #?(:clj [freememo.desktop-version :as desktop-version])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.peer :as peer])
    #?(:clj [freememo.sync-client :as sync-client])
@@ -92,7 +91,7 @@
      :cljs []))
 
 (defn license-summary* [_refresh user-id]
-  #?(:clj (license/access db/ds user-id desktop-version/desktop-major) :cljs nil))
+  #?(:clj (license/access db/ds user-id) :cljs nil))
 
 (defn price-label*
   "The license price for the session's country, or nil while no license is for
@@ -142,16 +141,12 @@
 
 (defn license-text
   "13.7 — one line per license state."
-  [{:strs [state trial-open? trial-days-left trial-ends grace-ends covered-majors]}]
+  [{:strs [state trial-open? trial-days-left trial-ends]}]
   (case state
-    "licensed" (str "Licensed for desktop versions "
-                 (clojure.string/join ", " (map (fn [[a b]] (str a " and " b)) covered-majors)) ".")
+    "licensed" "Licensed. Sync and AI work on every release."
     "trial" (if trial-open?
               "Trial. Sync and AI are on, with no end date for now."
               (str "Trial: " trial-days-left " days left (ends " (subs (str trial-ends) 0 10) ")."))
-    "grace" (str "Your license does not cover this version. Downloads only, until "
-              (subs (str grace-ends) 0 10) ".")
-    "expired" "Your license does not cover this version. Sync is off. Local use continues."
     "unlicensed" "The trial has ended. Sync is off. Local use continues."
     "Not checked yet."))
 
@@ -160,7 +155,7 @@
   [license]
   (case (get license "state")
     "unlicensed" "Sync is off because the trial has ended. Buy a Sync License to sync again."
-    "expired" (str "Sync is off because your Sync License does not cover this version, and the grace period ended"
+    "expired" (str "Sync is off because your Sync License has ended, and the grace period ended"
                 (when-let [end (get license "grace-ends")] (str " on " (subs (str end) 0 10)))
                 ". Buy a Sync License to sync again.")
     "Sync is off for this account."))
