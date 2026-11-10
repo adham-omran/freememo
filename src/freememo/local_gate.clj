@@ -7,7 +7,10 @@
    1. its Host header is the local origin, so DNS rebinding fails;
    2. a state-changing request, or a WebSocket upgrade, carries an Origin header
       that is the local origin, so a foreign page cannot act;
-   3. it carries the `fm_local` cookie with the install's secret.
+   3. it carries the `fm_local` cookie with the install's secret. The launcher
+      may name requests that need no cookie (`:public?`). Ticket 04 names the
+      sign-in callback, which freememo.net's redirect sends without the
+      SameSite=Strict cookie. Rules 1 and 2 still apply to it.
 
    The launcher opens the browser at a URL with a one-time `fm_token`. A GET
    with a valid token gets the cookie (HttpOnly, SameSite=Strict, ten years)
@@ -68,10 +71,11 @@
          which the launcher keeps in the data directory so a cookie lasts
          across restarts. `user-id` is the one account of this install.
          `local-route` is `(fn [request])` for the shell endpoints, nil for none.
+         `public?` is `(fn [request])`: true for a request that needs no cookie.
    Post: `{:wrap f, :issue-token! f}`. `(issue-token!)` returns a new one-time
          token. `(wrap handler)` returns the gated handler. It sits inside
          `wrap-session`, which it needs for the :session user id."
-  [{:keys [origin secret user-id local-route now-ms]
+  [{:keys [origin secret user-id local-route public? now-ms]
     :or {now-ms #(System/currentTimeMillis)}}]
   (let [host (str/replace origin #"^https?://" "")
         tokens (ConcurrentHashMap.)
@@ -119,6 +123,9 @@
                        (cookie-ok? request)
                        {:status 302 :headers {"Location" (stripped-location request)} :body ""}
                        :else (deny 401 "Unauthorized"))
+
+                     (and public? (public? request))
+                     (mark-title (handler request))
 
                      (not (cookie-ok? request))
                      (deny 401 "Unauthorized")

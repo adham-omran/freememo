@@ -2,7 +2,7 @@
   "The Local Install main (docs/adr/0001-jvm-launcher-replaces-electron.md,
    plans/local-install.md). One JVM, no Electron:
 
-     clojure.main -m freememo.local-install [--data-dir DIR] [--port N]
+     clojure.main -m freememo.local-install [--data-dir DIR] [--port N] [--origin URL]
 
    It takes an exclusive lock on the data directory, recovers a PostgreSQL
    that a killed JVM left behind, starts PostgreSQL through the zonky library,
@@ -12,9 +12,11 @@
 
    Files in the data directory:
 
-     account.json   the account: {origin, token, user_id, username, id_block}.
-                    The sync token is a secret, so it is a 0600 file. Ticket
-                    04 writes it at sign-in. Today a test or a person seeds it.
+     account.json   the account: {origin, token, user_id, username, id_block,
+                    first_download}. The sync token is a secret, so it is a
+                    0600 file. The first-launch sign-in writes it
+                    (`freememo.local-signin`). Without it, the launcher serves
+                    only the first-launch page and starts no PostgreSQL.
      install.json   {port, cookie_secret, enc_key_secret, pg_password}, 0600, written at
                     the first launch. The port and both secrets stay across
                     restarts, so a bookmark and its cookie keep working.
@@ -34,13 +36,15 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [freememo.launch-env :as launch-env]
-            [freememo.local-gate :as gate])
+            [freememo.local-gate :as gate]
+            [freememo.local-signin :as signin]
+            [ring.adapter.jetty :as jetty])
   (:import [io.zonky.test.db.postgres.embedded EmbeddedPostgres]
            [java.lang ProcessBuilder$Redirect ProcessHandle]
            [java.io File]
            [java.net InetAddress ServerSocket]
            [java.nio.channels FileChannel]
-           [java.nio.file Files OpenOption StandardOpenOption]
+           [java.nio.file Files OpenOption StandardCopyOption StandardOpenOption]
            [java.nio.file.attribute FileAttribute PosixFilePermissions]
            [java.security SecureRandom]
            [java.util Base64]))
@@ -71,16 +75,24 @@
 ;; ── Files ──────────────────────────────────────────────────────────
 
 (defn- write-private!
-  "Post: `f` holds `text` and only its owner can read it (0600 where the OS has it)."
+  "Post: `f` holds `text` and only its owner can read it (0600 where the OS has it).
+         The write goes to a temporary file first and moves over `f` in one
+         step, so a crash leaves the old file or the new one, never half."
   [^File f text]
-  (let [path (.toPath f)]
-    (Files/deleteIfExists path)
+  (let [path (.toPath f)
+        tmp (.resolveSibling path (str (.getFileName path) ".tmp"))]
+    (Files/deleteIfExists tmp)
     (try
-      (Files/createFile path (into-array FileAttribute
-                               [(PosixFilePermissions/asFileAttribute (PosixFilePermissions/fromString "rw-------"))]))
+      (Files/createFile tmp (into-array FileAttribute
+                              [(PosixFilePermissions/asFileAttribute (PosixFilePermissions/fromString "rw-------"))]))
       (catch UnsupportedOperationException _
-        (Files/createFile path (make-array FileAttribute 0))))
-    (spit f text)))
+        (Files/createFile tmp (make-array FileAttribute 0))))
+    (spit (.toFile tmp) text)
+    (try
+      (Files/move tmp path (into-array java.nio.file.CopyOption
+                             [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
+      (catch java.nio.file.AtomicMoveNotSupportedException _
+        (Files/move tmp path (into-array java.nio.file.CopyOption [StandardCopyOption/REPLACE_EXISTING]))))))
 
 (defn- random-secret []
   (let [bytes (byte-array 32)]
@@ -90,16 +102,19 @@
 (defn- read-json [^File f]
   (when (.exists f) (json/parse-string (slurp f))))
 
+(defn find-account
+  "Post: the account map with string keys, or nil when there is no account yet."
+  [^File data-dir]
+  (let [account (read-json (io/file data-dir "account.json"))]
+    (when (get account "user_id") account)))
+
 (defn read-account
   "Post: the account map with string keys. Throws when the file is missing,
          because there is nothing to serve without an account."
   [^File data-dir]
-  (let [f (io/file data-dir "account.json")
-        account (read-json f)]
-    (when-not (get account "user_id")
-      (throw (ex-info (str "This install has no account yet. Expected " f)
-               {:type ::no-account})))
-    account))
+  (or (find-account data-dir)
+    (throw (ex-info (str "This install has no account yet. Expected " (io/file data-dir "account.json"))
+             {:type ::no-account}))))
 
 ;; ── Single instance ────────────────────────────────────────────────
 
@@ -260,6 +275,7 @@
       nil opts
       "--data-dir" (recur (next more) (assoc opts :data-dir (io/file (first more))))
       "--port" (recur (next more) (assoc opts :port (parse-long (first more))))
+      "--origin" (recur (next more) (assoc opts :origin (first more)))
       (recur more opts))))
 
 (defn- set-server-env! [pg-port install]
@@ -270,52 +286,106 @@
                  "COOKIE_SECURE" "false" "AUTH_MODE" "password"}]
     (launch-env/set! k v)))
 
+(defn- sign-in-phase!
+  "No account yet: serve the first-launch page on the install's port until the
+   student signs in (`freememo.local-signin`).
+   Post: the account map. `account.json` is written, 0600, in one step. The
+         sign-in server runs on, in `!jetty`, until the caller stops it."
+  [{:keys [data-dir origin local-origin http-port install !jetty on-gate]}]
+  (let [{:keys [handler account]} (signin/make-flow
+                                    {:origin origin :local-origin local-origin
+                                     :save-account! #(write-private! (io/file data-dir "account.json")
+                                                       (json/generate-string %))})
+        {:keys [wrap issue-token!]} (gate/make-gate {:origin local-origin
+                                                     :secret (get install "cookie_secret")
+                                                     :public? signin/public-request?})]
+    (reset! !jetty (jetty/run-jetty (wrap handler) {:host "127.0.0.1" :port http-port :join? false}))
+    (on-gate issue-token!)
+    (log "waiting for the first sign-in at " local-origin)
+    (println (str "FREEMEMO_SIGNIN_READY port=" http-port))
+    (flush)
+    @account))
+
+(defn- first-download-pending?
+  "A sign-in writes `first_download` into the account. Until a download has
+   committed, GET / shows the progress page, not an empty library."
+  [account]
+  (let [!done (atom false)]
+    (fn []
+      (and (get account "first_download")
+        (not @!done)
+        (try (let [ready? (boolean (:library-ready ((ns-resolve 'freememo.sync-client 'status))))]
+               (when ready? (reset! !done true))
+               (not ready?))
+             (catch Throwable _ false))))))
+
 (defn start!
-  "Start everything.
+  "Start everything. With no account, the first-launch page comes first and
+   PostgreSQL starts after the sign-in.
    Post: `{:port :pg-port :open! :quit!}`. `quit!` stops the web server, then
          PostgreSQL, once, and releases the lock."
-  [{:keys [data-dir port]}]
+  [{:keys [data-dir port origin]}]
   (let [data-dir (or data-dir (default-data-dir))
         _ (.mkdirs ^File data-dir)
         lock (lock-data-dir! data-dir)
-        account (read-account data-dir)
         install (load-install! data-dir (or port default-port))
         http-port (get install "port")
-        origin (str "http://127.0.0.1:" http-port)
-        pg (start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password"))
+        local-origin (str "http://127.0.0.1:" http-port)
+        origin (str/replace (or origin (System/getenv "FREEMEMO_ORIGIN") "https://freememo.net") #"/+$" "")
+        !pg (atom nil)
         !jetty (atom nil)
+        !issue (atom nil)
+        !shown (atom false)
         quit-once (delay
                     (log "quitting")
                     (when-let [server @!jetty]
                       (try (.stop ^org.eclipse.jetty.server.Server server)
                            (catch Throwable e (log "web server: " (ex-message e)))))
-                    (try (.close pg) (catch Throwable e (log "postgres: " (ex-message e))))
+                    (when-let [pg @!pg]
+                      (try (.close ^EmbeddedPostgres pg) (catch Throwable e (log "postgres: " (ex-message e)))))
                     (try (.release ^java.nio.channels.FileLock lock) (catch Throwable _ nil))
                     (log "stopped"))
-        quit! #(force quit-once)]
+        quit! #(force quit-once)
+        open-url! (fn [] (str local-origin "/?" gate/token-param "=" (@!issue)))
+        open! #(open-browser! (open-url!))
+        ;; The first gate shows the browser: the tray, and either the page or
+        ;; the URL on stdout. A second gate (after a sign-in) does not.
+        on-gate (fn [issue-token!]
+                  (reset! !issue issue-token!)
+                  (when (compare-and-set! !shown false true)
+                    (if (headless?)
+                      (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
+                      (do (install-tray! open! #(System/exit 0))
+                          (open!)))))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
     (try
-      (set-server-env! (.getPort pg) install)
-      (require 'prod 'freememo.desktop 'freememo.logging)
-      ((ns-resolve 'freememo.logging 'init!))
-      ((ns-resolve 'freememo.desktop 'set-launch-config!) account)
-      (let [{:keys [wrap issue-token!]} (gate/make-gate
-                                          {:origin origin
-                                           :secret (get install "cookie_secret")
-                                           :user-id (get account "user_id")
-                                           :local-route @(ns-resolve 'freememo.desktop 'local-route)})
-            server ((ns-resolve 'prod 'start-server!) {:port http-port :wrap-gate wrap})
-            open-url! (fn [] (str origin "/?" gate/token-param "=" (issue-token!)))
-            open! #(open-browser! (open-url!))]
-        (reset! !jetty server)
-        (log "serving " origin)
-        (if (headless?)
-          (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
-          (do (install-tray! open! #(System/exit 0))
-              (open!)))
-        (println (str "FREEMEMO_READY port=" http-port " pg_port=" (.getPort pg)))
-        (flush)
-        {:port http-port :pg-port (.getPort pg) :open! open! :quit! quit!})
+      (let [account (or (find-account data-dir)
+                      (sign-in-phase! {:data-dir data-dir :origin origin :local-origin local-origin
+                                       :http-port http-port :install install :!jetty !jetty :on-gate on-gate}))
+            pg (reset! !pg (start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))]
+        (set-server-env! (.getPort pg) install)
+        (require 'prod 'freememo.desktop 'freememo.logging 'freememo.sync-client)
+        ((ns-resolve 'freememo.logging 'init!))
+        ((ns-resolve 'freememo.desktop 'set-launch-config!) account)
+        (let [{:keys [wrap issue-token!]} (gate/make-gate
+                                            {:origin local-origin
+                                             :secret (get install "cookie_secret")
+                                             :user-id (get account "user_id")
+                                             :local-route @(ns-resolve 'freememo.desktop 'local-route)})
+              pending? (first-download-pending? account)
+              _ (when-let [first-server @!jetty]
+                  ;; The sign-in server gives the port to the app.
+                  (.stop ^org.eclipse.jetty.server.Server first-server)
+                  (reset! !jetty nil))
+              server ((ns-resolve 'prod 'start-server!)
+                      {:port http-port
+                       :wrap-gate (fn [handler] (wrap (signin/wrap-first-download handler pending?)))})]
+          (reset! !jetty server)
+          (log "serving " local-origin)
+          (on-gate issue-token!)
+          (println (str "FREEMEMO_READY port=" http-port " pg_port=" (.getPort pg)))
+          (flush)
+          {:port http-port :pg-port (.getPort pg) :open! open! :quit! quit!}))
       (catch Throwable t
         (quit!)
         (throw t)))))
