@@ -19,6 +19,15 @@
     (is (= "28.2.40560" (at "2028-02-29T04:00:00Z")))
     (is (= "28.2.40320" (at "2028-02-29T00:00:00Z")))))
 
+(deftest the-shell-script-agrees
+  (doseq [iso ["2026-11-01T00:00:00Z" "2026-11-10T14:32:00Z" "2026-12-31T23:59:59Z"
+               "2028-02-29T04:00:00Z" "2027-01-09T08:09:00Z" "2030-09-30T23:59:00Z"]]
+    (let [secs (.getEpochSecond (Instant/parse iso))
+          p (.start (ProcessBuilder. ^java.util.List ["sh" "scripts/release-version.sh" "--epoch" (str secs)]))
+          out (.trim ^String (slurp (.getInputStream p)))]
+      (is (zero? (.waitFor p)) iso)
+      (is (= (rv/from-epoch-seconds secs) out) iso))))
+
 (deftest it-does-not-depend-on-the-time-zone-of-the-computer
   (let [secs (.getEpochSecond (Instant/parse "2026-11-30T23:59:00Z"))
         zone (java.util.TimeZone/getDefault)]
