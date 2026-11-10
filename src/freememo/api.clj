@@ -39,6 +39,7 @@
    [freememo.card-export-http :as card-export-http]
    [freememo.ai-proxy :as ai-proxy]
    [freememo.desktop-auth :as desktop-auth]
+   [freememo.update-feed :as update-feed]
    [freememo.sync-server :as sync-server]
    [freememo.comprehension-http :as comprehension-http]
    [freememo.availability-http :as availability-http]
@@ -1486,6 +1487,7 @@
    {:method :get  :path "/desktop/authorize"    :handler #'desktop-auth/authorize-handler}
    {:method :post :path "/desktop/authorize"    :handler #'desktop-auth/authorize-post-handler :body :small}
    {:method :post :path "/desktop/token"        :handler #'desktop-auth/token-handler   :body :small}
+   {:method :get  :path "/api/desktop/feed"     :handler #'update-feed/feed-handler}
    {:method :post :path "/api/desktop/id-block" :handler #'desktop-auth/id-block-handler :body :small}
    {:method :post :path "/api/sync/meta"        :handler #'sync-server/meta-handler     :body :small}
    {:method :post :path "/api/sync/graves"      :handler #'sync-server/graves-handler   :body :small}
