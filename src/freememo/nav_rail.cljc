@@ -25,6 +25,7 @@
    [freememo.command-bus :as bus]
    [freememo.motion :as motion]
    [freememo.nav-item-dom :as item-dom]
+   [freememo.page-title-format :as page-title-format]
    [freememo.commands :as commands]
    [freememo.help-content :as help]
    [freememo.icons :as icons]
@@ -33,6 +34,7 @@
    [freememo.undo-history-modal :refer [ActionsNavButton]]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.peer :as peer])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
@@ -494,6 +496,8 @@
         (dom/props {:href "/" :class "nav-rail__phone-brand" :aria-label "FreeMemo — home"})
         (dom/img (dom/props {:class "nav-rail__mark" :src "/freememo/favicon.svg" :alt ""}))
         (dom/span (dom/text "FreeMemo"))
+        (when (e/server (peer/local-install?))
+          (dom/span (dom/props {:class "nav-rail__local-mark"}) (dom/text page-title-format/local-mark)))
         (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil)))))
 
 (e/defn RailDestinations
@@ -637,6 +641,9 @@
                 (dom/props {:class "nav-rail__icon"})
                 (dom/img (dom/props {:class "nav-rail__mark" :src "/freememo/favicon.svg" :alt ""})))
               (dom/span (dom/props {:class "nav-rail__label nav-rail__wordmark"}) (dom/text "FreeMemo"))
+              (when (e/server (peer/local-install?))
+                (dom/span (dom/props {:class "nav-rail__label nav-rail__local-mark" :data-testid "local-mark"})
+                  (dom/text page-title-format/local-mark)))
               (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
             (RailDestinations active continue-target due waiting navigate!)

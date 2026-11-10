@@ -44,6 +44,24 @@
     (reset! !launch config)
     config))
 
+(defn set-launch-config!
+  "The Local Install launcher's replacement for `read-launch-config!`: it reads
+   the data directory, not stdin (docs/adr/0001-jvm-launcher-replaces-electron.md).
+   Pre:  `config` has string keys, and \"user_id\" is one of them.
+   Post: `start!` binds this account. The Electron gate is not used, so no
+         \"launch_secret\" is needed."
+  [config]
+  (when-not (and (map? config) (get config "user_id"))
+    (throw (ex-info "The Local Install account file has no user_id"
+             {:type ::bad-launch-config})))
+  (reset! !launch config)
+  config)
+
+(defn launch-config
+  "Post: the launch configuration map (string keys), or nil before it is set."
+  []
+  @!launch)
+
 (def ^:private opts {:builder-fn rs/as-unqualified-lower-maps})
 
 (defn- insert-block! [conn {:keys [start end]} origin]
@@ -113,8 +131,9 @@
 (defn- json-response [status body]
   {:status status :headers {"Content-Type" "application/json"} :body (json/generate-string body)})
 
-(defn- local-route
-  "The endpoints only Electron calls. They live here, not in `api/routes`,
+(defn local-route
+  "The endpoints only the desktop shell calls (Electron, or the Local Install
+   gate in `freememo.local-gate`). They live here, not in `api/routes`,
    because freememo.net has no use for them."
   [request]
   (case [(:request-method request) (:uri request)]

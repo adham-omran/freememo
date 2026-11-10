@@ -41,14 +41,18 @@
   [display-name repo-title]
   (when (and display-name repo-title) (str display-name " (" repo-title ")")))
 
+(def local-mark "Local")
+
 (defn page-title
   "Pre: item-name is a page's name as a string, or nil when the page's item
-   does not exist.
-   Post: `<item-name> | FreeMemo`. A name with no visible character reads
-   Untitled, and nil reads Not found."
-  [item-name]
-  (str (cond
-         (nil? item-name) "Not found"
-         (re-find #"\S" item-name) item-name
-         :else "Untitled")
-       " | " brand))
+   does not exist. `local?` is true in a Local Install.
+   Post: `<item-name> | FreeMemo`, or `<item-name> | FreeMemo Local` when
+   `local?`. A name with no visible character reads Untitled, and nil reads
+   Not found."
+  ([item-name] (page-title item-name false))
+  ([item-name local?]
+   (str (cond
+          (nil? item-name) "Not found"
+          (re-find #"\S" item-name) item-name
+          :else "Untitled")
+     " | " brand (when local? (str " " local-mark)))))

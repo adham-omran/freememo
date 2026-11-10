@@ -2879,6 +2879,17 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     opacity: 0;
 }
 .nav-rail__label > span { overflow: hidden; text-overflow: ellipsis; }
+/* The "Local" mark of a Local Install, beside the wordmark. */
+.nav-rail__local-mark {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: 1px solid var(--color-border, currentColor);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-secondary, inherit);
+}
+.nav-rail__label.nav-rail__local-mark { flex: 0 0 auto; align-self: center; margin-left: 8px; }
 .nav-rail:is([data-state="open"], [data-state="kept"]) .nav-rail__label { opacity: 1; }
 .nav-rail__sub {
     font-size: 12px;

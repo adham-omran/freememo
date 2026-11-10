@@ -3,6 +3,7 @@
    Unified topics model — all entities (documents, pages, extracts) are topics
    in a parent_id tree."
   (:require
+   [freememo.launch-env :as launch-env]
    [next.jdbc :as jdbc]
    [next.jdbc.connection :as connection]
    [next.jdbc.result-set :as rs]
@@ -64,15 +65,15 @@
 
 (def db-config
   {:dbtype "postgresql"
-   :host (or (System/getenv "DB_HOST") "localhost")
-   :port (Integer/parseInt (or (System/getenv "DB_PORT") "5432"))
-   :dbname (or (System/getenv "DB_NAME") "cardmaker")
+   :host (or (launch-env/getenv "DB_HOST") "localhost")
+   :port (Integer/parseInt (or (launch-env/getenv "DB_PORT") "5432"))
+   :dbname (or (launch-env/getenv "DB_NAME") "cardmaker")
    ;; HikariCP setter is setUsername → key must be :username, NOT :user
    ;; (next.jdbc's ->pool passes leftover keys to the pool's Java setters;
    ;; :user maps to no setter and is silently dropped → driver would fall
    ;; back to the OS user and auth would fail).
-   :username (or (System/getenv "DB_USER") "cardmaker")
-   :password (or (System/getenv "DB_PASSWORD") "dev")
+   :username (or (launch-env/getenv "DB_USER") "cardmaker")
+   :password (or (launch-env/getenv "DB_PASSWORD") "dev")
    :maximumPoolSize 10})
 
 ;; HikariCP connection pool. Loading this namespace does not connect.

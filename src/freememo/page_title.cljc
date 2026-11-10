@@ -16,6 +16,7 @@
             #?(:clj [freememo.curriculum :as curriculum])
             #?(:clj [freememo.db :as db])
             #?(:clj [freememo.walkthrough :as walkthrough])
+            #?(:clj [freememo.peer :as peer])
             #?(:clj [freememo.user-state :as us])))
 
 ;; Server reads. Each keeps its var on both peers, because its name appears
@@ -55,9 +56,10 @@
 
 (defn write-title!
   "Pre: item-name is a page's name, or nil when its item does not exist.
-   Post: on the client, `document.title` reads `(fmt/page-title item-name)`."
-  [item-name]
-  #?(:cljs (set! (.-title js/document) (fmt/page-title item-name))
+   `local?` is true in a Local Install.
+   Post: on the client, `document.title` reads `(fmt/page-title item-name local?)`."
+  [item-name local?]
+  #?(:cljs (set! (.-title js/document) (fmt/page-title item-name local?))
      :clj nil)
   :written)
 
@@ -79,7 +81,9 @@
   [user-id subject]
   (e/client
     (let [kind (when (vector? subject) (first subject))
-          id (when (vector? subject) (second subject))]
+          id (when (vector? subject) (second subject))
+          ;; One boolean, fixed for the life of the JVM.
+          local? (e/server (peer/local-install?))]
       (write-title!
         (case kind
           :topic (e/server
@@ -98,4 +102,5 @@
                                 (e/watch (us/get-atom user-id :question-mutations)))]
                       (e/Offload #(entity-title* rev user-id id))))
           :label (get fmt/tab-labels id)
-          nil)))))
+          nil)
+        local?))))

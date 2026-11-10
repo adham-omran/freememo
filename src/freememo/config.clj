@@ -13,6 +13,7 @@
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [freememo.launch-env :as launch-env]
    [freememo.peer :as peer]
    [taoensso.telemere :as tel]))
 
@@ -37,7 +38,7 @@
    Public because namespaces outside this one resolve their own deployment keys
    and MUST NOT reimplement this precedence."
   [env-var config-path]
-  (or (some-> (System/getenv env-var) str/trim not-empty)
+  (or (some-> (launch-env/getenv env-var) str/trim not-empty)
       (get-in config config-path)))
 
 (defn credits-enabled?

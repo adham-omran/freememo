@@ -40,6 +40,7 @@
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.curriculum-exam :as curriculum-exam])
    #?(:clj [freememo.desktop :as desktop])
+   #?(:clj [freememo.launch-env :as launch-env])
    #?(:clj [freememo.peer :as peer])))
 
 ;; Prod default card model — a freememo.card-models registry :id, used as the
@@ -56,7 +57,7 @@
      "Hard-fail boot when a required secret is unset/blank (B2). Self-host must
       not run on the dev fallback values. Throws ::missing-required-env."
      [k]
-     (when (clojure.string/blank? (System/getenv k))
+     (when (clojure.string/blank? (launch-env/getenv k))
        (throw (ex-info (str "Missing required environment variable: " k
                          " — refusing to boot. Set it in your .env / compose file"
                          " (generate secrets with: openssl rand -hex 32).")
@@ -170,12 +171,14 @@
            :else
            (handler request))))))
 
-#?(:clj ; server entrypoint
-   (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
-     (logging/init!)
-     ;; Desktop (plans/electron-local-db-sync.md 3.4): Electron writes the launch
-     ;; configuration on stdin, before anything else can read it.
-     (when (peer/desktop?) (desktop/read-launch-config!))
+#?(:clj
+   (defn start-server!
+     "Boot the app server and serve it.
+      `opts`: `:port` (else env PORT, else 8080) and `:wrap-gate`, the desktop
+      gate (else `desktop/wrap-launch-gate`, Electron's). The Local Install
+      launcher passes both (docs/adr/0001-jvm-launcher-replaces-electron.md).
+      Post: the Jetty `Server`, already started, with `:join? false`."
+     [{:keys [port wrap-gate]}]
      ;; B2: refuse to boot on dev-fallback secrets.
      (require-env! "ENC_KEY_SECRET")
      (require-env! "DB_PASSWORD")
@@ -188,7 +191,7 @@
            (merge
              (comptime-resource "electric-manifest.edn")
              ;; A desktop serves only its own window (4.1, 4.8).
-             {:host (if (peer/desktop?) "127.0.0.1" "0.0.0.0"), :port (Integer/parseInt (or (System/getenv "PORT") "8080")),
+             {:host (if (peer/desktop?) "127.0.0.1" "0.0.0.0"), :port (or port (Integer/parseInt (or (System/getenv "PORT") "8080"))),
               :resources-path "public"
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
               :manifest-path "public/freememo/js/manifest.edn"})]
@@ -233,8 +236,8 @@
            (wrap-multipart-params)
            (wrap-route-body-size) ; reject chunked + cap Content-Length
            (wrap-params)
-           (cond-> (peer/desktop?) (desktop/wrap-launch-gate))
-           (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
+           (cond-> (peer/desktop?) ((or wrap-gate desktop/wrap-launch-gate)))
+           (wrap-session {:store (cookie-store {:key (let [secret (or (launch-env/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
                                                                       hash (-> (java.security.MessageDigest/getInstance "SHA-256")
                                                                              (.digest (.getBytes secret "UTF-8")))]
                                                                   (java.util.Arrays/copyOf hash 16))})
@@ -274,6 +277,14 @@
                                     (into (vec (.getExcludedMimeTypes gzip))
                                       ["video/webm" "video/ogg"])))
                                 (.setHandler (.getHandler server))))))}))))
+
+#?(:clj ; server entrypoint
+   (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
+     (logging/init!)
+     ;; Desktop (plans/electron-local-db-sync.md 3.4): Electron writes the launch
+     ;; configuration on stdin, before anything else can read it.
+     (when (peer/desktop?) (desktop/read-launch-config!))
+     (start-server! {})))
 
 #?(:cljs ; client entrypoint
    (defn ^:export -main []

@@ -3,7 +3,8 @@
    Derives a stable 256-bit key from the user's login password using PBKDF2-SHA256.
    The derived key is stored base64-encoded in the server-side Ring session.
    Even with full DB access, the API key cannot be decrypted without the user's password."
-  (:require [taoensso.telemere :as tel])
+  (:require [freememo.launch-env :as launch-env]
+            [taoensso.telemere :as tel])
   (:import [javax.crypto Cipher SecretKeyFactory]
            [javax.crypto.spec SecretKeySpec GCMParameterSpec PBEKeySpec]
            [java.security SecureRandom]
@@ -33,7 +34,7 @@
    Same google-sub + same ENC_KEY_SECRET always produces the same key (deterministic).
    Security depends on ENC_KEY_SECRET being kept private."
   [^String google-sub]
-  (let [server-secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
+  (let [server-secret (or (launch-env/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
     (derive-key server-secret (str "google-" google-sub))))
 
 (defn derive-key-for-local-user
@@ -46,7 +47,7 @@
    cannot collide with a Google subject.
    Post: a non-nil base64 key, stable for (`user-id`, ENC_KEY_SECRET)."
   [user-id]
-  (let [server-secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
+  (let [server-secret (or (launch-env/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
     (derive-key server-secret (str "local-user-" user-id))))
 
 (defn- str->secret-key
