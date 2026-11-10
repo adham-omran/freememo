@@ -658,6 +658,15 @@
       (finally (reset! !running false))))
   (status))
 
+(defn resume-after-sign-in!
+  "A sign-in gave the link a new token (`freememo.local-library`). Show the
+   syncing state at once, so a page that reads it does not still see
+   :signed-out, then sync in the background."
+  []
+  (set-state! :syncing)
+  (future (sync-now!))
+  nil)
+
 ;; ── Scheduling (2.11) ──────────────────────────────────────────────
 
 (defonce ^:private !scheduler (atom nil))
