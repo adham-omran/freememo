@@ -27,6 +27,7 @@
    [freememo.navigation :as nav]
    #?(:clj [freememo.activity :as activity])
    #?(:clj [freememo.storage-meter :as meter])
+   #?(:clj [freememo.update-feed :as update-feed])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ---------------------------------------------------------------------------
@@ -136,6 +137,27 @@
            :topup? false
            :dismiss :removal})))
 
+(defn update-banners
+  "The Local Install's update banners (plans/local-install.md, New: updates).
+   `state` is `update-feed/banner-state`'s answer. A refused sync comes first,
+   and it replaces \"Update available\", because the student needs one line.
+   Both carry the installer link when the feed has one."
+  [{:keys [update-available update-required?]}]
+  (let [link (when-let [url (:url update-available)]
+               {:href url :href-label "Download"})]
+    (cond
+      update-required?
+      [(merge {:key "update-required" :tone :warning :message "Update to keep syncing"
+               :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}
+         link)]
+
+      update-available
+      [(merge {:key "update-available" :tone :warning :message "Update available"
+               :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}
+         link)]
+
+      :else [])))
+
 ;; ---------------------------------------------------------------------------
 ;; Server wrappers. Body-level #?(:clj … :cljs …), because reactive bodies name
 ;; them inside `(e/server …)` and the var must resolve on both peers.
@@ -145,8 +167,9 @@
   "Every banner for `user-id`. `_rev` is the pair of channel counters the strip
    watches; it exists to make this call re-run when either bumps."
   [_rev user-id]
-  #?(:clj (into (account-banners (meter/account-banner-state user-id))
-            (collapse-failures (activity/unseen-failures user-id)))
+  #?(:clj (-> (account-banners (meter/account-banner-state user-id))
+            (into (update-banners (update-feed/banner-state)))
+            (into (collapse-failures (activity/unseen-failures user-id))))
      :cljs []))
 
 (defn dismiss!*
@@ -218,7 +241,7 @@
           (case (e/server (dismiss!* user-id kind ids)) (t)))))))
 
 (e/defn Banner
-  [{:keys [tone message ids subject-id retry? topup? dismiss]} user-id navigate!]
+  [{:keys [tone message ids subject-id retry? topup? dismiss href href-label]} user-id navigate!]
   (e/client
     (dom/div
       (dom/props {:class (str "banner banner--" (name tone))
@@ -235,6 +258,11 @@
           (OpenAction ids subject-id user-id navigate!))
         (when retry?
           (RetryAction (first ids) user-id))
+        (when (some? href)
+          (dom/a
+            (dom/props {:class "btn btn-sm btn-primary" :href href :target "_blank"
+                        :rel "noopener noreferrer"})
+            (dom/text href-label)))
         (when topup?
           (dom/button
             (dom/props {:class "btn btn-sm btn-primary" :type "button"})
@@ -255,6 +283,7 @@
     (dom/div
       (dom/props {:class "banner-strip" :aria-live "polite"})
       (let [activity-rev (e/server (e/watch (us/get-atom user-id :activity-mutations)))
-            credits-rev (e/server (e/watch (us/get-atom user-id :credits-refresh)))]
-        (e/for [b (e/server (e/diff-by :key (banners* [activity-rev credits-rev] user-id)))]
+            credits-rev (e/server (e/watch (us/get-atom user-id :credits-refresh)))
+            desktop-rev (e/server (e/watch (us/get-atom user-id :desktop-mutations)))]
+        (e/for [b (e/server (e/diff-by :key (banners* [activity-rev credits-rev desktop-rev] user-id)))]
           (Banner b user-id navigate!))))))

@@ -605,7 +605,8 @@
   (try (set-state! state)
     (catch Throwable e
       (swap! !status assoc :state state)
-      (tel/error! {:id ::state-failed} e))))
+      (tel/error! {:id ::state-failed} e)))
+  (link/sync-failed!))
 
 (defonce ^:private !lock (Object.))
 (defonce ^:private !running (atom false))
@@ -633,6 +634,14 @@
         (fail! :error (or (.getMessage e) (str (class e)))))
       (finally (reset! !running false))))
   (status))
+
+(defn note-offline!
+  "The network check found freememo.net unreachable. Show the offline state,
+   unless a sync runs now: that sync ends in its own state."
+  []
+  (when-not @!running
+    (try (set-state! :offline)
+      (catch Throwable e (tel/error! {:id ::note-offline-failed} e)))))
 
 (defn choose-full-sync!
   "The user's answer to a full-sync choice: :download or :upload."
