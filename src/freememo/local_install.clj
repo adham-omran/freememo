@@ -36,19 +36,19 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [freememo.launch-env :as launch-env]
+            [freememo.local-files :as files]
             [freememo.local-gate :as gate]
             [freememo.local-license :as local-license]
             [freememo.local-log :refer [log]]
+            [freememo.local-postgres :as postgres]
             [freememo.local-signin :as signin]
             [freememo.local-tray :as tray]
             [ring.adapter.jetty :as jetty])
   (:import [io.zonky.test.db.postgres.embedded EmbeddedPostgres]
-           [java.lang ProcessBuilder$Redirect ProcessHandle]
            [java.io File]
            [java.net InetAddress ServerSocket]
            [java.nio.channels FileChannel]
-           [java.nio.file Files OpenOption StandardCopyOption StandardOpenOption]
-           [java.nio.file.attribute FileAttribute PosixFilePermissions]
+           [java.nio.file OpenOption StandardOpenOption]
            [java.security SecureRandom]
            [java.util Base64]))
 
@@ -72,26 +72,6 @@
       :else (io/file (or (System/getenv "XDG_DATA_HOME") (str home "/.local/share")) "FreeMemo Local"))))
 
 ;; ── Files ──────────────────────────────────────────────────────────
-
-(defn- write-private!
-  "Post: `f` holds `text` and only its owner can read it (0600 where the OS has it).
-         The write goes to a temporary file first and moves over `f` in one
-         step, so a crash leaves the old file or the new one, never half."
-  [^File f text]
-  (let [path (.toPath f)
-        tmp (.resolveSibling path (str (.getFileName path) ".tmp"))]
-    (Files/deleteIfExists tmp)
-    (try
-      (Files/createFile tmp (into-array FileAttribute
-                              [(PosixFilePermissions/asFileAttribute (PosixFilePermissions/fromString "rw-------"))]))
-      (catch UnsupportedOperationException _
-        (Files/createFile tmp (make-array FileAttribute 0))))
-    (spit (.toFile tmp) text)
-    (try
-      (Files/move tmp path (into-array java.nio.file.CopyOption
-                             [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
-      (catch java.nio.file.AtomicMoveNotSupportedException _
-        (Files/move tmp path (into-array java.nio.file.CopyOption [StandardCopyOption/REPLACE_EXISTING]))))))
 
 (defn- random-secret []
   (let [bytes (byte-array 32)]
@@ -154,80 +134,8 @@
               "cookie_secret" (or (get old "cookie_secret") (random-secret))
               "enc_key_secret" (or (get old "enc_key_secret") (random-secret))
               "pg_password" (or (get old "pg_password") (random-secret)))]
-    (when (not= old new) (write-private! f (json/generate-string new)))
+    (when (not= old new) (files/write-private! f (json/generate-string new)))
     new))
-
-;; ── PostgreSQL ─────────────────────────────────────────────────────
-
-(defn- pid-alive? [pid] (.isPresent (ProcessHandle/of pid)))
-
-(defn- postgres-process? [pid]
-  (let [handle (.orElse (ProcessHandle/of pid) nil)]
-    (boolean (some-> handle .info .command (.orElse "") (str/includes? "postgres")))))
-
-(defn- signal! [pid sig]
-  (.waitFor (.start (ProcessBuilder. ^java.util.List ["kill" (str "-" sig) (str pid)]))))
-
-(defn- wait-dead [pid ms]
-  (loop [n (quot ms 100)]
-    (cond (not (pid-alive? pid)) true
-          (zero? n) false
-          :else (do (Thread/sleep 100) (recur (dec n))))))
-
-(defn recover-postgres!
-  "A killed JVM leaves `postmaster.pid`, and often a live postmaster.
-   Pre:  this process holds the data directory lock, so no other launcher owns
-         that postmaster.
-   Post: no postmaster runs on `pgdata`, and `postmaster.pid` is gone."
-  [^File pgdata]
-  (let [pid-file (io/file pgdata "postmaster.pid")]
-    (when (.exists pid-file)
-      (let [pid (some-> (slurp pid-file) str/split-lines first str/trim parse-long)]
-        (when (and pid (pid-alive? pid) (postgres-process? pid))
-          (log "stopping a PostgreSQL that an earlier launch left (pid " pid ")")
-          (when-not (and (zero? (signal! pid "INT")) (wait-dead pid 20000))
-            (.destroyForcibly (.get (ProcessHandle/of pid)))
-            (wait-dead pid 10000)))
-        (.delete pid-file)
-        (log "removed the stale postmaster.pid")))))
-
-(defn- harden-postgres!
-  "Zonky's initdb uses trust auth, so any local user could read the library.
-   Post: the `postgres` role has `password`, and `pg_hba.conf` accepts only
-         scram-sha-256 on 127.0.0.1. Idempotent: it runs at every start. The
-         connection works under trust (first start, or a crash in this
-         window) and under scram (every later start), because it sends the
-         password. Only the first start has a few seconds of trust."
-  [^EmbeddedPostgres pg ^File pgdata password]
-  (with-open [conn (java.sql.DriverManager/getConnection
-                     (str "jdbc:postgresql://127.0.0.1:" (.getPort pg) "/postgres")
-                     "postgres" password)
-              stmt (.createStatement conn)]
-    ;; The password is base64url text, so it is safe inside a SQL literal.
-    (.execute stmt (str "ALTER ROLE postgres PASSWORD '" password "'"))
-    (write-private! (io/file pgdata "pg_hba.conf") "host all all 127.0.0.1/32 scram-sha-256\n")
-    (.execute stmt "SELECT pg_reload_conf()")))
-
-(defn- start-postgres!
-  "Post: a running zonky `EmbeddedPostgres` on a random loopback port, with
-         password auth (`harden-postgres!`). Zonky runs initdb when `pgdata`
-         is empty."
-  ^EmbeddedPostgres [^File pgdata ^File data-dir password]
-  (recover-postgres! pgdata)
-  (let [pg-log (ProcessBuilder$Redirect/appendTo (io/file data-dir "postgres.log"))
-        pg (-> (EmbeddedPostgres/builder)
-      (.setDataDirectory pgdata)
-      (.setCleanDataDirectory false)
-      (.setServerConfig "listen_addresses" "127.0.0.1")
-      (.setServerConfig "unix_socket_directories" "")
-      (.setOutputRedirector pg-log)
-      (.setErrorRedirector pg-log)
-      (.setPGStartupWait (java.time.Duration/ofSeconds 60))
-      ;; Zonky's own connections use this once scram is on.
-      (.setConnectConfig "password" password)
-      (.start))]
-    (harden-postgres! pg pgdata password)
-    pg))
 
 (defn- start-update-check!
   "Read the update feed of the account's server (ticket 08). A newer version
@@ -278,7 +186,7 @@
   [{:keys [data-dir origin local-origin http-port install !jetty on-gate]}]
   (let [{:keys [handler account]} (signin/make-flow
                                     {:origin origin :local-origin local-origin
-                                     :save-account! #(write-private! (io/file data-dir "account.json")
+                                     :save-account! #(files/write-private! (io/file data-dir "account.json")
                                                        (json/generate-string %))})
         {:keys [wrap issue-token!]} (gate/make-gate {:origin local-origin
                                                      :secret (get install "cookie_secret")
@@ -329,7 +237,7 @@
   (let [lib #(deref (ns-resolve 'freememo.local-library %))]
     ((ns-resolve 'freememo.local-account 'make-guard)
      {:origin origin :local-origin local-origin :account account
-      :save-file! #(write-private! (io/file data-dir "account.json") (json/generate-string %))
+      :save-file! #(files/write-private! (io/file data-dir "account.json") (json/generate-string %))
       :delete-file! #(io/delete-file (io/file data-dir "account.json") true)
       :adopt! (lib 'adopt!) :renew! (lib 'renew!) :wipe! (lib 'wipe!)
       :unsynced-count (lib 'unsynced-count) :revoked? (lib 'revoked?)
@@ -379,7 +287,7 @@
       (let [account (or (find-account data-dir)
                       (sign-in-phase! {:data-dir data-dir :origin origin :local-origin local-origin
                                        :http-port http-port :install install :!jetty !jetty :on-gate on-gate}))
-            pg (reset! !pg (start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))]
+            pg (reset! !pg (postgres/start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))]
         (set-server-env! (.getPort pg) install)
         (require 'prod 'freememo.desktop 'freememo.logging 'freememo.connectivity 'freememo.sync-client)
         ((ns-resolve 'freememo.logging 'init!))
