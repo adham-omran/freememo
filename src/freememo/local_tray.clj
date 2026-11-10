@@ -36,6 +36,11 @@
       :error ", sync failed"
       nil)))
 
+(defn version-label
+  "Post: the text of the disabled version line of the tray menu."
+  [version]
+  (str "Version " version))
+
 (defn template-image
   "Post: a black silhouette of `image` that keeps its shape: the alpha is the
          original alpha, less the white parts. macOS recolors a template
@@ -57,10 +62,10 @@
 (defn install-tray!
   "Post: the tray icon is in the system tray. Returns its `PopupMenu`.
          `open!` and `quit!` are `(fn [])`. `label` is the server-state text.
+         `version` is the Release Version (or \"dev\"), shown as a disabled line.
          `login` is nil or `{:label :enabled? :checked? :toggle!}`: the
          \"Start at login\" check item."
-  ([open! quit! label] (install-tray! open! quit! label nil))
-  ([open! quit! label login]
+  [open! quit! label version login]
   (let [raw (javax.imageio.ImageIO/read (io/resource "public/freememo/icon-192.png"))
         image (if (mac?)
                 (do (System/setProperty "apple.awt.enableTemplateImages" "true")
@@ -72,6 +77,7 @@
         item (fn [label f] (doto (java.awt.MenuItem. label) (.addActionListener (listener f))))]
     (.add menu (item "Open FreeMemo" open!))
     (.add menu (doto (java.awt.MenuItem. label) (.setEnabled false)))
+    (.add menu (doto (java.awt.MenuItem. (version-label version)) (.setEnabled false)))
     (when login
       (.add menu (doto (java.awt.CheckboxMenuItem. (:label login) (boolean (:checked? login)))
                    (.setEnabled (boolean (:enabled? login)))
@@ -82,7 +88,7 @@
       (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
         (.setImageAutoSize true)
         (.addActionListener (listener open!))))
-    menu)))
+    menu))
 
 (defn show-update!
   "Post: the tray menu has an \"Update available\" item first when `available`

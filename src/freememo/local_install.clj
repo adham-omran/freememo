@@ -151,7 +151,7 @@
         user-id (get account "user_id")]
     ((resolve-fn 'start!)
      {:origin (get account "origin")
-      :version ((resolve-fn 'version-from-env))
+      :version ((resolve-fn 'installed-version))
       :on-change (fn [available]
                    (when menu (tray/show-update! menu available))
                    ((resolve-fn 'bump-banners!) user-id))})))
@@ -286,6 +286,7 @@
                     (if (tray/headless?)
                       (println (str "FREEMEMO_OPEN_URL=" (open-url!)))
                       (do (reset! !menu (tray/install-tray! open! #(System/exit 0) (tray/server-label http-port nil)
+                                                   ((requiring-resolve 'freememo.config/release-version))
                                                    (login/login-item)))
                           (when-not no-tab (open!))))))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
