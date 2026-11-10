@@ -4,7 +4,6 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
-   [freememo.desktop-section :as desktop-section]
    [freememo.document-view :refer [DocumentColumns]]
    [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.bottom-panel :refer [BottomPanel]]
@@ -69,10 +68,7 @@
 
 (e/defn DocumentWorkspace [assistant-full-height?]
   (e/client
-    ;; A desktop local account has no assistant (15.4.4). A poem keeps the
-    ;; panel for its الشرح tab.
-    (if (and assistant-full-height?
-          (or dctx/is-poem? (e/server (desktop-section/account-ai?* dctx/user-id))))
+    (if assistant-full-height?
       (dom/div
         (dom/props {:class "document-workspace document-workspace--assistant-full"})
         (DocumentMainColumn false)

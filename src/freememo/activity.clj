@@ -38,7 +38,6 @@
    [taoensso.telemere :as tel]
    [freememo.db :as db]
    [freememo.commands :as commands]
-   [freememo.desktop-link :as link]
    [freememo.activity-registry :as registry])
   (:import [org.postgresql.util PGobject]))
 
@@ -118,12 +117,11 @@
   (and (keyword? t) (= "insufficient-credits" (name t))))
 
 (defn error-kind
-  "Why a failure happened, in the two cases the banner has an action for.
+  "Why a failure happened, in the case the banner has an action for.
 
    Pre : `error` is a string, a result map, an exception, or nil.
    Post: \"insufficient-credits\" when the failure is an empty balance,
-         \"needs-account\" when it is a feature that needs a freememo.net account
-         (the `link/sign-in-message` case), else nil. Total: never throws.
+         else nil. Total: never throws.
 
    Three shapes, because owners report in three ways. A result map is
    `{:insufficient-credits true}` or `{:error-type :insufficient-credits}`. An
@@ -137,7 +135,6 @@
     (let [chain (cause-chain error)]
       (cond
         (some #(credits-type? (:type (ex-data %))) chain) "insufficient-credits"
-        (some #(str/includes? (str (ex-message %)) link/sign-in-message) chain) "needs-account"
         :else nil))
 
     (map? error)
@@ -150,7 +147,6 @@
     :else
     (let [text (str error)]
       (cond
-        (str/includes? text link/sign-in-message) "needs-account"
         (str/starts-with? text insufficient-credits-text) "insufficient-credits"
         :else nil))))
 

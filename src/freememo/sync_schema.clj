@@ -30,26 +30,6 @@
   "Ids in one block (D2)."
   1000000)
 
-(def offline-id-floor
-  "2^50. A local account picks its own blocks at or above it (15.3.1), and
-   the server cuts its blocks below it (15.3.5)."
-  1125899906842624)
-
-(def offline-id-end
-  "2^53. The end of the offline range: every id below it is exact as a
-   JavaScript number (15.3.4)."
-  9007199254740992)
-
-(defn random-offline-block
-  "15.3.1 — a block at a random multiple of `block-size` in
-   [offline-id-floor, offline-id-end), from a cryptographic random source.
-   Post: {:start :end}, with offline-id-floor <= start < end <= offline-id-end."
-  []
-  (let [slots (quot (- offline-id-end offline-id-floor) block-size)
-        n (mod (.nextLong (java.security.SecureRandom.)) slots)
-        start (+ offline-id-floor (* n block-size))]
-    {:start start :end (+ start block-size)}))
-
 ;; ── Per-table facts ────────────────────────────────────────────────
 
 (def key-overrides

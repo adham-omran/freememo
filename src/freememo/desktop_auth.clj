@@ -152,16 +152,11 @@
 (defn allocate-block!
   "A fresh block of `schema/block-size` ids, bound to `token-id`.
    Inv: blocks come from one sequence, so two allocations never overlap
-        (1.2.3). The sequence never repeats a value, even across a rollback.
-        They stay below `schema/offline-id-floor`, so they never overlap a
-        block that a local account picked (15.3.5)."
+        (1.2.3). The sequence never repeats a value, even across a rollback."
   [conn user-id token-id]
   (let [n (:n (jdbc/execute-one! conn ["SELECT nextval('id_block_seq') AS n"] opts))
         start (+ schema/client-id-floor (* n schema/block-size))
         end (+ start schema/block-size)]
-    (when (> end schema/offline-id-floor)
-      (throw (ex-info "The server id blocks reached the offline id range"
-               {:type ::server-blocks-exhausted :start start})))
     (jdbc/execute! conn ["INSERT INTO id_blocks (block_start, block_end, user_id, token_id)
                           VALUES (?, ?, ?, ?)" start end user-id token-id])
     {:start start :end end}))
@@ -225,74 +220,6 @@
   [request]
   (if-let [{:keys [user-id token-id]} (bearer-token request)]
     (json-response 200 (allocate-block! db/ds user-id token-id))
-    (json-response 401 {:error "unauthorized"})))
-
-;; ── Offline blocks of a local account (15.5.7, 15.5.8) ─────────────
-
-(defn- offline-block? [{:strs [start end]}]
-  (and (integer? start) (integer? end)
-       (= (- end start) schema/block-size)
-       (<= schema/offline-id-floor start) (<= end schema/offline-id-end)
-       (zero? (mod (- start schema/offline-id-floor) schema/block-size))))
-
-(defn register-offline-blocks!
-  "15.5.8 — record the blocks a local account picked against `user-id` and
-   `token-id`, refusing each one that overlaps a block of another account.
-   Pre:  `blocks` is the desktop's list of {\"start\" \"end\"}. A malformed
-         block is refused, not thrown: the request is untrusted input.
-   Post: {:accepted [...] :refused [...]}, each block as it came in. A block
-         this account registered before is accepted again, so a retry gives
-         the same answer. Accepting a block that is new to the account opens
-         the token's merge window (15.7.2), once.
-   Inv:  `id_blocks` holds no two overlapping blocks. The table lock makes the
-         overlap check and the insert one step for every registrar."
-  [user-id token-id blocks]
-  (jdbc/with-transaction [tx db/ds]
-    (jdbc/execute! tx ["LOCK TABLE id_blocks IN SHARE ROW EXCLUSIVE MODE"])
-    (let [result (reduce
-                   (fn [acc {:strs [start end] :as block}]
-                     (if-not (offline-block? block)
-                       (update acc :refused conj block)
-                       (let [overlap (jdbc/execute! tx ["SELECT block_start, block_end, user_id FROM id_blocks
-                                                         WHERE block_start < ? AND block_end > ?" end start] opts)
-                             ours? (and (= 1 (count overlap))
-                                     (let [o (first overlap)]
-                                       (and (= (long (:user_id o)) (long user-id))
-                                            (= (long (:block_start o)) (long start)))))]
-                         (cond
-                           ours? (update acc :accepted conj block)
-                           (seq overlap) (update acc :refused conj block)
-                           :else (do (jdbc/execute! tx ["INSERT INTO id_blocks (block_start, block_end, user_id, token_id)
-                                                         VALUES (?, ?, ?, ?)" start end user-id token-id])
-                                     (-> acc (update :accepted conj block) (assoc :new? true)))))))
-                   {:accepted [] :refused [] :new? false}
-                   blocks)]
-      (when (:new? result)
-        (jdbc/execute! tx ["UPDATE desktop_tokens SET merge_opened_at = now()
-                            WHERE id = ? AND merge_opened_at IS NULL" token-id]))
-      (dissoc result :new?))))
-
-(defn offline-blocks-handler
-  "POST /api/desktop/offline-blocks (15.5.7). Allowed in every license state,
-   like the id-block route: the merge window it opens is what lets an account
-   with no license upload once (15.7)."
-  [request]
-  (if-let [{:keys [user-id token-id]} (bearer-token request)]
-    (let [blocks (get (request-params request) "blocks")]
-      (if (sequential? blocks)
-        (json-response 200 (register-offline-blocks! user-id token-id blocks))
-        (json-response 400 {:error "invalid_request"})))
-    (json-response 401 {:error "unauthorized"})))
-
-(defn merge-done-handler
-  "POST /api/desktop/merge-done (15.7.2). The desktop's merge upload ended, so
-   the token's merge window closes now rather than after its 7 days."
-  [request]
-  (if-let [{:keys [token-id]} (bearer-token request)]
-    (do (jdbc/execute! db/ds ["UPDATE desktop_tokens SET merge_closed_at = now()
-                               WHERE id = ? AND merge_opened_at IS NOT NULL AND merge_closed_at IS NULL"
-                              token-id])
-        (json-response 200 {:ok true}))
     (json-response 401 {:error "unauthorized"})))
 
 ;; ── Devices in Settings (3.2) ──────────────────────────────────────

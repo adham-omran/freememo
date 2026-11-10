@@ -23,7 +23,6 @@
    [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.desktop-section :refer [navigate-external! sign-in-path]]
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
    #?(:clj [freememo.activity :as activity])
@@ -39,7 +38,6 @@
 ;;   :subject-id  topic for Open, or nil
 ;;   :retry?      the Retry button shows
 ;;   :topup?      the Top up button shows
-;;   :signin?     the Sign in button shows
 ;;   :dismiss     nil (cannot be dismissed) | :failures | :removal
 ;; ---------------------------------------------------------------------------
 
@@ -66,7 +64,6 @@
    :subject-id subject-id
    :retry? (boolean retry?)
    :topup? (= "insufficient-credits" error-kind)
-   :signin? (= "needs-account" error-kind)
    :dismiss :failures})
 
 (defn collapsed-failure-banner
@@ -78,13 +75,11 @@
      :tone :danger
      :message (case kind
                 "insufficient-credits" (str n " actions need credits.")
-                "needs-account" (str n " actions need a FreeMemo account.")
                 (str n " actions failed."))
      :ids (mapv :id failures)
      :subject-id nil
      :retry? false
      :topup? (= "insufficient-credits" kind)
-     :signin? (= "needs-account" kind)
      :dismiss :failures}))
 
 (defn collapse-failures
@@ -125,7 +120,6 @@
            :subject-id nil
            :retry? false
            :topup? true
-           :signin? false
            :dismiss nil})
 
     removal
@@ -140,7 +134,6 @@
            :subject-id nil
            :retry? false
            :topup? false
-           :signin? false
            :dismiss :removal})))
 
 ;; ---------------------------------------------------------------------------
@@ -225,7 +218,7 @@
           (case (e/server (dismiss!* user-id kind ids)) (t)))))))
 
 (e/defn Banner
-  [{:keys [tone message ids subject-id retry? topup? signin? dismiss]} user-id navigate!]
+  [{:keys [tone message ids subject-id retry? topup? dismiss]} user-id navigate!]
   (e/client
     (dom/div
       (dom/props {:class (str "banner banner--" (name tone))
@@ -247,11 +240,6 @@
             (dom/props {:class "btn btn-sm btn-primary" :type "button"})
             (dom/text "Top up")
             (dom/On "click" (fn [_] (navigate! :settings)) nil)))
-        (when signin?
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-primary" :type "button"})
-            (dom/text "Sign in")
-            (dom/On "click" (fn [_] (navigate-external! sign-in-path)) nil)))
         (when (some? dismiss)
           (DismissAction dismiss ids user-id))))))
 

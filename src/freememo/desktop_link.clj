@@ -8,12 +8,7 @@
    reads them here: the sync client, the AI seam in `freememo.openrouter`, and
    the offline guard.
 
-   On the server peer every value stays nil and `require-online!` is a no-op.
-
-   A local account (plans/electron-local-db-sync.md §15) is a desktop with no
-   origin and no token. It still has a network, so the offline guard reads the
-   peer, not the origin (15.2.3), and `require-account!` refuses what needs
-   freememo.net (15.4.1)."
+   On the server peer every value stays nil and `require-online!` is a no-op."
   (:require [freememo.peer :as peer]))
 
 (defonce ^:private !link (atom {:origin nil :token nil :user-id nil :online? true}))
@@ -28,12 +23,6 @@
 (defn user-id [] (:user-id @!link))
 
 (defn online? [] (:online? @!link))
-
-(defn local-account?
-  "True on a desktop that has no FreeMemo account yet (15.2): it runs with no
-   token, and syncs nothing."
-  []
-  (and (peer/desktop?) (nil? (:token @!link))))
 
 (def ^:private !online-listeners (atom []))
 
@@ -66,17 +55,3 @@
   [feature]
   (when-let [message (offline-message feature)]
     (throw (ex-info message {:type ::offline :feature feature}))))
-
-(def sign-in-message
-  "15.4.1 — the text a local account sees for a feature that needs an account."
-  "Sign in to FreeMemo to use AI features.")
-
-(defn require-account!
-  "15.4.1 — refuse a feature that needs a FreeMemo account on a local account.
-   Post: returns nil on the server peer and on a signed-in desktop. Otherwise
-         throws an ex-info whose message is `sign-in-message` and whose data
-         is {:type ::sign-in-required}. `activity/error-kind` reads the message as
-         `needs-account`."
-  [feature]
-  (when (local-account?)
-    (throw (ex-info sign-in-message {:type ::sign-in-required :feature feature}))))

@@ -23,8 +23,7 @@
     (is (= 99 (:subject-id b)))
     (is (true? (:retry? b)))
     (is (= :failures (:dismiss b)))
-    (is (not (:topup? b)))
-    (is (not (:signin? b)))))
+    (is (not (:topup? b)))))
 
 (deftest a-run-is-named-by-its-label-and-an-action-by-its-what
   (is (= "Generating cards failed: x"
@@ -44,9 +43,9 @@
     (is (false? (:retry? (first banners))) "no Retry for many commands")))
 
 (deftest one-failure-of-a-kind-stays-single-and-shows-its-action
-  (let [[b] (fb/collapse-failures [(failure 1 :error-kind "needs-account" :subject-id 5)])]
+  (let [[b] (fb/collapse-failures [(failure 1 :error-kind "insufficient-credits" :subject-id 5)])]
     (is (= "failure-1" (:key b)))
-    (is (true? (:signin? b)))
+    (is (true? (:topup? b)))
     (is (= 5 (:subject-id b)))))
 
 (deftest collapsing-keeps-the-order-and-the-other-failures
@@ -54,7 +53,7 @@
                   [(failure 5 :error-kind "insufficient-credits")
                    (failure 4)
                    (failure 3 :error-kind "insufficient-credits")
-                   (failure 2 :error-kind "needs-account")
+                   (failure 2 :error-kind "other-kind")
                    (failure 1)])]
     (is (= ["kind-insufficient-credits" "failure-4" "failure-2" "failure-1"]
           (mapv :key banners)))

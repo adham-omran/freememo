@@ -2,7 +2,6 @@
   "Business logic for application settings."
   (:require
    [freememo.db :as db]
-   [freememo.desktop-link :as link]
    [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-sync-helpers :as anki-helpers]
    [freememo.card-models :as card-models]
@@ -416,12 +415,10 @@
       "basic")))
 
 (defn get-llm-enabled
-  "Whether AI features show for `user-id`. Off on a desktop local account,
-   which has no account to run them (plans/electron-local-db-sync.md 15.4.3)."
+  "Whether AI features show for `user-id`."
   [user-id]
   (let [v (db/get-setting user-id LLM_ENABLED)]
-    (and (not (link/local-account?))
-         (or (nil? v) (= "true" v)))))
+    (or (nil? v) (= "true" v))))
 
 (defn save-llm-enabled [user-id value]
   (try

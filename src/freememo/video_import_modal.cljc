@@ -22,7 +22,6 @@
    [freememo.activity-client :as ac]
    [freememo.navigation :as nav]
    [freememo.commands :as commands]
-   [freememo.desktop-section :as desktop-section]
    [freememo.document-picker :as picker]
    #?(:clj [freememo.option-queries :as options])
    [freememo.video-format :refer [format-bytes format-ms]]
@@ -99,11 +98,9 @@
    a zero-argument server call in a client `let` diverges between the two
    compilers and kills the websocket.
 
-   Post: boolean; true for an account that has never set it. False on a
-         desktop local account, which cannot transcribe (15.4.4)."
+   Post: boolean; true for an account that has never set it."
   [_refresh user-id]
-  #?(:clj (and (desktop-section/account-ai?* user-id)
-               (settings/get-video-transcribe-on-upload user-id))
+  #?(:clj (settings/get-video-transcribe-on-upload user-id)
      :cljs true))
 
 (defn save-transcribe-default!*
@@ -852,7 +849,7 @@
       ;; §15.3 4.1 — below the target controls, and inside the same staged-files
       ;; gate: the estimate has nothing to compute over until a file exists, and
       ;; an "Advanced" disclosure would bury a default that spends credits.
-      (when (and (seq files) (e/server (desktop-section/account-ai?* user-id)))
+      (when (seq files)
         (TranscriptionOption transcribe? busy? estimate-message user-id !transcribe-choice))
 
       ;; §14.3 3.4 — "existing" with nothing chosen is a state the UI can

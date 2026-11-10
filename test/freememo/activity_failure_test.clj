@@ -7,7 +7,6 @@
    columns, and skip when the port refuses connections."
   (:require [clojure.test :refer [deftest is testing]]
             [freememo.activity :as activity]
-            [freememo.desktop-link :as link]
             [freememo.db :as db]
             [freememo.user-state :as us]
             [next.jdbc :as jdbc]
@@ -18,7 +17,6 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest error-kind-reads-a-string
-  (is (= "needs-account" (activity/error-kind (str "Could not sync. " link/sign-in-message))))
   (is (= "insufficient-credits"
         (activity/error-kind "Out of credits. Top up in Settings to keep using AI features.")))
   (is (nil? (activity/error-kind "Network error")))
@@ -29,7 +27,6 @@
   (is (= "insufficient-credits" (activity/error-kind {:error-type :insufficient-credits})))
   (is (= "insufficient-credits"
         (activity/error-kind {:error "Out of credits. Top up in Settings."})))
-  (is (= "needs-account" (activity/error-kind {:error link/sign-in-message})))
   (is (nil? (activity/error-kind {:error "Network error"})))
   (is (nil? (activity/error-kind {:ok? false}))))
 
@@ -42,8 +39,6 @@
           (activity/error-kind
             (RuntimeException. "wrapped"
               (ex-info "gate" {:type :freememo.kg-llm/insufficient-credits}))))))
-  (is (= "needs-account"
-        (activity/error-kind (ex-info link/sign-in-message {:type ::sign-in-required}))))
   (is (nil? (activity/error-kind (RuntimeException. "boom")))))
 
 (deftest error-message-reads-every-shape
@@ -154,8 +149,8 @@
       1
       (fn [uid]
         (let [id (activity/start! uid "anki-reconcile" "collection" {:phase "writing"})]
-          (activity/terminate! uid id "failure" {:error link/sign-in-message})
-          (is (= "needs-account" (:error_kind (row id))))
+          (activity/terminate! uid id "failure" {:error "Out of credits. Top up in Settings to keep using AI features."})
+          (is (= "insufficient-credits" (:error_kind (row id))))
           (is (= [id] (mapv :id (activity/unseen-failures uid)))))))))
 
 (deftest acknowledge-sets-seen-at-and-bumps-once
