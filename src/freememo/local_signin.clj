@@ -136,8 +136,28 @@
           "<p><a class=\"again\" href=\"/\">Try again</a></p>")))))
 
 (def ^:private progress-script
+  ;; Two measures, because a full download has two phases. `total-bytes` counts
+  ;; only the stored files (sync-server/account-bytes), and the pages that carry
+  ;; files come first. Windows test, 2026-11-11 (93,191 items, 861 MB): at 4 min
+  ;; 3% of the items and 27% of the bytes; at 6 min 22% and 100%; then 800 items
+  ;; a second to the end. So the bar is the mean of the two fractions, the text
+  ;; names both, and the speed is MB/s while files arrive, else items/s.
   "var out=document.getElementById('out'),again=document.getElementById('again'),bar=document.getElementById('bar');
+   var lastB=null,lastR=null,rateB=null,rateR=null;
    function fmt(n){return (n||0).toLocaleString()}
+   function size(b){var m=b/1e6;return m>=1000?(m/1000).toFixed(2)+' GB':(m>=10?Math.round(m):m.toFixed(1))+' MB'}
+   function step(last,rate,v,now){
+     if(last&&v>last.v){var r=(v-last.v)/((now-last.t)/1000);rate=rate==null?r:rate*0.6+r*0.4}
+     if(!last||v!==last.v){last={v:v,t:now}}
+     return [last,rate]
+   }
+   function speed(db,dr){
+     var now=Date.now(),b=step(lastB,rateB,db,now),r=step(lastR,rateR,dr,now);
+     lastB=b[0];rateB=b[1];lastR=r[0];rateR=r[1];
+     if(rateB!=null&&now-lastB.t<10000)return ', at '+size(rateB)+'/s';
+     if(rateR!=null&&now-lastR.t<10000)return ', at '+fmt(Math.round(rateR))+' items/s';
+     return ''
+   }
    async function tick(){
      try{
        var r=await fetch('/api/desktop/status',{credentials:'same-origin'});
@@ -146,12 +166,20 @@
        var p=s.progress||{};
        if(s.error||s.state==='error'||s.state==='offline'){
          out.textContent=s.error||'The download stopped. Check the connection.';
-         again.hidden=false;bar.hidden=true
+         again.hidden=false;bar.hidden=true;rateB=rateR=null
        }else{
          again.hidden=true;
-         var total=p['total-rows'];
-         if(total){bar.hidden=false;bar.max=total;bar.value=Math.min(p.downloaded||0,total)}else{bar.hidden=true}
-         out.textContent=total?('Downloaded '+fmt(p.downloaded)+' of '+fmt(total)+' items'):'Starting the first download'
+         var rows=p['total-rows'],bytes=p['total-bytes'],db=p['downloaded-bytes']||0,dr=p.downloaded||0;
+         var fr=rows?Math.min(dr/rows,1):null,fb=bytes?Math.min(db/bytes,1):null;
+         var f=(fr!=null&&fb!=null)?(fr+fb)/2:(fr!=null?fr:fb);
+         if(f==null){bar.hidden=true;out.textContent='Starting the first download'}
+         else{
+           bar.hidden=false;bar.max=1000;bar.value=Math.round(f*1000);
+           var parts=[];
+           if(rows)parts.push(fmt(dr)+' of '+fmt(rows)+' items');
+           if(bytes)parts.push(size(db)+' of '+size(bytes)+' of files');
+           out.textContent='Downloaded '+parts.join(' and ')+speed(db,dr)
+         }
        }
      }catch(e){}
      setTimeout(tick,1000)

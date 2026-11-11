@@ -100,4 +100,6 @@
 (deftest the-first-download-page-has-a-bar-that-the-poll-fills
   (let [body (:body (signin/progress-page))]
     (is (re-find #"<progress id=\"bar\" hidden" body) "hidden until the totals come")
-    (is (re-find #"bar\.max=total;bar\.value=" body))))
+    (is (re-find #"\(fr\+fb\)/2" body) "the bar is the mean of the item and the byte fractions")
+    (is (re-find #"items/s" body) "items/s once the files are down")
+    (is (re-find #"'/s'" body) "MB/s while files arrive")))
