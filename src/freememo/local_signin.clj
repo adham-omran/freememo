@@ -136,7 +136,7 @@
           "<p><a class=\"again\" href=\"/\">Try again</a></p>")))))
 
 (def ^:private progress-script
-  "var out=document.getElementById('out'),again=document.getElementById('again');
+  "var out=document.getElementById('out'),again=document.getElementById('again'),bar=document.getElementById('bar');
    function fmt(n){return (n||0).toLocaleString()}
    async function tick(){
      try{
@@ -146,10 +146,12 @@
        var p=s.progress||{};
        if(s.error||s.state==='error'||s.state==='offline'){
          out.textContent=s.error||'The download stopped. Check the connection.';
-         again.hidden=false
+         again.hidden=false;bar.hidden=true
        }else{
          again.hidden=true;
-         out.textContent=p['total-rows']?('Downloaded '+fmt(p.downloaded)+' of '+fmt(p['total-rows'])+' items'):'Starting the first download'
+         var total=p['total-rows'];
+         if(total){bar.hidden=false;bar.max=total;bar.value=Math.min(p.downloaded||0,total)}else{bar.hidden=true}
+         out.textContent=total?('Downloaded '+fmt(p.downloaded)+' of '+fmt(total)+' items'):'Starting the first download'
        }
      }catch(e){}
      setTimeout(tick,1000)
@@ -162,6 +164,7 @@
          /api/desktop/status and opens the library when it ends."
   []
   (page (str "<h1>Getting your library</h1>"
+          "<progress id=\"bar\" hidden style=\"width:100%;height:1rem\"></progress>"
           "<p id=\"out\" role=\"status\">Starting</p>"
           "<p><button id=\"again\" type=\"button\" hidden>Try again</button></p>")
     {:script progress-script}))

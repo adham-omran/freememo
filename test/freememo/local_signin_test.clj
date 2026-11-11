@@ -96,3 +96,8 @@
         body (:body (handler {:request-method :get :uri "/callback" :query-string (str "error=access_denied&state=" state)}))]
     (is (str/includes? body "not allowed"))
     (is (= 400 (:status (callback f state))))))
+
+(deftest the-first-download-page-has-a-bar-that-the-poll-fills
+  (let [body (:body (signin/progress-page))]
+    (is (re-find #"<progress id=\"bar\" hidden" body) "hidden until the totals come")
+    (is (re-find #"bar\.max=total;bar\.value=" body))))
