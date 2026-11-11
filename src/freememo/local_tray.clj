@@ -2,8 +2,8 @@
   "The tray icon and the browser opener of a Local Install
    (plans/local-install.md, \"The tray\").
 
-   The menu holds, in order: \"Update available\" (only while the update feed
-   shows a newer version), \"Open FreeMemo\", a disabled line with the server
+   The menu holds, in order: \"Restart to update\" (only after an App Update jar
+   is verified), \"Update available\" (only while a newer Release needs an installer), \"Open FreeMemo\", a disabled line with the server
    state, \"Start at login\" (macOS and Windows, `freememo.local-login`), and
    \"Quit\". On macOS the icon is a template image (`template-image`)."
   (:require [clojure.java.io :as io]
@@ -104,3 +104,18 @@
           (.addActionListener (reify java.awt.event.ActionListener
                                 (actionPerformed [_ _] (open-browser! url)))))
         0))))
+
+(defn show-restart!
+  "Post: the tray menu has a \"Restart to update\" item first, and the old one
+   is gone. Call it only after the jar is verified (`freememo.app-update`).
+   A click runs `restart!`, a `(fn [])`."
+  [^java.awt.PopupMenu menu restart!]
+  (let [label "Restart to update"]
+    (doseq [i (reverse (range (.getItemCount menu)))
+            :when (= label (.getLabel (.getItem menu i)))]
+      (.remove menu (int i)))
+    (.insert menu
+      (doto (java.awt.MenuItem. label)
+        (.addActionListener (reify java.awt.event.ActionListener
+                              (actionPerformed [_ _] (restart!)))))
+      0)))

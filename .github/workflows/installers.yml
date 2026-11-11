@@ -11,8 +11,14 @@
 # be an older commit than the private one when the newest commits touch only
 # excluded paths (docs/adr/0002).
 #
-# A failed job leaves the release a draft and fails the run. Nothing is signed
-# yet (ticket 11 adds signing).
+# A failed job leaves the release a draft and fails the run. The installers are
+# not code signed yet (ticket 11). The app jar is signed (ticket 19): the release
+# job signs it with the Ed25519 key in the secret APP_UPDATE_SIGNING_KEY and
+# attaches freememo-<Release Version>-app.jar.sig. The matching public key is
+# tools/installer/app-update-public-key.b64, which build.mjs bakes into each
+# installer. Until that file exists App Update is off and the jar stays unsigned.
+# Once it exists the release job refuses to publish without the signature.
+# tools/installer/app-update-wizard.sh makes the key pair.
 #
 # Every file that this workflow uses is in a path that tools/publish-clean/EXCLUDED
 # keeps: .github/, tools/release/, tools/installer/, src/, resources/, deps.edn.
@@ -195,12 +201,44 @@ jobs:
         with:
           path: assets
           merge-multiple: true
+      # The signature covers a short text, not the jar bytes (see
+      # src/freememo/app_update.clj): "freememo-app-jar", the version and the SHA-256 of the jar.
+      - name: Sign the app jar
+        env:
+          APP_UPDATE_SIGNING_KEY: ${{ secrets.APP_UPDATE_SIGNING_KEY }}
+        run: |
+          pub=tools/installer/app-update-public-key.b64
+          if [ -z "$APP_UPDATE_SIGNING_KEY" ]; then
+            if [ -s "$pub" ]; then
+              echo "The public key $pub exists, but the secret APP_UPDATE_SIGNING_KEY is empty. Refusing to publish an unsigned app jar."
+              exit 1
+            fi
+            echo "App Update is off: there is no public key and no signing secret yet."
+            exit 0
+          fi
+          key="$RUNNER_TEMP/app-update-key.pem"
+          (umask 077; printf '%s\n' "$APP_UPDATE_SIGNING_KEY" > "$key")
+          jar="assets/$(node tools/installer/asset-names.mjs "$VERSION" app)"
+          sig="assets/$(node tools/installer/asset-names.mjs "$VERSION" sig)"
+          printf 'freememo-app-jar\n%s\n%s\n' "$VERSION" "$(sha256sum "$jar" | cut -d' ' -f1)" > statement.txt
+          openssl pkeyutl -sign -rawin -inkey "$key" -in statement.txt -out "$sig"
+          if [ -s "$pub" ]; then
+            openssl pkey -in "$key" -pubout -outform DER | base64 -w0 > derived.b64
+            if [ "$(tr -d '[:space:]' < "$pub")" != "$(cat derived.b64)" ]; then
+              echo "The secret does not match $pub."; rm -f "$key"; exit 1
+            fi
+          fi
+          rm -f "$key"
+          echo "signed $sig"
       - name: Check that every asset exists
         run: |
           missing=0
           for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
             if [ -s "assets/$name" ]; then echo "found $name"; else echo "MISSING $name"; missing=1; fi
           done
+          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
+          if [ -s "assets/$sig" ]; then echo "found $sig"
+          elif [ -s tools/installer/app-update-public-key.b64 ]; then echo "MISSING $sig"; missing=1; fi
           [ "$missing" = 0 ]
       - name: Attach the assets to the draft
         run: |
@@ -208,11 +246,15 @@ jobs:
           for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
             gh release upload "v$VERSION" "assets/$name" --clobber
           done
+          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
+          if [ -s "assets/$sig" ]; then gh release upload "v$VERSION" "assets/$sig" --clobber; fi
       # The draft stays a draft unless the release itself lists all four names.
       - name: Check the draft lists every asset
         run: |
           gh release view "v$VERSION" --json assets --jq '.assets[].name' | sort > attached.txt
           node tools/installer/asset-names.mjs "$VERSION" | sort > expected.txt
+          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
+          if [ -s "assets/$sig" ]; then echo "$sig" >> expected.txt; sort -o expected.txt expected.txt; fi
           cat attached.txt
           comm -13 attached.txt expected.txt > absent.txt
           if [ -s absent.txt ]; then echo "not attached:"; cat absent.txt; exit 1; fi

@@ -13,7 +13,9 @@
    Local Install side: the launcher calls `start!`. It reads the feed from the
    account's origin at start and every few hours. When the feed holds a newer
    version, `banner-state` says so and the web app and the tray show \"Update
-   available\". A feed that cannot be read shows nothing and logs one line.
+   available\". Since ticket 19 only the tray shows it, and only when the new Release needs
+   an installer; the web app shows no such banner, and an App Update downloads by itself
+   (`freememo.app-update`). A feed that cannot be read shows nothing and logs one line.
 
    `banner-state` also says when the server refused sync for an old Sync Protocol
    (the sync state `:update-required`). The web app then shows \"Update to keep
@@ -202,14 +204,19 @@
 (defn refresh!
   "Read the feed once.
    Pre:  `opts` has `:origin`, `:version` (this install's version), and may have
-         `:on-change` (a fn of the new `:available`).
+         `:on-change` (a fn of the new `:available`) and `:on-feed` (a fn of the
+         feed map, or nil when it cannot be read; the App Update check, ticket 19).
    Post: `banner-state` is current. A feed that cannot be read shows nothing: it
          clears an earlier `:available` and logs one line."
-  [{:keys [origin version on-change]}]
-  (let [now (try (available (fetch-feed origin) version (os-key))
-                 (catch Throwable e
-                   (log "cannot read the update feed: " (or (ex-message e) (str e)))
-                   nil))
+  [{:keys [origin version on-change on-feed]}]
+  (let [feed-map (try (fetch-feed origin)
+                      (catch Throwable e
+                        (log "cannot read the update feed: " (or (ex-message e) (str e)))
+                        nil))
+        now (when feed-map (available feed-map version (os-key)))
+        _ (when on-feed
+            (try (on-feed feed-map)
+                 (catch Throwable e (log "app update callback failed: " (or (ex-message e) (str e))))))
         [before _] (swap-vals! !state assoc :available now)]
     (when (not= (:available before) now)
       (when on-change
