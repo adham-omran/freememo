@@ -98,7 +98,7 @@ jobs:
           version="$VERSION"
           mkdir -p meta
           sha=$(sha256sum target/app.jar | cut -d' ' -f1)
-          clojure -M -e "(require 'freememo.desktop-version) (println (cheshire.core/generate-string {:release_version \"$version\" :runtime freememo.desktop-version/runtime :sync_protocol freememo.desktop-version/sync-protocol :app_jar_sha256 \"$sha\"}))" > "meta/$(tools/release/asset-names.sh "$version" release)"
+          clojure -M -e "(require 'cheshire.core 'freememo.desktop-version) (println (cheshire.core/generate-string {:release_version \"$version\" :runtime freememo.desktop-version/runtime :sync_protocol freememo.desktop-version/sync-protocol :app_jar_sha256 \"$sha\"}))" > "meta/$(tools/release/asset-names.sh "$version" release)"
           cat meta/*.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
