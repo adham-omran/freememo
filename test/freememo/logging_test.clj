@@ -77,3 +77,15 @@
       (install!))
     (is (identical? (get-in @handler-options [:console :output-fn])
                     (get-in @handler-options [:file :output-fn])))))
+
+(deftest a-desktop-writes-no-log-file-in-the-working-directory
+  ;; A macOS app opened from Finder runs in `/`. The file handler threw
+  ;; there and stopped the Local Install's start (v26.11.15171).
+  (let [added (atom [])
+        install! @(requiring-resolve 'freememo.logging/install-loki-log-handlers!)]
+    (with-redefs [freememo.peer/desktop? (constantly true)
+                  tel/handler:console (fn [_] (fn ([] nil) ([_] nil)))
+                  tel/handler:file (fn [_] (throw (ex-info "Unable to prepare writable `java.io.File`" {})))
+                  tel/add-handler! (fn [id & _] (swap! added conj id))]
+      (install!))
+    (is (= [:default/console] @added))))

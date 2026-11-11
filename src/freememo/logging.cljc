@@ -4,6 +4,7 @@
             #?@(:clj [[cheshire.core :as json]
                       [clojure.java.io :as io]
                       [freememo.config :as config]
+                      [freememo.peer :as peer]
                       [taoensso.telemere.postal :as tel-postal]])))
 
 ;; Plain defn wrappers safe for use inside e/defn bodies in .cljc files.
@@ -212,17 +213,22 @@
 #?(:clj
    (defn- install-loki-log-handlers!
      "Install one-line JSON handlers for container and rotated file logs.
+      A desktop gets no file handler: its launcher writes the console output
+      to {data}/freememo.log. `logs/` is relative to the working directory,
+      and a macOS app opened from Finder runs in `/`, where the handler
+      threw and stopped the start (v26.11.15171).
       Post: repeated calls replace both handlers instead of duplicating them."
      []
      (tel/add-handler! :default/console
        (tel/handler:console {:output-fn loki-json-output})
        {:async nil})
-     (let [log-dir (io/file "logs")]
-       (.mkdirs log-dir)
-       (tel/add-handler! :log-file
-         (tel/handler:file
-           {:path "logs/app.log"
-            :output-fn loki-json-output})))))
+     (when-not (peer/desktop?)
+       (let [log-dir (io/file "logs")]
+         (.mkdirs log-dir)
+         (tel/add-handler! :log-file
+           (tel/handler:file
+             {:path "logs/app.log"
+              :output-fn loki-json-output}))))))
 
 #?(:clj
    (defn- alert-subject-fn
