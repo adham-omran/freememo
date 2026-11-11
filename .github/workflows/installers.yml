@@ -36,9 +36,13 @@ on:
 permissions:
   contents: write
 
+# A newer tag cancels the run in progress: only the newest release matters, and
+# its commit holds every older change. One run at a time also keeps the publish
+# and prune steps of two runs apart. The cancelled run's draft stays until the
+# next prune.sh, which deletes every release but the one it keeps.
 concurrency:
   group: installers
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   JAVA_VERSION: '25'
