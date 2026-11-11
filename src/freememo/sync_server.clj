@@ -176,6 +176,23 @@
               (do (.renameTo tmp target) (json-response 200 {:ok true}))
               (do (.delete tmp) (json-response 400 {:error "hash-mismatch"})))))))))
 
+(defn upload-summary
+  "What a Loki query needs to place an upload: the rows per table and the
+   lowest and highest `id` key. It holds no row content.
+   Post: {:counts {table n} :min-id n-or-nil :max-id n-or-nil}."
+  [rows]
+  (let [ids (keep #(let [id (get-in % ["k" "id"])] (when (number? id) (long id))) rows)]
+    {:counts (frequencies (map #(get % "t") rows))
+     :min-id (when (seq ids) (apply min ids))
+     :max-id (when (seq ids) (apply max ids))}))
+
+(defn log-upload!
+  "Write one info line for a finished upload of `rows` by `user-id`."
+  [user-id rows]
+  (tel/log! {:level :info :id ::sync-upload
+             :data (assoc (upload-summary rows) :user-id user-id)}
+    "Desktop sync upload applied"))
+
 (defn upload-handler
   "Step 3. Apply the desktop's pending rows in one transaction (2.4).
    Post: {:xid :rejected :remaps :corrections}. `xid` is this transaction,
@@ -200,6 +217,7 @@
                                   (:corrections result))})))]
         (doseq [row (get body "rows" []) [_ b] (get row "b")]
           (some-> (blob-file user-id (get b "sha256")) .delete))
+        (log-upload! user-id (get body "rows" []))
         (when (seq (:touched result))
           (commands/bump-channels! user-id (apply/channels-for (:touched result))))
         (json-response 200 {:xid xid
