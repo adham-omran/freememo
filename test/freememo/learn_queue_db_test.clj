@@ -5,7 +5,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            [freememo.db :as db])
+            [freememo.db :as db]
+            [freememo.learn-page :as learn-page])
   (:import (java.security MessageDigest)))
 
 (def ^:private opts {:builder-fn rs/as-unqualified-lower-maps})
@@ -116,6 +117,29 @@
             (testing (str "window " offset "+" limit)
               (is (nil? (:error got)))
               (is (= (subvec full from to) (:rows got))))))
+        (finally (cleanup! u))))))
+
+(deftest a-window-row-names-its-source-document
+  ;; plans/learn-queue-source-lines.md: line 1 of a queue row is the title of
+  ;; the topic at the top of the tree, at any depth.
+  (when (db-up?)
+    (db/setup-schema)
+    (let [u (new-user!)]
+      (try
+        (let [root (add-topic! u {:title "The Selfish Gene" :due 4})
+              child (add-topic! u {:title "Chapter 1" :parent-id root :due 4})
+              grandchild (add-topic! u {:title "Replicators" :parent-id child})
+              own-root (add-topic! u {:title "Lone article"})
+              by-id (into {} (map (juxt :topics/id identity))
+                      (:rows (db/get-queue-display-rows u [grandchild own-root])))]
+          (is (= "The Selfish Gene" (:topics/source_document_title (by-id grandchild))))
+          (is (= "Lone article" (:topics/source_document_title (by-id own-root))))
+          (testing "the queue row puts the Source Document on line 1, but not for a Source Document"
+            (let [rows (vals (learn-page/queue-window-rows nil u [grandchild own-root] 0 2))
+                  row-of (into {} (map (juxt :id identity)) rows)]
+              (is (= "The Selfish Gene" (:source-document (row-of grandchild))))
+              (is (nil? (:source-document (row-of own-root))))
+              (is (= "Lone article" (:display-title (row-of own-root)))))))
         (finally (cleanup! u))))))
 
 (deftest topics-has-the-analyze-scale-factor

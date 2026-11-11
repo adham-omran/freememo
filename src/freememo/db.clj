@@ -9452,7 +9452,17 @@
   "t.id, t.parent_id, t.kind, t.title, t.priority,
                      t.next_review_at, t.interval_days, t.a_factor,
                      t.status, t.content_preview,
-                     s.url, s.title, s.csl_type, s.container_title")
+                     s.url, s.title, s.csl_type, s.container_title,
+                     src_doc.title AS source_document_title")
+
+(def ^:private learning-queue-display-joins
+  "The joins that `learning-queue-display-columns` reads. `src_doc` is the
+   topic's Source Document, the topic at the top of its tree (CONTEXT.md,
+   § Topics). A topic with no parent joins itself. The Learn queue row shows its
+   title on line 1 (plans/learn-queue-source-lines.md). pgjdbc keys the column
+   by its base table, so it arrives as `:topics/source_document_title`."
+  "LEFT JOIN sources s ON s.id = t.source_id
+   LEFT JOIN topics src_doc ON src_doc.id = freememo_root_topic_id(t.id)")
 
 (defn get-learning-queue
   "Due topics for incremental reading, with every display column. The Learn
@@ -9483,7 +9493,9 @@
    and :kind off these rows, and shipping whole document bodies down the queue
    cost one body per review step.
    Joins `sources` to surface bibliography fields (source_url, source_title,
-   source_csl_type, source_container); NULL when the topic has no source_id.
+   source_csl_type, source_container). NULL when the topic has no source_id.
+   Also joins the Source Document through freememo_root_topic_id, for the
+   `source_document_title` column (plans/learn-queue-source-lines.md).
 
    Pre : `user-id` identifies an existing user.
    Post: `{:rows [row …] :error nil}`, or `{:rows [] :error message}` when the
@@ -9497,7 +9509,7 @@
     {:rows (jdbc/execute! ds
              [(str "SELECT " learning-queue-display-columns "
               FROM topics t
-              LEFT JOIN sources s ON s.id = t.source_id
+              " learning-queue-display-joins "
               " learning-queue-where-sql " " learning-queue-order-sql)
               user-id])
      :error nil}
@@ -9546,7 +9558,7 @@
                     (jdbc/execute! ds
                       [(str "SELECT " learning-queue-display-columns "
                               FROM topics t
-                              LEFT JOIN sources s ON s.id = t.source_id
+                              " learning-queue-display-joins "
                               WHERE t.user_id = ? AND t.id = ANY(?)")
                        user-id (int-array ids)]))]
         {:rows (into [] (keep by-id) ids) :error nil}))

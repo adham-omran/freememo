@@ -92,6 +92,20 @@ _Avoid_: Mixed-form retry, copied exam
 The existing timed assessment over short knowledge-graph questions.
 _Avoid_: Exam
 
+## Topics
+
+**Source Document**:
+The topic at the top of a topic tree. An import makes one for each PDF, EPUB
+book, web article, Wikipedia page or video. Every topic in the tree belongs to
+it. A topic with no parent is its own Source Document. A Material can name a
+Source Document or a topic inside one.
+_Avoid_: Material, root, book, document (alone)
+
+**Parent Topic**:
+The topic directly above a topic in its tree. For a topic one level down, the
+Parent Topic is also the Source Document.
+_Avoid_: Source Document, container
+
 ## Learn
 
 **Learn Session**:

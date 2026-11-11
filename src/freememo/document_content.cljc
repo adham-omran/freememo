@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.document-view :refer [DocumentToolbars]]
+   [freememo.source-line-bar :refer [SourceLineBar]]
    [freememo.document-workspace :refer [DocumentWorkspace]]
    [freememo.live-doc-wizard :refer [LiveDocEmptyState]]
    #?(:clj [freememo.settings :as settings])))
@@ -91,6 +92,10 @@
       ;; Above-the-content chrome: command bar, PDF toolbar, biblio auto-open
       ;; + modal. Forward the whole prop map (no new literal here).
       (DocumentToolbars)
+
+      ;; Pinned between the toolbars and the body, so it stays in view when
+      ;; the body scrolls (plans/topic-view-source-line.md).
+      (SourceLineBar)
 
       (DocumentWorkspace assistant-full-height?)))
     )))

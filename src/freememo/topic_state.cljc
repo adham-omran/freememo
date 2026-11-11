@@ -22,6 +22,7 @@
    [clojure.string :as str]
    [freememo.topic-kinds :as topic-kinds]
    [freememo.util :as util]
+   [freememo.source-line :as source-line]
    #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])
@@ -105,6 +106,14 @@
             :root-topic-id root-id
             :title (:topics/title topic)
             :root-title (or (:topics/title root) (:topics/title topic))
+            ;; The line above the body (plans/topic-view-source-line.md).
+            ;; Decided here, where the body preview is at hand, so only two
+            ;; short strings cross the wire.
+            :source-line (source-line/topic-line
+                           {:root? (= root-id topic-id)
+                            :source-document (:topics/title (or root topic))
+                            :title (:topics/title topic)
+                            :body-text (:topics/content_preview topic)})
             :status (or (:topics/status topic) "active")})))
      :cljs nil))
 
@@ -461,6 +470,7 @@
        :code-has-source? (boolean (:code-has-source? overview))
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
        :pdf-page-count pdf-page-count :root-topic-id root-topic-id
+       :source-line (:source-line overview)
        :extract-status (:status overview) :static-content static-content
        :static-content-topic-id static-content-topic-id
        :initial-page initial-page :initial-layout initial-layout :initial-focus? initial-focus?

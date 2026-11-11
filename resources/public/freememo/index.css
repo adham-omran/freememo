@@ -2878,7 +2878,8 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     white-space: nowrap;
     opacity: 0;
 }
-.nav-rail__label > span { overflow: hidden; text-overflow: ellipsis; }
+/* The label clips. Its spans must not: iOS Safari paints no text in a clipped
+   span when the phone drawer turns visible (plans/phone-drawer-labels.md). */
 /* The "Local" mark of a Local Install, beside the wordmark. */
 .nav-rail__local-mark {
     flex: 0 0 auto;
@@ -6788,10 +6789,36 @@ form[aria-busy="true"] {
     white-space: nowrap;
 }
 
+/* Line 1 is the Source Document, line 2 the title
+   (plans/learn-queue-source-lines.md). The row height comes from
+   learn-page/queue-row-height: 48px here, 64px on a phone. */
+.learn-queue-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+}
+
+.learn-queue-source {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--color-text-secondary);
+}
+
+.learn-queue-source--none {
+    display: none;
+}
+
 .learn-queue-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 18px;
 }
 
 .learn-queue-due,
@@ -6808,6 +6835,24 @@ form[aria-busy="true"] {
     justify-content: flex-end;
     padding-inline: 10px;
     color: var(--color-text-secondary);
+}
+
+/* A phone drops the Date column and gives the title two lines. It comes after the
+   column rules above, so that it wins over them. */
+@media (max-width: 600px) {
+    .learn-queue-header th:last-child,
+    .learn-queue-date {
+        display: none;
+    }
+
+    .learn-queue-title {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
 }
 
 .learn-queue-empty,
@@ -10212,3 +10257,75 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
   background: var(--color-warning-bg); color: var(--color-warning-dark);
 }
 .curriculum-generation-notes { font-size: 13px; }
+
+/* The Source Document line between the toolbars and the body of the Topic View
+   (source_line_bar.cljc, plans/topic-view-source-line.md). It does not scroll
+   with the body. Closed, it is one line and each part ends with "…". Open, it
+   wraps to show the full text. */
+.source-line {
+    flex-shrink: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 3px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--color-bg-subtle);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 16px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.source-line__doc,
+.source-line__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The Source Document keeps at least a share of the line beside a long title. */
+.source-line__doc {
+    flex: 0 1 auto;
+    max-width: 60%;
+    font-weight: 600;
+}
+
+.source-line__title {
+    flex: 1 1 0;
+}
+
+.source-line__sep {
+    flex-shrink: 0;
+}
+
+.source-line--no-title .source-line__sep,
+.source-line--no-title .source-line__title {
+    display: none;
+}
+
+.source-line--no-title .source-line__doc {
+    max-width: 100%;
+}
+
+.source-line--open {
+    flex-wrap: wrap;
+}
+
+.source-line--open .source-line__doc,
+.source-line--open .source-line__title {
+    max-width: 100%;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.source-line:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}

@@ -26,6 +26,9 @@
 (e/declare kind)
 (e/declare pdf-root-id)
 (e/declare root-topic-id)
+;; {:source-document s :title t-or-nil}, from freememo.source-line/topic-line.
+;; The Source Document line above the body reads it.
+(e/declare source-line)
 (e/declare bib-topic-id)
 (e/declare queue-ctx)
 (e/declare origin)
