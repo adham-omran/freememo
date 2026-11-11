@@ -14,9 +14,13 @@
      sees every header. It may send any Host and Origin header.
    - `stop!` (SIGTERM, the same path as the tray's Quit), `kill!` (SIGKILL).
 
-   A JVM loads the app from source, so each start takes about a minute. The
-   classpath comes from `clojure -Spath` once per run. The client build must
-   exist: `clj -X:build:prod build-client`."
+   The harness compiles `prod` and `freememo.local-install` ahead of time (AOT)
+   once, into `<cache>/classes-<source hash>`, and every JVM starts from those
+   classes. The hash covers every file in `src`, `src-prod` and `deps.edn`, so
+   a source change gives a new directory and a new compile, and no start uses
+   stale classes (`source-key`). The cache is `$FM_SEAM1_CACHE`, else
+   `~/.cache/fm-seam1`. The classpath comes from `clojure -Spath` once per run.
+   The client build must exist: `clj -X:build:prod build-client`."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -45,11 +49,57 @@
   (when (.exists f)
     (doseq [c (reverse (file-seq f))] (.delete ^File c))))
 
-(def ^:private classpath
+(defn source-key
+  "Post: a hex SHA-256 over the path and bytes of every file under `roots`
+         (Files or Strings, in sorted order). A change to any file, a new file
+         or a removed file gives another key."
+  [roots]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")]
+    (doseq [^File f (sort-by #(.getPath ^File %)
+                      (filter #(.isFile ^File %) (mapcat (comp file-seq io/file) roots)))]
+      (.update md (.getBytes (.getPath f) "UTF-8"))
+      (.update md (Files/readAllBytes (.toPath f))))
+    (apply str (map #(format "%02x" %) (.digest md)))))
+
+(defn- cache-dir ^File []
+  (io/file (or (System/getenv "FM_SEAM1_CACHE")
+             (str (System/getProperty "user.home") "/.cache/fm-seam1"))))
+
+(def ^:private base-classpath
   (delay (-> (ProcessBuilder. ^java.util.List ["clojure" "-Spath" "-A:prod:local-install"])
            (.redirectErrorStream false)
            (.start)
            (#(let [out (slurp (.getInputStream %))] (.waitFor %) (str/trim out))))))
+
+(defn- compile-classes!
+  "Post: `dir` holds the AOT classes of `prod` and `freememo.local-install`.
+         The compile runs in a temporary directory, and a rename publishes it,
+         so a stopped compile leaves no half-filled directory."
+  [^File dir]
+  (let [tmp (File. (.getParentFile dir) (str (.getName dir) ".tmp"))
+        _ (delete-tree! tmp)
+        _ (.mkdirs tmp)
+        form (str "(binding [*compile-path* " (pr-str (.getPath tmp)) "] (compile 'prod) (compile 'freememo.local-install))")
+        pb (doto (ProcessBuilder. ^java.util.List
+                   ["java" "-Xss4m" "-cp" (str (.getPath tmp) File/pathSeparator @base-classpath)
+                    "clojure.main" "-e" form])
+             (.directory (io/file (System/getProperty "user.dir")))
+             (.redirectErrorStream true))
+        process (.start pb)
+        out (slurp (.getInputStream process))]
+    (when-not (zero? (.waitFor process))
+      (throw (ex-info (str "The AOT compile failed\n" out) {})))
+    (when-not (.renameTo tmp dir)
+      (throw (ex-info (str "Cannot publish " dir) {})))))
+
+(def ^:private classpath
+  "The classpath of every child JVM: the AOT classes of this source tree first."
+  (delay
+    (let [dir (io/file (cache-dir) (str "classes-" (source-key ["src" "src-prod" "deps.edn"])))]
+      (when-not (.exists dir)
+        (.mkdirs (cache-dir))
+        (compile-classes! dir))
+      (str (.getPath dir) File/pathSeparator @base-classpath))))
 
 (defn free-port []
   (with-open [s (java.net.ServerSocket. 0 1 (java.net.InetAddress/getByName "127.0.0.1"))]
