@@ -355,9 +355,20 @@
   (is (every? (comp card-models/web-search-supported? :id)
         card-models/registry))
   (is (= {:tools [{:type "openrouter:web_search"
-                   :parameters {:engine "auto"}}]
+                   :parameters {:engine "exa"}}]
           :tool_choice "required"}
-        (openrouter/web-search-fields)))
+        (openrouter/web-search-fields "exa")))
+  (testing "Gemini searches with Exa: its native search ends every required
+            search with finish_reason error and no text (measured 2026-11-11)"
+    (is (= "exa" (card-models/web-search-engine "gemini-3.8-flash")))
+    (is (= "exa" (card-models/web-search-engine "gemini-3.5-flash-lite")))
+    (is (= "exa" (card-models/web-search-engine "gemini-3-flash"))
+      "a retired Gemini id resolves to its successor's engine"))
+  (testing "other models keep OpenRouter's automatic choice"
+    (is (= "auto" (card-models/web-search-engine "gpt-6.1-sol")))
+    (is (= "auto" (card-models/web-search-engine "claude-sonnet-5"))))
+  (is (nil? (card-models/web-search-engine "no-such-model"))
+    "an unknown model gets no search")
   (is (= [{:title "OpenRouter docs" :url "https://openrouter.ai/docs"}]
         (openrouter/web-source-links
           [{:type "url_citation"
@@ -393,6 +404,34 @@
         (is (= 7 (:input-tokens (:metadata result))))
         (is (= 3 (:output-tokens (:metadata result))))
         (is (= 0.001 (:cost-usd (:metadata result))))))))
+
+(deftest a-stream-that-finishes-with-error-fails-with-the-provider-error
+  ;; The chunks Gemini 3.8 Flash sent on 2026-11-11 when its native web search
+  ;; failed: reasoning, then finish_reason "error" with no text, then usage.
+  (let [sse (str "data: {\"id\":\"gen-9\",\"choices\":[{\"delta\":"
+              "{\"role\":\"assistant\",\"reasoning\":\"Searching\"}}]}\n\n"
+              "data: {\"id\":\"gen-9\",\"choices\":[{\"delta\":{\"content\":\"\"},"
+              "\"finish_reason\":\"error\",\"native_finish_reason\":null}]}\n\n"
+              "data: {\"id\":\"gen-9\",\"choices\":[{\"delta\":{\"content\":\"\"},"
+              "\"finish_reason\":\"error\"}],"
+              "\"usage\":{\"prompt_tokens\":366,\"completion_tokens\":3364,"
+              "\"cost\":0}}\n\n"
+              "data: [DONE]\n\n")
+        metadata (atom [])]
+    (with-redefs [http/post
+                  (fn [_ _]
+                    {:status 200 :headers {}
+                     :body (ByteArrayInputStream. (.getBytes sse "UTF-8"))})]
+      (let [error (try (openrouter/chat-completion-stream!
+                         "key" {:stream true :messages []} {:feature :test}
+                         (fn [_]) #(swap! metadata conj %))
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? error) "the stream must not return as an empty answer")
+        (is (= "The model's provider ended the reply with an error."
+              (ex-message error)))
+        (is (= 0 (some :cost-usd @metadata))
+          "the usage after the error still reaches the caller, for billing")))))
 
 (deftest glm-5-3-flash-is-price-capped-in-both-registries
   (testing "the cap is the reason the entry exists at its price"
