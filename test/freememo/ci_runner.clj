@@ -1,10 +1,11 @@
 (ns freememo.ci-runner
   "Runs every suite that needs no PostgreSQL. CI calls `-main`.
 
-  The rule is behavior, not a list. Run each suite with the database port
-  refused. A suite that passes is database-free. A suite whose every failure is
-  a refused database connection (or a missing client build) cannot run in CI, so the run skips it. Any
-  other failure is red. A new suite is classified with no edit here.
+  The rule is behavior, not a list. Each suite runs with the database port
+  refused. A suite that passes is database-free. A suite cannot run in CI when
+  every failure is a refused database connection or a missing client build.
+  The run skips that suite. Any other failure is red. A new suite is classified
+  with no edit here.
 
   Seam 1 suites (`local-install*`, `local-postgres*`) start child JVMs and have
   their own command in test/CLAUDE.md. `excluded-ns?` leaves them out."
@@ -13,14 +14,14 @@
             [clojure.test :as t]))
 
 (def unavailable-re
-  "Text that a missing database or a missing client build leaves in a report.
-  The job has no PostgreSQL and builds no client, so a suite that fails only on
-  one of these cannot run there."
-  #"(?s)Connection to \S+ refused|PSQLException|java\.net\.ConnectException|HikariPool\S* - .*(?:Exception|Failed)")
+  "Text that a refused or unreachable database leaves in a report. The job has
+  no PostgreSQL. A failure that matches this cannot be a bug in the suite. A
+  SQL error does not match, because it proves that a database answered."
+  #"Connection to \S+ refused|java\.net\.ConnectException|HikariPool\S* - Connection is not available, request timed out")
 
 (def no-build-re
-  "A missing client build breaks every assertion that reads the shell, and most
-  of those failures do not name the cause. So one mention marks the whole suite."
+  "Text that a missing client build leaves in a report. The job builds no
+  client, so a failure that matches this cannot run there."
   #"missing-shadow-build-manifest")
 
 (defn excluded-ns?
@@ -55,8 +56,7 @@
   [out thrown]
   (let [texts (concat (failure-blocks out) (when thrown [(ex-text thrown)]))]
     (cond (empty? texts) :pass
-          (re-find no-build-re out) :skipped
-          (every? #(re-find unavailable-re %) texts) :skipped
+          (every? #(or (re-find unavailable-re %) (re-find no-build-re %)) texts) :skipped
           :else :fail)))
 
 (defn run-suite
