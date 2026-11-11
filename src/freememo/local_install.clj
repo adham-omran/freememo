@@ -147,19 +147,36 @@
     new))
 
 (defn- start-update-check!
-  "Read the update feed of the account's server (ticket 08). A newer version
-   shows in the web app (`update-feed/banner-state`) and in the tray `menu`
-   (nil when headless). Quiet when the feed cannot be read."
-  [account menu]
-  (let [update-feed-ns (do (require 'freememo.update-feed) (find-ns 'freememo.update-feed))
-        resolve-fn #(ns-resolve update-feed-ns %)
-        user-id (get account "user_id")]
+  "Read the update feed of the account's server (tickets 08 and 19). Quiet when
+   the feed cannot be read. On each answer:
+   - a newer Release that needs an installer (a higher Runtime) puts \"Update
+     available\" in the tray `menu` (nil when headless);
+   - a newer Release with the same Runtime downloads as an App Update
+     (`freememo.app-update`). When its jar is verified, and this JVM runs under
+     the bootstrap, the tray gets \"Restart to update\": it exits with code 75
+     and the bootstrap starts the newest verified jar."
+  [account menu data-dir]
+  (let [ns-of (fn [sym] (require sym) (find-ns sym))
+        uf (ns-of 'freememo.update-feed)
+        au (ns-of 'freememo.app-update)
+        resolve-fn #(ns-resolve uf %)
+        au-fn #(ns-resolve au %)
+        user-id (get account "user_id")
+        installed ((resolve-fn 'installed-version))]
     ((resolve-fn 'start!)
      {:origin (get account "origin")
-      :version ((resolve-fn 'installed-version))
-      :on-change (fn [available]
-                   (when menu (tray/show-update! menu available))
-                   ((resolve-fn 'bump-banners!) user-id))})))
+      :version installed
+      :on-feed (fn [feed]
+                 (when menu
+                   (let [avail (when (and feed (not= (get feed "runtime") @(ns-resolve (ns-of 'freememo.desktop-version) 'runtime)))
+                                 ((resolve-fn 'available) feed installed ((resolve-fn 'os-key))))]
+                     (tray/show-update! menu avail)))
+                 ((au-fn 'check!)
+                  {:data-dir data-dir :installed installed :feed feed
+                   :on-ready (fn [_version]
+                               (when (and menu ((au-fn 'restart-available?)))
+                                 (tray/show-restart! menu #(System/exit (int @(au-fn 'restart-code))))))}))
+      :on-change (fn [_available] ((resolve-fn 'bump-banners!) user-id))})))
 
 (defn- show-error! [message]
   (binding [*out* *err*] (println (str "FreeMemo Local could not start: " message)))
@@ -326,7 +343,7 @@
           (start-network-check!)
           (log "serving " local-origin)
           (on-gate issue-token!)
-          (start-update-check! account @!menu)
+          (start-update-check! account @!menu data-dir)
           (println (str "FREEMEMO_READY port=" http-port " pg_port=" (.getPort pg)))
           (flush)
           {:port http-port :pg-port (.getPort pg) :open! open! :quit! quit!}))

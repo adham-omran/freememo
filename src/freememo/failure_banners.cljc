@@ -141,20 +141,16 @@
 
 (defn update-banners
   "The Local Install's update banners (plans/local-install.md, New: updates).
-   `state` is `update-feed/banner-state`'s answer. A refused sync comes first,
-   and it replaces \"Update available\", because the student needs one line.
-   Both carry the installer link when the feed has one."
+   `state` is `update-feed/banner-state`'s answer. Only a refused Sync Protocol
+   shows a banner, \"Update to keep syncing\", with the installer link when the
+   feed has one. A newer Release shows none (ticket 19): an App Update installs
+   itself, and the tray offers \"Restart to update\"."
   [{:keys [update-available update-required?]}]
   (let [link (when-let [url (:url update-available)]
                {:href url :href-label "Download"})]
     (cond
       update-required?
       [(merge {:key "update-required" :tone :warning :message "Update to keep syncing"
-               :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}
-         link)]
-
-      update-available
-      [(merge {:key "update-available" :tone :warning :message "Update available"
                :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}
          link)]
 

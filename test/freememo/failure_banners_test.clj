@@ -82,11 +82,8 @@
     (is (= ["pause" "removal" "failure-1"] (mapv :key all)))))
 
 (deftest update-banners-say-what-the-student-must-do
-  (testing "a newer version gives \"Update available\" with the installer link"
-    (let [[b] (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}})]
-      (is (= "Update available" (:message b)))
-      (is (= "https://x/app" (:href b)))
-      (is (nil? (:dismiss b)))))
+  (testing "a newer version gives no banner (ticket 19: the App Update installs itself)"
+    (is (empty? (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}}))))
   (testing "a refused Sync Protocol gives one banner, \"Update to keep syncing\""
     (let [banners (fb/update-banners {:update-available {:version "2027.1.1" :url "https://x/app"}
                                       :update-required? true})]

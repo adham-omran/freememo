@@ -19,14 +19,20 @@
 // cannot build for another OS.
 //
 // Installer layout (the jpackage input directory):
-//   freememo.jar             the app. It is the App Update, and it holds no PostgreSQL.
+//   freememo-boot.jar        the bootstrap (tools/installer/bootstrap, ticket 19). It is the jpackage
+//                            main jar. It picks the newest verified App Update jar in the data
+//                            directory, else freememo.jar, and starts the app as a child JVM.
+//                            An App Update never replaces it.
+//   freememo.jar             the bundled app. It holds no PostgreSQL.
 //   postgres-binaries.jar    zonky PostgreSQL 18.6.0 for this OS (docs/adr/0003). jpackage
 //                            puts every jar of the input directory on the classpath, and
 //                            zonky finds its binaries there.
 //   tools/                   ffmpeg, ffprobe, ImageMagick, Graphviz (freememo.bundled-tools).
 //                            Linux has none: the package declares them as dependencies.
-// The launcher starts freememo.local_install (gen-class; a jpackage default argument would be
-// dropped as soon as the user passes one, like --no-tab) with -Xss4m and -Dfreememo.tools-dir=$APPDIR/tools.
+// The launcher starts FreememoBoot with -Dfreememo.boot.appdir, -Dfreememo.boot.bundled-version and
+// -Dfreememo.update-public-key (tools/installer/app-update-public-key.b64; without that file the
+// build leaves App Update off with one log line). The bootstrap starts freememo.local_install with
+// -Xss4m, -Dfreememo.tools-dir=$APPDIR/tools and the user's arguments, like --no-tab.
 
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -304,14 +310,41 @@ function macIcon (work) {
   return icns
 }
 
-function jpackageArgs ({ target, type, version, input, runtime, dest, work }) {
+const PUBLIC_KEY_FILE = path.join(here, 'app-update-public-key.b64')
+
+// Post: the public key (base64 X.509 DER, one line) that the bootstrap trusts, or null.
+function updatePublicKey () {
+  if (!fs.existsSync(PUBLIC_KEY_FILE)) {
+    log('App Update is off: tools/installer/app-update-public-key.b64 does not exist yet (run the wizard, ticket 19)')
+    return null
+  }
+  const key = fs.readFileSync(PUBLIC_KEY_FILE, 'utf8').replace(/\s+/g, '')
+  if (!/^[A-Za-z0-9+/=]+$/.test(key)) fail('app-update-public-key.b64 is not one line of base64')
+  return key
+}
+
+// Pre:  javac and jar of JAVA_HOME (or PATH).
+// Post: input/freememo-boot.jar holds the bootstrap.
+function bootstrap (input, work) {
+  const bin = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin') : null
+  const tool = name => bin ? path.join(bin, name) : name
+  const classes = path.join(work, 'boot-classes')
+  fs.mkdirSync(classes, { recursive: true })
+  sh(tool('javac'), ['-d', classes, path.join(here, 'bootstrap', 'FreememoBoot.java')])
+  sh(tool('jar'), ['--create', '--file', path.join(input, 'freememo-boot.jar'), '--main-class', 'FreememoBoot', '-C', classes, '.'])
+}
+
+function jpackageArgs ({ target, type, version, input, runtime, dest, work, publicKey }) {
   const publicDir = path.join(here, '..', '..', 'resources', 'public')
   const common = [
     '--type', type, '--name', 'FreeMemo', '--app-version', version, '--vendor', 'FreeMemo',
     '--description', 'FreeMemo Local: your flashcard library on this computer',
-    '--input', input, '--main-jar', 'freememo.jar', '--main-class', 'freememo.local_install',
+    '--input', input, '--main-jar', 'freememo-boot.jar', '--main-class', 'FreememoBoot',
     '--java-options', '-Xss4m',
     '--java-options', '-Dfreememo.tools-dir=$APPDIR/tools',
+    '--java-options', '-Dfreememo.boot.appdir=$APPDIR',
+    '--java-options', `-Dfreememo.boot.bundled-version=${version}`,
+    ...(publicKey ? ['--java-options', `-Dfreememo.update-public-key=${publicKey}`] : []),
     '--runtime-image', runtime, '--dest', dest
   ]
   if (target === 'darwin-arm64') {
@@ -349,6 +382,8 @@ async function main () {
   fs.mkdirSync(outDir, { recursive: true })
 
   fs.copyFileSync(jar, path.join(input, 'freememo.jar'))
+  bootstrap(input, work)
+  const publicKey = updatePublicKey()
   await postgres(target, input, work)
   const tools = path.join(input, 'tools')
   if (target === 'win32-x64') await windowsTools(tools, work)
@@ -360,7 +395,7 @@ async function main () {
   const jpackage = javaHome ? path.join(javaHome, 'bin', 'jpackage') : which('jpackage')
   if (!jpackage) fail('jpackage not found. Set JAVA_HOME to a JDK 21 or later.')
   const dest = path.join(work, 'jpackage-out')
-  sh(jpackage, jpackageArgs({ target, type, version, input, runtime, dest, work }))
+  sh(jpackage, jpackageArgs({ target, type, version, input, runtime, dest, work, publicKey }))
 
   // The installer takes its fixed asset name. An app-image (a local check) is a directory.
   const made = fs.readdirSync(dest).find(f => type === 'app-image' ? true : f.endsWith(`.${type}`))

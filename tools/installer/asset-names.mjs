@@ -8,7 +8,9 @@
 //   freememo-<Release Version>-app.jar             the app alone: the App Update
 //   freememo-<Release Version>-release.json        Runtime, Sync Protocol and jar hash of the commit
 //
-// Reserved, not listed: freememo-<Release Version>-app.jar.sig (ticket 19 signs the jar).
+// Optional, not listed: freememo-<Release Version>-app.jar.sig, the Ed25519 signature of the app
+// jar (ticket 19; `sigAssetName`). The release job attaches it once the signing key exists, and
+// refuses to publish without it from then on.
 // The update feed (src/freememo/update_feed.clj) keeps its own list; update_feed_test
 // compares the two.
 //
@@ -35,6 +37,10 @@ export function assetName (version, target, ext) {
   return `freememo-${version}-${OS[target]}.${ext}`
 }
 
+export function sigAssetName (version) {
+  return `freememo-${version}-app.jar.sig`
+}
+
 export function allAssetNames (version) {
   return [
     assetName(version, 'darwin-arm64', 'dmg'),
@@ -48,11 +54,12 @@ export function allAssetNames (version) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [version, os] = process.argv.slice(2)
   if (!/^[0-9]+[.][0-9]+[.][0-9]+$/.test(version || '')) {
-    console.error('usage: asset-names.mjs <version> [macos|windows|linux|app|release]')
+    console.error('usage: asset-names.mjs <version> [macos|windows|linux|app|release|sig]')
     process.exit(1)
   }
   const all = allAssetNames(version)
   if (!os) console.log(all.join('\n'))
+  else if (os === 'sig') console.log(sigAssetName(version))
   else {
     const hit = all.find(n => n.endsWith(os === 'app' ? '-app.jar' : os === 'release' ? '-release.json' : '') && (os === 'app' || os === 'release' || n.includes(`-${os}-`)))
     if (!hit) { console.error(`unknown asset kind ${os}`); process.exit(1) }
