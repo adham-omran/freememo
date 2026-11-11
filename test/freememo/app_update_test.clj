@@ -185,3 +185,27 @@
         (with-redefs [au/configured-public-key (constantly nil)]
           (is (= :off (au/check! {:data-dir data :installed "26.11.1" :feed feed})))))
       (finally (au/reset-state!) (delete-tree! data) (delete-tree! src)))))
+
+(deftest the-web-app-offers-a-ready-update-until-it-is-dismissed
+  ;; The banner strip asks `banner-state`. Before this, only the tray said that
+  ;; an update waited, and a Mac that starts at login could wait for weeks.
+  (try
+    (testing "nothing is ready: no banner"
+      (with-redefs [au/ready-version (constantly nil) au/restart-available? (constantly true)]
+        (is (nil? (au/banner-state)))))
+    (testing "a ready update under the bootstrap gives its version"
+      (with-redefs [au/ready-version (constantly "26.11.15322") au/restart-available? (constantly true)]
+        (is (= {:version "26.11.15322"} (au/banner-state)))))
+    (testing "no bootstrap: the app cannot restart itself, so no banner"
+      (with-redefs [au/ready-version (constantly "26.11.15322") au/restart-available? (constantly false)]
+        (is (nil? (au/banner-state)))))
+    (testing "a dismissed version stays hidden, and a later version shows again"
+      (au/dismiss-banner! "26.11.15322")
+      (with-redefs [au/ready-version (constantly "26.11.15322") au/restart-available? (constantly true)]
+        (is (nil? (au/banner-state))))
+      (with-redefs [au/ready-version (constantly "26.11.15400") au/restart-available? (constantly true)]
+        (is (= {:version "26.11.15400"} (au/banner-state)))))
+    (testing "restart! does nothing when nothing is ready"
+      (with-redefs [au/ready-version (constantly nil) au/restart-available? (constantly true)]
+        (is (false? (au/restart!)))))
+    (finally (au/reset-state!))))
