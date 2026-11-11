@@ -210,6 +210,15 @@
     {:counts {} :pending {}}
     fmt/synced-tables))
 
+(defn pending-edit-count
+  "How many edits are not yet synced: the rows with `usn = -1` in the account's
+   scope (the same rows `local-counts` lists as pending). The installer gate
+   (`freememo.installer-gate`) reads it."
+  []
+  (if-let [user-id (local-user-id)]
+    (transduce (map count) + 0 (vals (:pending (local-counts db/ds user-id))))
+    0))
+
 ;; ── 2. Graves ──────────────────────────────────────────────────────
 
 (defn- graves-step!

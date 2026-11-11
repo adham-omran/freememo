@@ -149,8 +149,9 @@
 (defn- start-update-check!
   "Read the update feed of the account's server (tickets 08 and 19). Quiet when
    the feed cannot be read. On each answer:
-   - a newer Release that needs an installer (a higher Runtime) puts \"Update
-     available\" in the tray `menu` (nil when headless);
+   - a newer Release that needs a higher Runtime downloads no jar. The installer
+     gate (`freememo.installer-gate`) syncs every pending edit; when nothing is
+     pending, the tray gets \"Download the new installer\" (nil `menu`: headless);
    - a newer Release with the same Runtime downloads as an App Update
      (`freememo.app-update`). When its jar is verified, and this JVM runs under
      the bootstrap, the tray gets \"Restart to update\": it exits with code 75
@@ -159,6 +160,7 @@
   (let [ns-of (fn [sym] (require sym) (find-ns sym))
         uf (ns-of 'freememo.update-feed)
         au (ns-of 'freememo.app-update)
+        gate (ns-of 'freememo.installer-gate)
         resolve-fn #(ns-resolve uf %)
         au-fn #(ns-resolve au %)
         user-id (get account "user_id")
@@ -167,10 +169,11 @@
      {:origin (get account "origin")
       :version installed
       :on-feed (fn [feed]
-                 (when menu
-                   (let [avail (when (and feed (not= (get feed "runtime") @(ns-resolve (ns-of 'freememo.desktop-version) 'runtime)))
-                                 ((resolve-fn 'available) feed installed ((resolve-fn 'os-key))))]
-                     (tray/show-update! menu avail)))
+                 ((ns-resolve gate 'on-feed!) feed
+                  {:installed installed
+                   :on-change (fn [st]
+                                (when menu (tray/show-update! menu st))
+                                ((resolve-fn 'bump-banners!) user-id))})
                  ((au-fn 'check!)
                   {:data-dir data-dir :installed installed :feed feed
                    :on-ready (fn [_version]

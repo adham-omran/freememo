@@ -141,20 +141,29 @@
 
 (defn update-banners
   "The Local Install's update banners (plans/local-install.md, New: updates).
-   `state` is `update-feed/banner-state`'s answer. Only a refused Sync Protocol
-   shows a banner, \"Update to keep syncing\", with the installer link when the
-   feed has one. A newer Release shows none (ticket 19): an App Update installs
+   `state` is `update-feed/banner-state`'s answer.
+   - A refused Sync Protocol shows \"Update to keep syncing\", with the installer
+     link when the feed has one.
+   - A Release that needs a newer Runtime (`:installer`, ticket 20) says that
+     edits are not yet synced, with no link, until nothing is pending. Then it
+     shows the link \"Download the new installer\".
+   A newer Release with the same Runtime shows none: an App Update installs
    itself, and the tray offers \"Restart to update\"."
-  [{:keys [update-available update-required?]}]
+  [{:keys [update-available update-required? installer]}]
   (let [link (when-let [url (:url update-available)]
-               {:href url :href-label "Download"})]
-    (cond
+               {:href url :href-label "Download"})
+        base {:tone :warning :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}]
+    (cond-> []
       update-required?
-      [(merge {:key "update-required" :tone :warning :message "Update to keep syncing"
-               :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}
-         link)]
+      (conj (merge base {:key "update-required" :message "Update to keep syncing"} link))
 
-      :else [])))
+      (= :unsynced (:status installer))
+      (conj (merge base {:key "installer-unsynced"
+                         :message "A new installer is ready, but your edits are not yet synced. Sync them first."}))
+
+      (= :ready (:status installer))
+      (conj (merge base {:key "installer-ready" :message "This version of FreeMemo needs a new installer."
+                         :href (:url installer) :href-label "Download the new installer"})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Server wrappers. Body-level #?(:clj … :cljs …), because reactive bodies name
