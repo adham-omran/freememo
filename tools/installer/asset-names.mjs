@@ -1,0 +1,55 @@
+// The names of the assets on a GitHub release. They are a contract: the update
+// feed (ticket 18) reads them, and the workflow checks that each one is
+// attached before it publishes the release.
+//
+//   freememo-<Release Version>-macos-arm64.dmg     installer, Apple Silicon
+//   freememo-<Release Version>-windows-x64.msi     installer, Windows
+//   freememo-<Release Version>-linux-x64.deb       installer, Debian and Ubuntu
+//   freememo-<Release Version>-app.jar             the app alone: the App Update
+//
+// <Release Version> is the tag name without its "v" (docs/adr/0002), such as
+// 26.11.13832. The same pattern as a regular expression:
+//   ^freememo-([0-9]+[.][0-9]+[.][0-9]+)-(macos-arm64[.]dmg|windows-x64[.]msi|linux-x64[.]deb|app[.]jar)$
+//
+// Command line, for the workflow:
+//   node asset-names.mjs <version>        the four names, one per line
+//   node asset-names.mjs <version> <os>   the name of one: macos, windows, linux or app
+
+import { fileURLToPath } from 'node:url'
+
+const OS = { 'darwin-arm64': 'macos-arm64', 'win32-x64': 'windows-x64', 'linux-x64': 'linux-x64' }
+
+export function targetKey () {
+  return `${process.platform}-${process.arch}`
+}
+
+// target: darwin-arm64, win32-x64, linux-x64, or 'any' for the jar.
+export function assetName (version, target, ext) {
+  if (target === 'any') return `freememo-${version}-app.jar`
+  if (!OS[target]) throw new Error(`no asset name for ${target}`)
+  return `freememo-${version}-${OS[target]}.${ext}`
+}
+
+export function allAssetNames (version) {
+  return [
+    assetName(version, 'darwin-arm64', 'dmg'),
+    assetName(version, 'win32-x64', 'msi'),
+    assetName(version, 'linux-x64', 'deb'),
+    assetName(version, 'any', 'jar')
+  ]
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const [version, os] = process.argv.slice(2)
+  if (!/^[0-9]+[.][0-9]+[.][0-9]+$/.test(version || '')) {
+    console.error('usage: asset-names.mjs <version> [macos|windows|linux|app]')
+    process.exit(1)
+  }
+  const all = allAssetNames(version)
+  if (!os) console.log(all.join('\n'))
+  else {
+    const hit = all.find(n => n.includes(os === 'app' ? '-app.jar' : `-${os}-`))
+    if (!hit) { console.error(`unknown asset kind ${os}`); process.exit(1) }
+    console.log(hit)
+  }
+}

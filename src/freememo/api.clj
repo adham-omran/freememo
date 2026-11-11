@@ -1,6 +1,7 @@
 (ns freememo.api
   "REST API handlers for file upload, page text save, and authentication."
   (:require
+   [freememo.bundled-tools :as bundled-tools]
    [freememo.pdf :as pdf]
    [freememo.audio :as audio]
    [freememo.epub :as epub]
@@ -130,7 +131,7 @@
    nil distinguishes 'binary absent' (IOException) from 'ran but failed'
    (non-zero exit / empty output / timed out)."
   [^String bin ^String path]
-  (let [pb (doto (ProcessBuilder. [bin path "-quality" "85" "jpeg:-"])
+  (let [pb (doto (bundled-tools/process-builder [bin path "-quality" "85" "jpeg:-"])
              (.redirectError ProcessBuilder$Redirect/DISCARD))
         proc (.start pb)
         ;; Drain stdout in a future (readAllBytes blocks until EOF) so a JPEG

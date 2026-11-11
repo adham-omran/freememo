@@ -134,7 +134,7 @@ application classpath to be available"
           (b/compile-clj {:basis basis
                           :src-dirs ["src" "src-prod"]
                           :class-dir class-dir
-                          :ns-compile '[prod]
+                          :ns-compile '[prod freememo.local-install]
                           :java-opts ["-Xss4m"]}))
         (b/uber {:class-dir class-dir
                  :uber-file (str "target/" jar-name)

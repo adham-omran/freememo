@@ -9,6 +9,7 @@
    Every call is bounded: a malformed or adversarial container must not pin a
    worker thread forever."
   (:require
+   [freememo.bundled-tools :as bundled-tools]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -33,7 +34,7 @@
    Never throws."
   [args timeout-ms]
   (try
-    (let [pb (ProcessBuilder. ^java.util.List (vec args))
+    (let [pb (bundled-tools/process-builder args)
           proc (.start pb)
           ;; Drain both pipes concurrently: ffmpeg writes progress to stderr
           ;; continuously, and a full OS pipe buffer would deadlock the process
