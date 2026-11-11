@@ -16,7 +16,10 @@
   {"current_version" version
    "installers" {"macos" "https://example.test/mac.dmg"
                  "windows" "https://example.test/win.exe"
-                 "linux" "https://example.test/linux.deb"}})
+                 "linux" "https://example.test/linux.deb"}
+   "app_update" {"url" "https://example.test/app.jar" "sha256" "abc"}
+   "runtime" 1
+   "sync_protocol" 1})
 
 (defn- with-install
   "Run `(f li cookie stub)` with a Local Install at `installed`, and a stub that

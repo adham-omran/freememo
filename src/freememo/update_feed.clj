@@ -2,10 +2,13 @@
   "The update feed of plans/local-install.md (\"New: updates\").
 
    Server side: freememo.net publishes `GET /api/desktop/feed`, a public route.
-   The body is `{current_version, installers {macos windows linux}}`.
-   The version and the installer URLs come from `DESKTOP_CURRENT_VERSION`, `DESKTOP_INSTALLER_MACOS`,
-   `DESKTOP_INSTALLER_WINDOWS` and `DESKTOP_INSTALLER_LINUX` (env or config.edn
-   `:desktop`). With no version set, the route answers 404.
+   The body is `{current_version, installers {macos windows linux},
+   app_update {url sha256 signature_url}, runtime, sync_protocol}`.
+   It comes from the latest release of `PUBLIC_REPO` on GitHub (default
+   `adham-omran/freememo`): the asset URLs and `freememo-<rv>-release.json`.
+   A draft or a release that lacks an asset is not used. The last good answer
+   stays in memory, so a GitHub outage does not empty the feed. With no good
+   answer yet, the route answers 404.
 
    Local Install side: the launcher calls `start!`. It reads the feed from the
    account's origin at start and every few hours. When the feed holds a newer
@@ -70,18 +73,106 @@
 
 ;; ── Server: the public route ───────────────────────────────────────
 
+(def asset-kinds
+  "The assets of a release that the feed needs, in the order of
+   `tools/installer/asset-names.mjs`. `update-feed-test` keeps both lists in step."
+  [[:macos "macos-arm64.dmg"] [:windows "windows-x64.msi"] [:linux "linux-x64.deb"] [:app "app.jar"]])
+
+(defn asset-name
+  "Post: the name of the asset of `kind` (`:macos`, `:windows`, `:linux`, `:app`,
+   `:sig` or `:release-json`) on the release `rv`."
+  [rv kind]
+  (case kind
+    :sig (str "freememo-" rv "-app.jar.sig")
+    :release-json (str "freememo-" rv "-release.json")
+    (str "freememo-" rv "-" (second (first (filter #(= kind (first %)) asset-kinds))))))
+
+(defn required-asset-names
+  "Post: the names that a release must carry before the feed uses it."
+  [rv]
+  (conj (mapv #(asset-name rv (first %)) asset-kinds) (asset-name rv :release-json)))
+
+(defn feed-from-release
+  "Pre:  `release` is the parsed GitHub release (string keys); `meta` is the parsed
+         `freememo-<rv>-release.json`.
+   Post: the feed map, or nil when the release is a draft, its tag is not a
+         Release Version, an asset is missing, or `meta` does not match it."
+  [release meta]
+  (let [tag (get release "tag_name")
+        rv (when (string? tag) (str/replace tag #"^v" ""))
+        urls (into {} (for [a (get release "assets")] [(get a "name") (get a "browser_download_url")]))]
+    (when (and rv (not (get release "draft")) (parse-version rv) (map? meta)
+            (= rv (get meta "release_version"))
+            (number? (get meta "runtime")) (number? (get meta "sync_protocol"))
+            (string? (get meta "app_jar_sha256"))
+            (every? #(not (str/blank? (get urls %))) (required-asset-names rv)))
+      {"current_version" rv
+       "installers" (into {} (for [os [:macos :windows :linux]] [(name os) (get urls (asset-name rv os))]))
+       "app_update" (cond-> {"url" (get urls (asset-name rv :app))
+                             "sha256" (get meta "app_jar_sha256")}
+                      (get urls (asset-name rv :sig)) (assoc "signature_url" (get urls (asset-name rv :sig))))
+       "runtime" (get meta "runtime")
+       "sync_protocol" (get meta "sync_protocol")})))
+
+(def cache-ttl-ms "How long a good answer is used before GitHub is asked again (60 requests an hour, unauthenticated)." (* 10 60 1000))
+(def retry-ms "How long to wait after a failed read before GitHub is asked again." (* 2 60 1000))
+
+(defonce ^:private !release (atom {:good nil :checked-at 0 :failed-at 0}))
+(defonce ^:private release-lock (Object.))
+
+(defn reset-release-cache! [] (reset! !release {:good nil :checked-at 0 :failed-at 0}))
+
+(defn log-github-failure [msg]
+  (tel/log! {:level :warn :id ::github-feed} msg))
+
+(defn- public-repo [] (or (config/env-or-config "PUBLIC_REPO" [:deployment :public-repo]) "adham-omran/freememo"))
+
+(defn- get-json [url]
+  (let [resp (http/request {:method :get :url url :throw-exceptions false :as :text
+                            :headers {"Accept" "application/vnd.github+json" "User-Agent" "freememo-update-feed"}
+                            :connection-timeout 4000 :socket-timeout 4000})]
+    (when-not (= 200 (:status resp))
+      (throw (ex-info (str url " answered HTTP " (:status resp)) {})))
+    (json/parse-string (:body resp))))
+
+(defn fetch-feed-from-github
+  "Post: the feed map for the latest release of `repo` at `api-base`. Throws when
+   GitHub fails or the release is not usable."
+  [api-base repo]
+  (let [release (get-json (str api-base "/repos/" repo "/releases/latest"))
+        tag (str (get release "tag_name"))
+        rv (str/replace tag #"^v" "")
+        url (some #(when (= (get % "name") (asset-name rv :release-json)) (get % "browser_download_url"))
+              (get release "assets"))
+        meta (when url (get-json url))]
+    (or (feed-from-release release meta)
+        (throw (ex-info (str "release " tag " is a draft or lacks an asset") {})))))
+
 (defn feed-body
-  "Post: the feed map, or nil when no version is configured."
-  []
-  (when-let [version (config/env-or-config "DESKTOP_CURRENT_VERSION" [:desktop :version])]
-    {"current_version" version
-     "installers" (into {}
-                    (for [[k env] {"macos" "DESKTOP_INSTALLER_MACOS"
-                                   "windows" "DESKTOP_INSTALLER_WINDOWS"
-                                   "linux" "DESKTOP_INSTALLER_LINUX"}
-                          :let [url (config/env-or-config env [:desktop :installers (keyword k)])]
-                          :when url]
-                      [k url]))}))
+  "Post: the feed map, or nil when no good answer exists yet. Asks GitHub at most
+   once per `cache-ttl-ms`, and again `retry-ms` after a failure. On a failure it
+   logs one line and gives the last good answer. The GitHub calls have a 4 s timeout.
+   `opts` may hold `:api-base` and `:repo`, for tests."
+  ([] (feed-body {}))
+  ([{:keys [api-base repo]}]
+   (let [fresh? (fn [{:keys [good checked-at failed-at]} now]
+                  (or (and good (< (- now checked-at) cache-ttl-ms))
+                    (< (- now failed-at) retry-ms)))]
+     (if (fresh? @!release (System/currentTimeMillis))
+       (:good @!release)
+       (locking release-lock
+         (let [now (System/currentTimeMillis)]
+           (if (fresh? @!release now)
+             (:good @!release)
+             (try
+               (let [fresh (fetch-feed-from-github (or api-base "https://api.github.com") (or repo (public-repo)))]
+                 (swap! !release assoc :good fresh :checked-at now)
+                 fresh)
+               (catch Throwable e
+                 (log-github-failure
+                   (str "cannot read the latest GitHub release: " (or (ex-message e) (str e))))
+                 (swap! !release assoc :failed-at now)
+                 (:good @!release))))))))))
 
 (defn feed-handler
   "GET /api/desktop/feed. Public: it carries no account data."
