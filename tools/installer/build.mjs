@@ -286,8 +286,10 @@ async function macTools (tools, work) {
   const bin = path.join(tools, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   for (const name of ['ffmpeg', 'ffprobe']) {
-    const zip = await pinned(MAC_FFMPEG[name])
-    unpack(zip, bin)
+    // unpack empties its target, so each zip gets its own directory, not bin.
+    const from = path.join(unpack(await pinned(MAC_FFMPEG[name]), path.join(work, `u-${name}`)), name)
+    if (!fs.existsSync(from)) throw new Error(`${MAC_FFMPEG[name].file} holds no ${name}`)
+    fs.copyFileSync(from, path.join(bin, name))
     fs.chmodSync(path.join(bin, name), 0o755)
   }
   const bundler = which('dylibbundler')
@@ -313,6 +315,8 @@ async function macTools (tools, work) {
   // sfdp finds its layout plugins through GVBINDIR.
   const gv = path.join(prefix('graphviz'), 'lib', 'graphviz')
   fs.cpSync(gv, path.join(tools, 'graphviz'), { recursive: true, dereference: true })
+  // The plugins load libgvc and friends from the Homebrew prefix. Point them at bin/libs, as sfdp is.
+  for (const dylib of out('find', [path.join(tools, 'graphviz'), '-name', '*.dylib']).split('\n').filter(Boolean)) bundle(dylib)
   log('mac tools: ok')
 }
 
