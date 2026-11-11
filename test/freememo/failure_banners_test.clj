@@ -89,6 +89,14 @@
                                       :update-required? true})]
       (is (= ["Update to keep syncing"] (mapv :message banners)))
       (is (= "https://x/app" (:href (first banners))))))
+  (testing "a downloaded App Update gives a banner with Restart and Dismiss"
+    (let [[b & more] (fb/update-banners {:app-update {:version "26.11.15322"}})]
+      (is (nil? more))
+      (is (= "app-update-26.11.15322" (:key b)))
+      (is (= "An update is ready. FreeMemo restarts to use it." (:message b)))
+      (is (:restart? b))
+      (is (= :app-update (:dismiss b)))
+      (is (= ["26.11.15322"] (:ids b)) "Dismiss hides this version only")))
   (testing "nothing to say gives no banner"
     (is (empty? (fb/update-banners {:update-available nil :update-required? false})))
     (is (empty? (fb/update-banners nil)))))

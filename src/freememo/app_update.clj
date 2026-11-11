@@ -216,12 +216,49 @@
   []
   @!ready)
 
-(defn reset-state! [] (reset! !ready nil))
+(defonce ^:private !dismissed
+  ;; The version whose banner the user dismissed. In memory only: the next start
+  ;; runs that version, so the banner has nothing left to say.
+  (atom nil))
+
+(defn reset-state! [] (reset! !ready nil) (reset! !dismissed nil))
 
 (defn restart-available?
   "True when this JVM runs under the bootstrap, which can start the next jar."
   []
   (= "true" (System/getProperty "freememo.bootstrap")))
+
+;; ── What the web app shows ─────────────────────────────────────────
+
+(defn banner-state
+  "What the banner strip says about an App Update (`failure-banners/update-banners`).
+   The tray item \"Restart to update\" alone was too easy to miss: a Mac that
+   starts at login may not restart for weeks.
+   Post: `{:version v}` while a verified update waits, this JVM can restart into
+         it, and the user has not dismissed `v`. nil otherwise, always nil on the
+         server."
+  []
+  (let [v (ready-version)]
+    (when (and v (restart-available?) (not= v @!dismissed))
+      {:version v})))
+
+(defn dismiss-banner!
+  "Hide the banner for `version`. A later version shows it again."
+  [version]
+  (reset! !dismissed version))
+
+(defn restart!
+  "Exit with `restart-code`, so the bootstrap starts the newest verified jar.
+   The tray item does the same. The exit runs on another thread after a short
+   delay, so the caller's response can leave first.
+   Post: true when the restart is under way; false, and nothing happens, when no
+         update waits or no bootstrap runs this JVM."
+  []
+  (if (and (ready-version) (restart-available?))
+    (do (log "restarting into App Update " (ready-version))
+        (future (Thread/sleep 300) (System/exit (int restart-code)))
+        true)
+    false))
 
 (defn check!
   "Look at one feed answer, and download an App Update when it applies.

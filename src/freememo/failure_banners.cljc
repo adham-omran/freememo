@@ -26,6 +26,7 @@
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
    #?(:clj [freememo.activity :as activity])
+   #?(:clj [freememo.app-update :as app-update])
    #?(:clj [freememo.storage-meter :as meter])
    #?(:clj [freememo.update-feed :as update-feed])
    #?(:clj [freememo.user-state :as us])))
@@ -149,9 +150,11 @@
      shows the link \"Download the new installer\". When the sync state is
      `:update-required`, the sync cannot finish, so the link shows at once with
      the count of edits that stay on this computer.
-   A newer Release with the same Runtime shows none: an App Update installs
-   itself, and the tray offers \"Restart to update\"."
-  [{:keys [update-available update-required? installer]}]
+   - A downloaded App Update (`:app-update`, `app-update/banner-state`) says that
+     it is ready, with Restart and Dismiss. Dismiss hides that version only. The
+     tray offers \"Restart to update\" too.
+   A newer Release with the same Runtime that is not yet downloaded shows none."
+  [{:keys [update-available update-required? installer app-update]}]
   (let [link (when-let [url (:url update-available)]
                {:href url :href-label "Download"})
         base {:tone :warning :ids [] :subject-id nil :retry? false :topup? false :dismiss nil}]
@@ -170,7 +173,14 @@
                                       n (if (= 1 n) " edit is" " edits are")
                                       " not synced. They stay on this computer.")
                                     "This version of FreeMemo needs a new installer.")
-                         :href (:url installer) :href-label "Download the new installer"})))))
+                         :href (:url installer) :href-label "Download the new installer"}))
+
+      (:version app-update)
+      (conj (merge base {:key (str "app-update-" (:version app-update))
+                         :message "An update is ready. FreeMemo restarts to use it."
+                         :ids [(:version app-update)]
+                         :restart? true
+                         :dismiss :app-update})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Server wrappers. Body-level #?(:clj … :cljs …), because reactive bodies name
@@ -182,17 +192,30 @@
    watches; it exists to make this call re-run when either bumps."
   [_rev user-id]
   #?(:clj (-> (account-banners (meter/account-banner-state user-id))
-            (into (update-banners (update-feed/banner-state)))
+            (into (update-banners (assoc (update-feed/banner-state)
+                                    :app-update (app-update/banner-state))))
             (into (collapse-failures (activity/unseen-failures user-id))))
      :cljs []))
 
 (defn dismiss!*
-  "Dismiss a banner: acknowledge its failures, or mark the removal notice read.
+  "Dismiss a banner: acknowledge its failures, mark the removal notice read, or
+   hide the App Update banner for its version (`ids` holds the version).
    Returns :done."
   [user-id kind ids]
-  #?(:clj (if (= :removal kind)
-            (meter/dismiss-removal! user-id)
+  #?(:clj (case kind
+            :removal (meter/dismiss-removal! user-id)
+            :app-update (do (app-update/dismiss-banner! (first ids))
+                            (update-feed/bump-banners! user-id)
+                            :done)
             (activity/acknowledge! user-id ids))
+     :cljs nil))
+
+(defn restart!*
+  "Restart a Local Install into its downloaded App Update. The session ends with
+   the JVM; the tab reconnects to the new one and reloads, as after a deploy.
+   Returns true when the restart is under way."
+  []
+  #?(:clj (app-update/restart!)
      :cljs nil))
 
 (defn retry!*
@@ -244,6 +267,20 @@
         (when t
           (case (e/server (e/Offload #(retry!* user-id id))) (t)))))))
 
+(e/defn RestartAction
+  "Restart into the downloaded App Update. The token never spends: the server
+   exits, so the button keeps saying \"Restarting…\" until the tab reloads."
+  []
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm btn-primary" :type "button"})
+      (let [click (dom/On "click" identity nil)
+            [t _] (e/Token click)]
+        (dom/props {:disabled (some? t)})
+        (dom/text (if (some? t) "Restarting…" "Restart"))
+        (when t
+          (case (e/server (restart!*)) (t)))))))
+
 (e/defn DismissAction [kind ids user-id]
   (e/client
     (dom/button
@@ -255,7 +292,7 @@
           (case (e/server (dismiss!* user-id kind ids)) (t)))))))
 
 (e/defn Banner
-  [{:keys [tone message ids subject-id retry? topup? dismiss href href-label]} user-id navigate!]
+  [{:keys [tone message ids subject-id retry? restart? topup? dismiss href href-label]} user-id navigate!]
   (e/client
     (dom/div
       (dom/props {:class (str "banner banner--" (name tone))
@@ -272,6 +309,8 @@
           (OpenAction ids subject-id user-id navigate!))
         (when retry?
           (RetryAction (first ids) user-id))
+        (when restart?
+          (RestartAction))
         (when (some? href)
           (dom/a
             (dom/props {:class "btn btn-sm btn-primary" :href href :target "_blank"

@@ -5,7 +5,9 @@
    The menu holds, in order: \"Restart to update\" (only after an App Update jar
    is verified), \"Update available\" (only while a newer Release needs an installer), \"Open FreeMemo\", a disabled line with the server
    state, \"Start at login\" (macOS and Windows, `freememo.local-login`), and
-   \"Quit\". On macOS the icon is a template image (`template-image`)."
+   \"Quit\". On macOS the icon is a template image (`template-image`), and only
+   a left click does anything: it opens the menu. Elsewhere the icon's action
+   opens FreeMemo."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [freememo.local-log :refer [log]]))
@@ -85,9 +87,14 @@
                                        (itemStateChanged [_ _] ((:toggle! login))))))))
     (.add menu (item "Quit" quit!))
     (.add (java.awt.SystemTray/getSystemTray)
-      (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
-        (.setImageAutoSize true)
-        (.addActionListener (listener open!))))
+      (let [icon (doto (java.awt.TrayIcon. image "FreeMemo Local" menu)
+                   (.setImageAutoSize true))]
+        ;; macOS: a left click opens the menu natively, and the JDK fires the
+        ;; action on a right click or Ctrl+click (CTrayIcon.java, JDK 25). An
+        ;; action there opened the browser on a right click. Java cannot open the
+        ;; native menu on a right click, so a right click does nothing.
+        (when-not (mac?) (.addActionListener icon (listener open!)))
+        icon))
     menu))
 
 (defn show-update!

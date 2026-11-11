@@ -155,7 +155,8 @@
    - a newer Release with the same Runtime downloads as an App Update
      (`freememo.app-update`). When its jar is verified, and this JVM runs under
      the bootstrap, the tray gets \"Restart to update\": it exits with code 75
-     and the bootstrap starts the newest verified jar."
+     and the bootstrap starts the newest verified jar. The web app's banner
+     strip says so too, with a Restart button."
   [account menu data-dir]
   (let [ns-of (fn [sym] (require sym) (find-ns sym))
         uf (ns-of 'freememo.update-feed)
@@ -178,7 +179,9 @@
                   {:data-dir data-dir :installed installed :feed feed
                    :on-ready (fn [_version]
                                (when (and menu ((au-fn 'restart-available?)))
-                                 (tray/show-restart! menu #(System/exit (int @(au-fn 'restart-code))))))}))
+                                 (tray/show-restart! menu #(System/exit (int @(au-fn 'restart-code)))))
+                               ;; The banner strip reads `app-update/banner-state`.
+                               ((resolve-fn 'bump-banners!) user-id))}))
       :on-change (fn [_available] ((resolve-fn 'bump-banners!) user-id))})))
 
 (defn- show-error! [message]
