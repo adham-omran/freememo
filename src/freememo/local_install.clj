@@ -316,12 +316,14 @@
                           (when-not no-tab (open!))))))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable quit! "local-install-quit"))
     (try
-      (let [;; PostgreSQL first: the bootstrap reads a READY line as "this jar can
-            ;; serve", and the sign-in page is such a line.
-            pg (reset! !pg (postgres/start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))
+      (let [;; Sign-in first: an install with no account makes no library, so a
+            ;; refused or offline sign-in leaves no pgdata (ticket 04). The
+            ;; bootstrap accepts the sign-in page as READY: a jar that serves it
+            ;; has started, and its PostgreSQL start runs after the sign-in.
             account (or (find-account data-dir)
                       (sign-in-phase! {:data-dir data-dir :origin origin :local-origin local-origin
-                                       :http-port http-port :install install :!jetty !jetty :on-gate on-gate}))]
+                                       :http-port http-port :install install :!jetty !jetty :on-gate on-gate}))
+            pg (reset! !pg (postgres/start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))]
         (set-server-env! (.getPort pg) install)
         (require 'prod 'freememo.desktop 'freememo.logging 'freememo.connectivity 'freememo.sync-client)
         ((ns-resolve 'freememo.logging 'init!))
