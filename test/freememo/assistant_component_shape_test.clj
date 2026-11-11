@@ -39,9 +39,9 @@
 
 (deftest transcript-diffs-at-the-server-source
   (let [source (slurp "src/freememo/assistant_transcript.cljc")]
-    (is (re-find #"\(e/server\s+\(e/diff-by :assistant_messages/id" source))
+    (is (re-find #"\(e/server\s+\(e/diff-by :transcript/key" source))
     (is (str/includes? source
-          "(assistant/transcript-rows page live-row)")
+          "(assistant/transcript-window-rows result projection active indices live-row)")
       "the view is diffed, so a row's shape and content cross in one frame")
     (is (not (str/includes? source
                "(e/server (assistant/transcript-message-view message))"))
@@ -95,7 +95,10 @@
 (deftest transcript-rows-never-share-a-branch-with-the-empty-state
   (testing "the row loop is always mounted, in an element of its own"
     (let [source (slurp "src/freememo/assistant_transcript.cljc")]
-      (is (re-find #"\(dom/props \{:class \"assistant-panel__rows\"\}\)\s+\(e/for \[display-message message-rows\]" source))
+      (is (re-find #"\(dom/props \{:class \"assistant-panel__rows assistant-panel__rows--windowed\"\}\)[\s\S]*\(e/for \[display-message" source))
+      (is (< (str/index-of source "(e/for [display-message")
+             (str/index-of source "(when (zero? message-count)"))
+        "the row loop is a sibling that comes before the empty-state branch, never inside it")
       (is (str/includes? source "(when (zero? message-count)"))
       (is (not (str/includes? source "(if (zero? message-count)"))
         "a branch from the starters to every row at once is what detached the rows")
