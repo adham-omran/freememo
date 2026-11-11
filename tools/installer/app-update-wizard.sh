@@ -150,18 +150,23 @@ write_env() {
   printf '  %s✓ wrote%s %s → %s\n' "$GREEN" "$RESET" "$key" "$ENV_FILE"
 }
 
+# The public repository builds the releases, so its secrets are the ones that
+# count. This checkout's origin is the private Forgejo repository, so gh must
+# name the repository.
+GH_PUBLIC_REPO="${PUBLIC_REPO:-adham-omran/freememo}"
+
 # set_secret NAME VALUE sets a GitHub Actions repo secret via gh. Falls back
 # to a warning (and records it) if gh is unavailable or unauthenticated.
 set_secret() {
   local name="$1" value="$2"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    if printf '%s' "$value" | gh secret set "$name" >/dev/null 2>&1; then
+    if printf '%s' "$value" | gh secret set "$name" -R "$GH_PUBLIC_REPO" >/dev/null 2>&1; then
       WRITTEN_SECRET+=("$name")
       printf '  %s✓ set%s GitHub secret %s\n' "$GREEN" "$RESET" "$name"
       return
     fi
   fi
-  SKIPPED+=("GitHub secret $name (set it manually: gh secret set $name)")
+  SKIPPED+=("GitHub secret $name (set it at https://github.com/$GH_PUBLIC_REPO/settings/secrets/actions)")
   warn "skipped GitHub secret $name: gh not ready; set it later"
 }
 
@@ -169,7 +174,7 @@ set_secret() {
 set_var() {
   local name="$1" value="$2"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    if gh variable set "$name" --body "$value" >/dev/null 2>&1; then
+    if gh variable set "$name" -R "$GH_PUBLIC_REPO" --body "$value" >/dev/null 2>&1; then
       printf '  %s✓ set%s GitHub variable %s\n' "$GREEN" "$RESET" "$name"
       return
     fi
