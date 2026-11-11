@@ -252,11 +252,14 @@
 ;; ── What the web app shows ─────────────────────────────────────────
 
 (defn banner-state
-  "Post: `{:update-available {:version :url} or nil, :update-required? bool}`.
-   Both are nil/false anywhere but a Local Install."
+  "Post: `{:update-available {:version :url} or nil, :update-required? bool,
+           :installer nil or {:status :unsynced} or {:status :ready :version :url}}`.
+   `:installer` is the Runtime gate (`freememo.installer-gate`, ticket 20).
+   All are nil/false anywhere but a Local Install."
   []
   (if-not (peer/local-install?)
-    {:update-available nil :update-required? false}
+    {:update-available nil :update-required? false :installer nil}
     {:update-available (:available @!state)
+     :installer ((requiring-resolve 'freememo.installer-gate/state))
      :update-required? (= :update-required
                          (:state ((requiring-resolve 'freememo.sync-client/status))))}))

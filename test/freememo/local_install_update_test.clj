@@ -69,13 +69,13 @@
   (with-install {:feed (feed installed)}
     (fn [li cookie s]
       (await-feed-read s)
-      (is (= {"update-available" nil "update-required?" false} (banner-state li cookie))))))
+      (is (= {"update-available" nil "installer" nil "update-required?" false} (banner-state li cookie))))))
 
 (deftest a-feed-that-cannot-be-read-shows-nothing-and-logs-one-line
   (with-install {:feed nil}
     (fn [li cookie s]
       (await-feed-read s)
-      (is (= {"update-available" nil "update-required?" false} (banner-state li cookie)))
+      (is (= {"update-available" nil "installer" nil "update-required?" false} (banner-state li cookie)))
       (is (= 1 (count (re-seq #"cannot read the update feed" (h/log-text li))))))))
 
 (deftest a-refused-sync-protocol-shows-update-to-keep-syncing

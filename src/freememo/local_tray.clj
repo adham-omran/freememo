@@ -91,14 +91,14 @@
     menu))
 
 (defn show-update!
-  "Post: the tray menu has an \"Update available\" item first when `available`
-   is `{:url}`, and none when it is nil. A click opens the installer URL."
-  [^java.awt.PopupMenu menu available]
-  (let [label "Update available"]
+  "Post: the tray menu has a \"Download the new installer\" item first when `installer`
+   is `{:status :ready :url}`, and none otherwise. A click opens the installer URL."
+  [^java.awt.PopupMenu menu installer]
+  (let [label "Download the new installer"]
     (doseq [i (reverse (range (.getItemCount menu)))
             :when (= label (.getLabel (.getItem menu i)))]
       (.remove menu (int i)))
-    (when-let [url (:url available)]
+    (when-let [url (when (= :ready (:status installer)) (:url installer))]
       (.insert menu
         (doto (java.awt.MenuItem. label)
           (.addActionListener (reify java.awt.event.ActionListener
