@@ -3,14 +3,14 @@
    old Sync Protocol message. A stub plays freememo.net (`freememo.local-install-stub`).
    The web app's banner and `GET /api/desktop/update` read the same function,
    `update-feed/banner-state`, so the test reads the endpoint through HTTP.
-   Each test starts one Local Install JVM, about a minute."
+   Each test starts one Local Install JVM, about 40 seconds."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [freememo.local-install-harness :as h]
             [freememo.local-install-stub :as stub]))
 
-(def ^:private installed "2026.11.100")
+(def ^:private installed "26.11.100")
 
 (defn- feed [version]
   {"current_version" version
@@ -55,10 +55,10 @@
     (Thread/sleep 1500)))
 
 (deftest a-newer-version-shows-update-available
-  (with-install {:feed (feed "2026.12.5")}
+  (with-install {:feed (feed "26.12.5")}
     (fn [li cookie _]
       (let [state (await-state li cookie #(get % "update-available"))]
-        (is (= {"version" "2026.12.5" "url" (str "https://example.test/"
+        (is (= {"version" "26.12.5" "url" (str "https://example.test/"
                                               (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac")
                                                 "mac.dmg" "linux.deb"))}
               (get state "update-available"))
@@ -79,7 +79,7 @@
       (is (= 1 (count (re-seq #"cannot read the update feed" (h/log-text li))))))))
 
 (deftest a-refused-sync-protocol-shows-update-to-keep-syncing
-  (with-install {:feed (feed "2026.12.5")
+  (with-install {:feed (feed "26.12.5")
                  :meta-status 409
                  :meta-body {"error" "update-required" "protocol" 2000}}
     (fn [li cookie _]

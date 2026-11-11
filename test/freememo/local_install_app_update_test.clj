@@ -15,8 +15,8 @@
             [freememo.local-install-harness :as h]
             [freememo.local-install-stub :as stub]))
 
-(def ^:private installed "2026.11.100")
-(def ^:private new-version "2026.12.5")
+(def ^:private installed "26.11.100")
+(def ^:private new-version "26.12.5")
 
 (defn- feed [sha origin & [runtime]]
   {"current_version" new-version
@@ -60,7 +60,7 @@
         (await-file (au/jar-file dir new-version))
         (is (.exists (au/jar-file dir new-version)))
         (is (.exists (au/sig-file dir new-version)))
-        (is (= #{"freememo-2026.12.5.jar" "freememo-2026.12.5.jar.sig"}
+        (is (= #{"freememo-26.12.5.jar" "freememo-26.12.5.jar.sig"}
               (set (map #(.getName ^java.io.File %) (.listFiles dir)))) "no temp file stays")))))
 
 (deftest a-jar-with-a-bad-signature-is-deleted-and-the-log-has-one-line
@@ -70,7 +70,7 @@
         (await-file (au/failed-file dir new-version))
         (is (not (.exists (au/jar-file dir new-version))))
         (is (not (.exists (au/sig-file dir new-version))))
-        (is (= 1 (count (re-seq #"app update 2026.12.5 not used: the signature is not valid" (h/log-text li)))))))))
+        (is (= 1 (count (re-seq #"app update 26.12.5 not used: the signature is not valid" (h/log-text li)))))))))
 
 (deftest a-higher-runtime-downloads-no-jar-and-offers-the-installer
   (let [kp (t/key-pair)]
