@@ -40,9 +40,12 @@ import java.util.regex.Pattern;
  *      bundled runtime, and wait for FREEMEMO_READY or FREEMEMO_SIGNIN_READY
  *      on its stdout. Every child line goes on to this process's stdout.
  *   3. When the child exits before READY, or READY does not come in time,
- *      write a .failed marker for that jar, log why, and start the next jar.
- *      When even the last jar fails, remove the markers of this run: the
- *      cause is then not the jar.
+ *      count a failed start for that jar (file freememo-<v>.jar.starts), log
+ *      why, and start the next jar. The second failed start in a row (crash or
+ *      timeout) writes the .failed marker. A READY clears the count. One slow
+ *      start (a cold disk, a first PostgreSQL initdb) so never rejects a good
+ *      jar for good. When even the last jar fails, remove the markers and
+ *      counts of this run: the cause is then not the jar.
  *   4. When the child exits with code 75 after READY (the tray's "Restart to
  *      update"), go back to step 1. Any other exit code ends this process.
  *
@@ -59,7 +62,10 @@ import java.util.regex.Pattern;
  *   freememo.boot.bundled-version   Release Version of the bundled jar
  *   freememo.update-public-key      see above
  *   freememo.boot.main-class        default freememo.local_install
- *   freememo.boot.ready-timeout-s   default 240
+ *   freememo.boot.ready-timeout-s   default 240. The app prints READY only after
+ *                                   PostgreSQL started, and a first start runs
+ *                                   initdb. Two failed starts are needed to
+ *                                   mark a jar, so 240 s stays enough.
  *   freememo.boot.java              default java.home/bin/java
  */
 public final class FreememoBoot {
@@ -137,6 +143,16 @@ public final class FreememoBoot {
 
   static Path sigOf(Path jar) { return jar.resolveSibling(jar.getFileName() + ".sig"); }
   static Path failedOf(Path jar) { return jar.resolveSibling(jar.getFileName() + ".failed"); }
+  static Path startsOf(Path jar) { return jar.resolveSibling(jar.getFileName() + ".starts"); }
+
+  /** Count one more failed start in a row for `jar`. Post: the new count. */
+  static int countFailedStart(Path jar) throws IOException {
+    int n = 0;
+    try { n = Integer.parseInt(Files.readString(startsOf(jar)).trim()); } catch (Exception ignored) { }
+    n++;
+    Files.writeString(startsOf(jar), n + "\n");
+    return n;
+  }
 
   static String versionOf(Path jar) {
     Matcher m = JAR.matcher(jar.getFileName().toString());
@@ -302,12 +318,23 @@ public final class FreememoBoot {
         boolean last = i == jars.size() - 1;
         if (!jar.equals(bundled)) log("starting " + jar.getFileName());
         o = start(jar);
-        if (o.ready) { restart = o.exit == RESTART_CODE; break; }
+        if (o.ready) {
+          if (!jar.equals(bundled)) Files.deleteIfExists(startsOf(jar));
+          restart = o.exit == RESTART_CODE;
+          break;
+        }
         if (locked) break;
         if (!jar.equals(bundled)) {
-          log(jar.getFileName() + " failed: " + o.why + (last ? "" : "; starting the previous jar"));
-          Files.writeString(failedOf(jar), o.why + "\n");
-          marked.add(failedOf(jar));
+          int n = countFailedStart(jar);
+          marked.add(startsOf(jar));
+          if (n >= 2) {
+            log(jar.getFileName() + " failed " + n + " starts in a row, so it is marked: " + o.why
+                + (last ? "" : "; starting the previous jar"));
+            Files.writeString(failedOf(jar), o.why + "\n");
+            marked.add(failedOf(jar));
+          } else {
+            log(jar.getFileName() + " failed: " + o.why + "; it gets one more start" + (last ? "" : ", after the previous jar"));
+          }
         } else {
           log("the bundled jar failed: " + o.why);
         }

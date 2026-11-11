@@ -113,20 +113,41 @@
         (is (str/includes? out "boot=true")))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
-(deftest a-new-jar-that-never-prints-ready-falls-back-to-the-previous-jar
+(defn- starts-file [data rv]
+  (io/file (au/updates-dir data) (str "freememo-" rv ".jar.starts")))
+
+(deftest a-slow-start-is-forgiven-and-a-second-failed-start-marks-the-jar
   (let [{:keys [app data]} (install! "ready") kp (t/key-pair)]
     (try
       (signed-update! data "26.12.1" "ready" kp)
       (signed-update! data "26.12.2" "hang" kp)
-      (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp :timeout 3})]
-        (is (zero? exit) out)
-        (is (= ["new-26.12.1"] (whos out)) "the previous jar runs")
-        (is (re-find #"freememo-26.12.2.jar failed: no READY after 3 s; starting the previous jar" out))
-        (is (.exists (au/failed-file (au/updates-dir data) "26.12.2")))
-        (testing "the next start does not try the failed jar again"
-          (let [{:keys [out]} (run-boot {:app app :data data :kp kp :timeout 3})]
-            (is (= ["new-26.12.1"] (whos out)))
-            (is (not (str/includes? out "26.12.2"))))))
+      (testing "first failed start: the previous jar runs, no marker"
+        (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp :timeout 2})]
+          (is (zero? exit) out)
+          (is (= ["new-26.12.1"] (whos out)) "the previous jar runs")
+          (is (re-find #"freememo-26.12.2.jar failed: no READY after 2 s; it gets one more start, after the previous jar" out))
+          (is (not (.exists (au/failed-file (au/updates-dir data) "26.12.2"))))
+          (is (.exists (starts-file data "26.12.2")))))
+      (testing "second failed start in a row: marked"
+        (let [{:keys [out]} (run-boot {:app app :data data :kp kp :timeout 2})]
+          (is (= ["new-26.12.1"] (whos out)))
+          (is (re-find #"failed 2 starts in a row, so it is marked" out))
+          (is (.exists (au/failed-file (au/updates-dir data) "26.12.2")))))
+      (testing "the next start does not try the marked jar"
+        (let [{:keys [out]} (run-boot {:app app :data data :kp kp :timeout 2})]
+          (is (= ["new-26.12.1"] (whos out)))
+          (is (not (str/includes? out "26.12.2")))))
+      (finally (t/delete-tree! app) (t/delete-tree! data)))))
+
+(deftest a-ready-clears-the-failed-start-count
+  (let [{:keys [app data]} (install! "ready") kp (t/key-pair)]
+    (try
+      (signed-update! data "26.12.2" "hang" kp)
+      (run-boot {:app app :data data :kp kp :timeout 2})
+      (is (.exists (starts-file data "26.12.2")))
+      (signed-update! data "26.12.2" "ready" kp)
+      (is (= ["new-26.12.2"] (whos (:out (run-boot {:app app :data data :kp kp :timeout 2})))))
+      (is (not (.exists (starts-file data "26.12.2"))) "READY clears the count")
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
 (deftest a-crashing-jar-falls-back-to-the-bundled-jar
@@ -136,7 +157,7 @@
       (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp})]
         (is (zero? exit) out)
         (is (= ["bundled"] (whos out)))
-        (is (re-find #"failed: the app exited with code 3 before READY; starting the previous jar" out)))
+        (is (re-find #"failed: the app exited with code 3 before READY; it gets one more start, after the previous jar" out)))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
 (deftest when-every-jar-fails-no-marker-stays
@@ -146,7 +167,8 @@
       (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp})]
         (is (= 3 exit) out)
         (is (empty? (whos out)))
-        (is (not (.exists (au/failed-file (au/updates-dir data) "26.12.1"))) "the cause was not the jar"))
+        (is (not (.exists (au/failed-file (au/updates-dir data) "26.12.1"))) "the cause was not the jar")
+        (is (not (.exists (starts-file data "26.12.1"))) "and the count is cleared"))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
 (deftest a-jar-with-a-bad-signature-is-deleted-and-never-runs
