@@ -22,7 +22,7 @@
 (defn print-release-version
   "Print the Release Version of a commit, and nothing else. This is the one
    entry point for a shell: `clojure -X:build build/print-release-version`
-   (scripts/release-version.sh wraps it). Optional arg `:commit \"<rev>\"`."
+   (tools/release/release-version.sh wraps it). Optional arg `:commit \"<rev>\"`."
   [{:keys [commit]}]
   (println (release-version/of-commit (or (some-> commit str) "HEAD"))))
 
