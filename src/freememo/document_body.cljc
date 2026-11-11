@@ -11,6 +11,7 @@
   (e/client
     (binding [dctx/user-id (:user-id m) dctx/enc-key (:enc-key m) dctx/page-topic-id (:page-topic-id m)
               dctx/kind (:kind m) dctx/pdf-root-id (:pdf-root-id m) dctx/root-topic-id (:root-topic-id m)
+              dctx/source-line (:source-line m)
               dctx/is-pdf? (:is-pdf? m) dctx/current-page (:current-page m) dctx/effective-content (:effective-content m)
               dctx/effective-content-topic-id (:effective-content-topic-id m)
               dctx/llm-enabled? (:llm-enabled? m) dctx/extract-status (:extract-status m) dctx/navigate! (:navigate! m)

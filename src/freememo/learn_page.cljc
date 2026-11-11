@@ -15,6 +15,7 @@
    [freememo.loading :as loading]
    [freememo.read-region :as read-region]
    [freememo.route-timing :as route-timing]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.user-state :as us])
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])))
@@ -85,6 +86,10 @@
         :title title
         :root? is-root
         :display-title display-title
+        ;; Line 1 of the row (plans/learn-queue-source-lines.md). nil for a
+        ;; Source Document, whose own title fills the row.
+        :source-document (when-not is-root
+                           (not-empty (:topics/source_document_title row)))
         :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
         :due-date (format-due-date (:topics/next_review_at row))
         :status (or (:topics/status row) "active")
@@ -562,6 +567,7 @@
           due-date (:due-date item)
           display-title (or (:display-title item) "")
           id (:id item)
+          source-document (:source-document item)
           source-container (:source-container item)
           [badge-text badge-color] (bibform/topic-badge kind source-container)
           open! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))
@@ -585,7 +591,18 @@
           (dom/span
             (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
             (dom/text badge-text))
-          (dom/span (dom/props {:class "learn-queue-title"}) (dom/text display-title)))
+          ;; Line 1 names the Source Document, line 2 is the title (one line
+          ;; on a desktop, two on a phone). A Source Document's row has no
+          ;; line 1, so its title sits centered in the row. The span stays
+          ;; mounted and empty there, because the Tape recycles rows.
+          (dom/span
+            (dom/props {:class "learn-queue-text"})
+            (dom/span
+              (dom/props {:class (if source-document
+                                   "learn-queue-source"
+                                   "learn-queue-source learn-queue-source--none")})
+              (dom/text (or source-document "")))
+            (dom/span (dom/props {:class "learn-queue-title"}) (dom/text display-title))))
         (dom/td
           (dom/props {:role "cell"
                       :class "learn-queue-due"
@@ -597,11 +614,26 @@
           (dom/props {:role "cell" :class "learn-queue-date"})
           (dom/text (or due-date "—")))))))
 
+(defn queue-row-height
+  "The height in px of one Learn queue row. Post: 64 on a phone (the Source
+   Document line and a title of two lines), else 48 (two lines)."
+  [phone?]
+  (if phone? 64 48))
+
+(defn queue-grid-cols
+  "The column template of the Learn queue. A phone has no Date column."
+  [phone?]
+  (if phone? "1fr 76px" "1fr 90px 120px"))
+
 (e/defn QueueTable [revision refresh user-id navigate! !queue-ready]
   (e/client
-    (let [grid-cols "1fr 90px 120px"
-          row-height 36
-          visible-rows 12]
+    (let [;; A row holds the Source Document line and the title
+          ;; (plans/learn-queue-source-lines.md). A phone drops the Date column
+          ;; and gives the title two lines, so its row is taller.
+          phone? (e/watch viewport/!phone?)
+          grid-cols (queue-grid-cols phone?)
+          row-height (queue-row-height phone?)
+          visible-rows (if phone? 8 12)]
       (dom/div
         (dom/props {:class "table-frame"
                     :role "table" :aria-label "Due topics"})
