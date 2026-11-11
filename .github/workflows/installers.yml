@@ -1,0 +1,208 @@
+# Builds the Local Install installers of a Release (ticket 17).
+#
+# The private Forgejo deploy pushes the tag v<Release Version> to this repository
+# and makes a DRAFT release with notes (tools/release/create-draft.sh). This
+# workflow runs on that tag. It builds the app jar once, builds an installer on
+# each OS, attaches everything to the draft, and publishes the draft only when
+# every asset is attached. Then it deletes older releases and tags
+# (tools/release/prune.sh).
+#
+# The Release Version is the tag name, never computed here: the public tip can
+# be an older commit than the private one when the newest commits touch only
+# excluded paths (docs/adr/0002).
+#
+# A failed job leaves the release a draft and fails the run. Nothing is signed
+# yet (ticket 11 adds signing).
+#
+# Every file that this workflow uses is in a path that tools/publish-clean/EXCLUDED
+# keeps: .github/, tools/release/, tools/installer/, src/, resources/, deps.edn.
+name: installers
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: installers
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: '25'
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad tag $tag"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  jar:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: 1.12.6.1673
+      # The jar is AOT compiled once, on Linux: a case-insensitive disk (macOS)
+      # cannot hold the classes of Electric (see src-build/build.clj).
+      - name: Build the app jar
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx4g
+        run: |
+          clojure -X:build vendor/fetch!
+          clojure -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"' :build/aot true \
+            :release-version '"${{ needs.version.outputs.version }}"'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/app.jar
+          if-no-files-found: error
+
+  linux:
+    needs: [version, jar]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: jar
+      - name: Build the .deb
+        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type deb --out out
+      # The check installs the package, as a user does, and starts it headless.
+      - name: Install the .deb and wait for READY
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "./out/$(node tools/installer/asset-names.mjs "${{ needs.version.outputs.version }}" linux)"
+          tools/installer/smoke.sh /opt/freememo/bin/FreeMemo 300
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: |
+            out/*.deb
+            out/*.jar
+          if-no-files-found: error
+
+  macos:
+    needs: [version, jar]
+    runs-on: macos-14   # arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: jar
+      - name: Install the tools that the installer bundles
+        run: brew install imagemagick graphviz dylibbundler
+      - name: Build the .dmg
+        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type dmg --out out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-macos
+          path: out/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: [version, jar]
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: jar
+      # jpackage needs the WiX Toolset on PATH to make an .msi.
+      - name: Put WiX on PATH
+        run: |
+          if ! command -v candle.exe >/dev/null 2>&1; then
+            choco install wixtoolset --no-progress -y
+          fi
+          echo "C:\\Program Files (x86)\\WiX Toolset v3.14\\bin" >> "$GITHUB_PATH"
+      - name: Build the .msi
+        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type msi --out out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows
+          path: out/*.msi
+          if-no-files-found: error
+
+  release:
+    needs: [version, linux, macos, windows]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Check that every asset exists
+        run: |
+          missing=0
+          for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
+            if [ -s "assets/$name" ]; then echo "found $name"; else echo "MISSING $name"; missing=1; fi
+          done
+          [ "$missing" = 0 ]
+      - name: Attach the assets to the draft
+        run: |
+          gh release view "v$VERSION" --json isDraft --jq .isDraft
+          for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
+            gh release upload "v$VERSION" "assets/$name" --clobber
+          done
+      # The draft stays a draft unless the release itself lists all four names.
+      - name: Check the draft lists every asset
+        run: |
+          gh release view "v$VERSION" --json assets --jq '.assets[].name' | sort > attached.txt
+          node tools/installer/asset-names.mjs "$VERSION" | sort > expected.txt
+          cat attached.txt
+          comm -13 attached.txt expected.txt > absent.txt
+          if [ -s absent.txt ]; then echo "not attached:"; cat absent.txt; exit 1; fi
+      - name: Publish the release
+        run: gh release edit "v$VERSION" --draft=false
+      - name: Delete older releases and tags
+        run: tools/release/prune.sh "$VERSION"

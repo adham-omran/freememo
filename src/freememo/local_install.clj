@@ -34,7 +34,12 @@
    quits the same way as the tray item.
 
    `--no-tab` starts the same way but opens no browser tab. The login item
-   (`freememo.local-login`) starts the installed app with it."
+   (`freememo.local-login`) starts the installed app with it.
+
+   `:gen-class` gives the jpackage launcher a main class (`freememo.local_install`).
+   It cannot use `clojure.main -m`: the arguments of the launcher command line,
+   such as `--no-tab`, replace every `--arguments` default of jpackage."
+  (:gen-class)
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
