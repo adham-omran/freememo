@@ -1,0 +1,37 @@
+name: test
+
+# This job runs every Clojure suite that needs no PostgreSQL, on each push.
+# The deploy workflows do not need this job, so a red run never blocks a deploy.
+# freememo.ci-runner picks the suites by behavior (test/CLAUDE.md, "CI"). It
+# runs each suite with the database port refused. A suite is skipped only when
+# every failure is a refused connection or a missing client build. Any other
+# failure is red.
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: freememo-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # This job uses the same runner label as the deploy job. Its job container
+    # has git, node and the docker socket. The repo does not say that it has a
+    # JDK. So the suites run in the image of the Dockerfile build stage.
+    runs-on: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout goes into the container as a tar stream. A bind mount
+      # from a job container would name a path on the daemon host. The named
+      # volumes keep the Maven and git libraries between runs.
+      # DB_PORT=1 refuses every database connection.
+      - name: Run the database-free suites
+        run: |
+          git archive HEAD | docker run --rm -i \
+            -e DB_PORT=1 \
+            -v freememo-ci-m2:/root/.m2 \
+            -v freememo-ci-gitlibs:/root/.gitlibs \
+            clojure:temurin-25-tools-deps-1.12.6.1673 \
+            sh -c 'mkdir /w && tar -x -C /w && cd /w && clj -J-Xss4m -J-Xmx3g -M:test -m freememo.ci-runner'

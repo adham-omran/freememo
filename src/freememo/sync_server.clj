@@ -176,6 +176,24 @@
               (do (.renameTo tmp target) (json-response 200 {:ok true}))
               (do (.delete tmp) (json-response 400 {:error "hash-mismatch"})))))))))
 
+(defn upload-summary
+  "What a Loki query needs to place an upload: the rows per table and the
+   lowest and highest `id` key. It holds no row content.
+   Post: {:counts {table n} :min-id n-or-nil :max-id n-or-nil}."
+  [rows]
+  (let [ids (seq (keep #(let [id (get-in % ["k" "id"])] (when (number? id) (long id))) rows))]
+    {:counts (frequencies (map #(get % "t") rows))
+     :min-id (when ids (apply min ids))
+     :max-id (when ids (apply max ids))}))
+
+(defn log-upload!
+  "Write one info line for an upload of `rows` by `user-id`. `rejected` holds
+   the rows that the server refused, so the text says what happened."
+  [user-id rows rejected]
+  (tel/log! {:level :info :id ::sync-upload
+             :data (assoc (upload-summary rows) :user-id user-id :rejected (count rejected))}
+    (format "Desktop sync upload: %d rows sent, %d rejected" (count rows) (count rejected))))
+
 (defn upload-handler
   "Step 3. Apply the desktop's pending rows in one transaction (2.4).
    Post: {:xid :rejected :remaps :corrections}. `xid` is this transaction,
@@ -200,6 +218,7 @@
                                   (:corrections result))})))]
         (doseq [row (get body "rows" []) [_ b] (get row "b")]
           (some-> (blob-file user-id (get b "sha256")) .delete))
+        (log-upload! user-id (get body "rows" []) (:rejected result))
         (when (seq (:touched result))
           (commands/bump-channels! user-id (apply/channels-for (:touched result))))
         (json-response 200 {:xid xid
@@ -373,6 +392,7 @@
                 {:base (inc (:x (jdbc/execute-one! tx ["SELECT pg_current_xact_id()::text::bigint AS x"] opts)))
                  :scm (:scm (jdbc/execute-one! tx ["UPDATE desktop_accounts SET scm = md5(random()::text)
                                                     WHERE user_id = ? RETURNING scm" user-id] opts))}))]
+        (log-upload! user-id [] [])
         (commands/bump-channels! user-id (apply/channels-for fmt/synced-tables))
         (json-response 200 {:base base :scm scm})))))
 
