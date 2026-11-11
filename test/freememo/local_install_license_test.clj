@@ -28,15 +28,15 @@
   (h/http (h/url li "/license-reminder/continue")
     {:method :post :cookie cookie :headers {"Origin" (str "http://127.0.0.1:" (:port li))}}))
 
-(deftest past-grace-the-reminder-comes-first-and-the-library-opens
-  (let [license {"state" "expired" "grace-ends" "2026-12-09T00:00:00Z"}
+(deftest unlicensed-the-reminder-comes-first-and-the-library-opens
+  (let [license {"state" "unlicensed"}
         s (stub/start! {:meta-status 200 :meta-body {"license" license "sync" "none"}})
         li1 (h/start-local-install! {:origin (:origin s)})
         data-dir (:data-dir li1)]
     (try
       (let [cookie1 (:cookie (h/sign-in! li1))]
         (testing "the first start caches the license and sync shows its refusal"
-          (is (wait-for 90000 #(= "expired" (get-in (status li1 cookie1) ["license" "state"]))))
+          (is (wait-for 90000 #(= "unlicensed" (get-in (status li1 cookie1) ["license" "state"]))))
           (is (wait-for 30000 #(= "license-refused" (get (status li1 cookie1) "state")))))
         (h/stop! li1))
       (let [li (h/start-local-install! {:data-dir data-dir :account nil :origin (:origin s)})

@@ -14,7 +14,7 @@
 (def ^:private get-root {:request-method :get :uri "/"})
 
 (deftest the-reminder-comes-first-for-each-nag-state-and-only-once
-  (doseq [state ["unlicensed" "expired" "grace"]]
+  (doseq [state ["unlicensed"]]
     (let [h (handler {"state" state})]
       (testing state
         (is (str/includes? (:body (h get-root)) "Buy a Sync License"))
@@ -39,10 +39,7 @@
     (is (str/includes? (first texts) "12 days left"))))
 
 (deftest sync-shows-its-refusal-reason
-  (is (str/includes? (section/sync-text {:state :license-refused :license {"state" "unlicensed"}}) "trial has ended"))
-  (is (str/includes? (section/sync-text {:state :license-refused
-                                         :license {"state" "expired" "grace-ends" "2026-12-09T00:00:00Z"}})
-        "grace period ended on 2026-12-09")))
+  (is (str/includes? (section/sync-text {:state :license-refused :license {"state" "unlicensed"}}) "trial has ended")))
 
 (deftest sync-text-differs-on-a-local-install
   (let [signed-out (section/sync-text {:state :signed-out})
@@ -55,9 +52,10 @@
     (is (str/includes? update "freememo.net"))
     (is (str/includes? local-update "Install the new version"))))
 
-(deftest the-grace-reminder-shows-its-end-date
-  (let [body (:body ((handler {"state" "grace" "grace-ends" "2026-12-09T00:00:00Z"}) get-root))]
-    (is (str/includes? body "until 2026-12-09."))))
+(deftest the-server-never-sends-grace-or-expired
+  (testing "a cached state that the server no longer sends starts no reminder"
+    (doseq [state ["expired" "grace"]]
+      (is (= "the app" (:body ((handler {"state" state}) get-root)))))))
 
 (deftest no-buy-link-while-the-license-is-not-for-sale
   (let [h (ll/wrap-reminder app {:origin "https://freememo.test" :buy? (constantly false)
