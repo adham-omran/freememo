@@ -67,10 +67,24 @@ jobs:
           clojure -X:build vendor/fetch!
           clojure -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"' :build/aot true \
             :release-version '"${{ needs.version.outputs.version }}"'
+      # The release feed (ticket 18) reads the Runtime and the Sync Protocol of
+      # this commit from this file. Only the commit itself knows them.
+      - name: Write the release data
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          mkdir -p meta
+          sha=$(sha256sum target/app.jar | cut -d' ' -f1)
+          clojure -M -e "(require 'freememo.desktop-version) (println (cheshire.core/generate-string {:release_version \"$version\" :runtime freememo.desktop-version/runtime :sync_protocol freememo.desktop-version/sync-protocol :app_jar_sha256 \"$sha\"}))" > "meta/$(node tools/installer/asset-names.mjs "$version" release)"
+          cat meta/*.json
       - uses: actions/upload-artifact@v4
         with:
           name: app-jar
           path: target/app.jar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-json
+          path: meta/*.json
           if-no-files-found: error
 
   linux:

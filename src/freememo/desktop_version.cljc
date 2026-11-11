@@ -11,6 +11,13 @@
 
 (def sync-protocol 1)
 
+(def runtime
+  "The Runtime of this Release: one number. It rises by one when a change needs
+   something that an App Update cannot replace (the launcher, the JRE, bundled
+   tools, PostgreSQL). The release workflow writes it into
+   `freememo-<rv>-release.json`; ticket 20 adds the gate."
+  1)
+
 (def protocol-header
   "The request header with which a Local Install sends its Sync Protocol on
    every sync, sign-in and AI proxy call."
