@@ -15,6 +15,7 @@
    [clojure.walk :as walk]
    [freememo.ai-tiers :as ai-tiers]
    [freememo.anki-digest :as digest]
+   [freememo.bytea-stream :as bytea-stream]
    [freememo.cloze :as cloze]
    [freememo.csl-util :as csl]
    [freememo.html-cleaner :as cleaner]
@@ -3542,6 +3543,31 @@
        (str "Schema step " step))
      result)))
 
+(defn- setup-schema-file-storage!
+  "Store new values of the two `bytea` file columns uncompressed.
+
+   A file goes out in `substring` chunks (`freememo.bytea-stream`). For a
+   compressed value, PostgreSQL decompresses from the start for each chunk, so
+   a stream costs O(n^2) work. With EXTERNAL each chunk reads only its own TOAST
+   chunks. Most PDFs and images do not compress anyway. The ALTER changes only
+   the catalog and rewrites no stored value. It needs an ACCESS EXCLUSIVE lock,
+   so it runs only while a column is not EXTERNAL yet, and it gives up after
+   5 s instead of queuing the routes behind it. The next boot tries again
+   (plans/bytea-streaming-memory.md)."
+  []
+  (doseq [[table column] [["topic_files" "file_data"] ["media" "bytes"]]
+          :when (not= "e" (:s (jdbc/execute-one! ds ["SELECT attstorage::text AS s FROM pg_attribute
+                                                      WHERE attrelid = ?::regclass AND attname = ?"
+                                                     table column]
+                                {:builder-fn rs/as-unqualified-lower-maps})))]
+    (try
+      (jdbc/with-transaction [tx ds]
+        (jdbc/execute! tx ["SET LOCAL lock_timeout = '5s'"])
+        (jdbc/execute! tx [(format "ALTER TABLE %s ALTER COLUMN %s SET STORAGE EXTERNAL" table column)]))
+      (catch java.sql.SQLException e
+        (tel/log! {:level :warn :id ::file-storage-not-set :data {:table table :error (ex-message e)}}
+          "Could not set EXTERNAL storage. The next boot tries again")))))
+
 (defn- setup-schema-availability!
   "One row per closed calendar month (UTC): the minutes up, the minutes in the
    month and the Uptime Target that applied. Operator data, so account transfer
@@ -3672,6 +3698,8 @@
   (run-schema-step! #'setup-schema-poem!)
   (run-schema-step! #'setup-schema-card-versions!)
   (run-schema-step! #'setup-schema-activity!)
+  ;; After `topic_files` (topics) and `media` (activity) exist.
+  (run-schema-step! #'setup-schema-file-storage!)
   (run-schema-step! #'setup-schema-assistant!)
   (run-schema-step! #'setup-schema-annotations!)
   (run-schema-step! #'setup-schema-sources!)
@@ -6164,6 +6192,19 @@
      (sql/format {:select [:file_data :file_size :mime_type]
                   :from [:topic_files]
                   :where [:and [:= :topic_id topic-id] [:= :role role]]}))))
+
+(defn open-topic-file-stream
+  "Stream the topic's file for `role` in chunks, for a route that serves it.
+   Returns `{:length n :stream in :mime-type m}`, or nil when the topic has no
+   such file. Use this, not `get-topic-file`, to send a file: that one reads
+   the whole value into the heap at three times its size
+   (plans/bytea-streaming-memory.md)."
+  [topic-id role]
+  (when-let [mime (jdbc/execute-one! ds ["SELECT mime_type FROM topic_files WHERE topic_id = ? AND role = ?" topic-id role]
+                    {:builder-fn rs/as-unqualified-lower-maps})]
+    (some-> (bytea-stream/open! ds {:table "topic_files" :column "file_data"
+                                    :where "t.topic_id = ? AND t.role = ?" :params [topic-id role]})
+      (assoc :mime-type (:mime_type mime)))))
 
 (defn topic-file-exists?
   "True iff a topic has a stored binary file blob for the role ('main' default)."
@@ -9928,8 +9969,24 @@
                  :from [:media]
                  :where [:and [:= :user_id user-id] [:= :sha256 sha256]]})))
 
+(defn get-media-info
+  "The media row `id` without its bytes: id, user_id, kind, mime_type and
+   byte_size. Nil when it does not exist."
+  [id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :user_id :kind :mime_type :byte_size]
+                 :from [:media]
+                 :where [:= :id id]})))
+
+(defn open-media-stream
+  "Stream media `id`'s bytes in chunks. Returns `{:length n :stream in}`, or nil
+   when it does not exist. Check ownership first, with `get-media-info`."
+  [id]
+  (bytea-stream/open! ds {:table "media" :column "bytes" :where "t.id = ?" :params [id]}))
+
 (defn get-media
-  "Get a media row by id (includes bytes for serving)."
+  "Get a media row by id, bytes included. To serve the bytes, use
+   `open-media-stream`: this reads the whole value into the heap."
   [id]
   (jdbc/execute-one! ds
     (sql/format {:select [:id :user_id :kind :bytes :mime_type :byte_size]

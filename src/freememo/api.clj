@@ -742,13 +742,15 @@
         (json-response 401 {:success false :error "Not authenticated"}))))
 
 (defn get-media-handler
-  "Serve media bytes by id, auth-checked per user."
+  "Serve media bytes by id, auth-checked per user. The bytes go out in chunks
+   (`db/open-media-stream`), never whole."
   [request]
   (if-let [user-id (require-auth request)]
     (try
       (let [uri (:uri request)
             media-id (-> uri (clojure.string/split #"/") last parse-long)
-            row (db/get-media media-id)]
+            row (db/get-media-info media-id)
+            stream (when (= (:media/user_id row) user-id) (db/open-media-stream media-id))]
         (cond
           (nil? row)
           {:status 404 :body "Not found"}
@@ -756,18 +758,23 @@
           (not= (:media/user_id row) user-id)
           {:status 403 :body "Forbidden"}
 
+          (nil? stream)
+          {:status 404 :body "Not found"}
+
           :else
           {:status 200
            :headers {"Content-Type" (:media/mime_type row)
+                     "Content-Length" (str (:length stream))
                      "Cache-Control" "private, max-age=86400"}
-           :body (io/input-stream (:media/bytes row))}))
+           :body (:stream stream)}))
       (catch Exception e
         (tel/error! {:id ::get-media-handler} e)
         {:status 500 :body "Internal server error"}))
     {:status 401 :body "Not authenticated"}))
 
 (defn get-pdf-handler
-  "Serve PDF file by topic ID from database."
+  "Serve PDF file by topic ID from database, in chunks
+   (`db/open-topic-file-stream`)."
   [request]
   (if-let [user-id (require-auth request)]
     (try
@@ -775,7 +782,7 @@
             topic-id (-> uri (clojure.string/split #"/") last parse-long)
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
-          (if-let [file-row (db/get-topic-file topic-id)]
+          (if-let [file (db/open-topic-file-stream topic-id "main")]
             {:status 200
              ;; Live Documents mutate the blob behind this stable URL on every
              ;; append; the IndexedDB cache (pdf-cache) is the perf layer, so a
@@ -787,8 +794,9 @@
                        ;; `content-disposition` is what makes this one header
                        ;; line whatever the title is.
                        "Content-Disposition" (input/content-disposition
-                                               "inline" (:topics/title topic) ".pdf")}
-             :body (io/input-stream (:topic_files/file_data file-row))}
+                                               "inline" (:topics/title topic) ".pdf")
+                       "Content-Length" (str (:length file))}
+             :body (:stream file)}
             {:status 404
              :body "PDF not found"})
           {:status 404
@@ -819,16 +827,17 @@
             topic-id (-> uri (clojure.string/split #"/") last parse-long)
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
-          (if-let [file-row (db/get-topic-file topic-id
-                              (if (audio-role-kinds (:topics/kind topic)) "audio" "main"))]
+          (if-let [file (db/open-topic-file-stream topic-id
+                          (if (audio-role-kinds (:topics/kind topic)) "audio" "main"))]
             {:status 200
-             :headers {"Content-Type" (or (:topic_files/mime_type file-row) "audio/mpeg")
+             :headers {"Content-Type" (or (:mime-type file) "audio/mpeg")
+                       "Content-Length" (str (:length file))
                        ;; No extension: audio formats vary and `topic_files`
                        ;; records a mime type, not a suffix. The Content-Type
                        ;; above is what the player reads either way.
                        "Content-Disposition" (input/content-disposition
                                                "inline" (:topics/title topic) nil)}
-             :body (io/input-stream (:topic_files/file_data file-row))}
+             :body (:stream file)}
             {:status 404 :body "Audio not found"})
           {:status 404 :body "Audio not found"}))
       (catch Exception e

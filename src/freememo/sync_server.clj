@@ -28,6 +28,7 @@
             [next.jdbc.result-set :as rs]
             [taoensso.telemere :as tel]
             [freememo.account-transfer-format :as fmt]
+            [freememo.bytea-stream :as bytea-stream]
             [freememo.commands :as commands]
             [freememo.db :as db]
             [freememo.desktop-auth :as desktop-auth]
@@ -273,22 +274,33 @@
         (if-not (and kind (map? key-map))
           (json-response 400 {:error "bad-blob-ref"})
           (let [meta (apply/table-meta db/ds table)
+                row-where (format "(%s) = (SELECT %s FROM jsonb_populate_record(null::%s, ?::jsonb) k)"
+                            (str/join ", " (map #(str "t." %) (:key meta)))
+                            (str/join ", " (map #(str "k." %) (:key meta)))
+                            (name table))
+                ;; A bytea value is not selected here: `bytea-stream` sends it
+                ;; in chunks (plans/bytea-streaming-memory.md).
                 row (jdbc/execute-one! db/ds
-                      [(format "SELECT %s AS v, freememo_sync_owner(?, ?::jsonb) AS owner
-                                FROM %s t WHERE (%s) = (SELECT %s FROM jsonb_populate_record(null::%s, ?::jsonb) k)"
-                         (if (= kind :bytea) (str "t." c) (str "t." c "::bigint"))
-                         (name table)
-                         (str/join ", " (map #(str "t." %) (:key meta)))
-                         (str/join ", " (map #(str "k." %) (:key meta)))
-                         (name table))
-                       t k k] opts)]
+                      [(format "SELECT %s AS v, freememo_sync_owner(?, ?::jsonb) AS owner FROM %s t WHERE %s"
+                         (if (= kind :bytea) (str "t." c " IS NOT NULL") (str "t." c "::bigint"))
+                         (name table) row-where)
+                       t k k] opts)
+                found? (and row (some? (:v row)) (not (false? (:v row)))
+                         (= (some-> (:owner row) long) (long user-id)))
+                ;; `table` and `c` go into SQL text. They are safe because
+                ;; `apply/synced-table` and `schema/blob-columns` allow only
+                ;; known names (`kind` is nil for any other column).
+                stream (when (and found? (= kind :bytea))
+                         (bytea-stream/open! db/ds {:table (name table) :column c
+                                                    :where row-where :params [k]}))]
             (cond
-              (or (nil? row) (nil? (:v row)) (not= (some-> (:owner row) long) (long user-id)))
+              (or (not found?) (and (= kind :bytea) (nil? stream)))
               (json-response 404 {:error "not-found"})
 
               (= kind :bytea)
-              {:status 200 :headers {"Content-Type" "application/octet-stream"}
-               :body (io/input-stream ^bytes (:v row))}
+              {:status 200 :headers {"Content-Type" "application/octet-stream"
+                                     "Content-Length" (str (:length stream))}
+               :body (:stream stream)}
 
               :else
               (let [size (with-open [conn (jdbc/get-connection db/ds)]
