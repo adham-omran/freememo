@@ -31,14 +31,28 @@
 ;; ---------------------------------------------------------------------------
 
 #?(:clj
+   (defn- date-part->long
+     "One CSL date part as a long. CSL-JSON allows a number or a string, and
+      Zotero's /csljson export writes strings (`[[\"2002\" \"9\"]]`).
+      Post: a long, or nil for a part that is neither a number nor digits."
+     [p]
+     (cond
+       (number? p)  (long p)
+       (string? p)  (some-> (re-matches #"\s*(\d+)\s*" p) second parse-long))))
+
+#?(:clj
    (defn- format-date-parts
-     "Render a CSL date-parts vector as YYYY-MM-DD / YYYY-MM / YYYY."
+     "Render a CSL date-parts vector as YYYY-MM-DD / YYYY-MM / YYYY.
+      Pre : `dp` is any value. Stored CSL comes from importers unchanged.
+      Post: a string, or nil when `dp` has no numeric year. Never throws on a
+            string part: `(int \"2002\")` did, and that failed the Electric
+            server process (plans/biblio-zotero-string-dates.md)."
      [dp]
      (when (and (sequential? dp) (sequential? (first dp)))
-       (let [[y m d] (first dp)]
+       (let [[y m d] (map date-part->long (first dp))]
          (cond
-           (and y m d) (format "%04d-%02d-%02d" (int y) (int m) (int d))
-           (and y m)   (format "%04d-%02d" (int y) (int m))
+           (and y m d) (format "%04d-%02d-%02d" y m d)
+           (and y m)   (format "%04d-%02d" y m)
            y           (str y))))))
 
 #?(:clj
