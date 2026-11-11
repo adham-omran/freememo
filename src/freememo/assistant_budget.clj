@@ -70,7 +70,7 @@
   "Split `rows` into runs of consecutive rows, oldest first, where each run
    estimates at most `slice-budget` tokens.
 
-   Pre:  each row is {:id :chars}, in id order.
+   Pre:  each row is {:id :chars}, in transcript order.
    Post: a vector of [first-id last-id] pairs that covers every row once, in
          order. A row larger than the budget is a slice of its own, because a
          message cannot be split."

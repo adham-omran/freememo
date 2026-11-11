@@ -672,6 +672,79 @@
                                                     WHERE m.chat_id = c.id)"]))
       0))
 
+(defn- setup-assistant-message-ord!
+  "`assistant_messages.ord`, a message's position in its chat. Every reader
+   orders a chat's rows by (ord, id), never by id alone.
+
+   An id does not follow time. A desktop gives its rows ids from a block at
+   2^40 or more (`freememo.sync-schema/client-id-floor`), and the server keeps
+   its sequence below 2^40. So a turn the server adds to an uploaded chat gets
+   a smaller id than the turns before it (plans/assistant-message-order.md).
+
+   A trigger sets ord on every write path: the server's inserts, an account
+   import and a sync apply, on both peers. It fires ALWAYS, even in a session
+   in replica mode. An insert with no ord gets the
+   chat's largest ord + 1. An update with no ord keeps the old one, so a
+   payload from a peer that predates the column cannot clear it. Two peers
+   that add to one chat while apart can give two rows the same ord. The id
+   breaks that tie.
+
+   The backfill orders a chat by id, which was the order before this column.
+   A chat that holds ids on both sides of 2^40 orders by `mtime` first. The
+   sync triggers stamp it with clock_timestamp() on the peer that wrote the
+   row, and it is a TIMESTAMPTZ, so it compares across peers. Idempotent: it
+   fills only rows with no ord."
+  []
+  (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS ord INTEGER"])
+  (jdbc/execute! ds ["
+    CREATE OR REPLACE FUNCTION freememo_assistant_message_ord() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.ord IS NULL THEN
+        IF TG_OP = 'UPDATE' THEN
+          NEW.ord := OLD.ord;
+        ELSE
+          NEW.ord := coalesce((SELECT max(m.ord) FROM assistant_messages m
+                                WHERE m.chat_id = NEW.chat_id), 0) + 1;
+        END IF;
+      END IF;
+      RETURN NEW;
+    END $$"])
+  (jdbc/execute! ds ["DROP TRIGGER IF EXISTS assistant_messages_ord ON assistant_messages"])
+  (jdbc/execute! ds ["CREATE TRIGGER assistant_messages_ord
+                      BEFORE INSERT OR UPDATE ON assistant_messages
+                      FOR EACH ROW EXECUTE FUNCTION freememo_assistant_message_ord()"])
+  ;; ALWAYS: a session in session_replication_role = replica skips ordinary
+  ;; triggers, and an insert there would then fail the NOT NULL below.
+  (jdbc/execute! ds ["ALTER TABLE assistant_messages ENABLE ALWAYS TRIGGER assistant_messages_ord"])
+  (let [mtime? (some? (jdbc/execute-one! ds
+                        ["SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'public' AND table_name = 'assistant_messages'
+                             AND column_name = 'mtime'"]))]
+    (jdbc/execute! ds
+      [(str "UPDATE assistant_messages m SET ord = o.ord
+               FROM (SELECT id, row_number() OVER (
+                              PARTITION BY chat_id ORDER BY "
+         (if mtime?
+           "CASE WHEN mixed THEN mtime END NULLS FIRST, id"
+           "id")
+         ") AS ord
+                       FROM (SELECT m2.*, bool_or(m2.id >= ?) OVER (PARTITION BY m2.chat_id)
+                                      AND bool_or(m2.id < ?) OVER (PARTITION BY m2.chat_id)
+                                      AS mixed
+                               FROM assistant_messages m2
+                              WHERE m2.chat_id IN (SELECT chat_id FROM assistant_messages
+                                                    WHERE ord IS NULL)) s) o
+              WHERE m.id = o.id AND m.ord IS NULL")
+       sync-schema/client-id-floor sync-schema/client-id-floor]))
+  (jdbc/execute! ds ["ALTER TABLE assistant_messages ALTER COLUMN ord SET NOT NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat_ord
+                      ON assistant_messages(chat_id, ord, id)"])
+  ;; A checkpoint covers a range of a chat in (ord, id) order. Its first id
+  ;; can be larger than its last in a chat that sync filled.
+  (jdbc/execute! ds ["ALTER TABLE assistant_checkpoints
+                      DROP CONSTRAINT IF EXISTS assistant_checkpoints_check"]))
+
 (defn- setup-schema-assistant!
   "AI assistant chats, message transcripts, durable runs, and evidence.
    Split out of setup-schema (see 7.4); called from it in order."
@@ -707,6 +780,7 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS client_id TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
                       ON assistant_messages(chat_id, id)"])
+  (setup-assistant-message-ord!)
   (delete-messageless-assistant-chats!)
   ;; Persona for this chat, an :id from freememo.assistant-modes/registry. Mode
   ;; is per chat so a transcript is one persona end to end. NULL on every chat
@@ -4155,8 +4229,10 @@
   "`chat-id` and every ancestor of it, IFF the chat is owned by `user-id`.
    Ancestors are read whether staged or not: a child keeps its inherited
    transcript while an ancestor waits in the undo window.
-   Post: unqualified rows {:id :parent_chat_id :fork_message_id :title}, in no
-         order. Empty for a foreign or missing chat."
+   Post: unqualified rows {:id :parent_chat_id :fork_message_id :fork_chat_id
+         :title}, in no order. :fork_chat_id is the chat that holds the fork
+         message, which is the parent or one of its ancestors. Empty for a
+         foreign or missing chat."
   [user-id chat-id]
   (jdbc/execute! ds
     ["WITH RECURSIVE line AS (
@@ -4166,7 +4242,9 @@
         SELECT c.id, c.parent_chat_id, c.fork_message_id, c.title, c.user_id
           FROM assistant_chats c JOIN line ON c.id = line.parent_chat_id
          WHERE c.user_id = line.user_id)
-      SELECT id, parent_chat_id, fork_message_id, title FROM line"
+      SELECT line.id, line.parent_chat_id, line.fork_message_id,
+             fm.chat_id AS fork_chat_id, line.title
+        FROM line LEFT JOIN assistant_messages fm ON fm.id = line.fork_message_id"
      chat-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
@@ -4274,20 +4352,23 @@
 (defn get-assistant-messages
   "Transcript for `chat-id`, oldest first (learner/assistant turns only —
    reading context is injected transiently per send, not stored here).
-   With `through-id`, only the messages up to that id: the part of an
-   ancestor's transcript a fork inherits."
+   With `through-id`, only the messages up to and including that message: the
+   part of an ancestor's transcript a fork inherits.
+   The order is (ord, id), never id alone (`setup-assistant-message-ord!`)."
   ([chat-id]
    (jdbc/execute! ds
      (sql/format {:select [:id :role :content :client_id :created_at]
                   :from [:assistant_messages]
                   :where [:= :chat_id chat-id]
-                  :order-by [[:id :asc]]})))
+                  :order-by [[:ord :asc] [:id :asc]]})))
   ([chat-id through-id]
    (jdbc/execute! ds
-     (sql/format {:select [:id :role :content :client_id :created_at]
-                  :from [:assistant_messages]
-                  :where [:and [:= :chat_id chat-id] [:<= :id through-id]]
-                  :order-by [[:id :asc]]}))))
+     ["SELECT m.id, m.role, m.content, m.client_id, m.created_at
+         FROM assistant_messages m
+        WHERE m.chat_id = ?
+          AND (m.ord, m.id) <= (SELECT t.ord, t.id FROM assistant_messages t WHERE t.id = ?)
+        ORDER BY m.ord, m.id"
+      chat-id through-id])))
 
 (defn get-assistant-message
   "One message IFF its chat belongs to user-id, else nil."
@@ -4617,13 +4698,16 @@
 (defn get-latest-assistant-answer-tokens
   "The token columns of the newest answer run in an owned chat that the
    provider reported an input count for, or nil. Compact runs measure their
-   summary request, not the chat, so they never answer."
+   summary request, not the chat, so they never answer. Newest is the
+   position of the run's answer message, because a run id does not follow
+   time in a chat that sync filled."
   [user-id chat-id]
   (jdbc/execute-one! ds
     [(str "SELECT r.input_tokens, r.output_tokens, r.reasoning_tokens "
        "FROM assistant_runs r JOIN assistant_chats c ON c.id = r.chat_id "
+       "JOIN assistant_messages m ON m.id = r.assistant_message_id "
        "WHERE c.user_id = ? AND c.id = ? AND r.kind = 'answer' "
-       "AND r.input_tokens IS NOT NULL ORDER BY r.id DESC LIMIT 1")
+       "AND r.input_tokens IS NOT NULL ORDER BY m.ord DESC, m.id DESC LIMIT 1")
      user-id chat-id]
     {:builder-fn rs/as-unqualified-maps}))
 
@@ -4725,8 +4809,9 @@
   [user-id chat-id]
   (jdbc/execute! ds
     [(str "SELECT cp.*, r.run_uuid, src.title AS chat_title, "
-       "(SELECT max(m.id) FROM assistant_messages m "
-       "  WHERE m.chat_id = cp.for_chat_id AND m.created_at <= cp.created_at) "
+       "(SELECT m.id FROM assistant_messages m "
+       "  WHERE m.chat_id = cp.for_chat_id AND m.created_at <= cp.created_at "
+       "  ORDER BY m.ord DESC, m.id DESC LIMIT 1) "
        "  AS after_message_id "
        "FROM assistant_checkpoints cp "
        "JOIN assistant_runs r ON r.id = cp.run_id "

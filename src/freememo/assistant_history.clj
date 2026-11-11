@@ -82,29 +82,53 @@
         read-options))))
 
 (def ^:private timeline-sql
+  "Every event of a chat's transcript as (section, position, kind, event_id).
+
+   No position comes from a message id, because an id does not follow time in
+   a chat that sync filled (plans/assistant-message-order.md). A row's
+   position is 2 x its `ord`, and a checkpoint after a row is at 2 x ord + 1.
+   The chat's own rows are section 2 and its fork event section 1. An
+   ancestor at depth d is section -d, so the root comes first.
+
+   Each ancestor line carries a cut: the message its rows end at, and the chat
+   that holds it. A parent's cut is its child's fork message, unless the
+   child's own cut lives above the child. Then the cut passes up unchanged and
+   the child adds no rows, as for a fork at a row the parent inherited."
   "WITH RECURSIVE line AS (
-     SELECT id, parent_chat_id, fork_message_id, title, user_id,
-            9223372036854775807::bigint AS through_id, true AS own
-       FROM assistant_chats WHERE id = ? AND user_id = ? AND staged_delete_id IS NULL
+     SELECT c.id, c.parent_chat_id, c.fork_message_id, fm.chat_id AS fork_chat_id,
+            c.title, c.user_id, 0 AS depth,
+            NULL::bigint AS cut_id, NULL::bigint AS cut_chat, true AS own
+       FROM assistant_chats c LEFT JOIN assistant_messages fm ON fm.id = c.fork_message_id
+      WHERE c.id = ? AND c.user_id = ? AND c.staged_delete_id IS NULL
      UNION ALL
-     SELECT c.id, c.parent_chat_id, c.fork_message_id, c.title, c.user_id,
-            least(line.through_id, line.fork_message_id), false
+     SELECT c.id, c.parent_chat_id, c.fork_message_id, fm.chat_id, c.title, c.user_id,
+            line.depth + 1,
+            CASE WHEN line.own OR line.cut_chat = line.id
+                 THEN line.fork_message_id ELSE line.cut_id END,
+            CASE WHEN line.own OR line.cut_chat = line.id
+                 THEN line.fork_chat_id ELSE line.cut_chat END,
+            false
        FROM assistant_chats c JOIN line ON c.id = line.parent_chat_id
+       LEFT JOIN assistant_messages fm ON fm.id = c.fork_message_id
       WHERE c.user_id = line.user_id),
    events AS (
-     SELECT CASE WHEN l.own THEN 2 ELSE 0 END AS section, m.id * 2 AS position,
+     SELECT CASE WHEN l.own THEN 2 ELSE -l.depth END AS section, m.ord::bigint * 2 AS position,
             0 AS kind, m.id AS event_id, m.id AS message_id, NULL::bigint AS checkpoint_id,
             NOT l.own AS inherited, NULL::text AS chat_title
        FROM assistant_messages m JOIN line l ON l.id = m.chat_id
-      WHERE m.id <= l.through_id
+       LEFT JOIN assistant_messages cut ON cut.id = l.cut_id
+      WHERE l.own OR (l.cut_chat = l.id AND (m.ord, m.id) <= (cut.ord, cut.id))
      UNION ALL
-     SELECT CASE WHEN cp.scope = 'inherited' THEN 0 ELSE 2 END,
-            coalesce(cp.covered_through_message_id, 0) * 2 + 1, 1, cp.id,
+     SELECT CASE WHEN cp.scope = 'inherited' THEN coalesce(-cl.depth, 0) ELSE 2 END,
+            coalesce(cm.ord, 0)::bigint * 2 + 1, 1, cp.id,
             NULL::bigint, cp.id, false, NULL::text
        FROM assistant_checkpoints cp JOIN line l ON l.id = cp.chat_id AND l.own
+       LEFT JOIN assistant_messages cm ON cm.id = cp.covered_through_message_id
+       LEFT JOIN line cl ON cl.id = cm.chat_id
      UNION ALL
-     SELECT 2, coalesce((SELECT max(m.id) FROM assistant_messages m
-                        WHERE m.chat_id = cp.for_chat_id AND m.created_at <= cp.created_at), 0) * 2 + 1,
+     SELECT 2, coalesce((SELECT m.ord FROM assistant_messages m
+                          WHERE m.chat_id = cp.for_chat_id AND m.created_at <= cp.created_at
+                          ORDER BY m.ord DESC, m.id DESC LIMIT 1), 0)::bigint * 2 + 1,
             1, cp.id, NULL::bigint, cp.id, false, src.title
        FROM assistant_checkpoints cp JOIN line l ON l.id = cp.for_chat_id AND l.own
        JOIN assistant_chats src ON src.id = cp.chat_id AND src.user_id = l.user_id
@@ -218,13 +242,15 @@
        user-id chat-id] read-options)))
 
 (defn latest-answer-message-id
-  "Keep the newest answer available through its terminal transition."
+  "Keep the newest answer available through its terminal transition. Newest
+   is the answer's position in the chat: a run id does not follow time in a
+   chat that sync filled."
   [user-id chat-id]
   (:assistant_message_id
     (jdbc/execute-one! db/ds
       ["SELECT r.assistant_message_id FROM assistant_runs r
          JOIN assistant_chats c ON c.id = r.chat_id
+         JOIN assistant_messages m ON m.id = r.assistant_message_id
         WHERE c.user_id = ? AND c.id = ? AND c.staged_delete_id IS NULL
-          AND r.assistant_message_id IS NOT NULL
-        ORDER BY r.id DESC LIMIT 1"
+        ORDER BY m.ord DESC, m.id DESC LIMIT 1"
        user-id chat-id] read-options)))

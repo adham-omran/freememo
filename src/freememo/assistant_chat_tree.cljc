@@ -7,42 +7,49 @@
    inherits its parent's transcript up to the fork message, and a parent reads
    the part of each included descendant after its fork point.
 
-   Message ids come from one global serial, and a chat's own messages are
-   written after it exists, so every own message of a child has an id greater
-   than its fork message. The path arithmetic below depends on that.
+   A message id does not follow time, so nothing here compares message ids.
+   A desktop gives its rows ids at 2^40 or more and the server keeps its own
+   below that, so a server turn in a chat that sync filled has a smaller id
+   than the desktop turns before it (plans/assistant-message-order.md). The
+   path follows which chat holds each fork message instead.
 
    The browser and the server both read this namespace, so it has no reader
    conditionals and no requires that one of them lacks.
 
-   A chat map here carries :id, :parent-id and :fork-message-id. The branch and
-   history functions also read :title, :excluded? and :label."
+   A chat map here carries :id, :parent-id and :fork-message-id. The path also
+   reads :fork-chat-id, the chat that holds the fork message: the parent, or
+   an ancestor of it when the fork is at a row the parent inherited. The
+   branch and history functions also read :title, :excluded? and :label."
   (:require [clojure.string :as str]))
 
 (defn- path-to
   "The (chat id, last message id) pairs that give `chat-id`'s transcript up to
-   message `through`, root first. A chat contributes a pair only when it can
-   hold an own message at or before `through`."
-  [chats chat-id through]
-  (let [{:keys [parent-id fork-message-id]} (get chats chat-id)
-        earlier (if parent-id
-                  (path-to chats parent-id (min through fork-message-id))
-                  [])]
-    (cond-> earlier
-      (or (nil? parent-id) (> through fork-message-id))
-      (conj [chat-id through]))))
+   message `through`, which chat `through-chat` holds, root first. `chat-id`
+   contributes a pair only when it holds `through`. Otherwise `through` lives
+   in an ancestor, and `chat-id` adds no rows."
+  [chats chat-id through through-chat]
+  (let [{:keys [parent-id fork-message-id fork-chat-id]} (get chats chat-id)
+        holds? (= chat-id through-chat)]
+    (cond-> (cond
+              (nil? parent-id) []
+              holds? (path-to chats parent-id fork-message-id fork-chat-id)
+              :else (path-to chats parent-id through through-chat))
+      holds? (conj [chat-id through]))))
 
 (defn inherited-path
   "The transcript a chat inherits, as [chat-id last-message-id] pairs from the
    root to the fork point.
 
-   Pre:  `chats` maps an id to a chat map for `chat-id` and every ancestor.
-   Post: [] for a root chat. Otherwise the pairs, oldest first. The messages
-         they name, read in order, ascend by id. A fork at a message the
-         parent inherited names no pair for the parent."
+   Pre:  `chats` maps an id to a chat map for `chat-id` and every ancestor,
+         each with :fork-chat-id when it has a parent.
+   Post: [] for a root chat. Otherwise the pairs, oldest first. Each pair
+         names its chat's rows in (ord, id) order up to the message it names.
+         A fork at a message the parent inherited names no pair for the
+         parent."
   [chats chat-id]
-  (let [{:keys [parent-id fork-message-id]} (get chats chat-id)]
+  (let [{:keys [parent-id fork-message-id fork-chat-id]} (get chats chat-id)]
     (if parent-id
-      (path-to chats parent-id fork-message-id)
+      (path-to chats parent-id fork-message-id fork-chat-id)
       [])))
 
 (defn fork-order
