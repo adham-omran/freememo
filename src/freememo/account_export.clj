@@ -208,19 +208,16 @@
 (defn- write-video-blob!
   "Write one large object as an archive entry.
 
-   Pre : `oid` names a live large object of `byte-size` bytes.
+   Pre : `row` (`largeobj/topic-row`) holds a live large object of
+         `byte-size` bytes.
    Post: the entry holds exactly those bytes.
-   Invariant (§5.3.5): the stream is opened and closed inside this call, so at
-         most one large-object connection is held at a time. `open-range-stream!`
-         owns its own connection and transaction until the stream closes, and
-         opening one per video at once would exhaust the pool."
-  ;; byte-size carries no ^long hint: five args plus a primitive hint is more
-  ;; than the JVM's primitive-arg fn arity, and the error names the arity rather
-  ;; than the hint.
-  [^ZipOutputStream zos ds ^String path oid byte-size]
+   Invariant: `open-range-stream!` reads one chunk per query and holds no
+         connection between chunks, so an export takes no pool connection
+         while it writes (plans/largeobj-chunked-streaming.md)."
+  [^ZipOutputStream zos ds ^String path row byte-size]
   (write-entry! zos path
     (fn [^OutputStream out]
-      (with-open [in ^InputStream (lo/open-range-stream! ds oid 0 (long byte-size))]
+      (with-open [in ^InputStream (lo/open-range-stream! ds row 0 (long byte-size))]
         (let [buf (byte-array copy-buffer-bytes)]
           (loop []
             (let [n (.read in buf)]
@@ -250,14 +247,14 @@
                               "SELECT bytes FROM media WHERE id = ?" id)
                           (inc n) n))
                 0 (media-blobs ds user-id))
-        videos (reduce (fn [n {:keys [topic_id lo_oid byte_size]}]
+        videos (reduce (fn [n {:keys [topic_id byte_size]}]
                          (write-video-blob! zos ds (fmt/blob-path :topic_videos topic_id nil)
-                           lo_oid (long byte_size))
+                           (lo/topic-row "topic_videos" topic_id) byte_size)
                          (inc n))
                  0 (video-blobs ds user-id))
-        epubs (reduce (fn [n {:keys [topic_id lo_oid byte_size]}]
+        epubs (reduce (fn [n {:keys [topic_id byte_size]}]
                         (write-video-blob! zos ds (fmt/blob-path :topic_epubs topic_id nil)
-                          lo_oid (long byte_size))
+                          (lo/topic-row "topic_epubs" topic_id) byte_size)
                         (inc n))
                 0 (epub-blobs ds user-id))]
     {:topic_files files :media media :topic_videos videos :topic_epubs epubs}))

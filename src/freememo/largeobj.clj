@@ -8,17 +8,20 @@
 
    Contract shared by every fn here: large-object descriptors are only valid
    inside a transaction. Callers passing `tx` MUST be inside
-   `jdbc/with-transaction`; `open-range-stream!` is the one exception — it owns
-   its own connection and transaction, released when the returned stream closes.
+   `jdbc/with-transaction`. `open-range-stream!` is the one exception. It takes
+   a pool and reads with `lo_get`, which needs no descriptor, one chunk per
+   query, so it holds no connection while the client reads.
 
    Orphan hazard: Postgres does NOT unlink a large object when the row holding
    its OID is deleted. Every deletion path must call `unlink!` explicitly, and
    `freememo.db/purge-orphan-video-objects!` sweeps what slips through."
   (:require
-   [next.jdbc :as jdbc])
+   [next.jdbc :as jdbc]
+   [next.jdbc.result-set :as rs]
+   [freememo.chunk-stream :as chunk-stream])
   (:import
    [java.io InputStream OutputStream]
-   [java.sql Connection]
+   [java.sql Connection SQLException]
    [org.postgresql PGConnection]
    [org.postgresql.largeobject LargeObject LargeObjectManager]))
 
@@ -104,60 +107,76 @@
             (do (.write lo buf 0 n) (recur (+ total n)))
             total))))))
 
-(defn- bounded-lo-stream
-  "InputStream yielding exactly `len` bytes from an already-positioned
-   LargeObject, then EOF. `release` runs once on close."
-  ^InputStream [^LargeObject lo ^long len release]
-  (let [remaining (volatile! len)
-        closed (volatile! false)]
-    (proxy [InputStream] []
-      (read
-        ([]
-         (let [b (byte-array 1)
-               n (.read ^InputStream this b 0 1)]
-           (if (pos? n) (bit-and (aget b 0) 0xff) -1)))
-        ([^bytes b]
-         (.read ^InputStream this b 0 (alength b)))
-        ([^bytes b off l]
-         (let [want (min (long l) (long @remaining))]
-           (if-not (pos? want)
-             -1
-             (let [n (.read lo b (int off) (int want))]
-               (if (pos? n)
-                 (do (vswap! remaining - n) n)
-                 -1))))))
-      (available [] (int (min (long @remaining) (long Integer/MAX_VALUE))))
-      (close []
-        (when-not @closed
-          (vreset! closed true)
-          (release))))))
+(def ^:private byte-versions
+  "For each table that holds a large-object OID: a SQL expression over `t` that
+   changes when the object's bytes change.
+
+   It is not `xmin`. `save-video-position!` updates a `topic_videos` row while
+   the video plays, and an `xmin` check would stop playback at each save.
+
+   The one in-place rewrite is `db/replace-video-bytes!`, at the end of a
+   remux. It writes the new `byte_size` and sets `remux_pending` to FALSE. The
+   flag is not always TRUE before it: a file sent as `video/mp4` that is really
+   another container starts with the flag FALSE and is remuxed all the same.
+   So `byte_size` is the guard that matters. A remux that gives a file of the
+   same size, with the flag already FALSE, does not show. Every other write of
+   the bytes gives a new OID. No code rewrites an EPUB in place
+   (plans/largeobj-chunked-streaming.md)."
+  {"topic_videos" "concat_ws(':', t.lo_oid, t.byte_size, t.remux_pending)"
+   "topic_epubs" "concat_ws(':', t.lo_oid, t.byte_size)"})
+
+(defn topic-row
+  "The `row` of `open-range-stream!` for the `table` row of `topic-id`."
+  [table topic-id]
+  {:table table :where "t.topic_id = ?" :params [topic-id]})
 
 (defn open-range-stream!
-  "InputStream over `[offset, offset+len)` of large object `oid`.
+  "InputStream over `[offset, offset+len)` of the large object that `row`
+   holds in its `lo_oid` column.
 
-   Unlike every other fn here this one does NOT take a `tx` — it checks out its
-   own pooled connection and opens a transaction, because a Ring response body
-   is consumed after the handler has returned. Closing the stream commits and
-   returns the connection to the pool; Ring's InputStream body protocol closes
-   it unconditionally, including on a client disconnect.
+   `row` is `{:table :where :params}`:
+   - `table` is a table of `byte-versions`.
+   - `where` is SQL over the alias `t` that selects one row, with `params` for
+     its placeholders. `table` and `where` come from code, never from a
+     request.
+   `topic-row` makes one for `topic_videos` and `topic_epubs`.
 
-   Pre:  `oid` exists; 0 <= offset and offset+len <= its size.
+   The open reads the object's real size and the row's byte version in one
+   statement. It throws when the object is too short to give the range. It
+   does not compare the real size with the row's `byte_size`, because a row
+   that sync wrote holds the size its client sent.
+
+   Each chunk is one `lo_get` query on a connection that is checked out for
+   that query only, in autocommit (`freememo.chunk-stream`). The stream holds
+   no connection while the client reads. When the bytes change during the
+   transfer (`byte-versions`), or the row or the object is gone, the next read
+   throws an IOException. A change between the caller's size read and the open
+   does not show. That window is one request long.
+
+   Pre:  0 <= offset and 0 <= len.
    Post: reading the stream yields exactly `len` bytes, then EOF.
-   Throws: SQLException if the object is gone — the caller answers 404."
-  ^InputStream [ds oid ^long offset ^long len]
-  (let [^Connection conn (jdbc/get-connection ds)]
-    (try
-      (.setAutoCommit conn false)
-      (let [^LargeObject lo (.open (lom conn) (long oid) LargeObjectManager/READ)]
-        (.seek64 lo offset LargeObject/SEEK_SET)
-        (bounded-lo-stream lo len
-          (fn []
-            (try (.close lo) (catch Exception _ nil))
-            (try (.commit conn) (catch Exception _ nil))
-            (try (.setAutoCommit conn true) (catch Exception _ nil))
-            (try (.close conn) (catch Exception _ nil)))))
-      (catch Throwable t
-        (try (.rollback conn) (catch Exception _ nil))
-        (try (.setAutoCommit conn true) (catch Exception _ nil))
-        (try (.close conn) (catch Exception _ nil))
-        (throw t)))))
+   Throws: SQLException at the open when the row or the object is missing, or
+           the object has fewer than offset+len bytes."
+  ^InputStream [ds {:keys [table where params]} ^long offset ^long len]
+  (let [version (or (get byte-versions table)
+                    (throw (IllegalArgumentException. (str "No byte version for the table " table))))
+        from (format "FROM %s t WHERE %s" table where)
+        ;; One statement in autocommit is one transaction, so `lo_open` is
+        ;; valid here. 262144 is INV_READ. A missing object makes `lo_open`
+        ;; throw.
+        found (jdbc/execute-one! ds
+                (into [(format "SELECT lo_lseek64(lo_open(t.lo_oid, 262144), 0, 2) AS n, %s AS x %s"
+                         version from)]
+                  params)
+                {:builder-fn rs/as-unqualified-lower-maps})
+        chunk-sql (format "SELECT lo_get(t.lo_oid, ?::bigint, ?::int) AS v, %s AS x %s" version from)]
+    (cond
+      (nil? found)
+      (throw (SQLException. (str "No " table " row for this large object")))
+
+      (< (long (:n found)) (+ offset len))
+      (throw (SQLException. (str "The large object has " (:n found) " bytes, too few for "
+                              len " bytes from byte " offset ".")))
+
+      :else
+      (chunk-stream/input-stream ds (fn [o n] (into [chunk-sql o n] params)) offset len (:x found)))))

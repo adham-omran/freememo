@@ -308,7 +308,7 @@
                 {:status 200
                  :headers {"Content-Type" "application/octet-stream"
                            "Content-Length" (str size)}
-                 :body (lo/open-range-stream! db/ds (:v row) 0 size)}))))))))
+                 :body (lo/open-range-stream! db/ds {:table (name table) :where row-where :params [k]} 0 size)}))))))))
 
 ;; ── 6, 7. sanity and finish (2.6) ──────────────────────────────────
 

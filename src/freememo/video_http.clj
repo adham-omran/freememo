@@ -217,6 +217,7 @@
 
           :else
           (let [size (long (:byte_size row))
+                video-row (lo/topic-row "topic_videos" topic-id)
                 parsed (parse-range (get-in request [:headers "range"]) size)
                 base {"Content-Type" (or (:mime_type row) "video/mp4")
                       "Accept-Ranges" "bytes"
@@ -243,7 +244,7 @@
               (nil? parsed)
               {:status 200
                :headers (assoc base "Content-Length" (str size))
-               :body (lo/open-range-stream! db/ds (:lo_oid row) 0 size)}
+               :body (lo/open-range-stream! db/ds video-row 0 size)}
 
               :else
               (let [[start end] parsed
@@ -252,7 +253,7 @@
                  :headers (assoc base
                             "Content-Range" (str "bytes " start "-" end "/" size)
                             "Content-Length" (str len))
-                 :body (lo/open-range-stream! db/ds (:lo_oid row) start len)})))))
+                 :body (lo/open-range-stream! db/ds video-row start len)})))))
       (catch Exception e
         (tel/error! {:id ::get-video-handler} e)
         {:status 500 :body "Internal server error"}))
