@@ -133,7 +133,10 @@ jobs:
         run: node tools/installer/build.mjs --version "$VERSION" --jar jar/app.jar --type deb --out out
       # The check installs the package, as a user does, and starts it headless.
       - name: Install the .deb and wait for READY
+        # The runner has no desktop, so it lacks /usr/share/desktop-directories, and the
+        # xdg-desktop-menu call in jpackage's postinst exits 3. A desktop Linux has it.
         run: |
+          sudo mkdir -p /usr/share/desktop-directories
           sudo apt-get update
           sudo apt-get install -y "./out/$(tools/release/asset-names.sh "$VERSION" linux)"
           tools/installer/smoke.sh /opt/freememo/bin/FreeMemo 300
@@ -147,7 +150,7 @@ jobs:
 
   macos:
     needs: [version, jar]
-    runs-on: macos-14   # arm64
+    runs-on: macos-15   # arm64. GitHub retired macos-14.
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
