@@ -1,0 +1,11 @@
+{
+  "comment": "The assets of a Release on GitHub, in one place. Readers: tools/installer/asset-names.mjs, src/freememo/update_feed.clj and tools/release/asset-names.sh (the installers workflow). {version} is the Release Version. An optional asset is attached when it exists (the .sig needs the signing key).",
+  "assets": [
+    {"kind": "macos",   "name": "freememo-{version}-macos-arm64.dmg",  "target": "darwin-arm64", "ext": "dmg", "optional": false},
+    {"kind": "windows", "name": "freememo-{version}-windows-x64.msi",  "target": "win32-x64",    "ext": "msi", "optional": false},
+    {"kind": "linux",   "name": "freememo-{version}-linux-x64.deb",    "target": "linux-x64",    "ext": "deb", "optional": false},
+    {"kind": "app",     "name": "freememo-{version}-app.jar",          "target": "any",          "ext": "jar", "optional": false},
+    {"kind": "release", "name": "freememo-{version}-release.json",     "optional": false},
+    {"kind": "sig",     "name": "freememo-{version}-app.jar.sig",      "optional": true}
+  ]
+}
