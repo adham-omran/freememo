@@ -739,11 +739,7 @@
        sync-schema/client-id-floor sync-schema/client-id-floor]))
   (jdbc/execute! ds ["ALTER TABLE assistant_messages ALTER COLUMN ord SET NOT NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat_ord
-                      ON assistant_messages(chat_id, ord, id)"])
-  ;; A checkpoint covers a range of a chat in (ord, id) order. Its first id
-  ;; can be larger than its last in a chat that sync filled.
-  (jdbc/execute! ds ["ALTER TABLE assistant_checkpoints
-                      DROP CONSTRAINT IF EXISTS assistant_checkpoints_check"]))
+                      ON assistant_messages(chat_id, ord, id)"]))
 
 (defn- setup-schema-assistant!
   "AI assistant chats, message transcripts, durable runs, and evidence.
@@ -887,6 +883,12 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_checkpoints_chat
                       ON assistant_checkpoints(chat_id, id)"])
+  ;; A checkpoint covers a range of a chat in (ord, id) order. Its first id
+  ;; can be larger than its last in a chat that sync filled. The table must
+  ;; exist here, so this cannot sit in `setup-assistant-message-ord!`, which
+  ;; runs before the CREATE on a new database.
+  (jdbc/execute! ds ["ALTER TABLE assistant_checkpoints
+                      DROP CONSTRAINT IF EXISTS assistant_checkpoints_check"])
   ;; A fork's request carries two histories, and each has its own checkpoint
   ;; (§4.1.2): `own` covers the chat's own rows, `inherited` the rows it
   ;; inherited. for_chat_id is the chat whose answer an automatic compaction
