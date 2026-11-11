@@ -31,12 +31,20 @@ fi
 
 # jlink and jpackage come from Temurin, as in CI. A distribution JDK can fail:
 # Fedora's jlink stops with "java.security has been modified". With no JAVA_HOME,
-# the script fetches Temurin 25 once into the cache. USE_SYSTEM_JDK=1 skips that.
+# the script fetches Temurin 25.0.5+8 once into the cache, and checks its
+# SHA-256 (the value that Adoptium publishes beside the file). To bump the JDK,
+# change both lines below. USE_SYSTEM_JDK=1 skips that.
+JDK_URL="https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz"
+JDK_SHA256="68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb"
 if [ -z "${JAVA_HOME:-}" ] && [ "${USE_SYSTEM_JDK:-}" != 1 ]; then
   jdkdir="${FREEMEMO_INSTALLER_CACHE:-$HOME/.cache/freememo-installer}/jdk"
   if [ ! -d "$jdkdir" ] || [ -z "$(ls "$jdkdir")" ]; then
     mkdir -p "$jdkdir"
-    curl -fsSL "https://api.adoptium.net/v3/binary/latest/25/ga/linux/x64/jdk/hotspot/normal/eclipse" | tar -xz -C "$jdkdir"
+    tgz="$jdkdir/.download.tar.gz"
+    curl -fsSL -o "$tgz" "$JDK_URL"
+    echo "$JDK_SHA256  $tgz" | sha256sum -c - || { rm -f "$tgz"; echo "the JDK download does not match the pinned SHA-256" >&2; exit 1; }
+    tar -xz -C "$jdkdir" -f "$tgz"
+    rm -f "$tgz"
   fi
   JAVA_HOME="$(echo "$jdkdir"/jdk-*)"
   export JAVA_HOME

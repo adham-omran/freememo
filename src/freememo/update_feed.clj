@@ -21,6 +21,7 @@
    (the sync state `:update-required`). The web app then shows \"Update to keep
    syncing\"."
   (:require [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clj-http.client :as http]
             [clojure.string :as str]
             [freememo.commands :as commands]
@@ -75,24 +76,27 @@
 
 ;; ── Server: the public route ───────────────────────────────────────
 
-(def asset-kinds
-  "The assets of a release that the feed needs, in the order of
-   `tools/installer/asset-names.mjs`. `update-feed-test` keeps both lists in step."
-  [[:macos "macos-arm64.dmg"] [:windows "windows-x64.msi"] [:linux "linux-x64.deb"] [:app "app.jar"]])
+(def asset-manifest
+  "The one list of release assets: `resources/freememo/release-assets.json`.
+   `tools/installer/asset-names.mjs` and `tools/release/asset-names.sh` read it
+   too, and `release-assets-test` checks that the three agree."
+  (delay (json/parse-string (slurp (io/resource "freememo/release-assets.json")))))
 
 (defn asset-name
   "Post: the name of the asset of `kind` (`:macos`, `:windows`, `:linux`, `:app`,
-   `:sig` or `:release-json`) on the release `rv`."
+   `:sig` or `:release`; `:release-json` is the old spelling of `:release`) on
+   the release `rv`."
   [rv kind]
-  (case kind
-    :sig (str "freememo-" rv "-app.jar.sig")
-    :release-json (str "freememo-" rv "-release.json")
-    (str "freememo-" rv "-" (second (first (filter #(= kind (first %)) asset-kinds))))))
+  (let [kind (if (= kind :release-json) "release" (name kind))
+        entry (first (filter #(= kind (get % "kind")) (get @asset-manifest "assets")))]
+    (str/replace (get entry "name") "{version}" rv)))
 
 (defn required-asset-names
   "Post: the names that a release must carry before the feed uses it."
   [rv]
-  (conj (mapv #(asset-name rv (first %)) asset-kinds) (asset-name rv :release-json)))
+  (->> (get @asset-manifest "assets")
+    (remove #(get % "optional"))
+    (mapv #(str/replace (get % "name") "{version}" rv))))
 
 (defn feed-from-release
   "Pre:  `release` is the parsed GitHub release (string keys); `meta` is the parsed

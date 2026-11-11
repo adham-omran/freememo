@@ -3500,8 +3500,21 @@
     )"])
   ;; A Sync License covers every Release, so a row has no major range (ADR 0002).
   ;; Every existing row, sold as "versions 1 and 2", now grants sync and AI.
-  (jdbc/execute! ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_from"])
-  (jdbc/execute! ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_to"])
+  ;; This Release does not drop `major_from` and `major_to`: during a blue-green
+  ;; deploy the old app color still reads them and inserts them for a few
+  ;; seconds. Nothing here writes or reads them. They become nullable, so this
+  ;; color's insert (which names neither) works on a database that still has
+  ;; them. A later Release drops them (plans/local-install/issues/15 Comments).
+  (jdbc/execute! ds ["DO $$ BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.columns
+                                   WHERE table_name = 'desktop_licenses' AND column_name = 'major_from') THEN
+                          ALTER TABLE desktop_licenses ALTER COLUMN major_from DROP NOT NULL;
+                        END IF;
+                        IF EXISTS (SELECT 1 FROM information_schema.columns
+                                   WHERE table_name = 'desktop_licenses' AND column_name = 'major_to') THEN
+                          ALTER TABLE desktop_licenses ALTER COLUMN major_to DROP NOT NULL;
+                        END IF;
+                      END $$"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_licenses_user
                       ON desktop_licenses(user_id)"])
   ;; A Wayl order buys credits or a desktop license (13.1.3).

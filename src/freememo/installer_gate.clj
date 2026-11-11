@@ -14,6 +14,11 @@
      nil                         nothing: no newer Release, or the same Runtime
      {:status :unsynced}         edits are not yet synced. No link.
      {:status :ready :version :url}   nothing is pending: show the link
+     {:status :ready :version :url :pending n}
+                                 edits are pending, but the sync state is
+                                 `:update-required`: the server refuses this
+                                 install, so no sync can send them. Show the
+                                 link at once, and say that the edits stay here.
 
    The pending signal is the one the sync client already has: a row with
    `usn = -1` (`freememo.sync-client/pending-edit-count`)."
@@ -35,15 +40,21 @@
 
 (defn decide
   "Pre:  `need` is the answer of `needed`. `pending` is the number of edits
-         not yet synced.
-   Post: nil, `{:status :unsynced}` or `{:status :ready :version :url}`. Offline
+         not yet synced. `update-required?` is true when the sync state is
+         `:update-required` (default false).
+   Post: nil, `{:status :unsynced}` or `{:status :ready :version :url}`, with
+         `:pending` when edits stay on this computer. Offline
          or refused sync changes nothing here: edits that stay pending keep the
          link hidden, and the sync that fails leaves them pending."
-  [need pending]
-  (cond
-    (nil? need) nil
-    (pos? pending) {:status :unsynced}
-    :else (assoc need :status :ready)))
+  ([need pending] (decide need pending false))
+  ([need pending update-required?]
+   (cond
+     (nil? need) nil
+     (not (pos? pending)) (assoc need :status :ready)
+     ;; The newest Release raised the Runtime and the Sync Protocol: sync gets
+     ;; 409 for good, so waiting for it would hide the link for ever.
+     update-required? (assoc need :status :ready :pending pending)
+     :else {:status :unsynced})))
 
 ;; ── Local Install side ─────────────────────────────────────────────
 
@@ -59,7 +70,8 @@
          A failed count shows `{:status :unsynced}`: no link without proof."
   []
   (when-let [need @!need]
-    (decide need (try (pending-count) (catch Throwable _ 1)))))
+    (decide need (try (pending-count) (catch Throwable _ 1))
+      (= :update-required ((requiring-resolve 'freememo.sync-client/sync-state))))))
 
 (defn- stop-timer! []
   (when-let [^ScheduledFuture f (first (reset-vals! !timer nil))]

@@ -18,7 +18,7 @@
 
 (def nag-states
   "The license states that start a launch with the reminder."
-  #{"unlicensed" "expired" "grace"})
+  #{"unlicensed"})
 
 (def continue-path "/license-reminder/continue")
 
@@ -28,15 +28,11 @@
   (str origin "/settings#settings-desktop"))
 
 (defn reminder-text
-  "Post: the sentence for `license` (a map with a \"state\" key)."
-  [license]
-  (if (= "grace" (get license "state"))
-    (str "Your Sync License does not cover this version. Sync downloads only"
-      (if-let [end (get license "grace-ends")]
-        (str ", until " (subs (str end) 0 (min 10 (count (str end)))) ".")
-        ", for now."))
-    (str "Your FreeMemo trial has ended. Your library stays on this computer and keeps working. "
-      "Sync with freememo.net needs a Sync License.")))
+  "Post: the sentence of the reminder. The server sends no other state than
+         `unlicensed` (the trial ended) that starts a launch with the reminder."
+  [_license]
+  (str "Your FreeMemo trial has ended. Your library stays on this computer and keeps working. "
+    "Sync with freememo.net needs a Sync License."))
 
 (defn reminder-page
   "Post: a Ring response with the reminder. The page has its own title, which

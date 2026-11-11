@@ -95,3 +95,30 @@
       (is (zero? (:credit_balance_iqd (jdbc/execute-one! db/ds ["SELECT credit_balance_iqd FROM users WHERE id = ?" u]
                                         {:builder-fn rs/as-unqualified-maps})))
         "a license order credits nothing"))))
+
+(deftest a-database-with-the-old-major-columns-still-takes-a-license
+  ;; Blue-green deploy: the old app color still reads and inserts the columns,
+  ;; so this Release keeps them, nullable, and writes neither of them.
+  (when (db-up?)
+    (try
+      (db/setup-schema)
+      (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses ADD COLUMN IF NOT EXISTS major_from INTEGER NOT NULL DEFAULT 1"])
+      (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses ADD COLUMN IF NOT EXISTS major_to INTEGER NOT NULL DEFAULT 2"])
+      (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses ALTER COLUMN major_from DROP DEFAULT"])
+      (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses ALTER COLUMN major_to DROP DEFAULT"])
+      (db/setup-schema)
+      (let [nullable (into {} (map (juxt :column_name :is_nullable))
+                       (jdbc/execute! db/ds ["SELECT column_name, is_nullable FROM information_schema.columns
+                                              WHERE table_name = 'desktop_licenses'
+                                                AND column_name IN ('major_from', 'major_to')"]
+                         {:builder-fn rs/as-unqualified-lower-maps}))
+            u (user!)]
+        (is (= {"major_from" "YES" "major_to" "YES"} nullable)
+          "setup-schema keeps both columns in this Release, and makes them nullable")
+        (is (some? (jdbc/with-transaction [tx db/ds] (db/grant-desktop-license! tx u "credits" nil)))
+          "an insert that names no major works")
+        (is (= :licensed (:state (license/access db/ds u (Instant/now))))))
+      (finally
+        (when (db-up?)
+          (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_from"])
+          (jdbc/execute! db/ds ["ALTER TABLE desktop_licenses DROP COLUMN IF EXISTS major_to"]))))))

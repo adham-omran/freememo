@@ -155,9 +155,6 @@
   [license]
   (case (get license "state")
     "unlicensed" "Sync is off because the trial has ended. Buy a Sync License to sync again."
-    "expired" (str "Sync is off because your Sync License has ended, and the grace period ended"
-                (when-let [end (get license "grace-ends")] (str " on " (subs (str end) 0 10)))
-                ". Buy a Sync License to sync again.")
     "Sync is off for this account."))
 
 (defn sync-text

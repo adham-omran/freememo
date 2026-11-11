@@ -20,6 +20,10 @@
 # Once it exists the release job refuses to publish without the signature.
 # tools/installer/app-update-wizard.sh makes the key pair.
 #
+# Actions are pinned to full commit SHAs (the tag is in the comment). Every
+# `${{ }}` value reaches a `run:` through `env:`, never inline. `brew install`
+# in the macos job is not pinned: Homebrew has no simple version pin.
+#
 # Every file that this workflow uses is in a path that tools/publish-clean/EXCLUDED
 # keeps: .github/, tools/release/, tools/installer/, src/, resources/, deps.edn.
 name: installers
@@ -44,6 +48,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - id: v
         run: |
@@ -51,17 +58,28 @@ jobs:
           version="${tag#v}"
           echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad tag $tag"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # The private deploy makes the draft before it pushes the tag. Without
+      # the draft, every job would build and the release job would fail last.
+      - name: Check that the draft release exists
+        run: |
+          draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$draft" != "true" ]; then
+            echo "::error::There is no draft release for the tag $GITHUB_REF_NAME. The private deploy makes the draft (tools/release/create-draft.sh) before it pushes the tag. Run the deploy again, or make the draft by hand."
+            exit 1
+          fi
 
   jar:
     needs: version
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: DeLaGuardo/setup-clojure@13.4
+      - uses: DeLaGuardo/setup-clojure@3fe9b3ae632c6758d0b7757b0838606ef4287b08 # 13.4
         with:
           cli: 1.12.6.1673
       # The jar is AOT compiled once, on Linux: a case-insensitive disk (macOS)
@@ -72,22 +90,22 @@ jobs:
         run: |
           clojure -X:build vendor/fetch!
           clojure -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"' :build/aot true \
-            :release-version '"${{ needs.version.outputs.version }}"'
+            :release-version "\"$VERSION\""
       # The release feed (ticket 18) reads the Runtime and the Sync Protocol of
       # this commit from this file. Only the commit itself knows them.
       - name: Write the release data
         run: |
-          version="${{ needs.version.outputs.version }}"
+          version="$VERSION"
           mkdir -p meta
           sha=$(sha256sum target/app.jar | cut -d' ' -f1)
-          clojure -M -e "(require 'freememo.desktop-version) (println (cheshire.core/generate-string {:release_version \"$version\" :runtime freememo.desktop-version/runtime :sync_protocol freememo.desktop-version/sync-protocol :app_jar_sha256 \"$sha\"}))" > "meta/$(node tools/installer/asset-names.mjs "$version" release)"
+          clojure -M -e "(require 'freememo.desktop-version) (println (cheshire.core/generate-string {:release_version \"$version\" :runtime freememo.desktop-version/runtime :sync_protocol freememo.desktop-version/sync-protocol :app_jar_sha256 \"$sha\"}))" > "meta/$(tools/release/asset-names.sh "$version" release)"
           cat meta/*.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: app-jar
           path: target/app.jar
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-json
           path: meta/*.json
@@ -96,28 +114,30 @@ jobs:
   linux:
     needs: [version, jar]
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: app-jar
           path: jar
       - name: Build the .deb
-        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type deb --out out
+        run: node tools/installer/build.mjs --version "$VERSION" --jar jar/app.jar --type deb --out out
       # The check installs the package, as a user does, and starts it headless.
       - name: Install the .deb and wait for READY
         run: |
           sudo apt-get update
-          sudo apt-get install -y "./out/$(node tools/installer/asset-names.mjs "${{ needs.version.outputs.version }}" linux)"
+          sudo apt-get install -y "./out/$(tools/release/asset-names.sh "$VERSION" linux)"
           tools/installer/smoke.sh /opt/freememo/bin/FreeMemo 300
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installer-linux
           path: |
@@ -128,24 +148,26 @@ jobs:
   macos:
     needs: [version, jar]
     runs-on: macos-14   # arm64
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: app-jar
           path: jar
       - name: Install the tools that the installer bundles
         run: brew install imagemagick graphviz dylibbundler
       - name: Build the .dmg
-        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type dmg --out out
-      - uses: actions/upload-artifact@v4
+        run: node tools/installer/build.mjs --version "$VERSION" --jar jar/app.jar --type dmg --out out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installer-macos
           path: out/*.dmg
@@ -154,19 +176,21 @@ jobs:
   windows:
     needs: [version, jar]
     runs-on: windows-2022
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: app-jar
           path: jar
@@ -178,8 +202,8 @@ jobs:
           fi
           echo "C:\\Program Files (x86)\\WiX Toolset v3.14\\bin" >> "$GITHUB_PATH"
       - name: Build the .msi
-        run: node tools/installer/build.mjs --version "${{ needs.version.outputs.version }}" --jar jar/app.jar --type msi --out out
-      - uses: actions/upload-artifact@v4
+        run: node tools/installer/build.mjs --version "$VERSION" --jar jar/app.jar --type msi --out out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installer-windows
           path: out/*.msi
@@ -193,11 +217,11 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: assets
           merge-multiple: true
@@ -218,8 +242,8 @@ jobs:
           fi
           key="$RUNNER_TEMP/app-update-key.pem"
           (umask 077; printf '%s\n' "$APP_UPDATE_SIGNING_KEY" > "$key")
-          jar="assets/$(node tools/installer/asset-names.mjs "$VERSION" app)"
-          sig="assets/$(node tools/installer/asset-names.mjs "$VERSION" sig)"
+          jar="assets/$(tools/release/asset-names.sh "$VERSION" app)"
+          sig="assets/$(tools/release/asset-names.sh "$VERSION" sig)"
           printf 'freememo-app-jar\n%s\n%s\n' "$VERSION" "$(sha256sum "$jar" | cut -d' ' -f1)" > statement.txt
           openssl pkeyutl -sign -rawin -inkey "$key" -in statement.txt -out "$sig"
           if [ -s "$pub" ]; then
@@ -230,31 +254,30 @@ jobs:
           fi
           rm -f "$key"
           echo "signed $sig"
+      # attach.txt lists what goes on the release: every required asset (the run
+      # fails when one is missing) and each optional asset that exists (the .sig).
       - name: Check that every asset exists
         run: |
           missing=0
-          for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
-            if [ -s "assets/$name" ]; then echo "found $name"; else echo "MISSING $name"; missing=1; fi
+          : > attach.txt
+          for name in $(tools/release/asset-names.sh "$VERSION"); do
+            if [ -s "assets/$name" ]; then echo "found $name"; echo "$name" >> attach.txt; else echo "MISSING $name"; missing=1; fi
           done
-          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
-          if [ -s "assets/$sig" ]; then echo "found $sig"
-          elif [ -s tools/installer/app-update-public-key.b64 ]; then echo "MISSING $sig"; missing=1; fi
+          for name in $(tools/release/asset-names.sh "$VERSION" --optional); do
+            if [ -s "assets/$name" ]; then echo "found $name"; echo "$name" >> attach.txt; fi
+          done
           [ "$missing" = 0 ]
       - name: Attach the assets to the draft
         run: |
           gh release view "v$VERSION" --json isDraft --jq .isDraft
-          for name in $(node tools/installer/asset-names.mjs "$VERSION"); do
+          for name in $(cat attach.txt); do
             gh release upload "v$VERSION" "assets/$name" --clobber
           done
-          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
-          if [ -s "assets/$sig" ]; then gh release upload "v$VERSION" "assets/$sig" --clobber; fi
-      # The draft stays a draft unless the release itself lists all four names.
+      # The draft stays a draft unless the release itself lists every asset.
       - name: Check the draft lists every asset
         run: |
           gh release view "v$VERSION" --json assets --jq '.assets[].name' | sort > attached.txt
-          node tools/installer/asset-names.mjs "$VERSION" | sort > expected.txt
-          sig="$(node tools/installer/asset-names.mjs "$VERSION" sig)"
-          if [ -s "assets/$sig" ]; then echo "$sig" >> expected.txt; sort -o expected.txt expected.txt; fi
+          sort attach.txt > expected.txt
           cat attached.txt
           comm -13 attached.txt expected.txt > absent.txt
           if [ -s absent.txt ]; then echo "not attached:"; cat absent.txt; exit 1; fi

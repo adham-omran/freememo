@@ -165,6 +165,9 @@
                     {:headers auth
                      :content-type :json :as :json :throw-exceptions false
                      :body (json/generate-string body)})
+             _ (when (and (peer/desktop?) (= 409 (:status resp))
+                       ((requiring-resolve 'freememo.sync-client/protocol-refusal?) (:body resp)))
+                 ((requiring-resolve 'freememo.sync-client/note-update-required!)))
              failed? (>= (int (:status resp)) 400)
              served-by (when (map? (:body resp)) (:provider (:body resp)))]
          (log/external! (cond-> {:id ::call :feature feature :user-id (:user-id ctx)

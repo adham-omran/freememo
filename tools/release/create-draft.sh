@@ -10,10 +10,8 @@ set -e
 need_env GH_REPO GH_TOKEN
 version="$1"; sha="$2"; notes="$3"
 tag="v$version"
-drafts="$(gh_list "/repos/$GH_REPO/releases" | jq -r --arg t "$tag" '.[] | select(.draft and .tag_name == $t) | .id')"
-for id in $drafts; do
-  gh_ok DELETE "/repos/$GH_REPO/releases/$id"
-done
+releases="$(gh_list "/repos/$GH_REPO/releases")"
+gh_delete_each "$releases" '.[] | select(.draft and .tag_name == $t) | .id' "/repos/$GH_REPO/releases/" "" "$tag"
 body="$(jq -n --arg t "$tag" --arg n "FreeMemo $version" --arg s "$sha" --rawfile b "$notes" \
   '{tag_name: $t, name: $n, target_commitish: $s, body: $b, draft: true, prerelease: false}')"
 gh_ok POST "/repos/$GH_REPO/releases" "$body"

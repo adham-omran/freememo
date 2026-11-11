@@ -94,8 +94,22 @@ const WINDOWS_DOWNLOADS = {
 }
 const VC_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'vcomp140.dll']
 
-// macOS: static ffmpeg builds. The URL follows "latest", so the download is not pinned.
-const MAC_FFMPEG = name => `https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/${name}.zip`
+// macOS: static ffmpeg 9.0.2 builds (build 1789931890), pinned by version URL and SHA-256.
+// To bump: take the new /download/... path from the redirect of
+// https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip
+// and hash both files.
+const MAC_FFMPEG = {
+  ffmpeg: {
+    url: 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip',
+    file: 'ffmpeg-9.0.2-macos-arm64.zip',
+    sha256: 'c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924'
+  },
+  ffprobe: {
+    url: 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip',
+    file: 'ffprobe-9.0.2-macos-arm64.zip',
+    sha256: 'fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6'
+  }
+}
 
 // Fixed for ever: Windows uses it to upgrade an older FreeMemo in place.
 const WIN_UPGRADE_UUID = '20ce3b4e-2e44-470d-a65f-620e91f41fbb'
@@ -264,7 +278,7 @@ async function macTools (tools, work) {
   const bin = path.join(tools, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   for (const name of ['ffmpeg', 'ffprobe']) {
-    const zip = await download(MAC_FFMPEG(name), path.join(cacheDir, `${name}-macos-arm64.zip`))
+    const zip = await pinned(MAC_FFMPEG[name])
     unpack(zip, bin)
     fs.chmodSync(path.join(bin, name), 0o755)
   }
