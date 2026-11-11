@@ -265,15 +265,25 @@
    Pre:  `opts` has `:data-dir`, `:installed` (Release Version), `:feed` (map or nil),
          and may have `:on-ready` (a fn of the version), `:public-key` and `:open-stream`.
    Post: `ready-version` is set when a verified jar newer than this one is
-         in the data directory. Never throws. Returns the status keyword."
+         in the data directory. A jar that already waits is not hashed again
+         while the feed names nothing newer: the feed is read every few minutes
+         and an app jar is about 160 MB. A feed newer than the waiting jar is
+         downloaded. Never throws. Returns the status keyword."
   [{:keys [data-dir installed feed public-key on-ready open-stream]}]
   (try
     (let [key (or public-key (configured-public-key))
-          ready! (fn [v] (when (not= v @!ready) (reset! !ready v) (when on-ready (on-ready v))) :ready)]
+          ready! (fn [v] (when (not= v @!ready) (reset! !ready v) (when on-ready (on-ready v))) :ready)
+          feed-version (get feed "current_version")
+          waiting @!ready
+          on-disk (when (and key (not (and waiting (not (feed/newer? feed-version waiting)))))
+                    (staged data-dir installed key))]
       (cond
         (nil? key) (do (log "App Update is off: this install has no public key") :off)
-        (staged data-dir installed key)
-        (do (prune! (updates-dir data-dir)) (ready! (:version (staged data-dir installed key))))
+
+        (and waiting (not (feed/newer? feed-version waiting))) :ready
+
+        (and on-disk (not (feed/newer? feed-version (:version on-disk))))
+        (do (prune! (updates-dir data-dir)) (ready! (:version on-disk)))
 
         (nil? feed) :no-feed
 

@@ -11,7 +11,8 @@
    answer yet, the route answers 404.
 
    Local Install side: the launcher calls `start!`. It reads the feed from the
-   account's origin at start and every few hours. When the feed holds a newer
+   account's origin at start, every `interval-minutes`, when the network comes
+   back, and from Settings → Desktop App → Check for updates. When the feed holds a newer
    version, `banner-state` says so and the web app and the tray show \"Update
    available\". Since ticket 19 only the tray shows it, and only when the new Release needs
    an installer; the web app shows no such banner, and an App Update downloads by itself
@@ -34,7 +35,12 @@
             [taoensso.telemere :as tel])
   (:import [java.util.concurrent ScheduledExecutorService TimeUnit]))
 
-(def interval-hours "How often a running Local Install reads the feed." 4)
+(def interval-minutes
+  "How often a running Local Install reads the feed. It was 4 hours. A release
+   published after the app started then waited up to 4 hours, with no sign of
+   it (plans/desktop-update-check-interval.md). A read costs freememo.net one
+   answer from memory: `feed-body` asks GitHub at most once per `cache-ttl-ms`."
+  2)
 
 (def feed-path "/api/desktop/feed")
 
@@ -192,6 +198,8 @@
 
 (defonce ^:private !state (atom {:available nil}))
 
+(defonce ^:private refresh-lock (Object.))
+
 (defn- log [& parts] (tel/log! {:level :info :id ::update-feed} (apply str parts)))
 
 (defn- fetch-feed
@@ -205,18 +213,30 @@
       (throw (ex-info (str "feed answered HTTP " (:status resp)) {})))
     body))
 
+(declare ^:private refresh!*)
+
 (defn refresh!
   "Read the feed once.
    Pre:  `opts` has `:origin`, `:version` (this install's version), and may have
          `:on-change` (a fn of the new `:available`) and `:on-feed` (a fn of the
          feed map, or nil when it cannot be read; the App Update check, ticket 19).
    Post: `banner-state` is current. A feed that cannot be read shows nothing: it
-         clears an earlier `:available` and logs one line."
+         clears an earlier `:available`. It logs one line for the first failed
+         read after a good one, so an offline install does not log every read."
+  [opts]
+  ;; One read at a time: the timer, the network listener and Check for updates
+  ;; must not download the same jar twice in parallel.
+  (locking refresh-lock (refresh!* opts)))
+
+(defn- refresh!*
   [{:keys [origin version on-change on-feed]}]
   (let [feed-map (try (fetch-feed origin)
                       (catch Throwable e
-                        (log "cannot read the update feed: " (or (ex-message e) (str e)))
+                        (let [[before _] (swap-vals! !state assoc :unreadable? true)]
+                          (when-not (:unreadable? before)
+                            (log "cannot read the update feed: " (or (ex-message e) (str e)))))
                         nil))
+        _ (when feed-map (swap! !state assoc :unreadable? false))
         now (when feed-map (available feed-map version (os-key)))
         _ (when on-feed
             (try (on-feed feed-map)
@@ -229,8 +249,12 @@
 
 (defonce ^:private !timer (atom nil))
 
+(defonce ^:private !opts
+  ;; The options `start!` got, so Check for updates reads the feed as the timer does.
+  (atom nil))
+
 (defn start!
-  "Read the feed now, every `interval-hours`, and when the network comes back,
+  "Read the feed now, every `interval-minutes`, and when the network comes back,
    off the caller's thread.
    Post: no effect when this install has no Release Version (a dev build): it logs one line."
   [{:keys [version] :as opts}]
@@ -239,8 +263,38 @@
     (when-not @!timer
       (let [^ScheduledExecutorService ex (lhttp/daemon-scheduler "freememo-update-feed")]
         (reset! !timer ex)
+        (reset! !opts opts)
         (link/on-online! #(.execute ex ^Runnable (fn [] (refresh! opts))))
-        (.scheduleWithFixedDelay ex ^Runnable #(refresh! opts) 0 interval-hours TimeUnit/HOURS)))))
+        (.scheduleWithFixedDelay ex ^Runnable #(refresh! opts) 0 interval-minutes TimeUnit/MINUTES)))))
+
+(defn check-now!
+  "Read the feed now, on the caller's thread, as the timer does: Settings →
+   Desktop App → Check for updates. An App Update the feed names downloads
+   before this returns.
+   Post: the result, also kept for `last-check`: `{:status :ready :version}`
+   (a verified update waits for Restart), `{:status :pending :version}` (the
+   feed names a newer version that is not ready), `{:status :current :version}`
+   (this install's version), or `{:status :error :error}`. A dev build, which
+   never calls `start!`, gives :error."
+  []
+  (let [opts @!opts
+        result (if-not opts
+                 {:status :error :error "This build has no Release Version, so it does not check for updates."}
+                 (do (refresh! opts)
+                     (let [{:keys [unreadable? available]} @!state
+                           ready ((requiring-resolve 'freememo.app-update/ready-version))]
+                       (cond
+                         unreadable? {:status :error :error "FreeMemo could not reach freememo.net."}
+                         ready {:status :ready :version ready}
+                         available {:status :pending :version (:version available)}
+                         :else {:status :current :version (:version opts)}))))]
+    (swap! !state assoc :last-check result)
+    result))
+
+(defn last-check
+  "Post: the result of the last `check-now!`, or nil."
+  []
+  (:last-check @!state))
 
 (defn installed-version
   "Post: the Release Version of this install, or nil for a dev build."

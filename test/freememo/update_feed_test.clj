@@ -2,6 +2,7 @@
   "The pure half of the update feed (plans/local-install/issues/08-update-feed.md).
    The whole path is in `freememo.local-install-update-test` (Seam 1)."
   (:require [clojure.test :refer [deftest is]]
+            [freememo.app-update]
             [freememo.desktop-link :as link]
             [freememo.peer :as peer]
             [freememo.sync-client :as sync-client]
@@ -39,6 +40,41 @@
     (is (some? (available)))
     (with-redefs [uf/fetch-feed (fn [_] (throw (ex-info "offline" {})))] (uf/refresh! opts))
     (is (nil? (available)) "an unreadable feed shows nothing")))
+
+(deftest an-offline-install-logs-one-line-per-outage
+  ;; The feed is read every few minutes, so an offline laptop must not log
+  ;; each failed read.
+  (let [lines (atom [])
+        opts {:origin "https://example.test" :version "2026.11.1"}
+        offline (fn [_] (throw (ex-info "offline" {})))
+        unreadable #(count (filter (fn [l] (re-find #"cannot read the update feed" l)) @lines))]
+    (with-redefs [uf/log (fn [& parts] (swap! lines conj (apply str parts)))]
+      (with-redefs [uf/fetch-feed (constantly feed)] (uf/refresh! opts))
+      (with-redefs [uf/fetch-feed offline] (uf/refresh! opts) (uf/refresh! opts) (uf/refresh! opts))
+      (is (= 1 (unreadable)) "three failed reads in a row log one line")
+      (with-redefs [uf/fetch-feed (constantly feed)] (uf/refresh! opts))
+      (with-redefs [uf/fetch-feed offline] (uf/refresh! opts))
+      (is (= 2 (unreadable)) "a new outage after a good read logs again"))))
+
+(deftest check-for-updates-says-what-it-found
+  (let [opts {:origin "https://example.test" :version "2026.11.1"}
+        check (fn [fetch ready]
+                (with-redefs [uf/!opts (atom opts)
+                              uf/fetch-feed fetch
+                              freememo.app-update/ready-version (constantly ready)]
+                  (uf/check-now!)))]
+    (is (= {:status :current :version "2026.11.1"}
+          (check (constantly {"current_version" "2026.11.1"}) nil))
+      "the feed names this version")
+    (is (= {:status :pending :version "2027.1.1"} (check (constantly feed) nil))
+      "a newer version that is not downloaded yet")
+    (is (= {:status :ready :version "2027.1.1"} (check (constantly feed) "2027.1.1"))
+      "a verified update waits for Restart")
+    (is (= :error (:status (check (fn [_] (throw (ex-info "offline" {}))) nil)))
+      "the feed cannot be read")
+    (is (= :error (:status (uf/last-check))) "the panel reads the last result")
+    (with-redefs [uf/!opts (atom nil)]
+      (is (= :error (:status (uf/check-now!))) "a dev build does not check"))))
 
 (deftest an-offline-start-checks-again-when-the-network-returns
   (let [listeners (atom [])

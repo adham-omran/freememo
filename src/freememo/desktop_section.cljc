@@ -8,7 +8,9 @@
      installs signed in to the account, each revocable (3.2).
 
    Command palette decision (8.2, 13.8.2): no entries. Sync runs by itself
-   (2.11), and buying is a one-time action. Both live here only.
+   (2.11), and buying is a one-time action. Both live here only. Check for
+   updates has no entry either: the app reads the feed every 2 minutes, so the
+   button is for a person who wants an answer now.
    Activity monitor decision (8.3): no entry. A sync reports its state on
    this tab and in no other place.
    Tab title decision (8.4): the conflict report is a Settings group, not a
@@ -45,16 +47,24 @@
   #?(:clj (peer/desktop?) :cljs false))
 
 (defn sync-status*
-  "The sync status, plus `:local-install?` and, on a Local Install with a newer
-   version in the feed, `:update-url`."
+  "The sync status, plus `:local-install?` and, on a Local Install,
+   `:update-check` (the last Check for updates) and, with a newer version in
+   the feed, `:update-url`."
   [_refresh]
   #?(:clj (let [local? (peer/local-install?)]
             (cond-> (assoc (sync-client/status) :local-install? local?)
-              local? (assoc :update-url (:url (:update-available (update-feed/banner-state))))))
+              local? (assoc :update-url (:url (:update-available (update-feed/banner-state)))
+                            :update-check (update-feed/last-check))))
      :cljs nil))
 
 (defn sync-now!* []
   #?(:clj (sync-client/sync-now!) :cljs nil))
+
+(defn check-updates!*
+  "Read the update feed now, then make the open tabs re-read the result."
+  [user-id]
+  #?(:clj (do (update-feed/check-now!) (update-feed/bump-banners! user-id) nil)
+     :cljs nil))
 
 (defn choose-full-sync!* [direction]
   #?(:clj (sync-client/choose-full-sync! (keyword direction)) :cljs nil))
@@ -186,6 +196,22 @@
       (str "Synced at " (subs (str last-sync-at) 0 16) ".")
       "Not synced yet.")))
 
+(defn update-check-text
+  "The line under Check for updates, for a `update-feed/check-now!` result."
+  [{:keys [status version error]}]
+  (case status
+    :current (str "This is the latest version (" version ").")
+    :ready (str "Version " version " is ready. Choose Restart in the banner to use it.")
+    :pending (str "Version " version " is out, but it is not ready yet. FreeMemo tries again in 2 minutes.")
+    :error (str "FreeMemo could not check for updates. " error)
+    nil))
+
+(defn update-check-class [{:keys [status]}]
+  (if (= :error status) "hint curriculum-inline-error" "hint"))
+
+(defn check-updates-label [busy?]
+  (if busy? "Checking for updates…" "Check for updates"))
+
 ;; ── Desktop body ───────────────────────────────────────────────────
 
 (e/defn SyncNowButton [label Run]
@@ -196,6 +222,17 @@
       (let [[t _] (e/Token (dom/On "click" identity nil))]
         (when t
           (case (Run) (t)))))))
+
+(e/defn CheckUpdatesButton [user-id]
+  (e/client
+    (dom/button
+      (dom/props {:type "button" :class "btn btn-secondary" :style {:margin-right "8px"}
+                  :id "check-for-updates"})
+      (let [[t _] (e/Token (dom/On "click" identity nil))]
+        (dom/props {:disabled (some? t) :aria-busy (some? t)})
+        (dom/text (check-updates-label (some? t)))
+        (when t
+          (case (e/server (e/Offload #(check-updates!* user-id))) (t)))))))
 
 (e/defn ConflictRow [user-id conflict parent-id]
   (e/client
@@ -251,13 +288,19 @@
               (dom/text "Buy a Sync License")))))
       (dom/div
        (SyncNowButton "Sync now" (e/fn [] (e/server (e/Offload #(sync-now!*)))))
+       (when (:local-install? status)
+         (CheckUpdatesButton user-id))
        (when (= :full-sync-choice (:state status))
          (dom/div
           (dom/props {:style {:display "contents"}})
           (SyncNowButton "Keep freememo.net's copy"
                          (e/fn [] (e/server (e/Offload #(choose-full-sync!* "download")))))
           (SyncNowButton "Keep this device's copy"
-                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload")))))))))
+                         (e/fn [] (e/server (e/Offload #(choose-full-sync!* "upload"))))))))
+      ;; Beside the button, so a failure has a place (docs/feature-obligations.md).
+      (when-let [check (:update-check status)]
+        (dom/p (dom/props {:class (update-check-class check) :role "status" :id "update-check-result"})
+          (dom/text (update-check-text check)))))
      (dom/section
       (dom/props {:class "settings-group"})
       (group/GroupHeading "Sync conflicts")

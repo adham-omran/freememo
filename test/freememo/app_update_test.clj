@@ -186,6 +186,29 @@
           (is (= :off (au/check! {:data-dir data :installed "26.11.1" :feed feed})))))
       (finally (au/reset-state!) (delete-tree! data) (delete-tree! src)))))
 
+(deftest a-waiting-update-is-not-verified-again-on-each-check
+  ;; The feed is read every few minutes. A real app jar is about 160 MB, so a
+  ;; check must not hash the jar that already waits for a restart.
+  (let [data (temp-dir) kp (key-pair) src (temp-dir) verifies (atom 0)]
+    (try
+      (au/reset-state!)
+      (let [{:keys [jar sig]} (write-jar-and-sig! src "26.12.1" "new app" kp)
+            files {"http://x/app.jar" (Files/readAllBytes (.toPath jar)) "http://x/app.jar.sig" (Files/readAllBytes (.toPath sig))}
+            f (assoc feed "app_update" {"url" "http://x/app.jar" "sha256" (au/sha256-hex jar) "signature_url" "http://x/app.jar.sig"})
+            opts {:data-dir data :installed "26.11.1" :public-key (.getPublic kp) :feed f
+                  :open-stream #(stream-of (files %))}
+            real-verify au/verify]
+        (is (= :ready (au/check! opts)))
+        (with-redefs [au/verify (fn [m] (swap! verifies inc) (real-verify m))]
+          (is (= :ready (au/check! opts)))
+          (is (= :ready (au/check! opts))))
+        (is (zero? @verifies) "the feed names the version that waits, so nothing is hashed")
+        (testing "a feed with a newer version than the waiting one still downloads"
+          (is (= :failed (au/check! (assoc opts :feed (assoc f "current_version" "26.12.2")
+                                       :open-stream (fn [_] (throw (ex-info "offline" {}))))))
+            "it tries the download, which fails here")))
+      (finally (au/reset-state!) (delete-tree! data) (delete-tree! src)))))
+
 (deftest the-web-app-offers-a-ready-update-until-it-is-dismissed
   ;; The banner strip asks `banner-state`. Before this, only the tray said that
   ;; an update waited, and a Mac that starts at login could wait for weeks.
