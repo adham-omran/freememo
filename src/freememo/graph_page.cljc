@@ -605,7 +605,8 @@
                   (dom/td
                     (dom/props {:class "graph-relation-explorer-cell"})
                     (dom/button
-                      (dom/props {:class "graph-relation-concept" :dir "auto" :title (:subject_label row) :aria-label (str "Inspect " (:subject_label row))})
+                      (dom/props {:class "graph-relation-concept" :dir "auto" :aria-label (str "Inspect " (:subject_label row))})
+                      (tooltip/Tooltip! (:subject_label row))
                       (dom/text (:subject_label row))
                       (dom/On "click"
                         (fn [_]
@@ -613,10 +614,12 @@
                           (reset! !view-mode :neighborhood)
                           (close!)) nil))
                     (dom/span
-                      (dom/props {:class "graph-relation-predicate" :title (:predicate_label row)})
+                      (dom/props {:class "graph-relation-predicate"})
+                      (tooltip/Tooltip! (:predicate_label row))
                       (dom/text (:predicate_label row)))
                     (dom/button
-                      (dom/props {:class "graph-relation-concept" :dir "auto" :title (:object_label row) :aria-label (str "Inspect " (:object_label row))})
+                      (dom/props {:class "graph-relation-concept" :dir "auto" :aria-label (str "Inspect " (:object_label row))})
+                      (tooltip/Tooltip! (:object_label row))
                       (dom/text (:object_label row))
                       (dom/On "click"
                         (fn [_]

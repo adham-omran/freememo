@@ -706,7 +706,10 @@
              :commands #{:move-topic :show-hierarchy :show-pins}}
             {:label "Review a subset"
              :detail "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."
-             :commands #{:open-subset-review :review-topic}}]}
+             :commands #{:open-subset-review :review-topic}}
+            {:label "Split an article into topics"
+             :detail "In the Viewer, open Split article from the command palette. Choose how to find the sections: headings, horizontal lines, a custom splitmark, or groups of four blocks. Choose Preview sections, tick the ones you want, and create them as child topics. Undo removes the batch."
+             :commands #{:split-article}}]}
    {:slug "right-click-menu"
     :title "Right-click menu"
     :intro "Right-click a row, an image, a PDF page or a place in the text to see what you can do there."
