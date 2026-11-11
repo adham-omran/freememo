@@ -1,10 +1,11 @@
 name: test
 
-# Runs every Clojure suite that needs no PostgreSQL, on each push. The deploy
-# workflows do not need this job, so a red run never blocks a deploy.
+# This job runs every Clojure suite that needs no PostgreSQL, on each push.
+# The deploy workflows do not need this job, so a red run never blocks a deploy.
 # freememo.ci-runner picks the suites by behavior (test/CLAUDE.md, "CI"). It
-# runs each one with the database port refused. A suite that fails only on a
-# refused connection needs the database and is skipped. Any other failure is red.
+# runs each suite with the database port refused. A suite is skipped only when
+# every failure is a refused connection or a missing client build. Any other
+# failure is red.
 on:
   push:
   workflow_dispatch:
@@ -15,16 +16,16 @@ concurrency:
 
 jobs:
   test:
-    # The same runner label as the deploy job. Its job container has git, node
-    # and the docker socket, but the repo does not say that it has a JDK. So the
-    # suites run in the image that the Dockerfile build stage uses.
+    # This job uses the same runner label as the deploy job. Its job container
+    # has git, node and the docker socket. The repo does not say that it has a
+    # JDK. So the suites run in the image of the Dockerfile build stage.
     runs-on: ci
     steps:
       - uses: actions/checkout@v4
 
-      # The checkout goes into the container as a tar stream, because a bind
-      # mount from a job container would name a path on the daemon host. The
-      # named volume keeps the Maven cache between runs.
+      # The checkout goes into the container as a tar stream. A bind mount
+      # from a job container would name a path on the daemon host. The named
+      # volumes keep the Maven and git libraries between runs.
       # DB_PORT=1 refuses every database connection.
       - name: Run the database-free suites
         run: |
