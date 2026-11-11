@@ -268,6 +268,25 @@
   [id]
   (boolean (resolve-model id)))
 
+(def ^:private exa-web-search-model-ids
+  "Models that must search with Exa, not with OpenRouter's \"auto\" engine.
+   For Gemini, \"auto\" picks Google's native search. With tool_choice
+   \"required\", that search ran for 75 to 87 s and then ended the stream with
+   finish_reason \"error\", no text and $0 cost: 4 of 4 runs on
+   gemini-3.8-flash, measured 2026-11-11. The same requests with Exa answered
+   with sources. plans/arabic-corpus-and-ocr-findings.md records 0 of 9 for
+   the same engine earlier."
+  #{"gemini-3.8-flash"
+    "gemini-3.5-flash-lite"})
+
+(defn web-search-engine
+  "The OpenRouter web-search engine for the effective model: \"exa\" for a
+   model in `exa-web-search-model-ids`, else \"auto\".
+   Post: nil when `id` resolves to no model, which has no web search."
+  [id]
+  (when-let [entry (resolve-model id)]
+    (if (exa-web-search-model-ids (:id entry)) "exa" "auto")))
+
 (def ^:private cache-breakpoint-model-ids
   "Models whose prompt cache needs an explicit `cache_control` breakpoint.
    Measured 2026-10-01 on gemini-3.8-flash: with no breakpoint, a repeated

@@ -345,12 +345,12 @@
     annotations))
 
 (defn web-search-fields
-  "Request one web search before the model answers.
-   The auto engine uses native provider search when available and the configured
-   fallback otherwise."
-  []
+  "Request one web search with `engine` before the model answers.
+   The \"auto\" engine uses native provider search when available and the
+   configured fallback otherwise. `card-models/web-search-engine` chooses it."
+  [engine]
   {:tools [{:type "openrouter:web_search"
-            :parameters {:engine "auto"}}]
+            :parameters {:engine engine}}]
    :tool_choice "required"})
 
 (defn- parse-sse-data
@@ -377,12 +377,22 @@
 
    Pre: body contains :stream true. Callbacks do not block indefinitely.
    Post: returns {:text :metadata :headers}. Every accepted SSE delta appears in
-   :text once. Non-200 responses throw api-error. The response stream closes.
+   :text once. Non-200 responses throw api-error. A stream whose choice
+   finishes with finish_reason \"error\" throws a ::stream-error after the
+   final facts reach `on-metadata`, so its usage is still billed. The response
+   stream closes.
    Invariant: the reader continues through [DONE], so terminal usage remains
    available after local delivery stops."
   [api-key body ctx on-delta on-metadata]
   (let [started-ns (System/nanoTime)
         first-token-ns (volatile! nil)
+        ;; OpenRouter can report a provider failure in mid-stream only as
+        ;; finish_reason "error", with no :error key. See
+        ;; plans/gemini-web-search-exa.md.
+        finish-error? (volatile! false)
+        throw-finish-error! #(when @finish-error?
+                               (throw (ex-info "The model's provider ended the reply with an error."
+                                        {:type ::stream-error :finish-reason "error"})))
         elapsed-ms #(long (/ (- (System/nanoTime) started-ns) 1000000))]
     (try
       (let [[url auth] (endpoint api-key "/chat/completions")
@@ -422,6 +432,8 @@
                           (vreset! first-token-ns (System/nanoTime)))
                         (.append text delta)
                         (on-delta delta))
+                      (when (= "error" (:finish_reason choice))
+                        (vreset! finish-error? true))
                       (when (seq chunk-metadata)
                         (on-metadata chunk-metadata))
                       (recur text (merge metadata chunk-metadata)
@@ -432,6 +444,7 @@
                                     (long (/ (- (long @first-token-ns) started-ns) 1000000)))
                                   true (assoc :provider-latency-ms (elapsed-ms)))]
                       (on-metadata facts)
+                      (throw-finish-error!)
                       (log/external! {:id ::stream-call :feature (or (:feature ctx) :assistant)
                                       :user-id (:user-id ctx) :outcome :ok
                                       :duration-ms (elapsed-ms)
@@ -445,6 +458,7 @@
                               (long (/ (- (long @first-token-ns) started-ns) 1000000)))
                             true (assoc :provider-latency-ms (elapsed-ms)))]
                 (on-metadata facts)
+                (throw-finish-error!)
                 {:text (str text) :metadata facts :headers (:headers response)
                  :web-sources (web-source-links annotations)})))))
       (catch Throwable error

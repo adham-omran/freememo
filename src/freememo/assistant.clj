@@ -826,13 +826,15 @@
          :walkthrough {:walkthrough-id :repo-id :as-of-sha}} with each key
          present when the request carried that message, or nil for neither.
          The run worker applies the reply's leading block to each.
-         The walkthrough's evidence follows the head's, numbered after it."
+         The walkthrough's evidence follows the head's, numbered after it.
+   `web-search-engine` is `card-models/web-search-engine` of the run's model,
+   or nil when the model has no web search."
   ([user-id chat page-topic-id user-text ref-topic-ids model-fields
-    web-search-supported? cache-breakpoint?]
+    web-search-engine cache-breakpoint?]
    (answer-request user-id chat page-topic-id user-text ref-topic-ids model-fields
-     web-search-supported? cache-breakpoint? nil))
+     web-search-engine cache-breakpoint? nil))
   ([user-id chat page-topic-id user-text ref-topic-ids model-fields
-    web-search-supported? cache-breakpoint? turn]
+    web-search-engine cache-breakpoint? turn]
    {:pre [(contains? turn-kinds turn)]}
    (let [head (request-head user-id chat page-topic-id ref-topic-ids cache-breakpoint?)
          diagnosis? (= :question-pins turn)
@@ -860,8 +862,8 @@
                                   :session_id (:assistant_chats/provider_session_id chat)
                                   :messages messages)
                           (and (:assistant_chats/web_search chat)
-                            web-search-supported?)
-                          (merge (openrouter/web-search-fields)))
+                            web-search-engine)
+                          (merge (openrouter/web-search-fields web-search-engine)))
       :source-snapshot evidence
       :evidence evidence
       :reply-blocks (when (or map-tail walk-tail)
@@ -1486,7 +1488,7 @@
     (let [{:keys [entry model-id model-fields]} (run-model user-id nil)]
       {:chat chat :entry entry :model-id model-id
        :rendered (answer-request user-id chat page-topic-id user-text ref-topic-ids
-                   model-fields (card-models/web-search-supported? model-id)
+                   model-fields (card-models/web-search-engine model-id)
                    (card-models/cache-breakpoint? model-id) turn)
        :budget (budget/budget-tokens
                  (model-context/context-length (:openrouter-model entry)))})))
