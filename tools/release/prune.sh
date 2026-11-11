@@ -12,12 +12,6 @@ keep="v$1"
 releases="$(gh_list "/repos/$GH_REPO/releases")"
 published="$(printf '%s' "$releases" | jq -r --arg t "$keep" '[.[] | select(.tag_name == $t and (.draft | not))] | length')"
 [ "$published" -ge 1 ] || die "release $keep is not published, so nothing was deleted"
-for id in $(printf '%s' "$releases" | jq -r --arg t "$keep" '.[] | select(.tag_name != $t) | .id'); do
-  gh_ok DELETE "/repos/$GH_REPO/releases/$id"
-  echo "prune: deleted release $id"
-done
-tags="$(gh_list "/repos/$GH_REPO/tags" | jq -r --arg t "$keep" '.[] | select(.name != $t and (.name | startswith("v"))) | .name')"
-for tag in $tags; do
-  gh_ok DELETE "/repos/$GH_REPO/git/refs/tags/$tag"
-  echo "prune: deleted tag $tag"
-done
+gh_delete_each "$releases" '.[] | select(.tag_name != $t) | .id' "/repos/$GH_REPO/releases/" "prune: deleted release" "$keep"
+tags="$(gh_list "/repos/$GH_REPO/tags")"
+gh_delete_each "$tags" '.[] | select(.name != $t and (.name | startswith("v"))) | .name' "/repos/$GH_REPO/git/refs/tags/" "prune: deleted tag" "$keep"

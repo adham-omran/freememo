@@ -21,15 +21,11 @@ need_env() {
 # Writes the response body to $GH_BODY and the HTTP status to $GH_STATUS.
 gh_api() {
   GH_BODY="$(mktemp)"
-  if [ -n "${3:-}" ]; then
-    GH_STATUS="$(curl -sS -o "$GH_BODY" -w '%{http_code}' -X "$1" \
-      -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-      -H 'Content-Type: application/json' -d "$3" "$GH_API$2")" || die "no answer from $GH_API"
-  else
-    GH_STATUS="$(curl -sS -o "$GH_BODY" -w '%{http_code}' -X "$1" \
-      -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-      "$GH_API$2")" || die "no answer from $GH_API"
-  fi
+  _path="$2"; _json="${3:-}"
+  set -- -sS -o "$GH_BODY" -w '%{http_code}' -X "$1" \
+    -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json'
+  [ -z "$_json" ] || set -- "$@" -H 'Content-Type: application/json' -d "$_json"
+  GH_STATUS="$(curl "$@" "$GH_API$_path")" || die "no answer from $GH_API"
 }
 
 # gh_ok METHOD PATH [BODY]: like gh_api, but stops on any status but 2xx.
@@ -53,6 +49,17 @@ gh_list() {
     _page=$((_page + 1))
   done
   printf '%s' "$_all"
+}
+
+# gh_delete_each LIST-JSON JQ-FILTER DELETE-PATH-PREFIX LABEL TAG
+# Deletes "$DELETE-PATH-PREFIX<value>" for each value that JQ-FILTER prints for
+# LIST-JSON (a JSON array from gh_list). The filter sees TAG as $t. A non-empty
+# LABEL prints "LABEL <value>" for each deletion.
+gh_delete_each() {
+  for _v in $(printf '%s' "$1" | jq -r --arg t "$5" "$2"); do
+    gh_ok DELETE "$3$_v"
+    [ -z "$4" ] || echo "$4 $_v"
+  done
 }
 
 # version_gt A B: success when Release Version A is larger than B. Each part
