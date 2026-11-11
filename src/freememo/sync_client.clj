@@ -76,6 +76,12 @@
 
 (declare local-user-id)
 
+(defn sync-state
+  "Post: the sync state keyword (`:idle`, `:update-required`, ...), or nil
+         before the first sync."
+  []
+  (:state @!status))
+
 (defn- set-state!
   "Move the sync state machine and refresh Settings (:desktop-mutations)."
   [state & {:as more}]
@@ -93,10 +99,30 @@
 
 ;; ── HTTP ───────────────────────────────────────────────────────────
 
+(defn protocol-refusal?
+  "Pre:  `body` is a parsed JSON map, a JSON string, or anything else.
+   Post: true when it is the body of `desktop-auth/protocol-refusal`:
+         an `error` of `update-required` or `server-outdated` and a numeric
+         `protocol`. Any other 409 is not a protocol refusal."
+  [body]
+  (let [m (cond
+            (map? body) body
+            (string? body) (try (json/parse-string body) (catch Exception _ nil)))]
+    (boolean (and (map? m)
+               (contains? #{"update-required" "server-outdated"} (get m "error"))
+               (number? (get m "protocol"))))))
+
+(defn note-update-required!
+  "Show \"Update to keep syncing\": the server refused the Sync Protocol of
+   this install. Every path that can see the refusal calls this."
+  []
+  (set-state! :update-required))
+
 (defn- call!
   "One request to freememo.net. Answers {:status :body}.
    Post: a refused connection marks the link offline and throws ::offline.
-         A 401 throws ::unauthorized: the token was revoked (3.2)."
+         A 401 throws ::unauthorized: the token was revoked (3.2).
+         A protocol refusal (409, `protocol-refusal?`) throws ::update-required."
   [method path & {:keys [json-body file query]}]
   (try
     (let [resp (http/request
@@ -118,6 +144,8 @@
       (link/set-online! true)
       (when (= 401 (:status resp))
         (throw (ex-info "This device was signed out of FreeMemo" {:type ::unauthorized})))
+      (when (and (= 409 (:status resp)) (protocol-refusal? body))
+        (throw (ex-info (str (get body "error")) {:type ::update-required})))
       {:status (:status resp) :body body})
     (catch java.io.IOException e
       (link/set-online! false)
@@ -138,6 +166,10 @@
                           desktop-version/protocol-header (str desktop-version/sync-protocol)}
                 :query-params {"t" t "k" (json/generate-string k) "c" col}
                 :as :stream :throw-exceptions false :socket-timeout 600000})]
+    (when (= 409 (:status resp))
+      (let [b (with-open [in ^java.io.InputStream (:body resp)] (slurp in))]
+        (when (protocol-refusal? b)
+          (throw (ex-info "update-required" {:type ::update-required})))))
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "Blob download failed: HTTP " (:status resp))
                {:type ::step-failed :step :blob :status (:status resp)})))
@@ -635,7 +667,7 @@
         (let [kind (:type (ex-data e))]
           (when-not (= kind ::offline)
             (tel/log! {:level :warn :id ::sync-failed :data (dissoc (ex-data e) :body)} (.getMessage e)))
-          (fail! (case kind ::offline :offline ::unauthorized :signed-out :error)
+          (fail! (case kind ::offline :offline ::unauthorized :signed-out ::update-required :update-required :error)
             (when-not (= kind ::offline) (.getMessage e)))))
       ;; Throwable, not Exception: a StackOverflowError that escaped here left
       ;; the state at :syncing, so the download window froze on its last

@@ -25,6 +25,18 @@
     (testing "nothing pending: the link"
       (is (= (assoc need :status :ready) (gate/decide need 0))))))
 
+(deftest update-required-shows-the-link-at-once
+  (let [need {:version "2026.12.5" :url "https://x/linux.deb"}]
+    (testing "edits pending and the server refuses this install: link, with the count"
+      (is (= (assoc need :status :ready :pending 3) (gate/decide need 3 true))))
+    (testing "nothing pending: the plain link"
+      (is (= (assoc need :status :ready) (gate/decide need 0 true))))
+    (testing "banner says how many edits stay here"
+      (let [[b] (fb/update-banners {:installer (gate/decide need 3 true)})]
+        (is (= "https://x/linux.deb" (:href b)))
+        (is (re-find #"3 edits are not synced" (:message b)))
+        (is (re-find #"stay on this computer" (:message b)))))))
+
 (deftest on-feed-syncs-then-shows-the-link
   (let [pending (atom 2) syncs (atom 0) seen (atom [])]
     (try

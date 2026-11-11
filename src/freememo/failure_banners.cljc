@@ -146,7 +146,9 @@
      link when the feed has one.
    - A Release that needs a newer Runtime (`:installer`, ticket 20) says that
      edits are not yet synced, with no link, until nothing is pending. Then it
-     shows the link \"Download the new installer\".
+     shows the link \"Download the new installer\". When the sync state is
+     `:update-required`, the sync cannot finish, so the link shows at once with
+     the count of edits that stay on this computer.
    A newer Release with the same Runtime shows none: an App Update installs
    itself, and the tray offers \"Restart to update\"."
   [{:keys [update-available update-required? installer]}]
@@ -162,7 +164,12 @@
                          :message "A new installer is ready, but your edits are not yet synced. Sync them first."}))
 
       (= :ready (:status installer))
-      (conj (merge base {:key "installer-ready" :message "This version of FreeMemo needs a new installer."
+      (conj (merge base {:key "installer-ready"
+                         :message (if-let [n (:pending installer)]
+                                    (str "This version of FreeMemo can sync no more. It needs a new installer. "
+                                      n (if (= 1 n) " edit is" " edits are")
+                                      " not synced. They stay on this computer.")
+                                    "This version of FreeMemo needs a new installer.")
                          :href (:url installer) :href-label "Download the new installer"})))))
 
 ;; ---------------------------------------------------------------------------
