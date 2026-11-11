@@ -250,6 +250,16 @@
                     (text 404 "Not found")))]
     {:handler handler :account account}))
 
+(defn wrap-signed-in-callback
+  "Post: after the sign-in, GET /callback (a reload of the page that the
+         sign-in ended on) redirects to /. Without it, the gate lets the
+         request through as public and the app answers its landing page."
+  [handler]
+  (fn [request]
+    (if (public-request? request)
+      {:status 302 :headers {"Location" "/" "Cache-Control" "no-store"} :body ""}
+      (handler request))))
+
 (defn wrap-first-download
   "Pre:  `pending?` is `(fn [])`: true while the first download is not done.
    Post: GET / answers the progress page while `pending?`. Anything else, and

@@ -212,3 +212,19 @@
         (is (= ["bundled" "bundled"] (whos out)) "the second run is the restart")
         (is (str/includes? out "restarting to apply an update")))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
+
+(deftest the-log-file-holds-the-app-output-and-rolls-over-at-5-mb
+  (let [{:keys [app data]} (install! "ready")]
+    (try
+      (testing "a Windows launcher has no console: the output also goes to freememo.log"
+        (let [{:keys [exit out]} (run-boot {:app app :data data})
+              log (slurp (io/file data "freememo.log"))]
+          (is (zero? exit) out)
+          (is (re-find #"\[boot\] \S+ FreeMemo 26.11.1 starting" log))
+          (is (re-find #"FREEMEMO_READY port=1 pg_port=2 who=bundled" log))))
+      (testing "a log over 5 MB moves to freememo.log.1 at the next start"
+        (spit (io/file data "freememo.log") (apply str (repeat (* 6 1024 1024) "x")))
+        (run-boot {:app app :data data})
+        (is (= (* 6 1024 1024) (.length (io/file data "freememo.log.1"))))
+        (is (< (.length (io/file data "freememo.log")) 10000)))
+      (finally (t/delete-tree! app) (t/delete-tree! data)))))

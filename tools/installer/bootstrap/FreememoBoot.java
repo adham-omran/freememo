@@ -3,6 +3,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -10,12 +11,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -48,6 +51,11 @@ import java.util.regex.Pattern;
  *      counts of this run: the cause is then not the jar.
  *   4. When the child exits with code 75 after READY (the tray's "Restart to
  *      update"), go back to step 1. Any other exit code ends this process.
+ *
+ * Log: every child line (stdout and stderr) and every bootstrap line also go
+ * to {data dir}/freememo.log. A Windows launcher has no console, so without
+ * the file the app's output is lost. At start, a log over 5 MB moves to
+ * freememo.log.1, so two files at most stay.
  *
  * A launcher that finds the data directory locked starts one child with the
  * best jar and no fallback, so that a second start never marks a good jar.
@@ -199,8 +207,36 @@ public final class FreememoBoot {
   // ── Running ──────────────────────────────────────────────────────
 
   void log(String line) {
-    out.println("[boot] " + line);
+    out.println("[boot] " + Instant.now() + " " + line);
     out.flush();
+  }
+
+  static final long LOG_MAX_BYTES = 5L << 20;
+
+  /**
+   * Post: a stream that writes to `console` and appends to {dataDir}/freememo.log.
+   * A log over LOG_MAX_BYTES first moves to freememo.log.1. Without a writable
+   * log, `console` alone, with one line that says why.
+   */
+  static PrintStream withLogFile(Path dataDir, PrintStream console) {
+    try {
+      Files.createDirectories(dataDir);
+      Path log = dataDir.resolve("freememo.log");
+      if (Files.exists(log) && Files.size(log) > LOG_MAX_BYTES) {
+        Files.move(log, dataDir.resolve("freememo.log.1"), StandardCopyOption.REPLACE_EXISTING);
+      }
+      OutputStream file = Files.newOutputStream(log, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+      OutputStream both = new OutputStream() {
+        @Override public void write(int b) throws IOException { console.write(b); file.write(b); }
+        @Override public void write(byte[] b, int off, int len) throws IOException { console.write(b, off, len); file.write(b, off, len); }
+        @Override public void flush() throws IOException { console.flush(); file.flush(); }
+        @Override public void close() throws IOException { flush(); file.close(); }
+      };
+      return new PrintStream(both, true, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      console.println("[boot] no log file in " + dataDir + ": " + e.getMessage());
+      return console;
+    }
   }
 
   private boolean dataDirLocked() {
@@ -256,7 +292,8 @@ public final class FreememoBoot {
   private Outcome start(Path jar) throws Exception {
     Outcome o = new Outcome();
     ProcessBuilder pb = new ProcessBuilder(command(jar));
-    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+    // stderr joins stdout, so it reaches the log file too.
+    pb.redirectErrorStream(true);
     Process p = pb.start();
     child = p;
     CountDownLatch done = new CountDownLatch(1);
@@ -365,7 +402,8 @@ public final class FreememoBoot {
         System.getProperty("freememo.boot.main-class", "freememo.local_install"),
         Long.parseLong(System.getProperty("freememo.boot.ready-timeout-s", "240")),
         System.getProperty("freememo.boot.java", Paths.get(System.getProperty("java.home"), "bin", "java").toString()),
-        dataDir, args, System.out);
+        dataDir, args, withLogFile(dataDir, System.out));
+    boot.log("FreeMemo " + bundled + " starting (" + System.getProperty("os.name") + ", Java " + System.getProperty("java.version") + ")");
     System.exit(boot.run());
   }
 }

@@ -200,13 +200,34 @@
       "--no-tab" (recur more (assoc opts :no-tab true))
       (recur more opts))))
 
-(defn- set-server-env! [pg-port install]
-  (doseq [[k v] {"DB_HOST" "127.0.0.1" "DB_PORT" pg-port "DB_NAME" "postgres"
-                 "DB_USER" "postgres" "DB_PASSWORD" (get install "pg_password")
+(defn- set-role-env!
+  "Post: the app namespaces see a desktop peer of a Local Install.
+   Call it first in `start!`. `freememo.peer` and `freememo.config` read these
+   once, when they load, and the first-launch tray loads `freememo.config` for
+   its version label before the sign-in ends. Set later, they come too late:
+   the process then runs as freememo.net, with no gate, no sync, and a server
+   on 0.0.0.0 (Windows test, 2026-11-11)."
+  [install]
+  (doseq [[k v] {"FREEMEMO_PEER" "desktop" "FREEMEMO_LOCAL_INSTALL" "true"
                  "ENC_KEY_SECRET" (get install "enc_key_secret")
-                 "FREEMEMO_PEER" "desktop" "FREEMEMO_LOCAL_INSTALL" "true"
                  "COOKIE_SECURE" "false" "AUTH_MODE" "password"}]
     (launch-env/set! k v)))
+
+(defn- set-db-env! [pg-port install]
+  (doseq [[k v] {"DB_HOST" "127.0.0.1" "DB_PORT" pg-port "DB_NAME" "postgres"
+                 "DB_USER" "postgres" "DB_PASSWORD" (get install "pg_password")}]
+    (launch-env/set! k v)))
+
+(defn require-desktop-role!
+  "Fail closed. Post: nil when `freememo.peer` reports a desktop peer of a
+   Local Install. Else it throws, so no app server starts as freememo.net:
+   that server has no gate and listens on 0.0.0.0."
+  []
+  (when-not (and ((requiring-resolve 'freememo.peer/desktop?))
+                 ((requiring-resolve 'freememo.peer/local-install?)))
+    (throw (ex-info (str "freememo.peer loaded before the launcher set FREEMEMO_PEER, so this JVM "
+                         "would serve as freememo.net. The launcher refuses to start the app.")
+             {:type ::wrong-peer-role}))))
 
 (defn- sign-in-phase!
   "No account yet: serve the first-launch page on the install's port until the
@@ -283,6 +304,7 @@
         _ (.mkdirs ^File data-dir)
         lock (lock-data-dir! data-dir)
         install (load-install! data-dir (or port default-port))
+        _ (set-role-env! install)
         http-port (get install "port")
         local-origin (str "http://127.0.0.1:" http-port)
         origin (str/replace (or origin (System/getenv "FREEMEMO_ORIGIN") "https://freememo.net") #"/+$" "")
@@ -324,7 +346,8 @@
                       (sign-in-phase! {:data-dir data-dir :origin origin :local-origin local-origin
                                        :http-port http-port :install install :!jetty !jetty :on-gate on-gate}))
             pg (reset! !pg (postgres/start-postgres! (io/file data-dir "pgdata") data-dir (get install "pg_password")))]
-        (set-server-env! (.getPort pg) install)
+        (set-db-env! (.getPort pg) install)
+        (require-desktop-role!)
         (require 'prod 'freememo.desktop 'freememo.logging 'freememo.connectivity 'freememo.sync-client)
         ((ns-resolve 'freememo.logging 'init!))
         ((ns-resolve 'freememo.desktop 'set-launch-config!) account)
@@ -345,6 +368,7 @@
                        :wrap-gate (fn [handler] (wrap ((:wrap guard)
                                                        (-> handler
                                                          (signin/wrap-first-download pending?)
+                                                         (signin/wrap-signed-in-callback)
                                                          (wrap-license-reminder (get account "origin"))))))})]
           (reset! !jetty server)
           (start-network-check!)
