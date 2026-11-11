@@ -35,9 +35,9 @@
 
 (def ^:private chats
   {1 {:id 1 :parent-id nil :fork-message-id nil :title "ABC"}
-   2 {:id 2 :parent-id 1 :fork-message-id 4 :title "A"}
-   3 {:id 3 :parent-id 2 :fork-message-id 6 :title "A1"}
-   4 {:id 4 :parent-id 2 :fork-message-id 2 :title "A0"}})
+   2 {:id 2 :parent-id 1 :fork-message-id 4 :fork-chat-id 1 :title "A"}
+   3 {:id 3 :parent-id 2 :fork-message-id 6 :fork-chat-id 2 :title "A1"}
+   4 {:id 4 :parent-id 2 :fork-message-id 2 :fork-chat-id 1 :title "A0"}})
 
 (deftest the-inherited-path-runs-from-the-root-to-the-fork-point
   (is (= [] (tree/inherited-path chats 1)) "a root inherits nothing")
@@ -73,6 +73,7 @@
                     (if-let [chat (get chats id)]
                       (recur (conj rows {:id id :parent_chat_id (:parent-id chat)
                                          :fork_message_id (:fork-message-id chat)
+                                         :fork_chat_id (:fork-chat-id chat)
                                          :title (:title chat)})
                         (:parent-id chat))
                       rows)))

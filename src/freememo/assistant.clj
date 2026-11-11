@@ -611,14 +611,33 @@
                          (str grounding "\n\nEvidence key for these established facts: "
                            "[evidence:" (:citation-key facts-source) "]."))}))
 
+(defn- rows-through
+  "The rows of `rows`, which are in transcript order, up to and including the
+   message `through-id`. All of `rows` when none of them is that message.
+   Position, not id: a message id does not follow time in a chat that sync
+   filled (plans/assistant-message-order.md)."
+  [rows through-id]
+  (let [rows (vec rows)
+        i (when through-id
+            (first (keep-indexed #(when (= through-id (:assistant_messages/id %2)) %1) rows)))]
+    (if i (subvec rows 0 (inc i)) rows)))
+
+(defn- rows-after
+  "The rows of `rows`, which are in transcript order, after the message
+   `after-id`. All of `rows` when `after-id` is nil or names none of them."
+  [rows after-id]
+  (let [rows (vec rows)
+        i (when after-id
+            (first (keep-indexed #(when (= after-id (:assistant_messages/id %2)) %1) rows)))]
+    (if i (subvec rows (inc i)) rows)))
+
 (defn- sendable-rows
   "Message `rows` after message id `after-id` that a request carries. Blank
    assistant placeholders never enter a request."
   [rows after-id]
-  (filterv #(and (> (:assistant_messages/id %) (or after-id 0))
-              (or (= "user" (:assistant_messages/role %))
-                (not (str/blank? (:assistant_messages/content %)))))
-    rows))
+  (filterv #(or (= "user" (:assistant_messages/role %))
+              (not (str/blank? (:assistant_messages/content %))))
+    (rows-after rows after-id)))
 
 (defn- provider-turns
   "The provider turns of message `rows` after message id `after-id`."
@@ -630,8 +649,9 @@
 
 (defn- chat-node
   "A chat row as freememo.assistant-chat-tree reads it."
-  [{:keys [id parent_chat_id fork_message_id title excluded activity_ms]}]
+  [{:keys [id parent_chat_id fork_message_id fork_chat_id title excluded activity_ms]}]
   {:id id :parent-id parent_chat_id :fork-message-id fork_message_id
+   :fork-chat-id fork_chat_id
    :title (or title "Untitled") :excluded? (boolean excluded) :activity-ms activity_ms})
 
 (defn- chat-lineage
@@ -1583,7 +1603,7 @@
         (every? (fn [[_ through]]
                   (let [prior (db/latest-assistant-checkpoint user-id chat-id scope)
                         turns (provider-turns
-                                (filter #(<= (:assistant_messages/id %) through) rows)
+                                (rows-through rows through)
                                 (:covered_through_message_id prior))]
                     (or (empty? turns)
                       (compact-slice! user-id api-key model target-chat
@@ -2610,12 +2630,19 @@
                       path)
           own (message-events user-id chat-id (db/get-assistant-messages chat-id))
           checkpoints (db/get-assistant-checkpoints user-id chat-id)
-          after (fn [id] (inc (* 2 (or id 0))))]
+          ;; A row's position is its place in the transcript, never its id
+          ;; (plans/assistant-message-order.md). Row i sorts at 2i + 2, and a
+          ;; checkpoint after row i at 2i + 3.
+          places (fn [rows] (into {} (map-indexed (fn [i m] [(:assistant_messages/id m) i])) rows))
+          inherited-at (places inherited)
+          own-at (places own)
+          row-order (fn [at] #(* 2 (inc (at (:assistant_messages/id %)))))
+          after (fn [at id] (if-let [i (at id)] (+ 3 (* 2 i)) 1))]
       (->> (concat
-             (map #((order 0 (* 2 (:assistant_messages/id %))) %) inherited)
+             (map #((order 0 ((row-order inherited-at) %)) %) inherited)
              (keep (fn [checkpoint]
                      (when (= "inherited" (:scope checkpoint))
-                       ((order 0 (after (:covered_through_message_id checkpoint)))
+                       ((order 0 (after inherited-at (:covered_through_message_id checkpoint)))
                         (checkpoint-event checkpoint))))
                checkpoints)
              (when (seq path)
@@ -2625,14 +2652,14 @@
                   :assistant_event/type "fork"
                   :assistant_messages/content
                   (:title (get lineage (:assistant_chats/parent_chat_id chat)))})])
-             (map #((order 2 (* 2 (:assistant_messages/id %))) %) own)
+             (map #((order 2 ((row-order own-at) %)) %) own)
              (keep (fn [checkpoint]
                      (when-not (= "inherited" (:scope checkpoint))
-                       ((order 2 (after (:covered_through_message_id checkpoint)))
+                       ((order 2 (after own-at (:covered_through_message_id checkpoint)))
                         (checkpoint-event checkpoint))))
                checkpoints)
              (map (fn [checkpoint]
-                    ((order 2 (after (:after_message_id checkpoint)))
+                    ((order 2 (after own-at (:after_message_id checkpoint)))
                      (checkpoint-event checkpoint)))
                (db/get-assistant-checkpoints-made-for user-id chat-id)))
         (sort-by ::order)
