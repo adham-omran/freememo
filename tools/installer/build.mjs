@@ -69,7 +69,10 @@ const JRE_MODULES = [
 // package manager keeps ImageMagick, Graphviz and ffmpeg current and shares
 // them with the system. libgvplugin-neato-layout8 holds the sfdp layout engine
 // (the Dockerfile explains why), libheif1 the HEIC decoder of ImageMagick.
-const DEB_DEPENDS = 'ffmpeg, imagemagick, graphviz, libgvplugin-neato-layout8, libheif1'
+// Ubuntu 24.04 has no libgvplugin-neato-layout8: its Graphviz 2.42 keeps that
+// engine in libgvc6, so the dependency names both. Its ImageMagick is v6, which
+// freememo.api reaches as `convert`.
+const DEB_DEPENDS = 'ffmpeg, imagemagick, graphviz, libgvplugin-neato-layout8 | libgvc6, libheif1'
 
 // The downloads of a Windows build, pinned. A changed file fails the build.
 const WINDOWS_DOWNLOADS = {
@@ -159,16 +162,18 @@ async function pinned (entry) {
 function unpack (archive, into) {
   fs.rmSync(into, { recursive: true, force: true })
   fs.mkdirSync(into, { recursive: true })
-  if (/\.(zip|jar|7z)$/.test(archive)) sh('7z', ['x', '-y', `-o${into}`, archive], { stdio: ['ignore', 'ignore', 'inherit'] })
+  if (/\.(zip|jar|7z|txz)$/.test(archive)) sh('7z', ['x', '-y', `-o${into}`, archive], { stdio: ['ignore', 'ignore', 'inherit'] })
   else sh('tar', ['-xf', archive, '-C', into])
   return into
 }
 
-function onlyChild (dir) {
+function onlyChildName (dir) {
   const entries = fs.readdirSync(dir).filter(f => !f.startsWith('.'))
-  if (entries.length !== 1) throw new Error(`${dir} holds ${entries.length} entries, not one directory`)
-  return path.join(dir, entries[0])
+  if (entries.length !== 1) throw new Error(`${dir} holds ${entries.length} entries, not one`)
+  return entries[0]
 }
+
+function onlyChild (dir) { return path.join(dir, onlyChildName(dir)) }
 
 // Post: input/postgres-binaries.jar, and the bundle holds the four extensions.
 async function postgres (target, input, work) {
@@ -180,10 +185,13 @@ async function postgres (target, input, work) {
   const unpacked = unpack(jar, path.join(work, 'pg-jar'))
   const txz = fs.readdirSync(unpacked).find(f => f.endsWith('.txz'))
   if (!txz) throw new Error(`${jar} holds no .txz`)
+  // List it with 7z, not tar. On the Windows runner `tar` is Git's GNU tar, which reads
+  // "D:\..." as host "D" and fails. 7z prints backslashes on Windows, so the test takes both.
   // zonky's Windows bundle keeps extensions in share/extension, the others in share/postgresql/extension.
-  const listing = out('tar', ['-tJf', path.join(unpacked, txz)])
+  const tarDir = unpack(path.join(unpacked, txz), path.join(work, 'pg-tar'))
+  const listing = out('7z', ['l', '-ttar', path.join(tarDir, onlyChildName(tarDir))])
   for (const ext of EXTENSIONS) {
-    if (!new RegExp(`share/(postgresql/)?extension/${ext}\\.control`).test(listing)) {
+    if (!new RegExp(`share[/\\\\](postgresql[/\\\\])?extension[/\\\\]${ext}\\.control`).test(listing)) {
       throw new Error(`the PostgreSQL bundle lacks the ${ext} extension`)
     }
   }
