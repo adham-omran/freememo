@@ -11,7 +11,8 @@
    receives each node's rendered size and reserves space for large hubs. It also
    packs components and distributes leaf fans. Positions are raw Graphviz points.
    The client camera fits them, so the server does no normalization."
-  (:require [freememo.db :as db]
+  (:require [freememo.bundled-tools :as bundled-tools]
+            [freememo.db :as db]
             [freememo.graph-queries :as queries]
             [clojure.string :as str]
             [taoensso.telemere :as tel]))
@@ -100,7 +101,7 @@
         payload-bytes (.getBytes dot "UTF-8")]
     (tel/log! {:level :info :id ::sfdp.start :data {:dot-bytes (alength payload-bytes)}}
       "kg-graph sfdp: starting layout")
-    (let [proc (.start (ProcessBuilder. (into [sfdp-bin] sfdp-args)))
+    (let [proc (.start (bundled-tools/process-builder (into [sfdp-bin] sfdp-args)))
           ;; Drain stdout on another thread while we write stdin, so neither pipe
           ;; buffer can fill and deadlock the subprocess.
           out (future (slurp (.getInputStream proc)))
