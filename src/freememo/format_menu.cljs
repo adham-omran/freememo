@@ -8,15 +8,10 @@
    Placement contract (the reason this exists — the native tooltip collided
    with the app command bar and covered content):
      - position:fixed, so no editor-pane overflow ancestor clips it.
-     - NEVER covers the visible part of the selection. The vertical side comes
-       from the selection's whole bounding box, so a multi-line selection is
-       cleared rather than straddled.
-     - four tiers, first fit wins: below the box inside the Quill container,
-       above the box inside the container, below the VISIBLE box inside the
-       viewport (over whatever sits under the editor), else hidden. No tier
-       above the container top — that is the app command bar's floor. The
-       container is clipped to the viewport first, so a container an ancestor
-       scrolled off screen still cannot place the card off screen.
+     - prefer a position clear of the whole visible selection.
+     - try below and above inside the container, then below inside the viewport,
+       then beside the selection. If none fits, keep the menu over the editor.
+       A visible selection always has a menu unless the user dismisses it.
      - on a touch device, also clear of the browser's own Cut/Copy/Paste bar,
        which sits just above or below the selection. The page cannot read where
        that bar is, so a band of `sel-place/touch-reserve` px is kept clear on
@@ -26,8 +21,8 @@
      - hidden while the selection is scrolled out of the container, and shown
        again on the way back. `!open?` (not the card's display) is what says a
        selection still wants the card.
-     - one size. No height cap and no scrolling card: a tier that does not fit
-       is not taken.
+     - cap the height only when the menu cannot fit below the app command bar.
+       In that case, scroll the menu so all actions remain accessible.
    freememo.selection-placement holds the arithmetic and its tests; this ns
    measures the rects and applies the result.
 
@@ -724,9 +719,7 @@
 
 (defn- focus-x
   "Viewport x of the selection's focus point — the end the user dragged to.
-   Falls back to the box's left edge when the collapsed range yields no rect
-   (an element focusNode does): the horizontal result cannot break the
-   never-cover invariant, which the vertical tiers carry alone."
+   Use the box's left edge when the collapsed range yields no rect."
   [^js sel ^js box]
   (or (when-let [node (.-focusNode sel)]
         (let [^js r (js/document.createRange)]
@@ -758,7 +751,8 @@
     (when (and sel (pos? (.-rangeCount sel)) (not (.-isCollapsed sel))
             (.contains container (.-focusNode sel)))
       (let [^js box (.getBoundingClientRect (.getRangeAt sel 0))]
-        {:selection {:top (.-top box) :bottom (.-bottom box)}
+        {:selection {:top (.-top box) :bottom (.-bottom box)
+                     :left (.-left box) :right (.-right box)}
          :focus-x (focus-x sel box)}))))
 
 (defn- touch?
@@ -769,37 +763,45 @@
   (.-matches (.matchMedia js/window "(pointer: coarse)")))
 
 (defn- place!
-  "Position `card` (fixed) where it covers no visible selected text, or hide it
-   when no tier fits. freememo.selection-placement decides; this measures.
+  "Place the menu for a visible selection. Prefer a position clear of the text.
 
    Pre  : `card` is in the document, `container` is the Quill container element,
           `rtl?` was read when the selection changed (focus-line-rtl?).
    Post : the card's display is \"block\" with left/top applied, or \"none\".
           The `fmt-above` class is set exactly when the card sits above the
           selection, which flips its dropdowns upward (index.css).
-   Inv  : the applied rect never intersects the selection's visible rows."
+   A selection that fills the pane keeps its menu even when no clear position fits."
   [^js card ^js container rtl?]
   ;; Display first: offsetWidth/Height read 0 while display is none. Both writes
   ;; land in one task, so a card that ends up hidden never paints.
   (set! (.. card -style -display) "block")
+  (set! (.. card -style -maxHeight) "")
+  (set! (.. card -style -overflowY) "visible")
   (let [^js con (.getBoundingClientRect container)
-        placement (when-let [geom (selection-geometry container)]
+        available-height (max 1 (- (.-innerHeight js/window) sel-place/margin
+                                  (max sel-place/margin (.-top con))))]
+    (when (> (.-offsetHeight card) available-height)
+      (set! (.. card -style -maxHeight) (str available-height "px"))
+      (set! (.. card -style -overflowY) "auto"))
+    (let [placement (when-let [geom (selection-geometry container)]
                     (sel-place/place
                       (assoc geom
                         :rtl? rtl?
+                        :allow-overlap? true
                         :reserve (if (touch?) sel-place/touch-reserve 0)
-                        :container {:top (.-top con) :bottom (.-bottom con)}
+                        :container {:top (.-top con) :bottom (.-bottom con)
+                                    :left (.-left con) :right (.-right con)}
                         :viewport {:width (.-innerWidth js/window)
                                    :height (.-innerHeight js/window)}
                         :menu {:width (.-offsetWidth card)
                                :height (.-offsetHeight card)})))]
-    (if placement
-      (do (set! (.. card -style -left) (str (js/Math.round (:left placement)) "px"))
-          (set! (.. card -style -top) (str (js/Math.round (:top placement)) "px"))
-          (if (= :above (:side placement))
-            (.add (.-classList card) "fmt-above")
-            (.remove (.-classList card) "fmt-above")))
-      (set! (.. card -style -display) "none"))))
+      (if placement
+        (do (set! (.. card -style -left) (str (js/Math.round (:left placement)) "px"))
+            (set! (.. card -style -top) (str (js/Math.round (:top placement)) "px"))
+            (if (= :above (:side placement))
+              (.add (.-classList card) "fmt-above")
+              (.remove (.-classList card) "fmt-above")))
+        (set! (.. card -style -display) "none")))))
 
 ;; ---------------------------------------------------------------------------
 ;; install! — lifecycle
@@ -811,9 +813,8 @@
 
    Pre:  `editor` is an initialized Quill instance whose native `.ql-tooltip`
          is hidden by CSS.
-   Post: a non-empty user selection in `editor` places the card clear of every
-         visible selected row, or shows nothing when no position clears them; a
-         collapse / Escape / outside-click hides it; scroll & resize re-place it,
+   Post: a visible, non-empty selection in `editor` shows the menu.
+         A collapse / Escape / outside-click hides it. Scroll & resize re-place it,
          hiding the card while the selection is out of view and placing it again
          on the way back. Teardown leaves no listeners or DOM behind.
 
@@ -854,7 +855,11 @@
                            (reset! !rng rng)
                            (show!))
                          (hide!)))
-        reposition (fn [_] (when (open?) (place-now!)))
+        reposition (fn [^js event]
+                     (let [target (.-target event)]
+                       (when (and (open?)
+                               (not (and (instance? js/Node target) (.contains card target))))
+                         (place-now!))))
         on-doc-down (fn [^js e]
                       (when (and (open?)
                               (not (.contains card (.-target e)))

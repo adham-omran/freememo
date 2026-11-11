@@ -1,17 +1,7 @@
 (ns freememo.selection-placement
-  "Where a selection-anchored popover goes so it never covers the selection.
-
-   Pure rectangle arithmetic, no DOM. `.cljc` with no requires so `test/` can
-   reach it — the project has a Clojure test harness only, and Playwright's
-   synthetic scroll/selection reproduce none of this geometry, so this file is
-   the only part of the placement that a test can check at all.
-
-   `freememo.format-menu` is the one caller: it measures the rects, calls
-   `place`, and applies the result.
-
-   Inv : the returned rect never intersects the rows of the selection that are
-         visible inside the container. The vertical tiers carry that alone, so a
-         degraded `focus-x` costs alignment and never the invariant.")
+  "Pure placement arithmetic for the selection popover.
+   Prefer a position clear of selected text. The editor menu permits overlap
+   when no clear position fits. Other callers retain the clearance rule.")
 
 (def gap
   "Pixels between the selection edge and the popover."
@@ -35,71 +25,80 @@
   (max lo (min v hi)))
 
 (defn place
-  "Position for a popover anchored to a selection, or nil for \"show nothing\".
+  "Return a menu position, or nil when the selection is outside the view.
+   If no clear position fits, return nil unless :allow-overlap? is true.
 
    `opts` (all lengths in viewport pixels):
-     :selection {:top :bottom}   the selection's whole bounding box
+     :selection {:top :bottom :left :right} the selection's whole bounding box
      :focus-x                    x of the end the user dragged to
      :rtl?                       the focus line resolves right-to-left
-     :container {:top :bottom}   the editor element the selection lives in
+     :container {:top :bottom :left :right} the Quill container
      :viewport  {:width :height} window inner size
      :menu      {:width :height} measured popover size
      :reserve                    extra clearance on each side of the selection,
                                  for the browser's own selection bar (default 0;
                                  the caller passes `touch-reserve` on touch)
+     :allow-overlap?             keep the menu visible if no clear position fits
 
-   Four tiers, first fit wins:
+   Five tiers, first fit wins:
      1. below the selection, inside the container
      2. above the selection, inside the container
      3. below the VISIBLE selection, inside the viewport — overlaps whatever
         sits under the editor, which the contract permits
-     4. none — return nil, and the caller hides the popover
+     4. beside the visible selection, inside the viewport
+     5. over the editor, clamped to the viewport
 
-   There is deliberately no above-the-container tier: the container top is the
-   floor that keeps the popover clear of the app command bar.
+   The optional final tier keeps Select All usable when the selection fills the pane.
+   Only that tier may cover selected text. Missing horizontal bounds mean the
+   selection spans the viewport.
 
-   The container is clipped to the viewport before anything else reads it, and
-   every tier inherits that one clip. A container whose own rect leaves the
-   viewport — an ancestor scrolled it, a modal inside a scrolling page — bounds
-   nothing on its far side, so an unclipped `con-top` lets the above-tier return
-   a position off the top of the screen while the user can see selected text.
-   Clipping also makes the visible band honest: a selected row inside the
-   container but outside the viewport is not visible either.
-
-   Pre  : container top <= container bottom; menu width/height > 0.
-   Post : nil, or {:top :left :side} with :side in #{:below :above}, and
-          :top >= margin.
-   Inv  : the returned [top, top+height] band never overlaps the visible
-          selection band [max(sel-top, top-limit), min(sel-bottom, bottom-limit)]."
-  [{:keys [selection focus-x rtl? container viewport menu reserve]}]
+   Pre: menu fits the viewport. Container bounds are ordered.
+   Post: :side is :below, :above, :left, :right, or :overlap."
+  [{:keys [selection focus-x rtl? container viewport menu reserve allow-overlap?]}]
   (let [clearance (+ gap (or reserve 0))
-        {sel-top :top sel-bottom :bottom} selection
-        {con-top :top con-bottom :bottom} container
+        {sel-top :top sel-bottom :bottom sel-left :left sel-right :right} selection
+        {con-top :top con-bottom :bottom con-left :left con-right :right} container
         {view-w :width view-h :height} viewport
         {menu-w :width menu-h :height} menu
         viewport-bottom (- view-h margin)
         top-limit (max con-top margin)
-        bottom-limit (min con-bottom viewport-bottom)]
+        bottom-limit (min con-bottom viewport-bottom)
+        visible-left (max (or sel-left 0) (or con-left 0) margin)
+        visible-right (min (or sel-right view-w) (or con-right view-w) (- view-w margin))]
     ;; Out of view: no selected row is both inside the container and on screen,
     ;; so there is nothing to anchor to and nothing the user can read.
-    (when (and (> sel-bottom top-limit) (< sel-top bottom-limit))
-      (let [visible-bottom (min sel-bottom bottom-limit)
+    (when (and (< top-limit bottom-limit)
+               (< visible-left visible-right)
+               (> sel-bottom top-limit) (< sel-top bottom-limit))
+      (let [visible-top (max sel-top top-limit)
+            visible-bottom (min sel-bottom bottom-limit)
+            anchor-left (clamp margin (- view-w menu-w margin)
+                          (if rtl? (- focus-x menu-w) focus-x))
+            fallback-top (clamp (min top-limit (- viewport-bottom menu-h))
+                           (- viewport-bottom menu-h) visible-top)
             below-in-container (+ sel-bottom clearance)
             above-in-container (- sel-top clearance menu-h)
             below-in-viewport (+ visible-bottom clearance)
-            [top side] (cond
+            beside-left (- visible-left clearance menu-w)
+            beside-right (+ visible-right clearance)
+            [top left side] (cond
                          (<= (+ below-in-container menu-h) bottom-limit)
-                         [below-in-container :below]
+                         [below-in-container anchor-left :below]
 
                          (>= above-in-container top-limit)
-                         [above-in-container :above]
+                         [above-in-container anchor-left :above]
 
                          (<= (+ below-in-viewport menu-h) viewport-bottom)
-                         [below-in-viewport :below]
+                         [below-in-viewport anchor-left :below]
 
-                         :else [nil nil])]
+                         (>= beside-left margin)
+                         [fallback-top beside-left :left]
+
+                         (<= (+ beside-right menu-w) (- view-w margin))
+                         [fallback-top beside-right :right]
+
+                         allow-overlap? [fallback-top anchor-left :overlap]
+
+                         :else nil)]
         (when top
-          {:top top
-           :left (clamp margin (- view-w menu-w margin)
-                   (if rtl? (- focus-x menu-w) focus-x))
-           :side side})))))
+          {:top (max margin top) :left left :side side})))))
