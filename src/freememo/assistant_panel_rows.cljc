@@ -15,6 +15,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.assistant-mode-trail :as mode-trail]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-reference-choice :as choice]
    [freememo.tooltip :as tooltip]
@@ -41,6 +42,7 @@
         (let [change (dom/On "change"
                        (fn [event]
                          (let [mode-id (-> event .-target .-value)]
+                           (mode-trail/record-mode-change! active mode-id)
                            (reset! !pending-mode mode-id)
                            mode-id))
                        nil)
