@@ -1,6 +1,7 @@
 (ns freememo.release-version-test
   "The Release Version of a commit (docs/adr/0002)."
   (:require [clojure.test :refer [deftest is testing]]
+            [freememo.config :as config]
             [freememo.local-tray :as tray]
             [freememo.release-version :as rv]
             [freememo.update-feed :as uf])
@@ -58,6 +59,11 @@
       (is (uf/newer? "26.12.0" "26.11.44639")))))
 
 (deftest a-dev-build-has-no-version-to-check
-  (is (nil? (uf/installed-version)) "no manifest in a test run")
+  ;; Stub the manifest reader: a prod build in this tree writes a real
+  ;; Release Version into resources/electric-manifest.edn.
+  (with-redefs [config/release-version (constantly rv/dev)]
+    (is (nil? (uf/installed-version)) "a dev build reports no version"))
+  (with-redefs [config/release-version (constantly "26.11.13832")]
+    (is (= "26.11.13832" (uf/installed-version)) "a prod build reports its version"))
   (is (= "Version dev" (tray/version-label "dev")))
   (is (= "Version 26.11.13832" (tray/version-label "26.11.13832"))))
