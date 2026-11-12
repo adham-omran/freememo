@@ -18,8 +18,9 @@
    `freememo-<rv>-release.json`; ticket 20 adds the gate.
    `desktop-version-test` fails when an installer input changes, until the
    change records whether it raises this number.
-   2: the app child JVM shows as FreeMemo, not as Java (2026-11-12)."
-  2)
+   Raise it to 2 after installs have the gate fix of 2026-11-12 (5b570915):
+   94088888 changed the bootstrap. Not before, see plans/runtime-guard.md."
+  1)
 
 (def protocol-header
   "The request header with which a Local Install sends its Sync Protocol on
