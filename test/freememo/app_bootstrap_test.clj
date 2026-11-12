@@ -23,7 +23,8 @@
      public static void main(String[] args) throws Exception {
        String[] w = new String(Main.class.getResourceAsStream(\"/mode.txt\").readAllBytes()).trim().split(\" \");
        System.out.println(\"who=\" + w[0] + \" args=\" + String.join(\",\", args)
-           + \" tools=\" + System.getProperty(\"freememo.tools-dir\") + \" boot=\" + System.getProperty(\"freememo.bootstrap\"));
+           + \" tools=\" + System.getProperty(\"freememo.tools-dir\") + \" boot=\" + System.getProperty(\"freememo.bootstrap\")
+           + \" ui-element=\" + System.getProperty(\"apple.awt.UIElement\"));
        switch (w[1]) {
          case \"crash\": System.exit(3);
          case \"hang\": Thread.sleep(600000); break;
@@ -104,13 +105,28 @@
   (let [{:keys [app data]} (install! "ready") kp (t/key-pair)]
     (try
       (signed-update! data "26.12.1" "ready" kp)
-      (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp} "--no-tab")]
+      (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp
+                                          :extra-props ["-Dapple.awt.UIElement=true"]}
+                                         "--no-tab")]
         (is (zero? exit) out)
         (is (= ["new-26.12.1"] (whos out)))
         (is (str/includes? out "args=--data-dir," ) "the user's arguments reach the app")
         (is (str/includes? out "--no-tab"))
         (is (str/includes? out "tools=/the/tools") "freememo.* properties go on")
-        (is (str/includes? out "boot=true")))
+        (is (str/includes? out "boot=true"))
+        (is (str/includes? out "ui-element=true")
+            "macOS: the child stays out of the Dock and Cmd-Tab"))
+      (finally (t/delete-tree! app) (t/delete-tree! data)))))
+
+(deftest the-child-runs-the-java-exe-of-the-bundled-runtime
+  ;; Windows: the installer sets freememo-app.exe, a renamed java.exe, so
+  ;; Task Manager shows FreeMemo. A missing name shows where the bootstrap looked.
+  (let [{:keys [app data]} (install! "ready")]
+    (try
+      (let [{:keys [exit out]} (run-boot {:app app :data data
+                                          :extra-props ["-Dfreememo.boot.java-exe=no-such-java"]})]
+        (is (not (zero? exit)) out)
+        (is (str/includes? out (str File/separator "bin" File/separator "no-such-java")) out))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
 (defn- starts-file [data rv]

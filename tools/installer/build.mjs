@@ -33,6 +33,7 @@
 // -Dfreememo.update-public-key (tools/installer/app-update-public-key.b64; without that file the
 // build leaves App Update off with one log line). The bootstrap starts freememo.local_install with
 // -Xss4m, -Dfreememo.tools-dir=$APPDIR/tools and the user's arguments, like --no-tab.
+// On Windows the child runs as runtime\bin\freememo-app.exe, not java.exe (windowsAppExe).
 
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -93,8 +94,15 @@ const WINDOWS_DOWNLOADS = {
   vcRedist: {
     url: 'https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe',
     sha256: 'cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b'
+  },
+  // Electron's resource editor. It gives freememo-app.exe its name and icon (windowsAppExe).
+  rcedit: {
+    url: 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe',
+    sha256: '3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a'
   }
 }
+// The app child JVM of a Windows install, in runtime\bin (windowsAppExe).
+const WIN_APP_EXE = 'freememo-app.exe'
 const VC_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'vcomp140.dll']
 
 // macOS: static ffmpeg 9.0.2 builds (build 1789931890), pinned by version URL and SHA-256.
@@ -276,6 +284,23 @@ async function windowsTools (tools, work) {
   log('windows tools: ok')
 }
 
+// Post: runtime\bin\freememo-app.exe is a copy of java.exe with the FreeMemo
+// name and icon. The bootstrap starts the app child with it
+// (-Dfreememo.boot.java-exe), so Task Manager shows "FreeMemo", not "OpenJDK
+// Platform binary". The java launcher finds its runtime from its own
+// directory, so the new file name changes nothing else.
+async function windowsAppExe (runtime) {
+  const exe = path.join(runtime, 'bin', WIN_APP_EXE)
+  fs.copyFileSync(path.join(runtime, 'bin', 'java.exe'), exe)
+  const ico = path.join(here, '..', '..', 'resources', 'public', 'favicon.ico')
+  sh(await pinned(WINDOWS_DOWNLOADS.rcedit), [exe, '--set-icon', ico,
+    '--set-version-string', 'FileDescription', 'FreeMemo',
+    '--set-version-string', 'ProductName', 'FreeMemo',
+    '--set-version-string', 'InternalName', 'freememo-app',
+    '--set-version-string', 'OriginalFilename', WIN_APP_EXE])
+  log(`${WIN_APP_EXE}: ok`)
+}
+
 // ── macOS tools ────────────────────────────────────────────────────
 
 // Layout: tools/bin/{ffmpeg,ffprobe,magick,sfdp,libs/}, tools/imagemagick/{lib,etc,share},
@@ -376,10 +401,14 @@ function jpackageArgs ({ target, type, version, input, runtime, dest, work, publ
   if (target === 'darwin-arm64') {
     return [...common, '--icon', macIcon(work), '--mac-package-name', 'FreeMemo', '--mac-package-identifier', MAC_BUNDLE_ID,
       // The tray makes a template image on macOS. See freememo.local-tray.
-      '--java-options', '-Dapple.awt.enableTemplateImages=true']
+      '--java-options', '-Dapple.awt.enableTemplateImages=true',
+      // The app child is a bare bin/java, not the bundle, so AWT showed it in
+      // the Dock and Cmd-Tab with the Duke icon. UIElement keeps it to the tray.
+      '--java-options', '-Dapple.awt.UIElement=true']
   }
   if (target === 'win32-x64') {
-    return [...common, '--icon', path.join(publicDir, 'favicon.ico'), '--win-menu', '--win-shortcut',
+    return [...common, '--java-options', `-Dfreememo.boot.java-exe=${WIN_APP_EXE}`,
+      '--icon', path.join(publicDir, 'favicon.ico'), '--win-menu', '--win-shortcut',
       '--win-per-user-install', '--win-upgrade-uuid', WIN_UPGRADE_UUID]
   }
   const icon = ['--icon', path.join(publicDir, 'freememo', 'icon-512.png')]
@@ -416,6 +445,7 @@ async function main () {
   else if (target === 'darwin-arm64') await macTools(tools, work)
   else fs.mkdirSync(tools) // Linux: the package declares its tools. The directory keeps $APPDIR/tools valid.
   const runtime = jlinkRuntime(work)
+  if (target === 'win32-x64') await windowsAppExe(runtime)
 
   const javaHome = process.env.JAVA_HOME
   const jpackage = javaHome ? path.join(javaHome, 'bin', 'jpackage') : which('jpackage')

@@ -74,7 +74,10 @@ import java.util.regex.Pattern;
  *                                   PostgreSQL started, and a first start runs
  *                                   initdb. Two failed starts are needed to
  *                                   mark a jar, so 240 s stays enough.
- *   freememo.boot.java              default java.home/bin/java
+ *   freememo.boot.java              default java.home/bin/{freememo.boot.java-exe}
+ *   freememo.boot.java-exe          default java. Windows: freememo-app.exe, a copy
+ *                                   of java.exe that says FreeMemo in Task Manager
+ *                                   (tools/installer/build.mjs, windowsAppExe).
  */
 public final class FreememoBoot {
   static final int RESTART_CODE = 75;
@@ -261,7 +264,7 @@ public final class FreememoBoot {
     cmd.add("-Dfreememo.bootstrap=true");
     for (String name : System.getProperties().stringPropertyNames()) {
       if ((name.startsWith("freememo.") && !name.equals("freememo.bootstrap")) || name.equals("jpackage.app-path")
-          || name.equals("apple.awt.enableTemplateImages")) {
+          || name.equals("apple.awt.enableTemplateImages") || name.equals("apple.awt.UIElement")) {
         cmd.add("-D" + name + "=" + System.getProperty(name));
       }
     }
@@ -401,7 +404,8 @@ public final class FreememoBoot {
     FreememoBoot boot = new FreememoBoot(Paths.get(appdir), bundled, key,
         System.getProperty("freememo.boot.main-class", "freememo.local_install"),
         Long.parseLong(System.getProperty("freememo.boot.ready-timeout-s", "240")),
-        System.getProperty("freememo.boot.java", Paths.get(System.getProperty("java.home"), "bin", "java").toString()),
+        System.getProperty("freememo.boot.java", Paths.get(System.getProperty("java.home"), "bin",
+            System.getProperty("freememo.boot.java-exe", "java")).toString()),
         dataDir, args, withLogFile(dataDir, System.out));
     boot.log("FreeMemo " + bundled + " starting (" + System.getProperty("os.name") + ", Java " + System.getProperty("java.version") + ")");
     System.exit(boot.run());
