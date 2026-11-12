@@ -7,6 +7,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [freememo.desktop-version :as dv]
             [freememo.local-install-harness :as h]
             [freememo.local-install-stub :as stub]))
 
@@ -18,7 +19,7 @@
                  "windows" "https://example.test/win.exe"
                  "linux" "https://example.test/linux.deb"}
    "app_update" {"url" "https://example.test/app.jar" "sha256" "abc"}
-   "runtime" 1
+   "runtime" dv/runtime
    "sync_protocol" 1})
 
 (defn- with-install

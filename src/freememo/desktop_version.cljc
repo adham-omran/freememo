@@ -15,8 +15,11 @@
   "The Runtime of this Release: one number. It rises by one when a change needs
    something that an App Update cannot replace (the launcher, the JRE, bundled
    tools, PostgreSQL). The release workflow writes it into
-   `freememo-<rv>-release.json`; ticket 20 adds the gate."
-  1)
+   `freememo-<rv>-release.json`; ticket 20 adds the gate.
+   `desktop-version-test` fails when an installer input changes, until the
+   change records whether it raises this number.
+   2: the app child JVM shows as FreeMemo, not as Java (2026-11-12)."
+  2)
 
 (def protocol-header
   "The request header with which a Local Install sends its Sync Protocol on

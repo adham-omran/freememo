@@ -20,6 +20,11 @@
                                  install, so no sync can send them. Show the
                                  link at once, and say that the edits stay here.
 
+   With the sync state `:license-refused` (no Sync License) the server refuses
+   every sync, so edits stay pending for good and only live on this computer.
+   The link shows at once, as `{:status :ready :version :url}`. Before
+   2026-11-12 this state waited for the sync, so the link never showed.
+
    The pending signal is the one the sync client already has: a row with
    `usn = -1` (`freememo.sync-client/pending-edit-count`)."
   (:require [freememo.desktop-version :as dv]
@@ -40,20 +45,21 @@
 
 (defn decide
   "Pre:  `need` is the answer of `needed`. `pending` is the number of edits
-         not yet synced. `update-required?` is true when the sync state is
-         `:update-required` (default false).
+         not yet synced. `sync-state` is `sync-client/sync-state` (default nil).
    Post: nil, `{:status :unsynced}` or `{:status :ready :version :url}`, with
-         `:pending` when edits stay on this computer. Offline
-         or refused sync changes nothing here: edits that stay pending keep the
-         link hidden, and the sync that fails leaves them pending."
-  ([need pending] (decide need pending false))
-  ([need pending update-required?]
+         `:pending` when edits stay on this computer. A sync state that a
+         later sync can end (offline, signed out, an error) changes nothing
+         here: edits that stay pending keep the link hidden."
+  ([need pending] (decide need pending nil))
+  ([need pending sync-state]
    (cond
      (nil? need) nil
      (not (pos? pending)) (assoc need :status :ready)
      ;; The newest Release raised the Runtime and the Sync Protocol: sync gets
      ;; 409 for good, so waiting for it would hide the link for ever.
-     update-required? (assoc need :status :ready :pending pending)
+     (= :update-required sync-state) (assoc need :status :ready :pending pending)
+     ;; No Sync License: no sync ever sends these edits. They are local only.
+     (= :license-refused sync-state) (assoc need :status :ready)
      :else {:status :unsynced})))
 
 ;; ── Local Install side ─────────────────────────────────────────────
@@ -71,7 +77,7 @@
   []
   (when-let [need @!need]
     (decide need (try (pending-count) (catch Throwable _ 1))
-      (= :update-required ((requiring-resolve 'freememo.sync-client/sync-state))))))
+      ((requiring-resolve 'freememo.sync-client/sync-state)))))
 
 (defn- stop-timer! []
   (when-let [^ScheduledFuture f (first (reset-vals! !timer nil))]

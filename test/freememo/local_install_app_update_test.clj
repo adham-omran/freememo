@@ -12,6 +12,7 @@
             [clojure.test :refer [deftest is]]
             [freememo.app-update :as au]
             [freememo.app-update-test :as t]
+            [freememo.desktop-version :as dv]
             [freememo.local-install-harness :as h]
             [freememo.local-install-stub :as stub]))
 
@@ -23,7 +24,7 @@
    "installers" {"macos" "https://example.test/mac.dmg" "windows" "https://example.test/win.msi"
                  "linux" "https://example.test/linux.deb"}
    "app_update" {"url" (str origin "/dl/app.jar") "sha256" sha "signature_url" (str origin "/dl/app.jar.sig")}
-   "runtime" (or runtime 1) "sync_protocol" 1})
+   "runtime" (or runtime dv/runtime) "sync_protocol" 1})
 
 (defn- with-app-update*
   "Run `(f li dir)` with a feed that offers a jar signed by `signer`, where the
@@ -46,7 +47,7 @@
       (finally (stub/stop! s) (t/delete-tree! src)))))
 
 (defn- with-app-update
-  [signer trusted f] (with-app-update* signer trusted 1 f))
+  [signer trusted f] (with-app-update* signer trusted dv/runtime f))
 
 (defn- await-file [^java.io.File f]
   (let [deadline (+ (System/currentTimeMillis) 90000)]
@@ -74,7 +75,7 @@
 
 (deftest a-higher-runtime-downloads-no-jar-and-offers-the-installer
   (let [kp (t/key-pair)]
-    (with-app-update* kp kp 2
+    (with-app-update* kp kp (inc dv/runtime)
       (fn [li dir]
         (let [cookie (:cookie (h/sign-in! li))
               deadline (+ (System/currentTimeMillis) 60000)

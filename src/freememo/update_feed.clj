@@ -14,9 +14,9 @@
    account's origin at start, every `interval-minutes`, when the network comes
    back, and from Settings → Desktop App → Check for updates. When the feed holds a newer
    version, `banner-state` says so and the web app and the tray show \"Update
-   available\". Since ticket 19 only the tray shows it, and only when the new Release needs
-   an installer; the web app shows no such banner, and an App Update downloads by itself
-   (`freememo.app-update`). A feed that cannot be read shows nothing and logs one line.
+   available\". Since ticket 19 it shows only when the new Release needs an installer
+   (`freememo.installer-gate`): the tray and the web app's banner strip offer \"Download
+   the new installer\". An App Update downloads by itself (`freememo.app-update`). A feed that cannot be read shows nothing and logs one line.
 
    `banner-state` also says when the server refused sync for an old Sync Protocol
    (the sync state `:update-required`). The web app then shows \"Update to keep
