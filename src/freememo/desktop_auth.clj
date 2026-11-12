@@ -183,6 +183,18 @@
     (when-let [error (and sent (desktop-version/protocol-error sent))]
       (json-response 409 {:error error :protocol desktop-version/sync-protocol}))))
 
+(defn client-build
+  "The Runtime and Release Version that a Local Install sent
+   (`desktop-version/request-headers`).
+   Post: {:runtime :app-version}. Each is nil when the header is missing or
+         not valid: Electron and older jars send neither. A bad value never
+         fails the request."
+  [request]
+  (let [runtime (some-> (get-in request [:headers "x-freememo-runtime"]) str/trim parse-long)
+        version (some-> (get-in request [:headers "x-freememo-version"]) str/trim not-empty)]
+    {:runtime (when (and runtime (<= 0 runtime 1000000)) runtime)
+     :app-version (some-> version (subs 0 (min 40 (count version))))}))
+
 (defn token-handler
   "POST /desktop/token — trade a code and its PKCE verifier for a token.
    Post: 200 with the token, the account and a first id block; 409 for a
@@ -208,10 +220,13 @@
             (json-response 400 {:error "invalid_grant"})
             (let [user-id (:user_id row)
                   token (random-secret)
-                  token-id (:id (jdbc/execute-one! tx ["INSERT INTO desktop_tokens (user_id, token_hash, device_name)
-                                                        VALUES (?, ?, ?) RETURNING id"
+                  {:keys [runtime app-version]} (client-build request)
+                  token-id (:id (jdbc/execute-one! tx ["INSERT INTO desktop_tokens
+                                                          (user_id, token_hash, device_name, runtime, app_version)
+                                                        VALUES (?, ?, ?, ?, ?) RETURNING id"
                                                        user-id (sha256-hex token)
-                                                       (some-> device_name (subs 0 (min 80 (count device_name))))]
+                                                       (some-> device_name (subs 0 (min 80 (count device_name))))
+                                                       runtime app-version]
                                  opts))
                   username (:username (jdbc/execute-one! tx ["SELECT username FROM users WHERE id = ?" user-id] opts))]
               ;; 13.5 — the trial starts at the account's first desktop sign-in.
@@ -224,13 +239,19 @@
 
 (defn bearer-token
   "The token-holder of a request: {:user-id :token-id}, or nil for a missing,
-   unknown or revoked token (3.2)."
+   unknown or revoked token (3.2).
+   Post: a valid token's row holds this call's time in `last_used_at`, and its
+         Runtime and Release Version (`client-build`). A call that sends none
+         writes NULL, so the row always tells what the last call sent."
   [request]
   (when-let [auth (get-in request [:headers "authorization"])]
     (when-let [[_ token] (re-matches #"Bearer\s+(\S+)" auth)]
-      (when-let [row (jdbc/execute-one! db/ds ["UPDATE desktop_tokens SET last_used_at = now()
-                                                WHERE token_hash = ? AND revoked_at IS NULL
-                                                RETURNING id, user_id" (sha256-hex token)] opts)]
+      (when-let [row (let [{:keys [runtime app-version]} (client-build request)]
+                       (jdbc/execute-one! db/ds ["UPDATE desktop_tokens
+                                                  SET last_used_at = now(), runtime = ?, app_version = ?
+                                                  WHERE token_hash = ? AND revoked_at IS NULL
+                                                  RETURNING id, user_id"
+                                                 runtime app-version (sha256-hex token)] opts))]
         {:user-id (:user_id row) :token-id (:id row)}))))
 
 (defn id-block-handler

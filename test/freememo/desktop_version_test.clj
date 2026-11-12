@@ -61,3 +61,10 @@
            " or JAVA_VERSION in .github/workflows/installers.yml. An App Update"
            " cannot deliver it. Decide whether to raise"
            " freememo.desktop-version/runtime (see `recorded`), then record " (pr-str now)))))
+
+(deftest each-desktop-call-names-its-runtime-and-version
+  (let [h (desktop-version/request-headers)]
+    (is (= (str desktop-version/sync-protocol) (get h desktop-version/protocol-header)))
+    (is (= (str desktop-version/runtime) (get h desktop-version/runtime-header)))
+    (is (= (str ((requiring-resolve 'freememo.config/release-version)))
+          (get h desktop-version/version-header)))))

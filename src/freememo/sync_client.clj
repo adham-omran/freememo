@@ -128,8 +128,8 @@
     (let [resp (http/request
                  (cond-> {:method method
                           :url (str (link/origin) path)
-                          :headers {"Authorization" (str "Bearer " (link/token))
-                                    desktop-version/protocol-header (str desktop-version/sync-protocol)}
+                          :headers (assoc (desktop-version/request-headers)
+                                     "Authorization" (str "Bearer " (link/token)))
                           :throw-exceptions false
                           :connection-timeout 15000
                           :socket-timeout 120000}
@@ -162,8 +162,8 @@
   ^File [{:strs [t k]} col]
   (let [file (File/createTempFile "fm-blob" ".bin")
         resp (http/get (str (link/origin) "/api/sync/blob")
-               {:headers {"Authorization" (str "Bearer " (link/token))
-                          desktop-version/protocol-header (str desktop-version/sync-protocol)}
+               {:headers (assoc (desktop-version/request-headers)
+                           "Authorization" (str "Bearer " (link/token)))
                 :query-params {"t" t "k" (json/generate-string k) "c" col}
                 :as :stream :throw-exceptions false :socket-timeout 600000})]
     (when (= 409 (:status resp))

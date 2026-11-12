@@ -86,3 +86,31 @@
     (finally
       (link/set-online! true)
       (link/configure! {:origin nil :token nil :user-id nil}))))
+
+(defn- token-row [token]
+  (jdbc/execute-one! db/ds ["SELECT runtime, app_version FROM desktop_tokens WHERE token_hash = ?"
+                            (auth/sha256-hex token)]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(deftest the-token-records-the-runtime-and-version-of-the-last-call
+  (when (db-up?)
+    (let [u (user!)
+          r (auth/token-handler {:headers {"content-type" "application/x-www-form-urlencoded"
+                                           "x-freememo-runtime" "2" "x-freememo-version" "26.11.16309"}
+                                 :params {"code" (code-for! u) "code_verifier" verifier
+                                          "redirect_uri" redirect}})
+          token (get (json/parse-string (:body r)) "access_token")
+          call (fn [headers] (auth/bearer-token {:headers (assoc headers "authorization" (str "Bearer " token))}))]
+      (testing "sign-in records them"
+        (is (= {:runtime 2 :app_version "26.11.16309"} (token-row token))))
+      (testing "each call records what it sent"
+        (is (= u (:user-id (call {"x-freememo-runtime" "3" "x-freememo-version" "26.12.1"}))))
+        (is (= {:runtime 3 :app_version "26.12.1"} (token-row token))))
+      (testing "a call that sends neither (Electron, an older jar) records NULL"
+        (call {})
+        (is (= {:runtime nil :app_version nil} (token-row token))))
+      (testing "a bad value is dropped, and the call still passes"
+        (is (= u (:user-id (call {"x-freememo-runtime" "99999999999999" "x-freememo-version" (apply str (repeat 100 "9"))}))))
+        (is (= {:runtime nil :app_version (apply str (repeat 40 "9"))} (token-row token)))
+        (is (= u (:user-id (call {"x-freememo-runtime" "two"}))))
+        (is (nil? (:runtime (token-row token))))))))

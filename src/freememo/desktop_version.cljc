@@ -26,6 +26,28 @@
    every sync, sign-in and AI proxy call."
   "X-FreeMemo-Sync-Protocol")
 
+(def runtime-header
+  "The request header with which a Local Install sends its Runtime. The server
+   records it on the token (`desktop-auth/bearer-token`), so production shows
+   which installs still need a new installer."
+  "X-FreeMemo-Runtime")
+
+(def version-header
+  "The request header with which a Local Install sends its Release Version.
+   The server records it on the token, like `runtime-header`."
+  "X-FreeMemo-Version")
+
+#?(:clj
+   (defn request-headers
+     "The headers that a Local Install sends on every sync, sign-in and AI proxy
+      call: its Sync Protocol, its Runtime and its Release Version (\"dev\"
+      outside a built jar).
+      Post: a map of header name to string value."
+     []
+     {protocol-header (str sync-protocol)
+      runtime-header (str runtime)
+      version-header (str ((requiring-resolve 'freememo.config/release-version)))}))
+
 (defn protocol-error
   "Compare the Sync Protocol that a request sent with this server's.
    Post: nil when they are equal, `\"update-required\"` when the client is

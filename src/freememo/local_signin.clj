@@ -35,8 +35,8 @@
             [freememo.desktop-version :as desktop-version]
             [freememo.local-http :as http])
   (:import [java.net URI URLEncoder]
-           [java.net.http HttpClient HttpClient$Redirect HttpRequest HttpRequest$BodyPublishers
-            HttpResponse$BodyHandlers]
+           [java.net.http HttpClient HttpClient$Redirect HttpRequest HttpRequest$Builder
+            HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
            [java.nio.charset StandardCharsets]
            [java.security MessageDigest SecureRandom]
            [java.time Duration]
@@ -90,6 +90,11 @@
   (try (.getHostName (java.net.InetAddress/getLocalHost))
        (catch Exception _ "FreeMemo Local")))
 
+(defn- with-headers
+  "Post: the builder `b` with each header of the map `m`."
+  ^HttpRequest$Builder [^HttpRequest$Builder b m]
+  (reduce-kv (fn [^HttpRequest$Builder b k v] (.header b ^String k ^String v)) b m))
+
 (defn exchange-code!
   "Trade the code and its verifier for the token (POST /desktop/token).
    Post: `{:access_token :user_id :username :id_block}` (string keys), or
@@ -99,7 +104,7 @@
                         (-> (HttpRequest/newBuilder (URI. (str origin "/desktop/token")))
                           (.timeout (Duration/ofSeconds 30))
                           (.header "Content-Type" "application/json")
-                          (.header desktop-version/protocol-header (str desktop-version/sync-protocol))
+                          (with-headers (desktop-version/request-headers))
                           (.POST (HttpRequest$BodyPublishers/ofString
                                    (json/generate-string {"code" code "code_verifier" verifier
                                                           "redirect_uri" redirect-uri

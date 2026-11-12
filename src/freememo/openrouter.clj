@@ -37,8 +37,8 @@
   (if (peer/desktop?)
     (do (link/require-online! "AI")
         [(str (link/origin) "/api/desktop/ai" path)
-         {"Authorization" (str "Bearer " (link/token))
-          desktop-version/protocol-header (str desktop-version/sync-protocol)}])
+         (assoc (desktop-version/request-headers)
+           "Authorization" (str "Bearer " (link/token)))])
     [(str base-url path)
      (if api-key {"Authorization" (str "Bearer " api-key)} {})]))
 

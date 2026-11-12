@@ -3521,6 +3521,11 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_desktop_tokens_user
                       ON desktop_tokens(user_id)"])
+  ;; The Runtime and Release Version that the install sent on its last call
+  ;; (desktop-auth/bearer-token). NULL: Electron, or a jar from before
+  ;; 2026-11-12. plans/runtime-guard.md.
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS runtime INTEGER"])
+  (jdbc/execute! ds ["ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS app_version TEXT"])
 
   ;; PKCE authorization codes (3.1). Single use, 60 seconds.
   (jdbc/execute! ds ["
