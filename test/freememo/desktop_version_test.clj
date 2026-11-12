@@ -51,7 +51,7 @@
      then stops taking App Updates and shows \"Download the new installer\".
    - It does not (a comment, a build-only step): keep the Runtime.
    Then set both values here to what the test prints."
-  {:runtime 1
+  {:runtime 2
    :sha256 "00aca10735972245f4bf25b44e3eb8ff7766b1e988d1318936e9c81b2892a282"})
 
 (deftest each-installer-change-has-a-runtime-decision
