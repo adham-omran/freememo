@@ -42,6 +42,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assetName, targetKey } from './asset-names.mjs'
+import { stripSignature } from './pe-signature.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -288,13 +289,19 @@ async function windowsTools (tools, work) {
 // name and icon. The bootstrap starts the app child with it
 // (-Dfreememo.boot.java-exe), so Task Manager shows "FreeMemo", not "OpenJDK
 // Platform binary". The java launcher finds its runtime from its own
-// directory, so the new file name changes nothing else.
+// directory, so the new file name changes nothing else. The copy is unsigned,
+// and its CompanyName is FreeMemo.
 async function windowsAppExe (runtime) {
   const exe = path.join(runtime, 'bin', WIN_APP_EXE)
   fs.copyFileSync(path.join(runtime, 'bin', 'java.exe'), exe)
+  // rcedit breaks the Eclipse Foundation signature of the copy, so remove it
+  // (pe-signature.mjs).
+  log(`${WIN_APP_EXE}: removed ${stripSignature(exe)} bytes of signature`)
   const ico = path.join(here, '..', '..', 'resources', 'public', 'favicon.ico')
   sh(await pinned(WINDOWS_DOWNLOADS.rcedit), [exe, '--set-icon', ico,
     '--set-version-string', 'FileDescription', 'FreeMemo',
+    // Windows showed java.exe's CompanyName, "Eclipse Adoptium", as the publisher.
+    '--set-version-string', 'CompanyName', 'FreeMemo',
     '--set-version-string', 'ProductName', 'FreeMemo',
     '--set-version-string', 'InternalName', 'freememo-app',
     '--set-version-string', 'OriginalFilename', WIN_APP_EXE])
@@ -408,6 +415,11 @@ function jpackageArgs ({ target, type, version, input, runtime, dest, work, publ
   }
   if (target === 'win32-x64') {
     return [...common, '--java-options', `-Dfreememo.boot.java-exe=${WIN_APP_EXE}`,
+      // Java opens a dual-stack IPv6 socket, so a bind to 127.0.0.1 becomes
+      // ::ffff:127.0.0.1, and Windows Firewall asked to allow FreeMemo on the
+      // network (2026-11-12). IPv4 sockets make the bind plain loopback. The
+      // bootstrap passes it on to the app child.
+      '--java-options', '-Djava.net.preferIPv4Stack=true',
       '--icon', path.join(publicDir, 'favicon.ico'), '--win-menu', '--win-shortcut',
       '--win-per-user-install', '--win-upgrade-uuid', WIN_UPGRADE_UUID]
   }

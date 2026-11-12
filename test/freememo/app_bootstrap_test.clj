@@ -24,7 +24,8 @@
        String[] w = new String(Main.class.getResourceAsStream(\"/mode.txt\").readAllBytes()).trim().split(\" \");
        System.out.println(\"who=\" + w[0] + \" args=\" + String.join(\",\", args)
            + \" tools=\" + System.getProperty(\"freememo.tools-dir\") + \" boot=\" + System.getProperty(\"freememo.bootstrap\")
-           + \" ui-element=\" + System.getProperty(\"apple.awt.UIElement\"));
+           + \" ui-element=\" + System.getProperty(\"apple.awt.UIElement\")
+           + \" ipv4=\" + System.getProperty(\"java.net.preferIPv4Stack\"));
        switch (w[1]) {
          case \"crash\": System.exit(3);
          case \"hang\": Thread.sleep(600000); break;
@@ -106,7 +107,8 @@
     (try
       (signed-update! data "26.12.1" "ready" kp)
       (let [{:keys [exit out]} (run-boot {:app app :data data :kp kp
-                                          :extra-props ["-Dapple.awt.UIElement=true"]}
+                                          :extra-props ["-Dapple.awt.UIElement=true"
+                                                        "-Djava.net.preferIPv4Stack=true"]}
                                          "--no-tab")]
         (is (zero? exit) out)
         (is (= ["new-26.12.1"] (whos out)))
@@ -115,7 +117,9 @@
         (is (str/includes? out "tools=/the/tools") "freememo.* properties go on")
         (is (str/includes? out "boot=true"))
         (is (str/includes? out "ui-element=true")
-            "macOS: the child stays out of the Dock and Cmd-Tab"))
+            "macOS: the child stays out of the Dock and Cmd-Tab")
+        (is (str/includes? out "ipv4=true")
+            "Windows: the child binds plain IPv4 loopback, so the firewall does not ask"))
       (finally (t/delete-tree! app) (t/delete-tree! data)))))
 
 (deftest the-child-runs-the-java-exe-of-the-bundled-runtime

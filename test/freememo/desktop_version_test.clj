@@ -24,7 +24,8 @@
   "The files that make what only an installer replaces: the bootstrap, the
    jpackage options, the JRE modules, the bundled tools and PostgreSQL."
   ["tools/installer/bootstrap/FreememoBoot.java"
-   "tools/installer/build.mjs"])
+   "tools/installer/build.mjs"
+   "tools/installer/pe-signature.mjs"])
 
 (defn- java-version-line
   "The JDK of the bundled JRE, from the installers workflow."
@@ -50,9 +51,12 @@
      change): raise `freememo.desktop-version/runtime` by one. Each install
      then stops taking App Updates and shows \"Download the new installer\".
    - It does not (a comment, a build-only step): keep the Runtime.
-   Then set both values here to what the test prints."
+   Then set both values here to what the test prints.
+   2026-11-12, kept at 2: the Windows app exe is unsigned with CompanyName
+   FreeMemo, and binds IPv4 loopback. It changes one firewall prompt, so only
+   new installs get it."
   {:runtime 2
-   :sha256 "00aca10735972245f4bf25b44e3eb8ff7766b1e988d1318936e9c81b2892a282"})
+   :sha256 "095576a6dd3dbc31188df8ddc50c132c2ab59674552fcdd74a796f2e2dfd053f"})
 
 (deftest each-installer-change-has-a-runtime-decision
   (let [now {:runtime desktop-version/runtime :sha256 (installer-digest)}]

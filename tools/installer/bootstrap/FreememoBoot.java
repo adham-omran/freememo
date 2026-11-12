@@ -264,7 +264,8 @@ public final class FreememoBoot {
     cmd.add("-Dfreememo.bootstrap=true");
     for (String name : System.getProperties().stringPropertyNames()) {
       if ((name.startsWith("freememo.") && !name.equals("freememo.bootstrap")) || name.equals("jpackage.app-path")
-          || name.equals("apple.awt.enableTemplateImages") || name.equals("apple.awt.UIElement")) {
+          || name.equals("apple.awt.enableTemplateImages") || name.equals("apple.awt.UIElement")
+          || name.equals("java.net.preferIPv4Stack")) {
         cmd.add("-D" + name + "=" + System.getProperty(name));
       }
     }
